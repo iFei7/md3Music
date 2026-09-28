@@ -46,7 +46,7 @@ MD3Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌
   </a>
 </p>
 
-> 数据由 GitHub Actions 定时从 GitHub API 读取，并写入仓库内的每日历史快照；悬停曲线可查看对应日期、Stars 和单日增长。
+> README 中展示的是静态趋势预览。点击图表打开开源榜交互页面后，可将鼠标悬停在曲线上查看对应日期、Stars 和单日增长。数据由 GitHub Actions 定时读取 GitHub API，并保存为仓库内的每日历史快照。
 
 ***
 
