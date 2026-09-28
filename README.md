@@ -420,7 +420,6 @@ A: 该开关仅在魅族 Flyme 机型上出现（由设备能力探测决定）�
   <a href="https://github.com/sdawhk"><img src="https://avatars.githubusercontent.com/u/147570195?v=4&s=80" width="80" height="80" alt="sdawhk" title="sdawhk" /></a>
   <a href="https://github.com/LightEastDS"><img src="https://avatars.githubusercontent.com/u/133585339?v=4&s=80" width="80" height="80" alt="LightEastDS" title="LightEastDS" /></a>
   <a href="https://github.com/DaltonChen6"><img src="https://avatars.githubusercontent.com/u/175537739?v=4&s=80" width="80" height="80" alt="DaltonChen6" title="DaltonChen6" /></a>
-  <a href="https://github.com/vcexml"><img src="https://avatars.githubusercontent.com/u/105481491?v=4&s=80" width="80" height="80" alt="vcexml" title="vcexml" /></a>
 </p>
 
 ***
