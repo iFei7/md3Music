@@ -417,8 +417,10 @@ A: 该开关仅在魅族 Flyme 机型上出现（由设备能力探测决定）�
   <a href="https://github.com/LyonHyrik"><img src="https://avatars.githubusercontent.com/u/309263464?v=4&s=80" width="80" height="80" alt="LyonHyrik" title="LyonHyrik" /></a>
   <a href="https://github.com/Andrea-lyz"><img src="https://avatars.githubusercontent.com/u/52863141?v=4&s=80" width="80" height="80" alt="Andrea-lyz" title="Andrea-lyz" /></a>
   <a href="https://github.com/7tattoo"><img src="https://avatars.githubusercontent.com/u/122350933?v=4&s=80" width="80" height="80" alt="7tattoo" title="7tattoo" /></a>
-    <a href="https://github.com/sdawhk"><img src="https://avatars.githubusercontent.com/u/147570195?v=4" width="80" height="80" alt="7tattoo" title="7tattoo" /></a>
+  <a href="https://github.com/sdawhk"><img src="https://avatars.githubusercontent.com/u/147570195?v=4&s=80" width="80" height="80" alt="sdawhk" title="sdawhk" /></a>
   <a href="https://github.com/LightEastDS"><img src="https://avatars.githubusercontent.com/u/133585339?v=4&s=80" width="80" height="80" alt="LightEastDS" title="LightEastDS" /></a>
+  <a href="https://github.com/DaltonChen6"><img src="https://avatars.githubusercontent.com/u/175537739?v=4&s=80" width="80" height="80" alt="DaltonChen6" title="DaltonChen6" /></a>
+  <a href="https://github.com/vcexml"><img src="https://avatars.githubusercontent.com/u/105481491?v=4&s=80" width="80" height="80" alt="vcexml" title="vcexml" /></a>
 </p>
 
 ***
