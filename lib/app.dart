@@ -31,15 +31,10 @@ import 'main.dart'
         pendingShortcutType,
         shortcutTabRequest;
 import 'modules/discover/discover_page.dart';
-import 'modules/mcp/mcp_player_control.dart';
-import 'modules/mcp/mcp_service.dart';
-import 'modules/coverflow/coverflow_page.dart';
 import 'utils/landscape_immersive.dart';
 import 'modules/charts/charts_page.dart';
-import 'modules/ip/ip_page.dart';
 import 'modules/user/user_center_page.dart';
 import 'modules/user/favorites_page.dart';
-import 'modules/brush/brush_page.dart';
 import 'modules/listen_together/listen_together_page.dart';
 import 'modules/listen_together/widgets/guest_play_confirm_dialog.dart';
 
@@ -53,16 +48,11 @@ import 'modules/playlist/playlist_page.dart';
 import 'modules/search/search_page.dart';
 import 'modules/settings/settings_page.dart';
 import 'modules/library/library_page.dart';
-import 'modules/launchpad/launchpad_page.dart';
 import 'modules/login/login_page.dart';
 import 'widgets/app_animation.dart';
 import 'modules/onboarding/onboarding_page.dart';
 import 'modules/onboarding/user_agreement_page.dart';
 import 'modules/personal_fm/personal_fm_page.dart';
-import 'modules/audiobook/audiobook_page.dart';
-import 'modules/recognition/song_recognition_page.dart';
-import 'modules/scene/scene_page.dart';
-import 'modules/channel/channel_page.dart';
 import 'providers/dlna_provider.dart';
 import 'providers/favorites_provider.dart';
 import 'providers/kugou_provider.dart';
@@ -163,19 +153,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => DeviceProvider()),
         ChangeNotifierProvider(create: (_) => GridColumnsProvider()),
         ChangeNotifierProvider(create: (_) => PlayerProvider()),
-        // AI 代理接口（MCP）：默认关闭。非惰性创建——需要在每次冷启动时读取
-        // 持久化设置决定是否恢复监听，否则用户开启后必须先进一次设置页才会起服务。
-        // 默认关闭时构造只做一次 SharedPreferences 读取即返回，零网络副作用。
-        ChangeNotifierProxyProvider<PlayerProvider, McpService>(
-          lazy: false,
-          create: (context) => McpService(
-            playerControl: PlayerProviderBackedControl(
-              context.read<PlayerProvider>(),
-            ),
-          ),
-          update: (context, player, previous) => previous ??
-              McpService(playerControl: PlayerProviderBackedControl(player)),
-        ),
+        // Lite：AI 代理接口（MCP）已下线，不再注册 McpService。
         ChangeNotifierProvider(create: (_) => LibraryProvider()),
         ChangeNotifierProvider(create: (_) => KugouProvider()),
         ChangeNotifierProvider(create: (_) => FavoritesProvider()),
@@ -603,10 +581,6 @@ class _SystemUiUpdaterState extends State<_SystemUiUpdater>
   }
 
   void _updateSystemUi() {
-    // 封面流页横屏实际沉浸中：保留 SystemUiMode.immersiveSticky，
-    // 不覆盖系统栏模式（否则方向变化等 rebuild 会冲掉沉浸设置）。
-    // 用「实际生效」标志：用户请求沉浸但切到其他 tab/竖屏时仍需恢复系统栏样式。
-    if (kCoverFlowImmersiveActive.value) return;
     // 播放器 Zen 沉浸生效中：保留 immersiveSticky，不被主界面 edgeToEdge 覆盖
     // （否则亮屏 resumed 会把状态栏重新显示出来）。
     if (kPlayerZenImmersiveActive.value) return;
@@ -660,9 +634,6 @@ class _MainLayoutState extends State<_MainLayout>
   final GlobalKey<DesktopShellState> _desktopShellKey =
       GlobalKey<DesktopShellState>();
 
-  /// 上一次同步的沉浸状态，避免重复调用 SystemChrome（幂等去重）。
-  bool _immersiveSynced = false;
-
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
   bool _lyriconFailDialogShown = false;
 
@@ -690,18 +661,8 @@ class _MainLayoutState extends State<_MainLayout>
     // 与外层 AnimatedSwitcher 的左右滑动叠加，形成"内容上浮 → 页面滑入"的层次感。
     Widget page;
     switch (tabId) {
-      case 'launchpad':
-        page = LaunchPadPage(
-          onTabSelected: _switchToTab,
-          onTabEnabled: _enableAndSwitchToTab,
-          onTabOpened: _openTabAsPage,
-        );
-        break;
       case 'discover':
         page = const DiscoverPage();
-        break;
-      case 'coverflow':
-        page = const CoverFlowPage();
         break;
       case 'library':
         page = const LibraryPage();
@@ -718,25 +679,6 @@ class _MainLayoutState extends State<_MainLayout>
         break;
       case 'charts':
         page = const ChartsPage();
-        break;
-      case 'ip':
-        page = const IpPage();
-        break;
-      case 'recognition':
-        // Tab 模式：SongRecognitionPage 自包悬浮宿主，一级形态自动退化交由 MiniPlayer 承载
-        page = const SongRecognitionPage();
-        break;
-      case 'audiobook':
-        page = const AudiobookPage();
-        break;
-      case 'scene':
-        page = const ScenePage();
-        break;
-      case 'channel':
-        page = const ChannelPage();
-        break;
-      case 'brush':
-        page = const BrushPage();
         break;
       case 'listen_together':
         page = const ListenTogetherPage();
@@ -1259,8 +1201,6 @@ class _MainLayoutState extends State<_MainLayout>
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _handleExternalMediaRequest(),
     );
-    // 监听封面流沉浸请求（长按切换 / 返回键恢复），变更时重算沉浸状态
-    kCoverFlowImmersive.addListener(_onCoverFlowImmersiveChanged);
     // 桌面外壳总开关：启动时载入持久化值 + 监听运行时切换（设置页开关）。
     // 载入前默认 false（常规响应式布局），载入/切换后触发整棵子树重建。
     kDesktopModeEnabled.addListener(_onDesktopModeChanged);
@@ -1285,28 +1225,11 @@ class _MainLayoutState extends State<_MainLayout>
     _exitResetTimer?.cancel();
     _exitController.dispose();
     LyriconProviderService.instance.removeListener(_onLyriconStateChanged);
-    kCoverFlowImmersive.removeListener(_onCoverFlowImmersiveChanged);
     kDesktopModeEnabled.removeListener(_onDesktopModeChanged);
     shortcutTabRequest.removeListener(_handleShortcutTabRequest);
     externalMediaRequest.removeListener(_handleExternalMediaRequest);
     WidgetsBinding.instance.removeObserver(this);
-    // 若 App 销毁时仍处于封面流沉浸，恢复系统栏（edgeToEdge，与主界面一致）
-    if (_immersiveSynced) {
-      _immersiveSynced = false;
-      kCoverFlowImmersiveActive.value = false;
-      SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.manual,
-        overlays: SystemUiOverlay.values,
-      );
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    }
     super.dispose();
-  }
-
-  /// 封面流沉浸请求变化（长按 / 返回键）→ 重算实际沉浸状态。
-  void _onCoverFlowImmersiveChanged() {
-    if (!mounted) return;
-    setState(() {});
   }
 
   /// 启动时从持久化载入桌面外壳开关，写入全局 [kDesktopModeEnabled]。
@@ -1432,21 +1355,6 @@ class _MainLayoutState extends State<_MainLayout>
     });
   }
 
-  /// LaunchPad 长按启用：先启用隐藏的 tab，再切换到该 tab。
-  /// 与 [toggleTabVisibility] 的差异：这是 LaunchPad 专属入口，
-  /// 隐藏 tab 只有在 LaunchPad 中长按才会被启用（点击不启用）。
-  void _enableAndSwitchToTab(String tabId) {
-    if (isFullPlayerOnTop) return;
-    final tabConfig = context.read<TabConfigProvider>();
-    if (tabConfig.hiddenTabs.contains(tabId)) {
-      // toggleTabVisibility 内部先同步更新 hiddenTabs 再异步持久化，
-      // 调用返回后 visibleIndexOf 即可拿到正确索引，无需等待
-      // ignore: discarded_futures
-      tabConfig.toggleTabVisibility(tabId);
-    }
-    _switchToTab(tabId);
-  }
-
   /// LaunchPad 点击隐藏 tab：以二级页面路由打开对应功能页（不切换主 tab）。
   void _openTabAsPage(String tabId) {
     Navigator.of(context).push(
@@ -1471,9 +1379,6 @@ class _MainLayoutState extends State<_MainLayout>
       case 'discover':
         page = const DiscoverPage();
         break;
-      case 'coverflow':
-        page = const CoverFlowPage();
-        break;
       case 'library':
         page = const LibraryPage();
         break;
@@ -1488,24 +1393,6 @@ class _MainLayoutState extends State<_MainLayout>
         break;
       case 'charts':
         page = const ChartsPage();
-        break;
-      case 'ip':
-        page = const IpPage();
-        break;
-      case 'recognition':
-        page = const SongRecognitionPage();
-        break;
-      case 'audiobook':
-        page = const AudiobookPage();
-        break;
-      case 'scene':
-        page = const ScenePage();
-        break;
-      case 'channel':
-        page = const ChannelPage();
-        break;
-      case 'brush':
-        page = const BrushPage();
         break;
       case 'listen_together':
         page = const ListenTogetherPage();
@@ -1749,22 +1636,12 @@ class _MainLayoutState extends State<_MainLayout>
         .map(_buildDrawerDestination)
         .toList();
 
-    // 封面流页横屏沉浸：由「当前 tab + 方向 + 用户长按请求」统一判定。
-    // 横屏默认显示 tab 栏，用户长按封面流页面进入沉浸（隐藏 tab 栏），
-    // 沉浸中按返回键恢复。判定与页面生命周期无关，
-    // 保证「在封面流页内竖屏→横屏旋转」也能正确进入/退出沉浸。
-    final safeIndex = _selectedIndex.clamp(0, visibleTabs.length - 1);
-    final currentTab = visibleTabs[safeIndex];
-    final immersive =
-        currentTab.id == 'coverflow' &&
-        MediaQuery.orientationOf(context) == Orientation.landscape &&
-        kCoverFlowImmersive.value;
-    _syncImmersiveMode(immersive);
+    // Lite：封面流已下线，横屏沉浸分支随之移除，页面不再需要 immersive 参与判定。
+    const immersive = false;
 
     // 一级页面返回拦截：
     // 1) PopScope 拦截系统返回手势 / 物理返回键，canPop=false → 触发 onPopInvoked
-    // 2) 封面流沉浸中：返回键先恢复 tab 栏（退出沉浸），不弹退出确认
-    // 3) 否则双击返回回到手机桌面：首次返回 Toast 提示，3 秒内再按一次
+    // 2) 双击返回回到手机桌面：首次返回 Toast 提示，3 秒内再按一次
     //    走 moveTaskToBack 挂后台（不杀进程、不停播放器、不停本地 Rust 服务器）
     return PopScope(
       canPop: false,
@@ -1781,11 +1658,7 @@ class _MainLayoutState extends State<_MainLayout>
             (_desktopShellKey.currentState?.maybePop() ?? false)) {
           return;
         }
-        if (immersive) {
-          kCoverFlowImmersive.value = false;
-        } else {
-          _onBackPressedForExit();
-        }
+        _onBackPressedForExit();
       },
       child: AbsorbPointer(
         absorbing: _isExiting,
@@ -1858,30 +1731,6 @@ class _MainLayoutState extends State<_MainLayout>
           ),
         ),
     );
-  }
-
-  /// 封面流横屏沉浸：同步「实际生效」标志并设置系统栏沉浸模式。
-  /// [immersive] 已由调用方按「tab + 方向 + 用户请求」算好；
-  /// 状态变化时调用，非沉浸时恢复默认系统栏。
-  void _syncImmersiveMode(bool immersive) {
-    if (_immersiveSynced == immersive) return;
-    _immersiveSynced = immersive;
-    kCoverFlowImmersiveActive.value = immersive;
-    // build 阶段不直接调用平台 channel，推迟到帧末执行
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (immersive) {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      } else {
-        // 退出沉浸回到主界面的 edgeToEdge（与 _SystemUiUpdater 一致），
-        // 先 manual 显式 show 一次：部分设备从 immersiveSticky 直接切
-        // edgeToEdge 时系统栏不会自动重新显示。
-        SystemChrome.setEnabledSystemUIMode(
-          SystemUiMode.manual,
-          overlays: SystemUiOverlay.values,
-        );
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      }
-    });
   }
 
   Widget _buildBody(

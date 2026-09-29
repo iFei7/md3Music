@@ -26,7 +26,6 @@ import '../../data/models/song.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
-import '../coverflow/coverflow_page.dart';
 import '../listen_together/widgets/listen_together_pill.dart';
 import '../settings/equalizer_settings_page.dart';
 import '../sound/sounds_page.dart';
@@ -982,11 +981,7 @@ class _FullPlayerState extends State<FullPlayer>
     // 则保持沉浸，避免返回后状态栏闪现。
     // 拖拽覆盖层（非路由）从未修改系统栏，无需恢复
     if (_systemUiModified) {
-      if (kCoverFlowImmersiveActive.value) {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      } else {
-        restoreSystemUi();
-      }
+      restoreSystemUi();
     }
     super.dispose();
   }

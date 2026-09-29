@@ -34,26 +34,24 @@ class TabItem {
 }
 
 /// 默认 Tab 定义（与 app.dart _MainLayout._pages 顺序对应）。
+///
+/// Lite：固定为「发现 / 收藏 / 本地音乐 / 我的」四个核心入口，
+/// 原 LaunchPad 入口已随该模块下线。
 const List<TabItem> kDefaultTabs = [
   TabItem(id: 'discover', label: '发现'),
   TabItem(id: 'favorites', label: '收藏'),
-  TabItem(id: 'launchpad', label: 'LaunchPad'),
   TabItem(id: 'library', label: '本地音乐'),
   TabItem(id: 'user', label: '我的', isRemovable: false),
 ];
 
 /// 可选 Tab（默认隐藏，需在设置页手动开启）。
+///
+/// Lite：已移除 coverflow / ip / recognition / audiobook / scene / channel /
+/// brush / launchpad 等长尾入口及其模块。
 const List<TabItem> kOptionalTabs = [
   TabItem(id: 'fm', label: '私人FM'), // 原默认（私人FM），现改为可选
-  TabItem(id: 'coverflow', label: '封面流'),
   TabItem(id: 'search', label: '搜索'),
   TabItem(id: 'charts', label: '排行榜'),
-  TabItem(id: 'ip', label: '编辑精选'),
-  TabItem(id: 'recognition', label: '听歌识曲'),
-  TabItem(id: 'audiobook', label: '听书'),
-  TabItem(id: 'scene', label: '场景音乐'),
-  TabItem(id: 'channel', label: '频道'),
-  TabItem(id: 'brush', label: '刷刷'),
   TabItem(id: 'listen_together', label: '一起听'),
   TabItem(id: 'settings', label: '设置'),
 ];

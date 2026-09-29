@@ -57,8 +57,6 @@ import '../../providers/car_mode_provider.dart';
 import '../sound/sounds_page.dart';
 import 'equalizer_settings_page.dart';
 import 'settings_group_heading.dart';
-import 'home_tab_manager.dart';
-import 'mcp_agent_section.dart';
 import 'settings_search_index.g.dart';
 
 /// CI compile-time version injection via --dart-define=APP_VERSION=X
@@ -758,10 +756,7 @@ class _SettingsPageState extends State<SettingsPage>
         onAutoPause: () => context.read<PlayerProvider>().pause(),
       ),
     ),
-    ('主页管理', Icons.tab_outlined, _buildTabManagementSection),
     ('桌面快捷方式', Icons.bolt_outlined, _buildDesktopShortcutSection),
-    // AI 代理接口（MCP）：独立一栏，二级界面承载全部 MCP 设置
-    ('AI 代理', Icons.smart_toy_outlined, _buildAiAgentSection),
     ('缓存与数据', Icons.storage_outlined, _buildCacheSection),
     ('关于', Icons.info_outline, _buildAboutSection),
     // 可选扩展：私有构建注入的额外分类（默认无）
@@ -810,9 +805,7 @@ class _SettingsPageState extends State<SettingsPage>
       '歌词': '歌词推送与设备显示',
       '播放': '音质、音效与播放行为',
       'USB 独占': '独占输出与设备状态',
-      '主页管理': '主页标签显示与排序',
       '桌面快捷方式': '应用图标长按快捷入口',
-      'AI 代理': 'MCP 接口、访问令牌与只读模式',
       '缓存与数据': '本地服务与数据维护',
       '关于': '版本、帮助与许可',
     };
@@ -3141,23 +3134,10 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 主页管理 section：Tab 显示/隐藏开关 + 拖拽排序（直接内嵌，免二次点击）
-  Widget _buildTabManagementSection(ColorScheme colorScheme) {
-    // search-item: 主页 Tab 管理 | tab 标签页 主页
-    return const _TabManagementPanel();
-  }
-
   /// 桌面快捷方式 section：Android 长按应用图标快捷入口的显示/隐藏、排序（直接内嵌，免二次点击）
   Widget _buildDesktopShortcutSection(ColorScheme colorScheme) {
     // search-item: 桌面快捷方式 | 快捷方式 快捷 长按
     return const _DesktopShortcutPanel();
-  }
-
-  /// AI 代理接口（MCP）section：外部 AI 客户端经 MCP 调用播放器的全部设置。
-  /// 独立一栏而非并入「缓存与数据」：能力面与风险面都独立，需要单独可见/可控。
-  Widget _buildAiAgentSection(ColorScheme colorScheme) {
-    // search-item: AI 代理接口 | AI 代理 mcp 大模型 智能体 claude 调用
-    return const McpAgentSection();
   }
 
   /// 本地持久化音频管理 section 未包含在公开版本中。
@@ -3691,24 +3671,6 @@ class _SettingsPageState extends State<SettingsPage>
         ),
       ),
     );
-  }
-}
-
-/// Tab 管理面板：支持拖拽排序 + 显示/隐藏开关。
-///
-/// “我的”页面不允许隐藏（保证用户始终有入口进入设置/登录）。
-/// 主页 Tab 管理面板：支持拖拽排序 + 显示/隐藏开关。
-///
-/// 直接内嵌于设置页「主页管理」二级卡片；外层已是 ListView，
-/// 故 ReorderableListView 以 shrinkWrap + 不滚动方式布局。
-class _TabManagementPanel extends StatelessWidget {
-  const _TabManagementPanel();
-
-  @override
-  Widget build(BuildContext context) {
-    // 与 LaunchPad 编辑托盘共用同一套主页管理组件（见 home_tab_manager.dart）。
-    // 内嵌于设置页 ListView，故 embedded: true（shrinkWrap + 不滚动）。
-    return const HomeTabManagerList(embedded: true);
   }
 }
 
