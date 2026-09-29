@@ -79,5 +79,5 @@ flutter:
     - assets/icons/
     - LICENSE
     - assets/web/
-  shaders:
-    - shaders/depth_parallax.frag
+  # Lite：shaders/ 段已移除 —— 上游从未提交真实的 depth_parallax.frag，
+  # 且 3D 深度封面在 standard 包中被 feature flag 关闭（整套删除见后续精简任务）。
