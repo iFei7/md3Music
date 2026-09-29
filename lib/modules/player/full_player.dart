@@ -26,7 +26,6 @@ import '../../data/models/song.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
-import '../listen_together/widgets/listen_together_pill.dart';
 import '../settings/equalizer_settings_page.dart';
 import '../sound/sounds_page.dart';
 import 'artist_photo_background.dart';
@@ -34,7 +33,6 @@ import 'mv_player_page.dart';
 import 'song_info_page.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/kugou_provider.dart';
-import '../../providers/listen_together_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
@@ -2112,8 +2110,6 @@ class _FullPlayerState extends State<FullPlayer>
                 onPressed: _collapseByButton,
               ),
             const Spacer(),
-            // 一起听胶囊：在房间中时显示人数（1/5），点击进入/返回房间页
-            const ListenTogetherPill(),
             // MD3E v2: 顶部栏右侧 FLAC 质量徽章，点击复用 _showQualityDialog
             _buildQualityPill(playerProvider),
             // 睡眠药丸：只订阅剩余时间独立通道，每秒走字不再触发整页重建

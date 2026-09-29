@@ -52,7 +52,6 @@ const List<TabItem> kOptionalTabs = [
   TabItem(id: 'fm', label: '私人FM'), // 原默认（私人FM），现改为可选
   TabItem(id: 'search', label: '搜索'),
   TabItem(id: 'charts', label: '排行榜'),
-  TabItem(id: 'listen_together', label: '一起听'),
   TabItem(id: 'settings', label: '设置'),
 ];
 
