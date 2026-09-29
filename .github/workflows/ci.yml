@@ -261,13 +261,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # Lite 分支：abiFilters 已收窄为 arm64-v8a / armeabi-v7a（x86 仅服务模拟器，
+      # 其 libkugou_server.so 占 10.1MB）。此步骤保留以兼容上游脚本，产物缺失时不再报错。
       - name: Upload x86_64 standard APK
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.apple_only == false }}
         uses: actions/upload-artifact@v4
         with:
           name: MD3音乐-标准版-模拟器
           path: build/app/outputs/flutter-apk/MD3音乐-${{ env.VER }}-标准版-模拟器.apk
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Upload arm64-v8a depth3d APK

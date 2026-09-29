@@ -19,10 +19,10 @@ android {
     compileSdk = 36
     ndkVersion = "28.2.13676358"
 
-    // 产品 flavor（3D 深度封面）:
-    //   standard - 不含 3D 封面：无 onnxruntime so、无深度模型资产，体积最小
-    //   depth3d  - 3D 全量包：内置 ONNX Runtime so + Depth Anything V2 模型资产
-    // 两 flavor 共用同一 applicationId/签名，depth3d 包可直接覆盖安装 standard 包。
+    // Lite 分支：保留 flavor 声明以兼容上游 CI/脚本（125 处引用），但 3D 深度封面已下线：
+    //   standard - lite 唯一构建目标（无 ORT so、无深度模型资产）
+    //   depth3d  - 已移除 3D 资产与 ONNX AAR，上游 CI 的 "无 AAR 即跳过" 门控会自动跳过它
+    // 构建：flutter build apk --release --flavor standard --split-per-abi
     flavorDimensions += "feature"
     productFlavors {
         create("standard") {}
@@ -47,10 +47,16 @@ android {
         // 渲染引擎固定为 skia（EnableImpeller=false，兼容优先）。Flutter 3.44 只认
         // manifest 静态值。仅此一处、无 flavor：保证 split-per-abi 产物名不含引擎标识。
         manifestPlaceholders["enableImpeller"] = "false"
-        // USB 独占输出 C++ 驱动：只编译与 jniLibs 相同的 4 个 ABI
+        // Lite：只出真实设备 ABI（arm64-v8a / armeabi-v7a）。
+        // x86 / x86_64 仅服务模拟器调试，且 libkugou_server.so 的 x86 两个 so
+        // 合计 10.1MB —— 一并排除，模拟器请改用 arm64 镜像。
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+        }
+        // USB 独占输出 C++ 驱动：只编译与 jniLibs 相同的 ABI
         externalNativeBuild {
             cmake {
-                abiFilters("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+                abiFilters("arm64-v8a", "armeabi-v7a")
             }
         }
     }
@@ -129,16 +135,9 @@ dependencies {
     implementation("androidx.media3:media3-common:1.4.1")
     // 2×2 封面小部件：从专辑封面位图提取主色（vibrant/dominant swatch）
     implementation("androidx.palette:palette-ktx:1.0.0")
-    // 3D 深度封面：端上 Depth Anything V2 推理（ONNX Runtime Mobile）
-    // 仅 depth3d flavor 打包（standard 包不含此 so，体积 -13.2MB）
-    // 自编 reduced-ops AAR：官方 libonnxruntime.so 33.0MB → 13.2MB（13,201,664 B），
-    // 只编译两份深度模型实际用到的算子内核；保留 NNAPI EP 符号以匹配官方
-    // libonnxruntime4j_jni.so 的符号引用（该 jni 层原样保留，勿动）；仅 arm64-v8a。
-    // 算子并集 = depth 模型 ∪ MI-GAN Pipeline（52 项注册 / 9 行）；配置与重建流程见
-    // android/app/libs/ort-ops/（REBUILD.md + depth_migan_union_v3.config）。
-    // ⚠️ 内核裁剪后 strings/差分都判不出算子是否可用，唯一判据是真机 createSession
-    //    日志（loadInpaintModel OK）。
-    "depth3dImplementation"(files("libs/onnxruntime-android-1.30.0-custom-v8a.aar"))
+    // Lite：已移除 3D 深度封面（ONNX Runtime AAR + Depth Anything V2 / MI-GAN 模型），
+    // 这里的 depth3dImplementation 依赖与 android/app/libs/onnxruntime-*.aar、
+    // android/app/src/depth3d/ 一并删除，省 42.2MB（13.2MB so + 29MB 模型）。
 
     // USB 独占数据路径（UsbDither / UsbAudioStream.writeRaw）的 JVM 单元测试
     testImplementation("junit:junit:4.13.2")
