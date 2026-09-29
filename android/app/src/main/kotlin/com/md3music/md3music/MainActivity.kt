@@ -97,7 +97,8 @@ class MainActivity : FlutterActivity() {
                 it.register(engine)
                 usbAudioPlugin = it
             }
-            MetadataWriterPlugin().register(engine)
+            // Lite：MetadataWriterPlugin 已移除 —— 上游公开仓库从未提交该类源码，
+            // 其 MethodChannel 在 Dart 侧也无任何调用点。
             ExternalEditorPlugin(context).register(engine)
             DiagnosticLogPlugin().register(engine)
         }
