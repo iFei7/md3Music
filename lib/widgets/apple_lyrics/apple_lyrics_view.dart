@@ -9,7 +9,6 @@
 /// - 用 [Ticker] + [SingleTickerProviderStateMixin] 每帧推进
 ///   所有控制器与渲染器，触发 [setState] 重绘
 /// - 每行独立的 renderer 实例（按行索引缓存），避免多行共用导致状态混乱
-/// - 每行独立的 scale 弹簧（_tickPerLineScales）：进场放大 / 离场缩小均连贯
 library;
 
 import 'dart:async';
@@ -190,16 +189,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   final LyricScrollController _scrollController = LyricScrollController();
   final InterludeDots _interludeDots = InterludeDots();
   final EmphasizeEffect _emphasizeEffect = EmphasizeEffect();
-
-  /// 每行独立的 scale 弹簧（行索引 → Spring）。
-  ///
-  /// 相比旧的单实例 LineScaleController 只服务当前行，这里每行都有自己的弹簧：
-  /// 离场行（当前行 → 非当前行）从 1.0 缩到 [LyricLayout.inactiveScale]、
-  /// 进场行从 inactiveScale 平滑放大到 1.0——两侧都有连贯动画，补上"缩小时硬切"。
-  final Map<int, Spring> _perLineScaleSprings = {};
-
-  /// 每行 scale 弹簧位置的复用列表（每帧 [_tickPerLineScales] 填充，传给 painter）。
-  List<double> _reusedPerLineScales = const <double>[];
 
   /// 当前歌曲的辉光触发阈值（ms）：500=快歌，1000=慢歌。
   ///
@@ -937,60 +926,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     return true;
   }
 
-  /// 所有行的 scale 弹簧是否已收敛（供停 Ticker 判定）。
-  ///
-  /// 每行独立持有 scale 弹簧后，离场/进场的缩放动画未收敛前不能停 Ticker。
-  bool _arePerLineScalesConverged() {
-    for (final s in _perLineScaleSprings.values) {
-      if (!s.isSettled) return false;
-    }
-    return true;
-  }
-
-  /// 推进每行独立的 scale 弹簧，并填充 [_reusedPerLineScales]。
-  ///
-  /// 返回是否有任一行仍在运动（供重绘门控与收敛判定）。
-  ///
-  /// 相比旧的单实例 LineScaleController 只服务当前行，这里每行都有自己的弹簧：
-  /// - 进场行（非当前 0.850 → 当前）：target 变 activeScale，从 0.850 平滑放大到 1.0；
-  /// - 离场行（当前 1.0 → 非当前）：target 变 inactiveScale，从 1.0 平滑缩到 0.850，
-  ///   补上原来"当前行缩小时硬切"的连贯动画。
-  /// 只推进视口附近行（与 renderer/偏移同范围）。
-  bool _tickPerLineScales(double dt) {
-    final int len = widget.lines.length;
-    if (_reusedPerLineScales.length != len) {
-      _reusedPerLineScales = List<double>.filled(len, LyricLayout.activeScale);
-    }
-    final int overscan = _overscan;
-    final int startI = math.max(0, _currentLineIndex - overscan);
-    final int endI = math.min(len, _currentLineIndex + overscan);
-    bool anyChanged = false;
-    final double active = LyricLayout.activeScale;
-    final double inactive = widget.enableScale
-        ? LyricLayout.inactiveScale
-        : active;
-    for (int i = startI; i < endI; i++) {
-      final double target = i == _currentLineIndex ? active : inactive;
-      final Spring spring = _perLineScaleSprings[i] ??= Spring(
-        mass: LyricLayout.scaleSpringMass,
-        damping: LyricLayout.scaleSpringDamping,
-        stiffness: LyricLayout.scaleSpringStiffness,
-        // 首次创建直接落在目标，避免从默认 1.0 一路动画到目标造成"飘"
-        initialPosition: target,
-      );
-      // 目标变化时 setTarget：行切换触发放大/缩小的连贯过渡
-      if (spring.target != target) {
-        spring.setTarget(target);
-      }
-      if (!spring.isSettled) {
-        spring.tick(dt);
-        anyChanged = true;
-      }
-      _reusedPerLineScales[i] = spring.position;
-    }
-    return anyChanged;
-  }
-
   /// v3 优化：检测视口附近 renderer 是否已收敛。
   /// 检查当前行的 WordRenderer + 视口内 LineRenderer 的 isConverged。
   bool _areRenderersConverged() {
@@ -1440,10 +1375,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     }
     _scrollController.tick(dt);
 
-    // 3. 推进每行独立的 scale 弹簧（离场缩 0.850 / 进场放 1.0，均连贯）
-    // 返回是否有缩放动画仍在进行，供下方重绘门控与收敛判定使用。
-    final bool anyScaleChanged = _tickPerLineScales(dt);
-
     // 4. 推进每行的 renderer
     // 性能优化：只 tick 视口附近的行（前后各 15 行），避免 200+ 行全量 tick。
     // 当前行用 WordRenderer（逐字 alpha + 上浮），其他行用 LineRenderer。
@@ -1619,10 +1550,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // 8. 级联弹簧延迟：检测当前行切换，从限幅后的视口顶部行自上而下错峰牵引
     if (_currentLineIndex >= 0 && _currentLineIndex != _previousLineIndex) {
       final now = _lastElapsed.inMicroseconds / 1000.0;
-      // 行切换时不再手动 reset scale：新当前行切换前作为非当前行已 settle 在
-      // inactiveScale，_tickPerLineScales 下一帧检测到 target 变 activeScale，
-      // 会自然从 0.850 弹到 1.0；离场行 target 变 inactiveScale，从 1.0 平滑缩回。
-      // 两侧的缩放都是每行独立弹簧的连贯过渡，无需在此瞬间赋值。
       // 上一当前行退场交接：启动清晰层淡出，与模糊图接管重叠，消除硬切。
       // KRC 行退场前由 WordRenderer 绘制，其 LineRenderer 实例那一帧根本没被
       // 调用过（alpha 停在 0、setLineState 输入缓存判定"未变"而早退），
@@ -1791,7 +1718,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // 也不能停 Ticker，否则圆点冻结。
     final bool animConverged =
         _scrollController.isConverged &&
-        _arePerLineScalesConverged() &&
         (_interludeExpandProgress - interludeTarget).abs() < 0.001 &&
         (_translationExpandProgress - transExpandTarget).abs() < 0.001 &&
         _transCollapsing.isEmpty;
@@ -1826,7 +1752,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     final bool hasVisualChange =
         _currentLineIndex != _lastRepaintCurrentLineIndex ||
         (currentPosY - _lastRepaintPosY).abs() > 0.5 ||
-        anyScaleChanged ||
         (_interludeExpandProgress - _lastRepaintInterludeProgress).abs() >
             0.001 ||
         (_translationExpandProgress - _lastRepaintTransExpand).abs() > 0.001 ||
@@ -1860,7 +1785,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           transCollapsing: _transCollapsing,
           perLineOffsets: _buildPerLineOffsets(),
           perLineOffsetsGeneration: _perLineOffsetsGeneration,
-          perLineScales: _reusedPerLineScales,
         );
         _repaintNotifier.fireRepaint();
       } else {
@@ -2131,7 +2055,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
             enableScale: widget.enableScale,
             wordRenderers: _wordRenderers,
             lineRenderers: _lineRenderers,
-            perLineScales: _reusedPerLineScales,
             emphasizeEffect: _emphasizeEffect,
             interludeDots: _interludeDots,
             interludeAfterIndices: _interludeAfterIndices,
@@ -2166,7 +2089,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           _painter!.enableScale = widget.enableScale;
           _painter!.wordRenderers = _wordRenderers;
           _painter!.lineRenderers = _lineRenderers;
-          _painter!.perLineScales = _reusedPerLineScales;
           _painter!.emphasizeEffect = _emphasizeEffect;
           _painter!.interludeDots = _interludeDots;
           _painter!.interludeAfterIndices = _interludeAfterIndices;
@@ -2221,8 +2143,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
 /// 遍历所有 lines，跳过视口外（含 overscan=300px 上下缓冲）的行，
 /// 按行调用对应 renderer 的 [WordRenderer.paintLine] / [LineRenderer.paintLine]。
 ///
-/// 每行通过 [perLineScales]（各自 scale 弹簧位置）提供 scale：进场放大 / 离场缩小
-/// 均连贯；目标值取自 [LyricLayout.activeScale] / [LyricLayout.inactiveScale]（可调）。
+/// 每行 scale 取稳态值：当前行 [LyricLayout.activeScale]、
+/// 非当前行 [LyricLayout.inactiveScale]（可调）。
 ///
 /// 间奏时段在视口中央绘制 [InterludeDots]。
 ///
@@ -2244,11 +2166,6 @@ class _LyricsPainter extends CustomPainter {
   Map<int, WordRenderer> wordRenderers;
   Map<int, LineRenderer> lineRenderers;
 
-  /// 每行当前的 scale 弹簧位置（由 _onTick 的 per-line scale 推进循环填充）。
-  ///
-  /// 每行独立持有 scale 弹簧后，离场行（当前行 → 非当前行）从 1.0 平滑缩到
-  /// inactiveScale，进场行从 0.850 平滑放大到 1.0——补上原来"缩小硬切"的观感。
-  List<double> perLineScales;
   EmphasizeEffect emphasizeEffect;
   InterludeDots interludeDots;
   List<int> interludeAfterIndices;
@@ -2287,7 +2204,6 @@ class _LyricsPainter extends CustomPainter {
     required this.enableScale,
     required this.wordRenderers,
     required this.lineRenderers,
-    required this.perLineScales,
     required this.emphasizeEffect,
     required this.interludeDots,
     required this.interludeAfterIndices,
@@ -2321,7 +2237,6 @@ class _LyricsPainter extends CustomPainter {
     required Map<int, double> transCollapsing,
     required List<double> perLineOffsets,
     required int perLineOffsetsGeneration,
-    required List<double> perLineScales,
   }) {
     this.currentLineIndex = currentLineIndex;
     this.posY = posY;
@@ -2334,7 +2249,6 @@ class _LyricsPainter extends CustomPainter {
     this.transCollapsing = transCollapsing;
     this.perLineOffsets = perLineOffsets;
     this.perLineOffsetsGeneration = perLineOffsetsGeneration;
-    this.perLineScales = perLineScales;
   }
 
   /// 获取指定行 i 的实际高度（含换行 + 副行动画高度），降级到 mainLineHeight。
@@ -2452,17 +2366,8 @@ class _LyricsPainter extends CustomPainter {
 
       final bool isActive = i == currentLineIndex;
 
-      // 形变 scale 与 alpha scale 分开取：
-      // - 形变（canvas.scale）用弹簧值，切行时产生 0.850→1.0 的弹性放大；
-      // - alpha 用稳态值（当前行恒为 activeScale），使 factor=1、
-      //   dynamicDarkAlpha=0.4 —— 新当前行从 0.4 起淡入，而不是被弹簧
-      //   在起点处压到 0.2 再慢慢亮起来。
+      // 每行 scale 取稳态值（无弹簧）：当前行 activeScale、非当前行 inactiveScale。
       // 与 _onTick 步骤 4 传给 renderer 的 scale 口径保持一致。
-      // 形变 scale 用每行自己的弹簧位置（perLineScales），这样离场行从 1.0
-      // 平滑缩到 inactiveScale、进场行从 0.850 平滑放大到 1.0，都不再硬切。
-      final double scale = i < perLineScales.length
-          ? perLineScales[i]
-          : LyricLayout.inactiveScale;
       final double alphaScale = isActive
           ? LyricLayout.activeScale
           : (enableScale ? LyricLayout.inactiveScale : LyricLayout.activeScale);
@@ -2473,7 +2378,7 @@ class _LyricsPainter extends CustomPainter {
       const double pivotX = startX;
       final double pivotY = y + lineHeight / 2;
       canvas.translate(pivotX, pivotY);
-      canvas.scale(scale, scale);
+      canvas.scale(alphaScale, alphaScale);
       canvas.translate(-pivotX, -pivotY);
 
       // 当前行 + 有 word 时间戳 → WordRenderer（逐字模式：N 次 layout/帧）

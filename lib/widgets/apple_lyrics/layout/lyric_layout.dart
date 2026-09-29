@@ -412,28 +412,6 @@ class LyricLayout {
   /// 用户滚动后自动回弹到当前行的超时时间
   static const int autoReturnMs = 3000;
 
-  // ============== 弹簧参数：行缩放 ==============
-
-  /// 主行缩放弹簧：mass
-  static const double scaleSpringMass = 2;
-
-  /// 主行缩放弹簧：damping
-  static const double scaleSpringDamping = 25;
-
-  /// 主行缩放弹簧：stiffness
-  static const double scaleSpringStiffness = 100;
-
-  // ============== 弹簧参数：背景行缩放 ==============
-
-  /// 背景行缩放弹簧：mass
-  static const double bgScaleSpringMass = 1;
-
-  /// 背景行缩放弹簧：damping
-  static const double bgScaleSpringDamping = 20;
-
-  /// 背景行缩放弹簧：stiffness
-  static const double bgScaleSpringStiffness = 50;
-
   // ============== 弹簧参数：posY seeking/间奏模式 ==============
 
   /// posY seeking/间奏模式：stiffness
