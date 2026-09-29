@@ -224,7 +224,6 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyUseGaussianBlur = 'lyric_use_gaussian_blur';
   static const String _keyBlurIntensity = 'lyric_blur_intensity';
   static const String _keyUseGlowEffect = 'lyric_use_glow_effect';
-  static const String _keyUseFlowingBackground = 'lyric_use_flowing_background';
   static const String _keyFontSource = 'lyric_font_source';
   static const String _keyCustomFontPath = 'lyric_custom_font_path';
   static const String _keyShowTranslation = 'lyric_show_translation';
@@ -251,7 +250,6 @@ class LyricPreferences extends ChangeNotifier {
   // 歌词模糊强度倍数（默认 1.0 = 历史行为）
   double _blurIntensity = defaultBlurIntensity;
   bool _useGlowEffect = true;
-  bool _useFlowingBackground = false;
   bool _useDuetLayout = false;
   bool _showTranslation = true;
   LyricDisplayMode _displayMode = LyricDisplayMode.translation;
@@ -296,7 +294,6 @@ class LyricPreferences extends ChangeNotifier {
   double get blurIntensity => _blurIntensity;
 
   bool get useGlowEffect => _useGlowEffect;
-  bool get useFlowingBackground => _useFlowingBackground;
   bool get useDuetLayout => _useDuetLayout;
   bool get showTranslation => _showTranslation;
   LyricDisplayMode get displayMode => _displayMode;
@@ -389,7 +386,6 @@ class LyricPreferences extends ChangeNotifier {
         (prefs.getDouble(_keyBlurIntensity) ?? defaultBlurIntensity)
             .clamp(minBlurIntensity, maxBlurIntensity);
     _useGlowEffect = prefs.getBool(_keyUseGlowEffect) ?? true;
-    _useFlowingBackground = prefs.getBool(_keyUseFlowingBackground) ?? false;
     _useDuetLayout = prefs.getBool(_keyUseDuetLayout) ?? false;
     _showTranslation = prefs.getBool(_keyShowTranslation) ?? true;
     _displayMode = _displayModeFromName(prefs.getString(_keyDisplayMode));
@@ -484,15 +480,6 @@ class LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyUseGlowEffect, enabled);
-  }
-
-  /// 设置动态流光背景开关并持久化。
-  Future<void> setUseFlowingBackground(bool enabled) async {
-    if (_useFlowingBackground == enabled) return;
-    _useFlowingBackground = enabled;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyUseFlowingBackground, enabled);
   }
 
   /// 设置男女对唱歌词优化开关并持久化。
@@ -717,7 +704,6 @@ class LyricPreferences extends ChangeNotifier {
     _useGaussianBlur = false;
     _blurIntensity = defaultBlurIntensity;
     _useGlowEffect = true;
-    _useFlowingBackground = false;
     _useDuetLayout = false;
     _showTranslation = true;
     _displayMode = LyricDisplayMode.translation;
@@ -742,7 +728,6 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setBool(_keyUseGaussianBlur, _useGaussianBlur);
     await prefs.remove(_keyBlurIntensity);
     await prefs.setBool(_keyUseGlowEffect, _useGlowEffect);
-    await prefs.setBool(_keyUseFlowingBackground, _useFlowingBackground);
     await prefs.setBool(_keyUseDuetLayout, _useDuetLayout);
     await prefs.setBool(_keyShowTranslation, _showTranslation);
     await prefs.setString(_keyDisplayMode, _displayMode.name);

@@ -42,13 +42,13 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/comment_reply_target.dart';
 import 'comment_compose_sheet.dart';
 import 'comments_view.dart';
-import 'lyrics_view.dart';
 import 'player_tab_layout.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
+import '../../widgets/apple_lyrics/apple_lyrics_view.dart';
+import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
+import '../../widgets/apple_lyrics/layout/lyric_preferences_panel.dart';
 import '../../utils/landscape_immersive.dart';
-import '../../widgets/md3_lyric_preferences.dart';
-import '../../widgets/md3_lyric_preferences_panel.dart';
 import '../../widgets/ai_recommend_sheet.dart';
 import '../../widgets/md3e_transport_row.dart';
 import '../../widgets/menu_action_cell.dart';
@@ -103,7 +103,6 @@ class FullPlayer extends StatefulWidget {
 class _FullPlayerState extends State<FullPlayer>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   late TabController _tabController;
-  String _lyrics = '';
   List<LyricLine> _lyricMetadata = const [];
   bool _hasTranslation = false;
   bool _hasRoma = false;
@@ -1188,7 +1187,6 @@ class _FullPlayerState extends State<FullPlayer>
 
     setState(() {
       _isLoadingLyrics = true;
-      _lyrics = '';
       _lyricMetadata = const [];
       _hasTranslation = false;
       _hasRoma = false;
@@ -1246,10 +1244,8 @@ class _FullPlayerState extends State<FullPlayer>
         );
         setState(() {
           _isLoadingLyrics = false;
-          // MD3 渲染器（LyricsView）内置的 LRC/KRC 正则无法解析 TTML 与
-          // 增强型 LRC（尖括号逐字）。统一用 LyricParserChain 解析得到主歌词行，
-          // 再序列化为标准 LRC 文本交给 LyricsView（保持其滚动/换行/点击逻辑不变）。
-          _lyrics = _toLyricsViewText(lyricText);
+          // 统一用 LyricParserChain 解析为 List<LyricLine> 直接交给
+          // AppleLyricsView（覆盖 LRC/KRC/TTML/增强型 LRC 全格式）。
           _lyricMetadata = parsedLyrics;
           _hasTranslation = parsedLyrics.any(
             (line) => line.translation != null && line.translation!.isNotEmpty,
@@ -1263,68 +1259,12 @@ class _FullPlayerState extends State<FullPlayer>
       if (mounted) {
         setState(() {
           _isLoadingLyrics = false;
-          _lyrics = '';
           _lyricMetadata = const [];
           _hasTranslation = false;
           _hasRoma = false;
         });
       }
     }
-  }
-
-  /// 把原始歌词文本转换为 LyricsView 能识别的标准 LRC 行文本。
-  ///
-  /// LyricsView 内置的 LRC/KRC 正则无法解析 TTML（XML）与增强型 LRC（尖括号
-  /// `<mm:ss.xx>` / `<offset,duration,...>` 逐字）。这里用 LyricParserChain
-  /// 统一解析，仅取主歌词行
-  /// （text + 行起始时间），序列化为 `[mm:ss.fff]主歌词` 文本交给 LyricsView，
-  /// 保留其滚动、换行、点击跳转逻辑不变。
-  /// 若 LyricsView 本身已能解析（普通 LRC / KRC），直接原样返回，避免任何行为变化。
-  String _toLyricsViewText(String raw) {
-    if (raw.trim().isEmpty) return raw;
-    final format = LyricParserChain.detectFormat(raw);
-    // 增强型 LRC：行首 `[mm:ss]` 会误判为 lrc，但其尖括号逐字时间戳无法由
-    // LyricsView 直接处理。MD3 不需要逐字动态效果，因此先剥离内层标签，
-    // 保留行首时间戳并转换为普通 LRC。
-    if (_isEnhancedLrcText(raw)) {
-      final normalized = raw.replaceAll(_inlineLyricTagRegex, '');
-      return _serializeLines(LyricParserChain.parse(normalized));
-    }
-    // 个别本地文件把 KRC 的 `<offset,duration,...>` 标签嵌在 LRC 行中。
-    // 这种混合格式会被自动检测为 LRC，必须先移除内层标签，否则它们会
-    // 被 LyricsView 当成正文显示。
-    if (format == LyricFormat.lrc && _krcWordTagRegex.hasMatch(raw)) {
-      final normalized = raw.replaceAll(_krcWordTagRegex, '');
-      return _serializeLines(LyricParserChain.parse(normalized));
-    }
-    // 普通 LRC / KRC 由 LyricsView 原生支持，原样透传
-    if (format == LyricFormat.lrc || format == LyricFormat.krc) {
-      return raw;
-    }
-    return _serializeLines(LyricParserChain.parse(raw));
-  }
-
-  /// 增强型 LRC 的内层逐字时间标签，允许一位到三位分钟数。
-  static final RegExp _angleTimeRegex = RegExp(r'<\d{1,3}:\d{2}\.\d{2,3}>');
-  static final RegExp _krcWordTagRegex = RegExp(r'<-?\d+(?:,-?\d+)+>');
-  static final RegExp _inlineLyricTagRegex = RegExp(
-    r'<(?:\d{1,3}:\d{2}\.\d{2,3}|-?\d+(?:,-?\d+)+)>',
-  );
-  static bool _isEnhancedLrcText(String raw) => _angleTimeRegex.hasMatch(raw);
-
-  /// 把解析后的主歌词行序列化为 LyricsView 可识别的 `[mm:ss.fff]主歌词` 文本。
-  String _serializeLines(List<LyricLine> lines) {
-    if (lines.isEmpty) return '';
-    final sb = StringBuffer();
-    for (final l in lines) {
-      if (l.text.isEmpty) continue;
-      final ms = l.startTime;
-      final mm = (ms ~/ 60000).toString().padLeft(2, '0');
-      final ss = ((ms % 60000) ~/ 1000).toString().padLeft(2, '0');
-      final mmm = (ms % 1000).toString().padLeft(3, '0');
-      sb.write('[$mm:$ss.$mmm]${l.text}\n');
-    }
-    return sb.toString();
   }
 
   /// 封面淡入淡出：旧封面淡出 + 新封面淡入，400ms easeInOut。
@@ -1553,18 +1493,20 @@ class _FullPlayerState extends State<FullPlayer>
                         // P0: 歌词时间只订阅 positionNotifier（高频 200ms），
                         // 不再因 positionStream 触发整页重建
                         : RepaintBoundary(
-                            child: LyricsView(
-                              lyrics: _lyrics,
-                              parsedLyrics: _lyricMetadata,
-                              position: Duration.zero,
-                              positionListenable:
-                                  playerProvider.positionNotifier,
-                              adaptPosition: (position) =>
-                                  _adjustedLyricPosition(position, currentSong),
-                              doubleTapToJump: lyricDoubleTap,
-                              onSeek: (duration) {
-                                playerProvider.seek(duration);
-                              },
+                            child: ListenableBuilder(
+                              listenable: playerProvider,
+                              builder: (context, _) => AppleLyricsView(
+                                lines: _lyricMetadata,
+                                currentTimeMs: 0,
+                                positionListenable: playerProvider.positionNotifier,
+                                adaptTimeMs: (position) =>
+                                    _adjustedLyricPosition(position, currentSong).inMilliseconds,
+                                isPlaying: playerProvider.isPlaying,
+                                playbackNotReady: playerProvider.isPlaybackNotReady,
+                                doubleTapToJump: lyricDoubleTap,
+                                songBpm: currentSong?.bpm,
+                                onSeek: (ms) => playerProvider.seek(Duration(milliseconds: ms)),
+                              ),
                             ),
                           ),
                   ),
@@ -1789,21 +1731,20 @@ class _FullPlayerState extends State<FullPlayer>
                                     )
                                   // P0: 歌词时间只订阅 positionNotifier（高频 200ms）
                                   : RepaintBoundary(
-                                      child: LyricsView(
-                                        lyrics: _lyrics,
-                                        parsedLyrics: _lyricMetadata,
-                                        position: Duration.zero,
-                                        positionListenable:
-                                            playerProvider.positionNotifier,
-                                        adaptPosition: (position) =>
-                                            _adjustedLyricPosition(
-                                              position,
-                                              currentSong,
-                                            ),
-                                        doubleTapToJump: lyricDoubleTap,
-                                        onSeek: (duration) {
-                                          playerProvider.seek(duration);
-                                        },
+                                      child: ListenableBuilder(
+                                        listenable: playerProvider,
+                                        builder: (context, _) => AppleLyricsView(
+                                          lines: _lyricMetadata,
+                                          currentTimeMs: 0,
+                                          positionListenable: playerProvider.positionNotifier,
+                                          adaptTimeMs: (position) =>
+                                              _adjustedLyricPosition(position, currentSong).inMilliseconds,
+                                          isPlaying: playerProvider.isPlaying,
+                                          playbackNotReady: playerProvider.isPlaybackNotReady,
+                                          doubleTapToJump: lyricDoubleTap,
+                                          songBpm: currentSong?.bpm,
+                                          onSeek: (ms) => playerProvider.seek(Duration(milliseconds: ms)),
+                                        ),
                                       ),
                                     ),
                             ),
@@ -2024,21 +1965,20 @@ class _FullPlayerState extends State<FullPlayer>
                                     )
                                   // P0: 歌词时间只订阅 positionNotifier（高频 200ms）
                                   : RepaintBoundary(
-                                      child: LyricsView(
-                                        lyrics: _lyrics,
-                                        parsedLyrics: _lyricMetadata,
-                                        position: Duration.zero,
-                                        positionListenable:
-                                            playerProvider.positionNotifier,
-                                        adaptPosition: (position) =>
-                                            _adjustedLyricPosition(
-                                              position,
-                                              currentSong,
-                                            ),
-                                        doubleTapToJump: lyricDoubleTap,
-                                        onSeek: (duration) {
-                                          playerProvider.seek(duration);
-                                        },
+                                      child: ListenableBuilder(
+                                        listenable: playerProvider,
+                                        builder: (context, _) => AppleLyricsView(
+                                          lines: _lyricMetadata,
+                                          currentTimeMs: 0,
+                                          positionListenable: playerProvider.positionNotifier,
+                                          adaptTimeMs: (position) =>
+                                              _adjustedLyricPosition(position, currentSong).inMilliseconds,
+                                          isPlaying: playerProvider.isPlaying,
+                                          playbackNotReady: playerProvider.isPlaybackNotReady,
+                                          doubleTapToJump: lyricDoubleTap,
+                                          songBpm: currentSong?.bpm,
+                                          onSeek: (ms) => playerProvider.seek(Duration(milliseconds: ms)),
+                                        ),
                                       ),
                                     ),
                             ),
@@ -3682,16 +3622,16 @@ class _FullPlayerState extends State<FullPlayer>
           right: 8,
           bottom: 4,
           child: ListenableBuilder(
-            listenable: Md3LyricPreferences.instance,
+            listenable: LyricPreferences.instance,
             builder: (context, _) {
               if (_zenMode || (!_hasTranslation && !_hasRoma)) {
                 return const SizedBox.shrink();
               }
-              final prefs = Md3LyricPreferences.instance;
+              final prefs = LyricPreferences.instance;
               final mode = _effectiveMd3DisplayMode(prefs);
-              final on = prefs.showAuxiliary;
+              final on = LyricPreferences.instance.showTranslation;
               return InkWell(
-                onTap: () => prefs.setShowAuxiliary(!on),
+                onTap: () => LyricPreferences.instance.setShowTranslation(!on),
                 onLongPress: _switchMd3LyricSubLineMode,
                 customBorder: const CircleBorder(),
                 child: SizedBox(
@@ -3699,7 +3639,7 @@ class _FullPlayerState extends State<FullPlayer>
                   height: 48,
                   child: Center(
                     child: Icon(
-                      mode == Md3LyricDisplayMode.roma
+                      mode == LyricDisplayMode.roma
                           ? Icons.abc
                           : Icons.translate,
                       size: 20,
@@ -3718,48 +3658,47 @@ class _FullPlayerState extends State<FullPlayer>
     );
   }
 
-  Md3LyricDisplayMode _effectiveMd3DisplayMode(Md3LyricPreferences prefs) {
+  LyricDisplayMode _effectiveMd3DisplayMode(LyricPreferences prefs) {
     final preferred = prefs.displayMode;
-    if (preferred == Md3LyricDisplayMode.translation && _hasTranslation) {
+    if (preferred == LyricDisplayMode.translation && _hasTranslation) {
       return preferred;
     }
-    if (preferred == Md3LyricDisplayMode.roma && _hasRoma) {
+    if (preferred == LyricDisplayMode.roma && _hasRoma) {
       return preferred;
     }
     return _hasTranslation
-        ? Md3LyricDisplayMode.translation
-        : Md3LyricDisplayMode.roma;
+        ? LyricDisplayMode.translation
+        : LyricDisplayMode.roma;
   }
 
   void _switchMd3LyricSubLineMode() {
     HapticFeedback.lightImpact();
-    final prefs = Md3LyricPreferences.instance;
+    final prefs = LyricPreferences.instance;
     final current = _effectiveMd3DisplayMode(prefs);
-    final next = current == Md3LyricDisplayMode.translation
-        ? Md3LyricDisplayMode.roma
-        : Md3LyricDisplayMode.translation;
-    if (next == Md3LyricDisplayMode.roma && !_hasRoma) {
+    final next = current == LyricDisplayMode.translation
+        ? LyricDisplayMode.roma
+        : LyricDisplayMode.translation;
+    if (next == LyricDisplayMode.roma && !_hasRoma) {
       showToast('当前歌曲暂无罗马音');
       return;
     }
-    if (next == Md3LyricDisplayMode.translation && !_hasTranslation) {
+    if (next == LyricDisplayMode.translation && !_hasTranslation) {
       showToast('当前歌曲暂无翻译');
       return;
     }
-    if (!prefs.showAuxiliary) {
-      prefs.setShowAuxiliary(true);
+    if (!LyricPreferences.instance.showTranslation) {
+      prefs.setShowTranslation(true);
     }
     prefs.setDisplayMode(next);
-    showToast(next == Md3LyricDisplayMode.roma ? '已切换到罗马音' : '已切换到翻译');
+    showToast(next == LyricDisplayMode.roma ? '已切换到罗马音' : '已切换到翻译');
   }
 
-  /// 弹出 MD3 风格播放页的歌词显示设置面板（字号/行间距/字体）。
-  /// 与 Apple Music 风格的 `LyricPreferences` 完全独立。
+  /// 弹出播放页歌词显示设置面板（字号/行间距/字体等）。
   void _showLyricPreferencesSheet(BuildContext context) {
     showM3EModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (context) => SafeArea(child: const Md3LyricPreferencesPanel()),
+      builder: (context) => SafeArea(child: const LyricPreferencesPanel()),
     );
   }
 }

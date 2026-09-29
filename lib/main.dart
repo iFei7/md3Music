@@ -24,7 +24,6 @@ import 'modules/onboarding/user_agreement_page.dart';
 import 'services/kugou_server.dart';
 import 'utils/landscape_immersive.dart';
 import 'widgets/apple_lyrics/layout/lyric_preferences.dart';
-import 'widgets/md3_lyric_preferences.dart';
 
 /// 顶级 Navigator 的 GlobalKey，预留供后续扩展使用。
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
@@ -115,8 +114,6 @@ Future<(bool, bool)> runBootstrap() async {
   await Future.wait([
     // 加载歌词字号/行间距偏好（从 SharedPreferences）
     LyricPreferences.instance.load(),
-    // 加载 MD3 风格播放页的独立歌词偏好（与 Apple Music 风格完全分离）
-    Md3LyricPreferences.instance.load(),
     // 恢复屏幕常亮开关状态，供 PlayerProvider/MV 页播放时读取
     WakelockService.instance.init().catchError((_) {}),
     // 初始化均衡器服务（恢复偏好设置，监听播放状态自动绑定）

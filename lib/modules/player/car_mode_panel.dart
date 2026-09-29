@@ -10,12 +10,10 @@ import 'package:provider/provider.dart';
 
 import '../../providers/car_mode_provider.dart';
 import '../../providers/player_provider.dart';
-import '../../providers/theme_provider.dart';
 import '../../widgets/smart_artwork_image.dart';
 import 'car_mode_layout.dart';
 import 'car_mode_lyric_bar.dart';
 import 'full_player.dart';
-import 'full_player_am.dart';
 import 'full_player_route.dart';
 
 /// 车机模式外壳：开启时把 [child]（整棵根 Navigator）与常驻播放器面板并排。
@@ -471,17 +469,13 @@ class _CarModePlayerHost extends StatelessWidget {
   }
 }
 
-/// 二选一渲染当前播放页样式（MD / AM）。位于面板 Navigator 的某一页内部，
-/// 但依赖的 Provider 在 MaterialApp 之上，所以样式开关切换时本组件会重建。
+/// 渲染常驻面板内的播放页（Lite：统一 MD3 风格）。
 class _CarModePlayerBody extends StatelessWidget {
   const _CarModePlayerBody();
 
   @override
   Widget build(BuildContext context) {
-    final useAm = context.watch<ThemeProvider>().useAmStylePlayer;
-    return useAm
-        ? const AmStyleFullPlayer(dockMode: true)
-        : const FullPlayer(dockMode: true);
+    return const FullPlayer(dockMode: true);
   }
 }
 

@@ -345,7 +345,7 @@ class _MiniPlayerState extends State<MiniPlayer>
   void _expandPlayerFromDrag() {
     final progress = playerExpansion.value;
     // 防重复入栈：路由栈里已有播放页时不再 push，否则会出现多个
-    // AmStyleFullPlayer 实例、各自驱动歌词等动画，整页帧率翻倍（实测
+    // 播放页实例、各自驱动歌词等动画，整页帧率翻倍（实测
     // 120Hz 屏 ~120fps 且明显发热）。与 openFullPlayer 同一语义。
     if (activePlayerRoute != null) {
       playerDragActive.value = false;

@@ -5,7 +5,6 @@ import 'package:just_audio/just_audio.dart' as just_audio;
 import 'package:md3music/data/models/song.dart';
 import 'package:md3music/data/repositories/history_repository.dart';
 import 'package:md3music/providers/player_provider.dart';
-import 'package:md3music/modules/player/am_transport_controls.dart';
 import 'package:md3music/widgets/md3e_transport_row.dart';
 import 'package:md3music/widgets/playback_status_feedback.dart';
 import 'package:provider/provider.dart';
@@ -183,7 +182,6 @@ void main() {
     AudioServiceLoader.setTestOverride(() async => audio);
     late final PlayerProvider player;
     var mdPlayCalls = 0;
-    var amPlayCalls = 0;
     try {
       await tester.runAsync(() async {
         player = PlayerProvider();
@@ -210,10 +208,6 @@ void main() {
                     isPlaying: player.isPlaying,
                     onPlayPause: () => mdPlayCalls++,
                   ),
-                  AMTransportControls(
-                    isPlaying: player.isPlaying,
-                    onPlayPause: () => amPlayCalls++,
-                  ),
                 ],
               ),
             ),
@@ -226,7 +220,6 @@ void main() {
       expect(find.text('歌词加载失败'), findsOneWidget);
       expect(find.text('播放失败，请重试'), findsOneWidget);
       expect(find.byType(MD3ETransportRow), findsOneWidget);
-      expect(find.byType(AMTransportControls), findsOneWidget);
       expect(find.byTooltip(player.isPlaying ? '暂停' : '播放'), findsWidgets);
       expect(find.byTooltip('上一首'), findsWidgets);
       expect(find.byTooltip('下一首'), findsWidgets);
@@ -242,10 +235,7 @@ void main() {
 
       await tester.tapAt(tester.getCenter(find.byType(MD3ETransportRow)));
       await tester.pumpAndSettle();
-      await tester.tapAt(tester.getCenter(find.byType(AMTransportControls)));
-      await tester.pumpAndSettle();
       expect(mdPlayCalls, 1);
-      expect(amPlayCalls, 1);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       player.dispose();

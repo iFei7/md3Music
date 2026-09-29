@@ -106,14 +106,11 @@ class _SettingsPageState extends State<SettingsPage>
   bool _useDynamicColor = false;
   // 封面动态取色开关（与系统主题色独立、可叠加；开启时封面优先）
   bool _useCoverSeedColor = false;
-  // Apple Music 风格播放页开关（默认关闭，开启后用 AM 风格 FullPlayer）
-  bool _useAmStylePlayer = false;
   bool _useGaussianBlur = true;
   bool _useArtistPhotoBackground = false;
   int _artistPhotoInterval = 15;
   double _artistPhotoOpacity = 0.55;
   bool _useGlowEffect = true;
-  bool _useFlowingBackground = false;
   bool _useDuetLayout = true;
   // 歌词省电模式开关（默认开启，开启后歌词界面锁定 60fps，滑动时解锁）
   bool _lyricEcoMode = true;
@@ -381,8 +378,6 @@ class _SettingsPageState extends State<SettingsPage>
     final useDynamicColor = context.read<ThemeProvider>().useDynamicColor;
     // 从 ThemeProvider 同步「封面动态取色」开关状态
     final useCoverSeedColor = context.read<ThemeProvider>().useCoverSeedColor;
-    // 从 ThemeProvider 同步「Apple Music 风格播放页」开关状态
-    final useAmStylePlayer = context.read<ThemeProvider>().useAmStylePlayer;
     final lyricDoubleTapToJump = context
         .read<ThemeProvider>()
         .lyricDoubleTapToJump;
@@ -493,7 +488,6 @@ class _SettingsPageState extends State<SettingsPage>
       _secondaryPlayerEnabled = secondaryPlayerEnabled;
       _useDynamicColor = useDynamicColor;
       _useCoverSeedColor = useCoverSeedColor;
-      _useAmStylePlayer = useAmStylePlayer;
       _lyricDoubleTapToJump = lyricDoubleTapToJump;
       _useArtistPhotoBackground = useArtistPhotoBackground;
       _artistPhotoInterval = artistPhotoInterval;
@@ -508,7 +502,6 @@ class _SettingsPageState extends State<SettingsPage>
       _textShadowBlur = textShadowBlur;
       _useGaussianBlur = LyricPreferences.instance.useGaussianBlur;
       _useGlowEffect = LyricPreferences.instance.useGlowEffect;
-      _useFlowingBackground = LyricPreferences.instance.useFlowingBackground;
       _useDuetLayout = LyricPreferences.instance.useDuetLayout;
       _lyricEcoMode = LyricPreferences.instance.ecoMode;
       _lyricDynamicColor = LyricPreferences.instance.useDynamicLyricColor;
@@ -1956,22 +1949,15 @@ class _SettingsPageState extends State<SettingsPage>
     showToast('已清除背景图片，使用默认壁纸', long: true);
   }
 
-  /// 播放页样式 section：播放器风格卡片选择 + 视觉特效开关。
+  /// 播放页样式 section：歌词/视觉特效开关（Lite：已统一为单一播放页风格）。
   ///
-  /// 排列逻辑：先选风格 → 两种风格通用项 → MD3 专属 → Apple Music 专属 →
-  /// 两种风格均支持的频谱。专属项按其生效风格聚拢，避免灰显开关散落在各处。
+  /// 排列逻辑：通用项 → 播放页专属（写真背景）→ 歌词特效 → 歌词动画 → 音乐频谱。
   Widget _buildPlayerStyleSection(ColorScheme colorScheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // ① 风格选择：决定下方哪些专属项可用
-        _buildGroupLabel('播放页风格', colorScheme, first: true),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
-          child: _buildStyleCards(colorScheme),
-        ),
-        // ② 两种风格通用
-        _buildGroupLabel('通用', colorScheme),
+        // 通用
+        _buildGroupLabel('通用', colorScheme, first: true),
         // search: 双击 跳转
         SwitchListTile(
           title: const Text('歌词双击跳转'),
@@ -2072,21 +2058,19 @@ class _SettingsPageState extends State<SettingsPage>
             ),
           ],
         ],
-        // ③ MD3 风格专属：歌手写真背景 + 其从属的间隔 / 透明度
-        _buildGroupLabel('MD3Music 风格', colorScheme),
+        // 播放页专属：歌手写真背景 + 其从属的间隔 / 透明度
+        _buildGroupLabel('播放页', colorScheme),
         // search: 写真 背景 轮播
         SwitchListTile(
           title: const Text('歌手写真背景轮播'),
           value: _useArtistPhotoBackground,
-          onChanged: !_useAmStylePlayer
-              ? (v) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _useArtistPhotoBackground = v);
-                  context.read<ThemeProvider>().setUseArtistPhotoBackground(v);
-                }
-              : null,
+          onChanged: (v) {
+            HapticFeedback.lightImpact();
+            setState(() => _useArtistPhotoBackground = v);
+            context.read<ThemeProvider>().setUseArtistPhotoBackground(v);
+          },
         ),
-        if (_useArtistPhotoBackground && !_useAmStylePlayer)
+        if (_useArtistPhotoBackground)
           // search: 写真 轮播 间隔
           // 原 trailing 的紧凑 DropdownButton 换成字段式 M3EDropdownMenu：
           // 控件下沉到 subtitle，与下方「写真背景透明度」的 subtitle 控件行
@@ -2125,7 +2109,7 @@ class _SettingsPageState extends State<SettingsPage>
               },
             ),
           ),
-        if (_useArtistPhotoBackground && !_useAmStylePlayer)
+        if (_useArtistPhotoBackground)
           // search: 写真 透明度
           ListTile(
             title: const Text('写真背景透明度'),
@@ -2145,32 +2129,28 @@ class _SettingsPageState extends State<SettingsPage>
             ),
             trailing: _statusText('${(_artistPhotoOpacity * 100).round()}%'),
           ),
-        // ④ Apple Music 风格专属：先歌词内容/排版，再颜色，再特效，最后性能兜底
-        _buildGroupLabel('Apple Music 风格', colorScheme),
+        // 歌词特效：内容/排版 → 颜色 → 特效 → 性能兜底
+        _buildGroupLabel('歌词特效', colorScheme),
         // search: 对唱 男女
         SwitchListTile(
           title: const Text('男女对唱歌词优化'),
           value: _useDuetLayout,
-          onChanged: _useAmStylePlayer
-              ? (v) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _useDuetLayout = v);
-                  LyricPreferences.instance.setUseDuetLayout(v);
-                }
-              : null,
+          onChanged: (v) {
+            HapticFeedback.lightImpact();
+            setState(() => _useDuetLayout = v);
+            LyricPreferences.instance.setUseDuetLayout(v);
+          },
         ),
         // 歌词动态字体颜色：当前行按「85% 白 + 15% 封面提取色」混色（仅 AM 播放器）
         // search: 动态颜色 混色
         SwitchListTile(
           title: const Text('歌词动态颜色'),
           value: _lyricDynamicColor,
-          onChanged: _useAmStylePlayer
-              ? (v) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _lyricDynamicColor = v);
-                  LyricPreferences.instance.setUseDynamicLyricColor(v);
-                }
-              : null,
+          onChanged: (v) {
+            HapticFeedback.lightImpact();
+            setState(() => _lyricDynamicColor = v);
+            LyricPreferences.instance.setUseDynamicLyricColor(v);
+          },
         ),
         // search: 高斯模糊 模糊
         SwitchListTile(
@@ -2178,44 +2158,25 @@ class _SettingsPageState extends State<SettingsPage>
           // 标题说明了是什么，副标题只留影响决策的功耗代价
           subtitle: const Text('高功耗'),
           value: _useGaussianBlur,
-          onChanged: _useAmStylePlayer
-              ? (v) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _useGaussianBlur = v);
-                  LyricPreferences.instance.setUseGaussianBlur(v);
-                }
-              : null,
+          onChanged: (v) {
+            HapticFeedback.lightImpact();
+            setState(() => _useGaussianBlur = v);
+            LyricPreferences.instance.setUseGaussianBlur(v);
+          },
         ),
         // search: 辉光 发光
         SwitchListTile(
           title: const Text('歌词辉光效果'),
           value: _useGlowEffect,
-          onChanged: _useAmStylePlayer
-              ? (v) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _useGlowEffect = v);
-                  LyricPreferences.instance.setUseGlowEffect(v);
-                }
-              : null,
+          onChanged: (v) {
+            HapticFeedback.lightImpact();
+            setState(() => _useGlowEffect = v);
+            LyricPreferences.instance.setUseGlowEffect(v);
+          },
         ),
-        // search: 流光 背景
-        SwitchListTile(
-          title: const Text('背景动态流光'),
-          subtitle: const Text('高功耗'),
-          value: _useFlowingBackground,
-          onChanged: _useAmStylePlayer
-              ? (v) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _useFlowingBackground = v);
-                  LyricPreferences.instance.setUseFlowingBackground(v);
-                }
-              : null,
-        ),
-        // 播放页背景模糊：仅 AM 风格 + 动态流光关闭时渲染此模糊层，
-        // 两种条件任一不满足即隐藏（流光开启时滑块无意义）
+        // 播放页背景模糊层渲染强度
         // search: 模糊 背景 播放器 毛玻璃 封面
-        if (_useAmStylePlayer && !_useFlowingBackground)
-          ListTile(
+        ListTile(
             title: const Text('播放页背景模糊'),
             subtitle: M3ESlider(
               // 控件统一用 md3e_core 的无节点 M3ESlider（不传 divisions）。
@@ -2246,13 +2207,11 @@ class _SettingsPageState extends State<SettingsPage>
         SwitchListTile(
           title: const Text('歌词省电模式'),
           value: _lyricEcoMode,
-          onChanged: _useAmStylePlayer
-              ? (v) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _lyricEcoMode = v);
-                  LyricPreferences.instance.setEcoMode(v);
-                }
-              : null,
+          onChanged: (v) {
+            HapticFeedback.lightImpact();
+            setState(() => _lyricEcoMode = v);
+            LyricPreferences.instance.setEcoMode(v);
+          },
         ),
         // 歌词动画入口：动画参数、歌词模糊强度、辉光触发阈值统一在独立子页无极调节，
         // 排在歌词省电模式（特效兜底开关）之后、音乐频谱分组之前。
@@ -3562,116 +3521,6 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // 播放器风格卡片选择
-  // ─────────────────────────────────────────────────────────────────────
-
-  Widget _buildStyleCards(ColorScheme colorScheme) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        _buildStyleCard(
-          colorScheme: colorScheme,
-          title: 'MD3Music',
-          subtitle: 'Material 3 风格',
-          isSelected: !_useAmStylePlayer,
-          onTap: () {
-            HapticFeedback.lightImpact();
-            setState(() => _useAmStylePlayer = false);
-            context.read<ThemeProvider>().setUseAmStylePlayer(false);
-          },
-          preview: _SettingsMd3StylePreview(colorScheme: colorScheme),
-        ),
-        const Gap(AppSpacing.lg),
-        _buildStyleCard(
-          colorScheme: colorScheme,
-          title: 'Apple Music',
-          subtitle: '模糊封面 + 逐字歌词',
-          isSelected: _useAmStylePlayer,
-          onTap: () {
-            HapticFeedback.lightImpact();
-            setState(() => _useAmStylePlayer = true);
-            context.read<ThemeProvider>().setUseAmStylePlayer(true);
-          },
-          preview: _SettingsAmStylePreview(colorScheme: colorScheme),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStyleCard({
-    required ColorScheme colorScheme,
-    required String title,
-    required String subtitle,
-    required bool isSelected,
-    required VoidCallback onTap,
-    required Widget preview,
-  }) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: M3ExpressiveMotion.defaultDuration,
-          curve: M3ExpressiveMotion.expressiveEasing,
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isSelected
-                  ? colorScheme.primary
-                  : colorScheme.outlineVariant,
-              width: isSelected ? 2.5 : 1,
-            ),
-          ),
-          child: Column(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: SizedBox(
-                  height: 140,
-                  width: double.infinity,
-                  // 迷你界面示意图：高度固定 140、宽度受 Expanded 约束，
-                  // 内部元素（28dp 顶栏、24dp 图标块）没有余量跟随系统字号，
-                  // 字一放大就撑破。这里豁免系统字号，让预览恒按真实比例呈现。
-                  // 「显示大小」不在此列 —— 它整页等比变化，预览随之整体缩放。
-                  child: MediaQuery(
-                    data: MediaQuery.of(
-                      context,
-                    ).copyWith(textScaler: TextScaler.noScaling),
-                    child: preview,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                  color: isSelected
-                      ? colorScheme.primary
-                      : colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-              if (isSelected) ...[
-                const SizedBox(height: 6),
-                Icon(Icons.check_circle, size: 20, color: colorScheme.primary),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// 设置页说明文字：始终占满可用横向空间，并从内容区左侧开始排版。
@@ -3841,231 +3690,6 @@ class _DesktopShortcutPanel extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────
 
 /// MD3Music 风格播放器预览：简洁的 Material 3 卡片布局。
-class _SettingsMd3StylePreview extends StatelessWidget {
-  final ColorScheme colorScheme;
-
-  const _SettingsMd3StylePreview({required this.colorScheme});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: colorScheme.surface,
-      child: Column(
-        children: [
-          // 顶栏
-          Container(
-            height: 28,
-            color: colorScheme.surfaceContainer,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            alignment: Alignment.centerLeft,
-            child: Row(
-              children: [
-                Icon(
-                  Icons.keyboard_arrow_down,
-                  size: 14,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-                const Spacer(),
-                Icon(
-                  Icons.more_horiz,
-                  size: 12,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ],
-            ),
-          ),
-          // 封面
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Center(
-                        child: Icon(
-                          Icons.music_note,
-                          size: 32,
-                          color: colorScheme.onPrimaryContainer,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Container(
-                    height: 5,
-                    width: 55,
-                    decoration: BoxDecoration(
-                      color: colorScheme.onSurface,
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Container(
-                    height: 4,
-                    width: 36,
-                    decoration: BoxDecoration(
-                      color: colorScheme.onSurfaceVariant,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Container(
-                    height: 3,
-                    decoration: BoxDecoration(
-                      color: colorScheme.primary,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      Icon(
-                        Icons.skip_previous,
-                        size: 16,
-                        color: colorScheme.onSurface,
-                      ),
-                      Icon(
-                        Icons.play_arrow,
-                        size: 20,
-                        color: colorScheme.primary,
-                      ),
-                      Icon(
-                        Icons.skip_next,
-                        size: 16,
-                        color: colorScheme.onSurface,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Apple Music 风格播放器预览：模糊封面背景 + 逐字歌词。
-class _SettingsAmStylePreview extends StatelessWidget {
-  final ColorScheme colorScheme;
-
-  const _SettingsAmStylePreview({required this.colorScheme});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            colorScheme.primary.withValues(alpha: 0.6),
-            colorScheme.surface,
-          ],
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.keyboard_arrow_down,
-                  size: 14,
-                  color: colorScheme.onSurface,
-                ),
-                const Spacer(),
-                Icon(Icons.more_horiz, size: 12, color: colorScheme.onSurface),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _buildLyricBar(45, colorScheme.onSurface, 0.2),
-                  const SizedBox(height: 5),
-                  _buildLyricBar(70, colorScheme.primary, 1.0),
-                  const SizedBox(height: 5),
-                  _buildLyricBar(40, colorScheme.onSurface, 0.2),
-                  const SizedBox(height: 5),
-                  _buildLyricBar(30, colorScheme.onSurface, 0.1),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: colorScheme.primary.withValues(alpha: 0.7),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Icon(
-                    Icons.music_note,
-                    size: 12,
-                    color: colorScheme.onPrimary,
-                  ),
-                ),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        height: 4,
-                        width: 40,
-                        decoration: BoxDecoration(
-                          color: colorScheme.onSurface,
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Container(
-                        height: 3,
-                        width: 26,
-                        decoration: BoxDecoration(
-                          color: colorScheme.onSurfaceVariant,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(Icons.play_arrow, size: 16, color: colorScheme.onSurface),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLyricBar(double width, Color color, double opacity) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        height: 6,
-        width: width,
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: opacity),
-          borderRadius: BorderRadius.circular(4),
-        ),
-      ),
-    );
-  }
-}
 
 /// 逐字歌词时间偏移设置（仅在线音乐生效）。
 ///

@@ -55,9 +55,6 @@ dependencies:
   # 1.3.0 用了 @awaitNotRequired，该符号只在 3.47+ 的 foundation.dart
   # 导出列表中提供，3.44.x 上会编译失败（Undefined name 'awaitNotRequired'）。
   material_ui: ^1.3.0
-  # AM 播放器传输按钮：路径级矢量图标形变（play↔pause 连续 morph + prev/next 描边动画）
-  # 纯 Dart、零外部依赖，仅需自带 24x24 描边 SVG
-  iconic_morph: ^1.9.0
   # 网络类型检测（WiFi / 移动网络）：音质按网络分别设置
   connectivity_plus: ^7.0.0
   # 图片选择（外部歌单截图导入）
