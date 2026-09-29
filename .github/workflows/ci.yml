@@ -129,9 +129,10 @@ jobs:
       - name: Flutter build APK (standard, release, split per ABI)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.apple_only == false }}
         run: |
+          set -o pipefail
           flutter build apk --release --flavor standard --split-per-abi \
             --target-platform android-arm64,android-arm \
-            --dart-define=APP_VERSION=ci-${{ github.sha }}
+            --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_standard.log"
 
       # depth3d flavor：3D 全量包（内置 onnxruntime so + 深度模型），仅 arm64-v8a
       - name: Flutter build APK (depth3d, release, arm64-v8a)
@@ -139,7 +140,7 @@ jobs:
         run: |
           flutter build apk --release --flavor depth3d \
             --dart-define=ENABLE_DEPTH_3D=true --split-per-abi --target-platform android-arm64 \
-            --dart-define=APP_VERSION=ci-${{ github.sha }}
+            --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_depth3d.log"
 
       # 原子随身听按包名识别合作应用：额外构建一个 arm64-v8a 兼容包。
       # 只覆盖 applicationId，namespace / Kotlin 包路径 / MethodChannel 均保持原样。
@@ -156,11 +157,29 @@ jobs:
           flutter build apk --release --flavor standard --split-per-abi \
             --target-platform android-arm64 \
             --android-project-arg=md3ApplicationId=com.apple.android.music \
-            --dart-define=APP_VERSION=ci-${{ github.sha }}
+            --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_apple.log"
           mv "$standard_apk" "$apk_dir/app-apple-music-arm64-v8a-release.apk"
           if [[ -f "$standard_backup" ]]; then
             mv "$standard_backup" "$standard_apk"
           fi
+
+      # 构建失败时把日志尾部写进 check-run summary：
+      # summary 经 check-runs API 公开可读，无需登录即可拉取失败日志（agent 闭环用）
+      - name: Report build diagnostics
+        if: failure()
+        run: |
+          {
+            echo "## Build failure diagnostics"
+            for f in "$RUNNER_TEMP"/build_standard.log "$RUNNER_TEMP"/build_depth3d.log "$RUNNER_TEMP"/build_apple.log; do
+              if [[ -f "$f" ]]; then
+                echo ""
+                echo "### $(basename "$f") (tail)"
+                echo '<pre>'
+                tail -c 40000 "$f"
+                echo '</pre>'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
 
       # ============================================================
       # 产物改名为中文（便于区分）
