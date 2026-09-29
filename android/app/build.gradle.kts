@@ -50,9 +50,12 @@ android {
         // Lite：只出真实设备 ABI（arm64-v8a / armeabi-v7a）。
         // x86 / x86_64 仅服务模拟器调试，且 libkugou_server.so 的 x86 两个 so
         // 合计 10.1MB —— 一并排除，模拟器请改用 arm64 镜像。
-        ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
-        }
+        // ⚠️ ABI 收窄**不能**用 ndk.abiFilters：--split-per-abi 时 Flutter 插件会
+        // 注入 splits.abi（默认含 x86_64），AGP 判定两者冲突直接失败
+        // （"Conflicting configuration: ndk abiFilters cannot be present when
+        //  splits abi filters are set"）。收窄由两处负责：
+        //   1) CI 传 --target-platform android-arm64,android-arm（决定 splits 与引擎 so）
+        //   2) 下方 externalNativeBuild.cmake.abiFilters（决定 C++ 驱动编译哪些 ABI）
         // USB 独占输出 C++ 驱动：只编译与 jniLibs 相同的 ABI
         externalNativeBuild {
             cmake {

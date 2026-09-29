@@ -125,10 +125,13 @@ jobs:
 
       # 构建 Release APK（按 ABI 拆分）
       # flavor 化之后必须显式 --flavor：定义 productFlavors 后 AGP 不再生成 assembleRelease
+      # --target-platform：Lite 收窄为 arm64/armv7。不加的话 Flutter 插件注入的
+      # splits.abi 会含 x86_64，打出无 libkugou_server.so 的废包（模拟器包已下线）。
       - name: Flutter build APK (standard, release, split per ABI)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.apple_only == false }}
         run: |
           flutter build apk --release --flavor standard --split-per-abi \
+            --target-platform android-arm64,android-arm \
             --dart-define=APP_VERSION=ci-${{ github.sha }}
 
       # depth3d flavor：3D 全量包（内置 onnxruntime so + 深度模型），仅 arm64-v8a
