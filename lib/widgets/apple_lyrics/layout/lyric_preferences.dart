@@ -85,17 +85,6 @@ class LyricPreferences extends ChangeNotifier {
   /// 与当前未设置字重时的渲染外观（Flutter 默认 FontWeight.normal=400）一致。
   static const int defaultFontWeight = 400;
 
-  /// 辉光触发阈值系数最小值
-  ///
-  /// 触发阈值 = 歌词字长中位数 × 该系数；系数越小越容易触发辉光。
-  static const double minGlowThresholdFactor = 1.0;
-
-  /// 辉光触发阈值系数最大值
-  static const double maxGlowThresholdFactor = 2.0;
-
-  /// 辉光触发阈值系数默认值
-  static const double defaultGlowThresholdFactor = 1.2;
-
   /// 非当前行缩放最小值。
   ///
   /// 0.80 时背景行明显后退，再小会与当前行脱节。
@@ -169,13 +158,11 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyFontSize = 'lyric_font_size';
   static const String _keyLineSpacing = 'lyric_line_spacing';
   static const String _keyFontWeight = 'lyric_font_weight';
-  static const String _keyUseGlowEffect = 'lyric_use_glow_effect';
   static const String _keyFontSource = 'lyric_font_source';
   static const String _keyCustomFontPath = 'lyric_custom_font_path';
   static const String _keyShowTranslation = 'lyric_show_translation';
   static const String _keyDisplayMode = 'lyric_display_mode';
   static const String _keyEcoMode = 'lyric_eco_mode';
-  static const String _keyGlowThresholdFactor = 'lyric_glow_threshold_factor';
   static const String _keyInactiveScale = 'lyric_inactive_scale';
   static const String _keyAlignPosition = 'lyric_align_position';
   static const String _keyLiftHeightPx = 'lyric_lift_height_px';
@@ -185,15 +172,12 @@ class LyricPreferences extends ChangeNotifier {
   double _fontSize = defaultUserFontSize;
   double _lineSpacing = defaultLineSpacing;
   int _fontWeight = defaultFontWeight;
-  bool _useGlowEffect = true;
   bool _showTranslation = true;
   LyricDisplayMode _displayMode = LyricDisplayMode.translation;
   LyricFontSource _fontSource = LyricFontSource.system;
   String? _customFontPath;
   // 歌词省电模式（默认开启）：开启后歌词界面锁定 60fps，用户上下滑动歌词时临时解锁
   bool _ecoMode = true;
-  // 辉光触发阈值系数（默认 1.2）：触发阈值 = 歌词字长中位数 × 该系数
-  double _glowThresholdFactor = defaultGlowThresholdFactor;
   // 非当前行缩放（默认 0.850）：清晰层非当前行与 AM 模糊层共用此值
   double _inactiveScale = defaultInactiveScale;
   // 当前行垂直锚位（默认 0.35）：当前行中心落在视口高度的该比例处
@@ -212,7 +196,6 @@ class LyricPreferences extends ChangeNotifier {
 
   /// 歌词字重对应 [FontWeight]（供 TextStyle 使用）。
   FontWeight get fontWeight => FontWeight(_fontWeight);
-  bool get useGlowEffect => _useGlowEffect;
   bool get showTranslation => _showTranslation;
   LyricDisplayMode get displayMode => _displayMode;
   LyricFontSource get fontSource => _fontSource;
@@ -220,11 +203,6 @@ class LyricPreferences extends ChangeNotifier {
 
   /// 歌词省电模式是否开启（默认开启）。
   bool get ecoMode => _ecoMode;
-
-  /// 辉光触发阈值系数（范围 [minGlowThresholdFactor]~[maxGlowThresholdFactor]）。
-  ///
-  /// 触发阈值 = 歌词字长中位数 × 该系数；系数越小越容易触发辉光。
-  double get glowThresholdFactor => _glowThresholdFactor;
 
   /// 非当前行缩放（范围 [minInactiveScale]~[maxInactiveScale]）。
   ///
@@ -281,15 +259,11 @@ class LyricPreferences extends ChangeNotifier {
     _fontWeight =
         (prefs.getInt(_keyFontWeight) ?? _deviceDefaultFontWeight)
             .clamp(minFontWeight, maxFontWeight);
-    _useGlowEffect = prefs.getBool(_keyUseGlowEffect) ?? true;
     _showTranslation = prefs.getBool(_keyShowTranslation) ?? true;
     _displayMode = _displayModeFromName(prefs.getString(_keyDisplayMode));
     _fontSource = _fontSourceFromName(prefs.getString(_keyFontSource));
     _customFontPath = prefs.getString(_keyCustomFontPath);
     _ecoMode = prefs.getBool(_keyEcoMode) ?? true;
-    _glowThresholdFactor =
-        (prefs.getDouble(_keyGlowThresholdFactor) ?? defaultGlowThresholdFactor)
-            .clamp(minGlowThresholdFactor, maxGlowThresholdFactor);
     _inactiveScale = (prefs.getDouble(_keyInactiveScale) ?? defaultInactiveScale)
         .clamp(minInactiveScale, maxInactiveScale);
     _alignPosition =
@@ -336,15 +310,6 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setInt(_keyFontWeight, _fontWeight);
   }
 
-  /// 设置辉光效果开关并持久化。
-  Future<void> setUseGlowEffect(bool enabled) async {
-    if (_useGlowEffect == enabled) return;
-    _useGlowEffect = enabled;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyUseGlowEffect, enabled);
-  }
-
   /// 设置歌词省电模式开关并持久化。
   /// 开启后歌词界面锁定 60fps，用户上下滑动歌词时临时解锁帧率限制。
   Future<void> setEcoMode(bool enabled) async {
@@ -353,21 +318,6 @@ class LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyEcoMode, enabled);
-  }
-
-  /// 设置辉光触发阈值系数并持久化。
-  ///
-  /// 触发阈值 = 歌词字长中位数 × 该系数，范围 [minGlowThresholdFactor]~
-  /// [maxGlowThresholdFactor]（默认 [defaultGlowThresholdFactor]=1.2）。
-  /// 系数越小越容易触发辉光。
-  Future<void> setGlowThresholdFactor(double value) async {
-    final clamped =
-        value.clamp(minGlowThresholdFactor, maxGlowThresholdFactor);
-    if (clamped == _glowThresholdFactor) return;
-    _glowThresholdFactor = clamped;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keyGlowThresholdFactor, _glowThresholdFactor);
   }
 
   /// 设置非当前行缩放并持久化。
@@ -506,14 +456,12 @@ class LyricPreferences extends ChangeNotifier {
     _fontSize = _deviceDefaultFontSize;
     _lineSpacing = _deviceDefaultLineSpacing;
     _fontWeight = _deviceDefaultFontWeight;
-    _useGlowEffect = true;
     _showTranslation = true;
     _displayMode = LyricDisplayMode.translation;
     _fontSource = LyricFontSource.system;
     _customFontPath = null;
     _loadedCustomFontFamily = null;
     _ecoMode = true;
-    _glowThresholdFactor = defaultGlowThresholdFactor;
     _inactiveScale = defaultInactiveScale;
     _alignPosition = defaultAlignPosition;
     _liftHeightPx = defaultLiftHeightPx;
@@ -522,11 +470,9 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setDouble(_keyFontSize, _fontSize);
     await prefs.setDouble(_keyLineSpacing, _lineSpacing);
     await prefs.setInt(_keyFontWeight, _fontWeight);
-    await prefs.setBool(_keyUseGlowEffect, _useGlowEffect);
     await prefs.setBool(_keyShowTranslation, _showTranslation);
     await prefs.setString(_keyDisplayMode, _displayMode.name);
     await prefs.remove(_keyEcoMode);
-    await prefs.remove(_keyGlowThresholdFactor);
     await prefs.remove(_keyInactiveScale);
     await prefs.remove(_keyAlignPosition);
     await prefs.remove(_keyLiftHeightPx);

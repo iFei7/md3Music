@@ -6,14 +6,13 @@ import 'package:md3music/widgets/apple_lyrics/layout/lyric_preferences.dart';
 
 /// 歌词动画调节子页面。
 ///
-/// 集中调节歌词的逐行动画参数与歌词效果强度，全部为**无极**滑块（无档位小圆点）：
+/// 集中调节歌词的逐行动画参数，全部为**无极**滑块（无档位小圆点）：
 /// - 当前行细节：已播字上浮高度
 /// - 歌词非当前行缩放
 /// - 歌词当前行位置（滚动锚位）
-/// - 歌词效果：辉光触发阈值
 ///
 /// AppBar 的重置按钮可**二次确认后**把本页全部参数恢复默认——
-/// 注意只重置本页 4 个参数，绝不调用 [LyricPreferences.reset]
+/// 注意只重置本页 3 个参数，绝不调用 [LyricPreferences.reset]
 /// （那会把字号/行距/字重等不在本页的设置一并清掉）。
 ///
 /// 监听 [LyricPreferences] 实时刷新；拖动中只刷新标签（onChanged），
@@ -75,22 +74,6 @@ class LyricAnimationSettingsPage extends StatelessWidget {
                 label: '${prefs.liftHeightPx.toStringAsFixed(1)} px',
                 onChanged: (v) => prefs.setLiftHeightPx(v),
               ),
-              const Divider(height: 24),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16),
-                child: Text('歌词效果',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
-              ),
-              _buildSliderTile<double>(
-                prefs: prefs,
-                title: '辉光触发阈值',
-                subtitle: '触发阈值 = 歌词字长中位数 × 该系数（越小越易触发）',
-                value: prefs.glowThresholdFactor,
-                min: LyricPreferences.minGlowThresholdFactor,
-                max: LyricPreferences.maxGlowThresholdFactor,
-                label: prefs.glowThresholdFactor.toStringAsFixed(1),
-                onChanged: (v) => prefs.setGlowThresholdFactor(v),
-              ),
             ],
           );
         },
@@ -100,7 +83,7 @@ class LyricAnimationSettingsPage extends StatelessWidget {
 
   /// 二次确认后把本页全部参数恢复默认。
   ///
-  /// **只重置本页 4 个参数**，绝不调用 [LyricPreferences.reset]
+  /// **只重置本页 3 个参数**，绝不调用 [LyricPreferences.reset]
   /// （那会把字号/行距/字重等不在本页的设置一并清掉）。
   Future<void> _confirmResetAll(
     BuildContext context,
@@ -112,8 +95,8 @@ class LyricAnimationSettingsPage extends StatelessWidget {
         return AlertDialog(
           title: const Text('恢复本页默认值'),
           content: const Text(
-            '将把本页全部参数（非当前行缩放、当前行位置、已播字上浮高度、'
-            '辉光触发阈值）恢复为默认值，确定继续吗？',
+            '将把本页全部参数（非当前行缩放、当前行位置、已播字上浮高度）'
+            '恢复为默认值，确定继续吗？',
           ),
           actions: <Widget>[
             TextButton(
@@ -134,7 +117,6 @@ class LyricAnimationSettingsPage extends StatelessWidget {
     await prefs.setInactiveScale(LyricPreferences.defaultInactiveScale);
     await prefs.setAlignPosition(LyricPreferences.defaultAlignPosition);
     await prefs.setLiftHeightPx(LyricPreferences.defaultLiftHeightPx);
-    await prefs.setGlowThresholdFactor(LyricPreferences.defaultGlowThresholdFactor);
     showToast('已恢复本页全部默认值');
   }
 

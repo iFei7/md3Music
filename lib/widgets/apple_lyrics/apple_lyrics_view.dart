@@ -27,7 +27,6 @@ import 'controllers/lyric_scroll_controller.dart';
 import 'layout/lyric_layout.dart';
 import 'layout/lyric_preferences.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
-import 'renderers/emphasize_effect.dart';
 import 'renderers/interlude_dots.dart';
 import 'renderers/line_renderer.dart';
 import 'renderers/word_renderer.dart';
@@ -49,8 +48,7 @@ class AppleLyricsView extends StatefulWidget {
 
   /// 播放流未就绪（切歌 loading / 音频缓冲 buffering）。
   /// 未就绪期间逐字动画时钟冻结在权威位置（语义对齐暂停），避免
-  /// "帧时钟前进 300ms → 兜底回吸"的锯齿循环造成字内渐变来回抽搐；
-  /// 强调波浪随 renderer 的 isPlaying=false 一并冻结。
+  /// "帧时钟前进 300ms → 兜底回吸"的锯齿循环造成字内渐变来回抽搐。
   final bool playbackNotReady;
 
   /// 用户点击某行后回调（调用方应调用 just_audio.seek）
@@ -77,13 +75,6 @@ class AppleLyricsView extends StatefulWidget {
   /// 是否启用双击跳转（开启后单击不跳转，双击才跳转播放位置）
   final bool doubleTapToJump;
 
-  /// 歌曲 BPM（节拍/分钟），可空。
-  ///
-  /// 用于按快慢歌区分辉光触发阈值：非空时优先使用（BPM>=100 快歌→500ms，
-  /// 否则慢歌→1000ms）；为空则回落 KRC 歌词字长统计推断（见
-  /// [EmphasizeEffect.resolveThresholdMs]）。
-  final int? songBpm;
-
   /// 播放位置 listenable：提供后组件内部订阅位置更新，动画驱动直接消费
   /// 内部权威时间 [_AppleLyricsViewState._authorityTimeMs]，外层不再需要
   /// 每 ~200ms 用新 [currentTimeMs] 重建本组件（性能解耦）。
@@ -104,7 +95,6 @@ class AppleLyricsView extends StatefulWidget {
     this.forceDarkBackground = false,
     this.enableInterludeDots = true,
     this.doubleTapToJump = false,
-    this.songBpm,
     this.positionListenable,
     this.adaptTimeMs,
   });
@@ -179,14 +169,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
 
   final LyricScrollController _scrollController = LyricScrollController();
   final InterludeDots _interludeDots = InterludeDots();
-  final EmphasizeEffect _emphasizeEffect = EmphasizeEffect();
-
-  /// 当前歌曲的辉光触发阈值（ms）：500=快歌，1000=慢歌。
-  ///
-  /// 由歌曲 BPM / KRC 歌词字长推断（[EmphasizeEffect.resolveThresholdMs]），
-  /// 切歌（lines / songBpm 变化）时重算，并同步到每个 [WordRenderer]。
-  int _glowThresholdMs = 500;
-
   /// 每行独立的 [WordRenderer] 缓存（按行索引）。
   ///
   /// WordRenderer 内部检测 line 切换并维护 alpha map，多行共用会导致状态混乱，
@@ -687,11 +669,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   @override
   void initState() {
     super.initState();
-    // 初值：按歌曲 BPM / 歌词字长解析辉光触发阈值（切歌时 didUpdateWidget 重算）
-    _glowThresholdMs = EmphasizeEffect.resolveThresholdMs(
-      lines: widget.lines,
-      songBpm: widget.songBpm,
-    );
     // createTicker 由 SingleTickerProviderStateMixin 提供，
     // 在 widget 不可见时自动暂停（muted），节省 CPU。
     _ticker = createTicker(_onTick);
@@ -931,13 +908,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       _syncEcoDriver();
     }
     // v3 优化：切歌（lines 引用变化）时重启驱动，重新推进新行的 renderer
-    if (!identical(oldWidget.lines, widget.lines) ||
-        oldWidget.songBpm != widget.songBpm) {
-      // 快慢歌辉光阈值随歌曲变化：重算并同步到渲染器（renderer 在渲染循环设置）
-      _glowThresholdMs = EmphasizeEffect.resolveThresholdMs(
-        lines: widget.lines,
-        songBpm: widget.songBpm,
-      );
+    if (!identical(oldWidget.lines, widget.lines)) {
       // 切歌后首次定位直接瞬移到新歌当前行（避免从旧歌曲的长距离滚动）
       _scrollController.resetInitialJump();
       // 切歌诊断日志：定位"切歌后省电模式失效须重新开关"问题用（低频事件）
@@ -1217,9 +1188,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       final bool useWordRenderer = isActive && line.hasWordTiming;
       if (useWordRenderer) {
         final renderer = _wordRendererFor(i);
-        renderer.emphasizeEffect = _emphasizeEffect;
-        // 快慢歌辉光阈值（切歌时重算），行绑定时据此判定强调字
-        renderer.thresholdMs = _glowThresholdMs;
         // 翻译副行浮出/渐显进度（仅当前行注入；非当前行 WordRenderer 不绘制副行）。
         // alpha 与位置共用展开进度，淡入淡出贯穿整个过渡。
         // 当前行恒为入场：副行绕底边从下翻转出现（方向标记必须无条件赋值，
@@ -1232,13 +1200,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           scale: scale,
         );
         // 用平滑时间驱动逐字动画（上浮/字内渐变），避免 positionStream 5fps 卡顿
-        // isPlaying 用于冻结自驱动波浪：暂停/未就绪时波浪不推进，防止辉光持续
-        // 闪烁；未就绪时 smoothPos 也冻结，重锚检测两侧输入静止，波浪不会反复重锚
-        renderer.tick(
-          dt,
-          _smoothPosMs.round(),
-          isPlaying: widget.isPlaying && !widget.playbackNotReady,
-        );
+        renderer.tick(dt, _smoothPosMs.round());
         if (!renderer.isConverged) anyRendererAnimating = true;
       } else {
         final renderer = _lineRendererFor(i);
@@ -1722,7 +1684,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
             enableScale: widget.enableScale,
             wordRenderers: _wordRenderers,
             lineRenderers: _lineRenderers,
-            emphasizeEffect: _emphasizeEffect,
             interludeDots: _interludeDots,
             interludeAfterIndices: _interludeAfterIndices,
             interludePlaceholderHeight: _interludePlaceholderHeight,
@@ -1753,7 +1714,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           _painter!.enableScale = widget.enableScale;
           _painter!.wordRenderers = _wordRenderers;
           _painter!.lineRenderers = _lineRenderers;
-          _painter!.emphasizeEffect = _emphasizeEffect;
           _painter!.interludeDots = _interludeDots;
           _painter!.interludeAfterIndices = _interludeAfterIndices;
           _painter!.interludePlaceholderHeight = _interludePlaceholderHeight;
@@ -1827,7 +1787,6 @@ class _LyricsPainter extends CustomPainter {
   Map<int, WordRenderer> wordRenderers;
   Map<int, LineRenderer> lineRenderers;
 
-  EmphasizeEffect emphasizeEffect;
   InterludeDots interludeDots;
   List<int> interludeAfterIndices;
   double interludePlaceholderHeight;
@@ -1862,7 +1821,6 @@ class _LyricsPainter extends CustomPainter {
     required this.enableScale,
     required this.wordRenderers,
     required this.lineRenderers,
-    required this.emphasizeEffect,
     required this.interludeDots,
     required this.interludeAfterIndices,
     required this.interludePlaceholderHeight,
