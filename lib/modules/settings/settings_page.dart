@@ -110,7 +110,6 @@ class _SettingsPageState extends State<SettingsPage>
   int _artistPhotoInterval = 15;
   double _artistPhotoOpacity = 0.55;
   bool _useGlowEffect = true;
-  bool _useDuetLayout = true;
   // 歌词省电模式开关（默认开启，开启后歌词界面锁定 60fps，滑动时解锁）
   bool _lyricEcoMode = true;
   // 歌词动态字体颜色开关（默认开启，仅 AM 播放器生效）
@@ -500,7 +499,6 @@ class _SettingsPageState extends State<SettingsPage>
       _useTextShadow = useTextShadow;
       _textShadowBlur = textShadowBlur;
       _useGlowEffect = LyricPreferences.instance.useGlowEffect;
-      _useDuetLayout = LyricPreferences.instance.useDuetLayout;
       _lyricEcoMode = LyricPreferences.instance.ecoMode;
       _lyricDynamicColor = LyricPreferences.instance.useDynamicLyricColor;
       _bluetoothLyricEnabled = bluetoothLyricEnabled;
@@ -2129,16 +2127,6 @@ class _SettingsPageState extends State<SettingsPage>
           ),
         // 歌词特效：内容/排版 → 颜色 → 特效 → 性能兜底
         _buildGroupLabel('歌词特效', colorScheme),
-        // search: 对唱 男女
-        SwitchListTile(
-          title: const Text('男女对唱歌词优化'),
-          value: _useDuetLayout,
-          onChanged: (v) {
-            HapticFeedback.lightImpact();
-            setState(() => _useDuetLayout = v);
-            LyricPreferences.instance.setUseDuetLayout(v);
-          },
-        ),
         // 歌词动态字体颜色：当前行按「85% 白 + 15% 封面提取色」混色（仅 AM 播放器）
         // search: 动态颜色 混色
         SwitchListTile(

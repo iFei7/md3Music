@@ -557,7 +557,6 @@ void main() {
         lineWithTrans,
         20,
         maxWidth: 200,
-        viewportWidth: 200,
       );
       expect(canvas.transforms, isEmpty, reason: '就位副行走直绘路径，零变换开销');
       expect(canvas.drawParagraphOffsets.length, 2, reason: '主行 1 次 + 副行 1 次');
@@ -575,7 +574,6 @@ void main() {
         lineWithTrans,
         20,
         maxWidth: 200,
-        viewportWidth: 200,
       );
       expect(canvas.transforms, hasLength(1), reason: '翻转中恰好施加 1 次变换');
 
@@ -619,7 +617,6 @@ void main() {
         lineWithTrans,
         20,
         maxWidth: 200,
-        viewportWidth: 200,
       );
       expect(canvas.transforms, hasLength(1));
 

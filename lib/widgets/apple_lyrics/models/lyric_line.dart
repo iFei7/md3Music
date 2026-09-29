@@ -70,11 +70,6 @@ class LyricLine {
   /// 二者可同时存在（如日语歌曲同时有中文翻译和罗马音）。
   final String? roma;
 
-  /// 演唱者标识（TTML 的 `ttm:agent`，如 `v1`/`v2`/`v4`）。
-  ///
-  /// 供对唱布局按 agentId 区分左/右/中；非 TTML 歌词为 null。
-  final String? agentId;
-
   /// 常量构造函数。[words] 默认空常量列表。
   const LyricLine({
     required this.startTime,
@@ -83,7 +78,6 @@ class LyricLine {
     this.words = const [],
     this.translation,
     this.roma,
-    this.agentId,
   });
 
   /// 该行是否有逐字时间戳。渲染器据此切换逐字 / 整行模式。
@@ -103,10 +97,8 @@ class LyricLine {
     List<LyricWord>? words,
     String? translation,
     String? roma,
-    String? agentId,
     bool clearTranslation = false,
     bool clearRoma = false,
-    bool clearAgentId = false,
   }) {
     return LyricLine(
       startTime: startTime ?? this.startTime,
@@ -115,7 +107,6 @@ class LyricLine {
       words: words ?? this.words,
       translation: clearTranslation ? null : (translation ?? this.translation),
       roma: clearRoma ? null : (roma ?? this.roma),
-      agentId: clearAgentId ? null : (agentId ?? this.agentId),
     );
   }
 
@@ -129,7 +120,6 @@ class LyricLine {
           text == other.text &&
           translation == other.translation &&
           roma == other.roma &&
-          agentId == other.agentId &&
           listEquals(words, other.words);
 
   @override
@@ -139,7 +129,6 @@ class LyricLine {
         text,
         translation,
         roma,
-        agentId,
         Object.hashAll(words),
       );
 
@@ -147,6 +136,5 @@ class LyricLine {
   String toString() =>
       'LyricLine(startTime: $startTime, duration: $duration, text: \'$text\', '
       'words: ${words.length}, translation: ${translation == null ? 'null' : '\'$translation\''}, '
-      'roma: ${roma == null ? 'null' : '\'$roma\''}, '
-      'agentId: ${agentId == null ? 'null' : '\'$agentId\''})';
+      'roma: ${roma == null ? 'null' : '\'$roma\''})';
 }

@@ -17,7 +17,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/widgets.dart';
 
-import '../layout/duet_layout.dart';
 import '../layout/lyric_layout.dart';
 import '../layout/lyric_preferences.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
@@ -270,12 +269,6 @@ class WordRenderer {
   /// 预计算的每个 word 在行内的起始 X 坐标（相对于行首）。
   /// 在 [_ensureBound] 时一次性计算，避免每帧 O(n²) 循环累加。
   List<double> _wordStartXs = const <double>[];
-
-  /// 缓存的上次换行扫描的 maxWidth，用于判断是否需要重算 _cachedVisualLineWidths。
-  double _cachedMaxWidth = -1;
-
-  /// 缓存的每条视觉行的 word 累计宽度，避免每帧重新分配 List。
-  List<double> _cachedVisualLineWidths = const <double>[];
 
   // ============== 状态查询 ==============
 
@@ -763,8 +756,6 @@ class WordRenderer {
     LyricLine line,
     double fontSize, {
     double maxWidth = double.infinity,
-    DuetAlignment alignment = DuetAlignment.defaultAlign,
-    double viewportWidth = 0,
   }) {
     // 临时调试：行切换时打印换行分析（定位歌词重叠）
     final bool isNewLine =
@@ -816,22 +807,12 @@ class WordRenderer {
         line,
         fontSize,
         maxWidth: maxWidth,
-        alignment: alignment,
-        viewportWidth: viewportWidth,
       );
       return;
     }
 
-    // 对唱对齐：预扫描每视觉行的 word 宽度，换行时重算 baseX
-    // _visualLineWidths[i] = 第 i 条视觉行的 word 累计宽度
-    final List<double> visualLineWidths = _computeVisualLineWidths(maxWidth);
     int visualLineIndex = 0;
-    double baseX = _alignX(
-      alignment,
-      offset.dx,
-      visualLineWidths.isNotEmpty ? visualLineWidths[0] : 0,
-      viewportWidth,
-    );
+    final double baseX = offset.dx;
 
     double dx = 0; // 相对 baseX 的水平偏移
     double currentY = offset.dy; // 当前视觉行的 y 坐标
@@ -878,16 +859,7 @@ class WordRenderer {
         currentY = visualLineIndex == 0
             ? offset.dy + mainLineHeight
             : currentY + wrapLineHeight;
-        // 换行后重算对齐 baseX
         visualLineIndex++;
-        if (visualLineIndex < visualLineWidths.length) {
-          baseX = _alignX(
-            alignment,
-            offset.dx,
-            visualLineWidths[visualLineIndex],
-            viewportWidth,
-          );
-        }
       }
 
       // 换行行用 0.8x 行盒（行盒=行距，避免行盒重叠）；主行用完整行高
@@ -1093,16 +1065,8 @@ class WordRenderer {
           lastRowHeight +
           transFontSize * 0.3 +
           subH * (translationExpand - 1.0);
-      // 翻译副行对齐跟随原文，按副行自身宽度计算 x
-      final double transX = _alignX(
-        alignment,
-        offset.dx,
-        _translationPainter.width,
-        viewportWidth,
-      );
-      // 多行翻译副行需设置 textAlign 让每条视觉行独立对齐到 transX
-      // 单行时 textAlign 不影响，_alignX 已计算正确 x
-      _translationPainter.textAlign = _duetToTextAlign(alignment);
+      // 翻译副行与主行同左对齐
+      final double transX = offset.dx;
       _paintTranslation(canvas, Offset(transX, transY));
     }
   }
@@ -1550,67 +1514,6 @@ class WordRenderer {
     return bright + (dark - bright) * t;
   }
 
-  /// 按换行逻辑预扫描，计算每条视觉行的 word 累计宽度。
-  /// 与 paintLine 循环中的换行判断一致：dx + width > maxWidth 且 dx > 0 时换行。
-  /// 性能优化：缓存结果，maxWidth 不变时直接返回缓存。
-  List<double> _computeVisualLineWidths(double maxWidth) {
-    if (maxWidth == _cachedMaxWidth && _cachedVisualLineWidths.isNotEmpty) {
-      return _cachedVisualLineWidths;
-    }
-    _cachedMaxWidth = maxWidth;
-    final List<double> widths = <double>[];
-    double dx = 0;
-    double lineW = 0;
-    for (int i = 0; i < _wordWidths.length; i++) {
-      final w = _wordWidths[i];
-      if (dx + w > maxWidth && dx > 0) {
-        widths.add(lineW);
-        dx = 0;
-        lineW = 0;
-      }
-      dx += w;
-      lineW += w;
-    }
-    if (lineW > 0) widths.add(lineW);
-    _cachedVisualLineWidths = widths;
-    return widths;
-  }
-
-  /// 根据对唱对齐方式计算文本起始 x 坐标。
-  /// [leftPadding] 为左侧 1em 边距（即 offset.dx），右侧对称留白。
-  double _alignX(
-    DuetAlignment alignment,
-    double leftPadding,
-    double textWidth,
-    double viewportWidth,
-  ) {
-    if (viewportWidth <= 0 ||
-        alignment == DuetAlignment.defaultAlign ||
-        alignment == DuetAlignment.left) {
-      return leftPadding;
-    }
-    if (alignment == DuetAlignment.right) {
-      return viewportWidth - leftPadding - textWidth;
-    }
-    // center
-    return (viewportWidth - textWidth) / 2;
-  }
-
-  /// 对唱对齐方式 → TextAlign 映射（用于多行翻译副行内部对齐）。
-  /// left/defaultAlign → start（左对齐）
-  /// right → end（右对齐）
-  /// center → center（居中）
-  static TextAlign _duetToTextAlign(DuetAlignment alignment) {
-    switch (alignment) {
-      case DuetAlignment.center:
-        return TextAlign.center;
-      case DuetAlignment.right:
-        return TextAlign.end;
-      default:
-        return TextAlign.start;
-    }
-  }
-
   /// 整行降级绘制（无 word 时间戳时使用）。
   ///
   /// [maxWidth] 用于自动换行（默认 [double.infinity] 不换行）。
@@ -1621,8 +1524,6 @@ class WordRenderer {
     LyricLine line,
     double fontSize, {
     double maxWidth = double.infinity,
-    DuetAlignment alignment = DuetAlignment.defaultAlign,
-    double viewportWidth = 0,
   }) {
     if (line.text.isEmpty) return;
     final double alpha = dynamicDarkAlpha;
@@ -1650,13 +1551,7 @@ class WordRenderer {
     painter.layout(
       maxWidth: maxWidth == double.infinity ? double.infinity : maxWidth,
     );
-    final double x = _alignX(
-      alignment,
-      offset.dx,
-      painter.width,
-      viewportWidth,
-    );
-    painter.paint(canvas, Offset(x, offset.dy));
+    painter.paint(canvas, Offset(offset.dx, offset.dy));
     painter.dispose();
   }
 
@@ -2137,8 +2032,6 @@ class WordRenderer {
     _boundLineHeight = -1;
     _wordWidths = const <double>[];
     _wordStartXs = const <double>[];
-    _cachedMaxWidth = -1;
-    _cachedVisualLineWidths = const <double>[];
     _currentWordIdx = -1;
     _intraWordProgress = 0.0;
     _maskX = -1.0;

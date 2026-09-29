@@ -35,7 +35,6 @@ const List<({String label, String category, String aliases})>
   (label: '歌手写真背景轮播', category: '播放页样式', aliases: '写真 背景 轮播'),
   (label: '轮播间隔', category: '播放页样式', aliases: '写真 轮播 间隔'),
   (label: '写真背景透明度', category: '播放页样式', aliases: '写真 透明度'),
-  (label: '男女对唱歌词优化', category: '播放页样式', aliases: '对唱 男女'),
   (label: '歌词动态颜色', category: '播放页样式', aliases: '动态颜色 混色'),
   (label: '歌词辉光效果', category: '播放页样式', aliases: '辉光 发光'),
   (label: '播放页背景模糊', category: '播放页样式', aliases: '模糊 背景 播放器 毛玻璃 封面'),

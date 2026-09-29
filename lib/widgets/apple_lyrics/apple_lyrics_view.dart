@@ -26,7 +26,6 @@ import 'package:flutter/widgets.dart';
 import '../../core/services/player_frame_driver.dart';
 import 'controllers/lyric_scroll_controller.dart';
 import 'animation/spring.dart';
-import 'layout/duet_layout.dart';
 import 'layout/lyric_layout.dart';
 import 'layout/lyric_preferences.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
@@ -383,23 +382,17 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     return shader;
   }
 
-  // ============== 男女对唱歌词处理 ==============
+  // ============== 歌词行数据 ==============
   //
-  // 当 [LyricPreferences.useDuetLayout] 开启时，对 widget.lines 做一次预处理：
-  // 剔除「男：/女：/合：」前缀，并生成每行的对齐方式（左/右/居中）。
-  // 处理结果缓存到 [_cleanedLines] / [_duetAlignments]，供行高测量、模糊渲染、
-  // painter 使用。时间戳保持不变，故 onSeek / 当前行定位 / 间奏检测不受影响。
-  List<LyricLine> _cleanedLines = const <LyricLine>[];
-  List<DuetAlignment> _duetAlignments = const <DuetAlignment>[];
+  // [_lines] 与 widget.lines 同引用，仅在来源引用变化时重新绑定并失效相关缓存。
+  // 时间戳保持不变，故 onSeek / 当前行定位 / 间奏检测不受影响。
+  List<LyricLine> _lines = const <LyricLine>[];
 
-  /// 上次处理对唱时所基于的 lines 引用（用于缓存命中判断）。
-  Object? _cachedDuetLinesRef;
-
-  /// 上次处理对唱时的 useDuetLayout 值。
-  bool _cachedUseDuetLayout = false;
+  /// 上次绑定时所基于的 widget.lines 引用（用于缓存命中判断）。
+  Object? _cachedLinesSourceRef;
 
   /// 缓存的 hasTimestamps 结果（避免每帧 O(N) 遍历所有 lines）。
-  /// 在 _recomputeDuetIfNeeded 中随 lines 引用变化时更新。
+  /// 在 [_syncLinesIfNeeded] 中随 lines 引用变化时更新。
   bool _cachedHasTimestamps = false;
 
   /// 缓存的"是否含逐字行"结果（避免每帧 O(N) 遍历所有 lines）。
@@ -410,25 +403,20 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 持续推进逐字渐变/上浮/辉光动画。
   bool _cachedHasAnyWordTiming = false;
 
-  /// 重算对唱预处理结果（若 lines 引用或开关变化）。
-  void _recomputeDuetIfNeeded() {
-    final useDuet = LyricPreferences.instance.useDuetLayout;
-    if (useDuet == _cachedUseDuetLayout &&
-        identical(widget.lines, _cachedDuetLinesRef) &&
-        _cleanedLines.length == widget.lines.length) {
+  /// 绑定当前歌词行列表（仅在来源引用变化时重新绑定并失效缓存）。
+  void _syncLinesIfNeeded() {
+    if (identical(widget.lines, _cachedLinesSourceRef) &&
+        _lines.length == widget.lines.length) {
       return;
     }
-    _cachedUseDuetLayout = useDuet;
-    _cachedDuetLinesRef = widget.lines;
+    _cachedLinesSourceRef = widget.lines;
+    _lines = widget.lines;
     // 缓存 hasTimestamps 结果，避免每帧 O(N) 遍历
     _cachedHasTimestamps = widget.lines.any((l) => l.startTime > 0);
     // 缓存"是否含逐字行"（KRC / 字级 LRC 的 words 非空），P0-A 静止省电
     // 模式仅对整首歌无逐字（LRC 逐行 / 纯文本）生效
     _cachedHasAnyWordTiming = widget.lines.any((l) => l.words.isNotEmpty);
-    final result = DuetLayout.process(widget.lines, useDuet);
-    _cleanedLines = result.cleanedLines;
-    _duetAlignments = result.alignments;
-    // 失效行高缓存，让 _recomputeLineHeightsIfNeeded 用新的 _cleanedLines 重算
+    // 失效行高缓存，让 _recomputeLineHeightsIfNeeded 用新的 _lines 重算
     _cachedLinesRef = null;
     // 歌词内容变化：清空副行收起表并重置副行进度（旧行索引不再适用于新歌词）
     _transCollapsing.clear();
@@ -585,7 +573,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     return _interludePlaceholderHeight * _interludeExpandProgress;
   }
 
-  /// 每行副行（翻译/罗马音）预留高度（含过长换行），索引与 [_cleanedLines] 对齐。
+  /// 每行副行（翻译/罗马音）预留高度（含过长换行），索引与 [_lines] 对齐。
   ///
   /// 公式见 [LyricLayout.auxSubHeight]：`rows × transFontSize × 1.5 + 0.3em 间隙`，
   /// rows 为该行副行在可用宽度内的实际视觉行数。行高缓存恒按纯主行测量，
@@ -607,8 +595,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
 
   /// 指定行是否有副行文本（翻译或罗马音，按 displayMode）。
   bool _lineHasAuxText(int i) {
-    if (i < 0 || i >= _cleanedLines.length) return false;
-    final line = _cleanedLines[i];
+    if (i < 0 || i >= _lines.length) return false;
+    final line = _lines[i];
     final String? aux =
         LyricPreferences.instance.displayMode == LyricDisplayMode.roma
         ? line.roma
@@ -659,7 +647,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 同时检测相邻行间隔 >= [LyricLayout.interludeThresholdMs] 的位置，
   /// 记录到 [_interludeAfterIndices]。占位高度动态展开/收起（不在这里固定）。
   void _recomputeLineHeightsIfNeeded(double fontSize, double viewportWidth) {
-    final identitySame = identical(_cleanedLines, _cachedLinesRef);
+    final identitySame = identical(_lines, _cachedLinesRef);
     final currentFontFamily = LyricLayout.fontFamily;
     final currentFontWeight = LyricLayout.fontWeight.value;
     final currentLineHeight = LyricLayout.lineHeight;
@@ -672,9 +660,9 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     if (fontSize == _cachedFontSize &&
         viewportWidth == _cachedViewportWidth &&
         currentLineHeight == _cachedLineHeight &&
-        _cleanedLines.length == _cachedLinesLength &&
+        _lines.length == _cachedLinesLength &&
         identitySame &&
-        _lineHeights.length == _cleanedLines.length &&
+        _lineHeights.length == _lines.length &&
         currentFontFamily == _cachedFontFamily &&
         currentFontWeight == _cachedFontWeight &&
         currentDisplayMode == _cachedDisplayMode) {
@@ -683,8 +671,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     _cachedFontSize = fontSize;
     _cachedViewportWidth = viewportWidth;
     _cachedLineHeight = currentLineHeight;
-    _cachedLinesLength = _cleanedLines.length;
-    _cachedLinesRef = _cleanedLines;
+    _cachedLinesLength = _lines.length;
+    _cachedLinesRef = _lines;
     _cachedFontFamily = currentFontFamily;
     _cachedFontWeight = currentFontWeight;
     _cachedDisplayMode = currentDisplayMode;
@@ -710,8 +698,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     final List<double> tops = <double>[];
     final List<int> interludeIndices = <int>[];
     double acc = 0;
-    for (int i = 0; i < _cleanedLines.length; i++) {
-      final line = _cleanedLines[i];
+    for (int i = 0; i < _lines.length; i++) {
+      final line = _lines[i];
       // 行高恒按"纯主行"测量：翻译副行预留不再进静态缓存，改由
       // _transExtraHeightFor（展开/收起进度）每帧动态叠加。副行占位随动画
       // 平滑增长/回落，消除行切换时高度瞬间换位导致的位置闪现。
@@ -728,8 +716,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       // 检测当前行与下一行之间是否有间奏（最后一行后面无间奏）
       // 间奏点关闭时跳过检测，_interludeAfterIndices 保持为空，
       // _updateInterlude 自然不会激活任何间奏，节奏点不会出现。
-      if (widget.enableInterludeDots && i < _cleanedLines.length - 1) {
-        final next = _cleanedLines[i + 1];
+      if (widget.enableInterludeDots && i < _lines.length - 1) {
+        final next = _lines[i + 1];
         // 用"人声实际结束时间"而非 endTime（KRC 行 duration 常覆盖尾音/空白，
         // 会把真实 gap 压缩导致间奏点识别不到，见 effectiveLineEndTime）
         final gap = next.startTime - AppleLyricsView.effectiveLineEndTime(line);
@@ -746,11 +734,11 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // 无翻译/罗马音的歌零额外开销。此值在动画中按进度逐行叠加（见
     // [_transExtraHeightFor]），也是 renderer 副行"长出"位移的取值来源。
     final List<double> auxHeights = List<double>.filled(
-      _cleanedLines.length,
+      _lines.length,
       0,
     );
-    for (int i = 0; i < _cleanedLines.length; i++) {
-      final line = _cleanedLines[i];
+    for (int i = 0; i < _lines.length; i++) {
+      final line = _lines[i];
       final String? auxText = currentDisplayMode == LyricDisplayMode.roma
           ? line.roma
           : line.translation;
@@ -1039,10 +1027,9 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
 
   /// 偏好变化时触发重绘。
   ///
-  /// **始终 setState**：偏好变化（如 useDuetLayout 切换）需要触发 build，
-  /// 让 _recomputeDuetIfNeeded 重新处理歌词。若仅依赖 _onTick 末尾的
-  /// hasVisualChange 判断，在播放中但当前行未切换时 hasVisualChange 为 false，
-  /// 不会 setState，导致 _cleanedLines/_duetAlignments 不更新，对齐不生效。
+  /// **始终 setState**：偏好变化（字号/字重/行距等）需要触发 build 重新测量。
+  /// 若仅依赖 _onTick 末尾的 hasVisualChange 判断，在播放中但当前行未切换时
+  /// hasVisualChange 为 false，不会 setState，导致布局不更新。
   ///
   /// **字体变化时的特殊处理**：失效所有缓存，强制下帧重算：
   /// - 行高缓存：让 `_recomputeLineHeightsIfNeeded` 重测所有行高度
@@ -1063,7 +1050,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       _releaseRendererCaches();
     }
     // 统一走 _syncEcoDriver 确定驱动源（eco 开关变化：锁定 → 60fps Timer；
-    // 解锁/关闭 → Ticker 满帧），并确保偏好变化（如 useDuetLayout）触发重建
+    // 解锁/关闭 → Ticker 满帧），并确保偏好变化触发重建
     _syncEcoDriver();
     setState(() {});
   }
@@ -2118,9 +2105,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           fontSize,
         );
 
-        // 男女对唱预处理：剔除「男：/女：/合：」前缀并生成对齐方式
-        // 必须在行高测量之前，确保行高基于剔除后的文本计算
-        _recomputeDuetIfNeeded();
+        // 绑定歌词行列表（仅在来源引用变化时重新绑定）
+        _syncLinesIfNeeded();
         // 性能优化：缓存命中检查，只在数据/字号/视口变化时重算 lineHeights/lineTops
         // 之前每帧都跑 N 次 TextPainter.layout 是 CPU 瓶颈（UI 线程 70%+）
         _recomputeLineHeightsIfNeeded(fontSize, constraints.maxWidth);
@@ -2132,8 +2118,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         if (_painter == null) {
           _painter = _LyricsPainter(
             repaint: _repaintNotifier,
-            lines: _cleanedLines,
-            duetAlignments: _duetAlignments,
+            lines: _lines,
             currentLineIndex: _currentLineIndex,
             posY: _scrollController.posY,
             fontSize: fontSize,
@@ -2141,7 +2126,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
             lineHeights: _lineHeights,
             lineTops: _lineTops,
             viewportHeight: constraints.maxHeight,
-            viewportWidth: constraints.maxWidth,
             maxLineWidth: maxLineWidth,
             currentTimeMs: _authorityTimeMs,
             enableScale: widget.enableScale,
@@ -2169,8 +2153,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           );
         } else {
           // 复用持久化 painter，更新所有字段（布局 + 动画）
-          _painter!.lines = _cleanedLines;
-          _painter!.duetAlignments = _duetAlignments;
+          _painter!.lines = _lines;
           _painter!.currentLineIndex = _currentLineIndex;
           _painter!.posY = _scrollController.posY;
           _painter!.fontSize = fontSize;
@@ -2178,7 +2161,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           _painter!.lineHeights = _lineHeights;
           _painter!.lineTops = _lineTops;
           _painter!.viewportHeight = constraints.maxHeight;
-          _painter!.viewportWidth = constraints.maxWidth;
           _painter!.maxLineWidth = maxLineWidth;
           _painter!.currentTimeMs = _authorityTimeMs;
           _painter!.enableScale = widget.enableScale;
@@ -2249,7 +2231,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
 /// [maxLineWidth] 参数实现 word 级换行。
 class _LyricsPainter extends CustomPainter {
   List<LyricLine> lines;
-  List<DuetAlignment> duetAlignments;
   int currentLineIndex;
   double posY;
   double fontSize;
@@ -2257,7 +2238,6 @@ class _LyricsPainter extends CustomPainter {
   List<double> lineHeights;
   List<double> lineTops;
   double viewportHeight;
-  double viewportWidth;
   double maxLineWidth;
   int currentTimeMs;
   bool enableScale;
@@ -2295,7 +2275,6 @@ class _LyricsPainter extends CustomPainter {
   _LyricsPainter({
     super.repaint,
     required this.lines,
-    required this.duetAlignments,
     required this.currentLineIndex,
     required this.posY,
     required this.fontSize,
@@ -2303,7 +2282,6 @@ class _LyricsPainter extends CustomPainter {
     required this.lineHeights,
     required this.lineTops,
     required this.viewportHeight,
-    required this.viewportWidth,
     required this.maxLineWidth,
     required this.currentTimeMs,
     required this.enableScale,
@@ -2370,7 +2348,7 @@ class _LyricsPainter extends CustomPainter {
       i < lineTops.length ? lineTops[i] : i * mainLineHeight;
 
   /// 指定行是否有副行文本（与 State._lineHasAuxText 同口径；
-  /// lines 即 _cleanedLines）。
+  /// lines 即 _lines）。
   bool _lineHasAuxText(int i) {
     if (i < 0 || i >= lines.length) return false;
     final line = lines[i];
@@ -2489,24 +2467,10 @@ class _LyricsPainter extends CustomPainter {
           ? LyricLayout.activeScale
           : (enableScale ? LyricLayout.inactiveScale : LyricLayout.activeScale);
 
-      // 对唱对齐方式（越界时降级为默认左对齐）
-      final DuetAlignment alignment = i < duetAlignments.length
-          ? duetAlignments[i]
-          : DuetAlignment.defaultAlign;
-
       // 保存画布状态，应用 scale 变换。
-      // pivotX 根据 alignment 选择：左对齐用左边缘，右对齐用右边缘，居中用视口中心。
-      // 这样 scale<1.0 时文本以对齐锚点为中心收缩，对齐不会偏移。
-      // 若统一用左边缘 pivot，右对齐/居中行 scale 后会向左偏移（视觉上对齐失效）。
+      // pivotX 取左边缘：scale<1.0 时文本以左边缘为中心收缩，对齐不会偏移。
       canvas.save();
-      final double pivotX;
-      if (alignment == DuetAlignment.right) {
-        pivotX = viewportWidth - startX;
-      } else if (alignment == DuetAlignment.center) {
-        pivotX = viewportWidth / 2;
-      } else {
-        pivotX = startX;
-      }
+      const double pivotX = startX;
       final double pivotY = y + lineHeight / 2;
       canvas.translate(pivotX, pivotY);
       canvas.scale(scale, scale);
@@ -2530,8 +2494,6 @@ class _LyricsPainter extends CustomPainter {
           line,
           fontSize,
           maxWidth: maxLineWidth,
-          alignment: alignment,
-          viewportWidth: viewportWidth,
         );
       } else {
         // 整行模式：LRC/纯文本行 + 非当前行的 KRC 行
@@ -2547,8 +2509,6 @@ class _LyricsPainter extends CustomPainter {
           line,
           fontSize,
           maxWidth: maxLineWidth,
-          alignment: alignment,
-          viewportWidth: viewportWidth,
         );
       }
 

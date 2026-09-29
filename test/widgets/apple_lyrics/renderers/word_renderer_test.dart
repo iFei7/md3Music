@@ -526,7 +526,6 @@ void main() {
         krcLineWithTrans,
         20,
         maxWidth: 200,
-        viewportWidth: 200,
       );
       expect(canvas.transforms, isEmpty);
       expect(canvas.drawParagraphOffsets, isNotEmpty);
@@ -544,7 +543,6 @@ void main() {
         krcLineWithTrans,
         20,
         maxWidth: 200,
-        viewportWidth: 200,
       );
       expect(canvas.transforms, hasLength(1));
 

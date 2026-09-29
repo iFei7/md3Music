@@ -208,7 +208,6 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyCustomFontPath = 'lyric_custom_font_path';
   static const String _keyShowTranslation = 'lyric_show_translation';
   static const String _keyDisplayMode = 'lyric_display_mode';
-  static const String _keyUseDuetLayout = 'lyric_use_duet_layout';
   static const String _keyEcoMode = 'lyric_eco_mode';
   static const String _keyUseDynamicLyricColor = 'lyric_dynamic_color';
   static const String _keyGlowThresholdFactor = 'lyric_glow_threshold_factor';
@@ -227,7 +226,6 @@ class LyricPreferences extends ChangeNotifier {
   double _lineSpacing = defaultLineSpacing;
   int _fontWeight = defaultFontWeight;
   bool _useGlowEffect = true;
-  bool _useDuetLayout = false;
   bool _showTranslation = true;
   LyricDisplayMode _displayMode = LyricDisplayMode.translation;
   LyricFontSource _fontSource = LyricFontSource.system;
@@ -263,7 +261,6 @@ class LyricPreferences extends ChangeNotifier {
   /// 歌词字重对应 [FontWeight]（供 TextStyle 使用）。
   FontWeight get fontWeight => FontWeight(_fontWeight);
   bool get useGlowEffect => _useGlowEffect;
-  bool get useDuetLayout => _useDuetLayout;
   bool get showTranslation => _showTranslation;
   LyricDisplayMode get displayMode => _displayMode;
   LyricFontSource get fontSource => _fontSource;
@@ -351,7 +348,6 @@ class LyricPreferences extends ChangeNotifier {
         (prefs.getInt(_keyFontWeight) ?? _deviceDefaultFontWeight)
             .clamp(minFontWeight, maxFontWeight);
     _useGlowEffect = prefs.getBool(_keyUseGlowEffect) ?? true;
-    _useDuetLayout = prefs.getBool(_keyUseDuetLayout) ?? false;
     _showTranslation = prefs.getBool(_keyShowTranslation) ?? true;
     _displayMode = _displayModeFromName(prefs.getString(_keyDisplayMode));
     _fontSource = _fontSourceFromName(prefs.getString(_keyFontSource));
@@ -426,15 +422,6 @@ class LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyUseGlowEffect, enabled);
-  }
-
-  /// 设置男女对唱歌词优化开关并持久化。
-  Future<void> setUseDuetLayout(bool enabled) async {
-    if (_useDuetLayout == enabled) return;
-    _useDuetLayout = enabled;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyUseDuetLayout, enabled);
   }
 
   /// 设置歌词省电模式开关并持久化。
@@ -648,7 +635,6 @@ class LyricPreferences extends ChangeNotifier {
     _lineSpacing = _deviceDefaultLineSpacing;
     _fontWeight = _deviceDefaultFontWeight;
     _useGlowEffect = true;
-    _useDuetLayout = false;
     _showTranslation = true;
     _displayMode = LyricDisplayMode.translation;
     _fontSource = LyricFontSource.system;
@@ -670,7 +656,6 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setDouble(_keyLineSpacing, _lineSpacing);
     await prefs.setInt(_keyFontWeight, _fontWeight);
     await prefs.setBool(_keyUseGlowEffect, _useGlowEffect);
-    await prefs.setBool(_keyUseDuetLayout, _useDuetLayout);
     await prefs.setBool(_keyShowTranslation, _showTranslation);
     await prefs.setString(_keyDisplayMode, _displayMode.name);
     await prefs.remove(_keyEcoMode);
