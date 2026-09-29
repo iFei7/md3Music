@@ -175,7 +175,6 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyShowTranslation = 'lyric_show_translation';
   static const String _keyDisplayMode = 'lyric_display_mode';
   static const String _keyEcoMode = 'lyric_eco_mode';
-  static const String _keyUseDynamicLyricColor = 'lyric_dynamic_color';
   static const String _keyGlowThresholdFactor = 'lyric_glow_threshold_factor';
   static const String _keyInactiveScale = 'lyric_inactive_scale';
   static const String _keyAlignPosition = 'lyric_align_position';
@@ -193,8 +192,6 @@ class LyricPreferences extends ChangeNotifier {
   String? _customFontPath;
   // 歌词省电模式（默认开启）：开启后歌词界面锁定 60fps，用户上下滑动歌词时临时解锁
   bool _ecoMode = true;
-  // 动态字体颜色（默认开启，仅 AM 播放器可用）：当前行歌词颜色按「70% 白 + 30% 封面提取色」混色
-  bool _useDynamicLyricColor = true;
   // 辉光触发阈值系数（默认 1.2）：触发阈值 = 歌词字长中位数 × 该系数
   double _glowThresholdFactor = defaultGlowThresholdFactor;
   // 非当前行缩放（默认 0.850）：清晰层非当前行与 AM 模糊层共用此值
@@ -223,9 +220,6 @@ class LyricPreferences extends ChangeNotifier {
 
   /// 歌词省电模式是否开启（默认开启）。
   bool get ecoMode => _ecoMode;
-
-  /// 歌词动态字体颜色是否开启（默认开启，仅 AM 播放器生效）。
-  bool get useDynamicLyricColor => _useDynamicLyricColor;
 
   /// 辉光触发阈值系数（范围 [minGlowThresholdFactor]~[maxGlowThresholdFactor]）。
   ///
@@ -293,7 +287,6 @@ class LyricPreferences extends ChangeNotifier {
     _fontSource = _fontSourceFromName(prefs.getString(_keyFontSource));
     _customFontPath = prefs.getString(_keyCustomFontPath);
     _ecoMode = prefs.getBool(_keyEcoMode) ?? true;
-    _useDynamicLyricColor = prefs.getBool(_keyUseDynamicLyricColor) ?? true;
     _glowThresholdFactor =
         (prefs.getDouble(_keyGlowThresholdFactor) ?? defaultGlowThresholdFactor)
             .clamp(minGlowThresholdFactor, maxGlowThresholdFactor);
@@ -360,16 +353,6 @@ class LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyEcoMode, enabled);
-  }
-
-  /// 设置歌词动态字体颜色开关并持久化。
-  /// 开启后当前行歌词颜色按「70% 白 + 30% 封面提取色」混色（仅 AM 播放器生效）。
-  Future<void> setUseDynamicLyricColor(bool enabled) async {
-    if (_useDynamicLyricColor == enabled) return;
-    _useDynamicLyricColor = enabled;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyUseDynamicLyricColor, enabled);
   }
 
   /// 设置辉光触发阈值系数并持久化。
@@ -530,7 +513,6 @@ class LyricPreferences extends ChangeNotifier {
     _customFontPath = null;
     _loadedCustomFontFamily = null;
     _ecoMode = true;
-    _useDynamicLyricColor = true;
     _glowThresholdFactor = defaultGlowThresholdFactor;
     _inactiveScale = defaultInactiveScale;
     _alignPosition = defaultAlignPosition;
@@ -544,7 +526,6 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setBool(_keyShowTranslation, _showTranslation);
     await prefs.setString(_keyDisplayMode, _displayMode.name);
     await prefs.remove(_keyEcoMode);
-    await prefs.remove(_keyUseDynamicLyricColor);
     await prefs.remove(_keyGlowThresholdFactor);
     await prefs.remove(_keyInactiveScale);
     await prefs.remove(_keyAlignPosition);

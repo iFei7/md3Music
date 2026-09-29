@@ -77,13 +77,6 @@ class AppleLyricsView extends StatefulWidget {
   /// 是否启用双击跳转（开启后单击不跳转，双击才跳转播放位置）
   final bool doubleTapToJump;
 
-  /// 专辑封面提取色（动态字体颜色用，仅 AM 播放器传入）。
-  ///
-  /// 非 null 且 [LyricPreferences.useDynamicLyricColor] 开启且 [forceDarkBackground]
-  /// 为 true 时，当前行歌词颜色按「70% 白 + 30% 提取色」混色；
-  /// 非当前行保持默认白色不变。
-  final Color? accentColor;
-
   /// 歌曲 BPM（节拍/分钟），可空。
   ///
   /// 用于按快慢歌区分辉光触发阈值：非空时优先使用（BPM>=100 快歌→500ms，
@@ -111,7 +104,6 @@ class AppleLyricsView extends StatefulWidget {
     this.forceDarkBackground = false,
     this.enableInterludeDots = true,
     this.doubleTapToJump = false,
-    this.accentColor,
     this.songBpm,
     this.positionListenable,
     this.adaptTimeMs,
@@ -326,14 +318,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 同时用于检测时间回退（seek/跳转）：currentTimeMs < 上次值时说明
   /// 播放位置回跳，需强制重置间奏点动画时钟（见 [_updateInterlude]）。
   int _lastInterludeCheckTimeMs = -1;
-
-  // ============== 动态字体颜色（仅 AM 播放器，默认关闭） ==============
-  // 开启后当前行歌词颜色按「70% 白 + 30% 封面提取色」混色，
-  // 非当前行保持默认白色。颜色由 build 根据 accentColor 计算一次，
-  // _onTick 与 painter 每帧读取，避免每帧 Color.lerp 分配。
-
-  /// 当前行动态字体颜色（ARGB int），null 表示不使用（回退默认白色）。
-  int? _activeLineColorValue;
 
   // overscan 视口缓冲行数：pad 端 15、手机端 10。在 build 中根据最短边更新
   int _overscan = 10;
@@ -1246,7 +1230,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         renderer.setLineState(
           isActive: true,
           scale: scale,
-          activeColorValue: _activeLineColorValue,
         );
         // 用平滑时间驱动逐字动画（上浮/字内渐变），避免 positionStream 5fps 卡顿
         // isPlaying 用于冻结自驱动波浪：暂停/未就绪时波浪不推进，防止辉光持续
@@ -1282,7 +1265,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         renderer.setLineState(
           isActive: isActive,
           scale: scale,
-          activeColorValue: _activeLineColorValue,
         );
         renderer.tick(dt);
         if (!renderer.isConverged) anyRendererAnimating = true;
@@ -1690,22 +1672,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     // 根据屏幕最短边判断设备类型：>= 600dp 视为 pad（平板），更新 overscan 缓冲行数
     final shortestSide = MediaQuery.of(context).size.shortestSide;
     _overscan = shortestSide >= 600 ? 15 : 10;
-    // 动态字体颜色：仅 AM 播放器（深色背景）且开关开启且提取到封面颜色时，
-    // 当前行歌词颜色 = 85% 白 + 15% 提取色；否则回退默认白色（null）。
-    // 混色后再兜底提升明度（≥0.78），保证深色背景上的可读性；
-    // 仅抬升明度、保留色相与饱和度，视觉上仍是封面色调的浅色。
-    if (widget.forceDarkBackground &&
-        LyricPreferences.instance.useDynamicLyricColor &&
-        widget.accentColor != null) {
-      final mixed = Color.lerp(Colors.white, widget.accentColor!, 0.15)!;
-      final hsl = HSLColor.fromColor(mixed);
-      _activeLineColorValue = hsl
-          .withLightness(math.max(hsl.lightness, 0.78))
-          .toColor()
-          .toARGB32();
-    } else {
-      _activeLineColorValue = null;
-    }
     // 根据主题亮度设置歌词文字颜色：
     // - AM 风格（forceDarkBackground=true）→ 始终白色
     // - 深色主题 → 白色
@@ -1767,7 +1733,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
             auxSubHeights: _auxSubHeights,
             transCollapsing: _transCollapsing,
             textColorValue: LyricLayout.textColorValue,
-            activeLineColorValue: _activeLineColorValue,
             linesGeneration: _linesGeneration,
             lineHeightsGeneration: _lineHeightsGeneration,
             lineTopsGeneration: _lineTopsGeneration,
@@ -1799,7 +1764,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           // 必须在此同步引用，否则换歌/切翻译后 painter 会读旧列表（长度不匹配）
           _painter!.auxSubHeights = _auxSubHeights;
           _painter!.textColorValue = LyricLayout.textColorValue;
-          _painter!.activeLineColorValue = _activeLineColorValue;
           _painter!.linesGeneration = _linesGeneration;
           _painter!.lineHeightsGeneration = _lineHeightsGeneration;
           _painter!.lineTopsGeneration = _lineTopsGeneration;
@@ -1878,7 +1842,6 @@ class _LyricsPainter extends CustomPainter {
   List<double> auxSubHeights;
   Map<int, double> transCollapsing;
   int textColorValue;
-  int? activeLineColorValue;
   int linesGeneration;
   int lineHeightsGeneration;
   int lineTopsGeneration;
@@ -1910,7 +1873,6 @@ class _LyricsPainter extends CustomPainter {
     required this.auxSubHeights,
     required this.transCollapsing,
     required this.textColorValue,
-    required this.activeLineColorValue,
     required this.linesGeneration,
     required this.lineHeightsGeneration,
     required this.lineTopsGeneration,
@@ -2076,7 +2038,6 @@ class _LyricsPainter extends CustomPainter {
         renderer.setLineState(
           isActive: true,
           scale: alphaScale,
-          activeColorValue: activeLineColorValue,
         );
         renderer.paintLine(
           canvas,
@@ -2091,7 +2052,6 @@ class _LyricsPainter extends CustomPainter {
         renderer.setLineState(
           isActive: isActive,
           scale: alphaScale,
-          activeColorValue: activeLineColorValue,
         );
         renderer.paintLine(
           canvas,
@@ -2146,8 +2106,7 @@ class _LyricsPainter extends CustomPainter {
         centerY,
         dotRadius: dotRadius,
         spacing: dotSpacing,
-        // 间奏点颜色跟随当前行动态色（未开启/未提取到时回退基础歌词色）
-        colorValue: activeLineColorValue ?? LyricLayout.textColorValue,
+        colorValue: LyricLayout.textColorValue,
       );
     }
   }

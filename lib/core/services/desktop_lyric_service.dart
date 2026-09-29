@@ -15,7 +15,6 @@ import '../../providers/lyric_request_lifecycle.dart';
 import '../../providers/theme_provider.dart';
 import '../../core/layout/ui_density.dart';
 import '../../core/utils/app_toast.dart';
-import '../../core/utils/artwork_color_extractor.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
@@ -90,7 +89,7 @@ class LockScreenProgressPushGate {
 class DesktopLyricService {
   static final DesktopLyricService instance = DesktopLyricService._();
   DesktopLyricService._() {
-    // AM 歌词偏好变化（字号/行距/字重/字体/副行/动态取色）→ 锁屏歌词跟随重推
+    // AM 歌词偏好变化（字号/行距/字重/字体/副行）→ 锁屏歌词跟随重推
     LyricPreferences.instance.addListener(_onLyricPrefsChangedForLockScreen);
   }
 
@@ -135,9 +134,6 @@ class DesktopLyricService {
   // - 进度节流：上次轻量进度推送时刻与播放态（播放态翻转时立即推）
   final LockScreenProgressPushGate _lockProgressPushGate =
       LockScreenProgressPushGate();
-  // - 封面主色提取令牌：切歌自增，异步结果回来时校验避免串歌
-  int _lockAccentToken = 0;
-
   // SuperLyric 歌词推送开关：基于 Binder 的系统级实时歌词 API。
   // 复用本服务的定时器与歌词解析管线，在切歌 / 歌词行变化时推送当前行
   // （text/words/翻译/副歌词 + title/artist）；播放/暂停由 SuperLyric 自动
@@ -553,7 +549,6 @@ class DesktopLyricService {
       _lockFullDirty = true;
       _lockPlaceholder = '';
       _lockProgressPushGate.reset();
-      _lockAccentToken++;
       // 通知原生端开关已开启（原生端后续由 ACTION_SCREEN_OFF 广播拉起界面）
       try {
         await MediaNotificationService.showLockScreenLyric();
@@ -568,7 +563,7 @@ class DesktopLyricService {
   }
 
   /// AM 歌词偏好变化回调：锁屏歌词样式全部跟随 AM 歌词设置
-  /// （字号/行距/字重/字体来源/副行模式/动态取色），偏好一变即整包重推，
+  /// （字号/行距/字重/字体来源/副行模式），偏好一变即整包重推，
   /// 锁屏显示中调整播放页歌词设置即时生效。
   void _onLyricPrefsChangedForLockScreen() {
     if (!_lockScreenLyricEnabled) return;
@@ -616,33 +611,19 @@ class DesktopLyricService {
       customFontPath: prefs.customFontPath,
       showTranslation: prefs.showTranslation,
       displayMode: prefs.displayMode.index,
-      useDynamicColor: prefs.useDynamicLyricColor,
+      // Lite：歌词动态取色已下线，锁屏歌词固定使用纯白
+      useDynamicColor: false,
     );
     _lockProgressPushGate.markFullPush(
       nowMs: DateTime.now().millisecondsSinceEpoch,
       isPlaying: player?.isPlaying ?? false,
     );
-    _pushLockScreenAccent(song?.artworkUri, prefs.useDynamicLyricColor);
+    _pushLockScreenAccent();
   }
 
-  /// 异步提取封面主色并推送到原生锁屏界面（当前行「85% 白 + 15% 主色」混色）。
-  ///
-  /// 动态取色关闭或无封面时推 0（原生侧用纯白）。提取结果带令牌校验，
-  /// 切歌后回来的旧结果直接丢弃。
-  void _pushLockScreenAccent(String? artUrl, bool useDynamic) {
-    final token = ++_lockAccentToken;
-    if (!useDynamic || artUrl == null || artUrl.isEmpty) {
-      MediaNotificationService.updateLockScreenAccent(0);
-      return;
-    }
-    ArtworkColorExtractor.extract(artUrl)
-        .then((color) {
-          if (token != _lockAccentToken || !_lockScreenLyricEnabled) return;
-          MediaNotificationService.updateLockScreenAccent(
-            color?.toARGB32() ?? 0,
-          );
-        })
-        .catchError((_) {});
+  /// 推送锁屏歌词主色：Lite 已下线歌词动态取色，固定推 0（原生侧使用纯白）。
+  void _pushLockScreenAccent() {
+    MediaNotificationService.updateLockScreenAccent(0);
   }
 
   /// 锁屏歌词每 tick 推送入口：全量脏 → 整包重推；否则 500ms 节流轻量进度。

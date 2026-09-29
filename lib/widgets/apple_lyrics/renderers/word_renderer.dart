@@ -166,11 +166,6 @@ class WordRenderer {
   /// 主题切换时 textColorValue 变化，需清空 _lastSetAlphas 强制重建所有 word TextSpan。
   int _lastTextColorValue = -1;
 
-  /// 当前行专用的文字颜色（ARGB int，仅 [_isActive] 时生效）。
-  /// 动态字体颜色：由封面提取色按「70% 白 + 30% 提取色」混色得到，
-  /// null 表示不使用（回退到 LyricLayout.textColorValue）。
-  int? _activeColorValue;
-
   /// 每字辉光判定缓存（行绑定期计算一次）。
   /// 与 [_wordPainters] / [_wordWidths] 同长度同索引。
   /// true 表示该 word 应触发辉光（已通过 duration + 内容过滤）。
@@ -369,11 +364,9 @@ class WordRenderer {
   void setLineState({
     required bool isActive,
     required double scale,
-    int? activeColorValue,
   }) {
     _isActive = isActive;
     _scale = scale;
-    _activeColorValue = activeColorValue;
   }
 
   /// 设置强调辉光效果计算器。
@@ -765,11 +758,8 @@ class WordRenderer {
       _debugLogWrap(line, fontSize, maxWidth);
     }
 
-    // 解析当前行实际文字颜色：动态字体颜色（仅当前行）优先，否则回退主题默认色。
     // 颜色变化时清空 alpha 缓存强制重建所有 word TextSpan。
-    final int textColorValue = (_isActive && _activeColorValue != null)
-        ? _activeColorValue!
-        : LyricLayout.textColorValue;
+    final int textColorValue = LyricLayout.textColorValue;
     if (textColorValue != _lastTextColorValue) {
       // 哨兵 -2 = 未初始化：与渐变路径的白色缓存（-1）和 uniform 的
       // alphaStep（0~20）都不同，保证首次绘制必定重新 set text + layout。
@@ -783,7 +773,7 @@ class WordRenderer {
       }
       _lastTextColorValue = textColorValue;
       // P1-5：辉光精灵颜色跟随文字色（当前行渐变路径下为白色），
-      // 颜色变化（主题/动态字体色切换）时失效所有精灵缓存（逐字符）。
+      // 颜色变化（主题切换）时失效所有精灵缓存（逐字符）。
       for (final charList in _charGlowSprites) {
         for (final img in charList) {
           img?.dispose();
@@ -1527,10 +1517,7 @@ class WordRenderer {
   }) {
     if (line.text.isEmpty) return;
     final double alpha = dynamicDarkAlpha;
-    // 动态字体颜色（仅当前行）优先，否则回退主题默认色
-    final int colorValue = (_isActive && _activeColorValue != null)
-        ? _activeColorValue!
-        : LyricLayout.textColorValue;
+    final int colorValue = LyricLayout.textColorValue;
     final painter = TextPainter(textDirection: TextDirection.ltr);
     painter.text = TextSpan(
       text: line.text,
@@ -2026,7 +2013,6 @@ class WordRenderer {
     _isActive = false;
     _scale = LyricLayout.inactiveScale;
     _boundLine = null;
-    _activeColorValue = null;
     _boundFontSize = -1;
     _boundFontWeight = -1;
     _boundLineHeight = -1;

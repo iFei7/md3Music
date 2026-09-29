@@ -149,11 +149,6 @@ class LineRenderer {
   /// 上次 set text 时使用的字重。字重变化时需强制重建 TextSpan。
   FontWeight _lastFontWeight = FontWeight.normal;
 
-  /// 当前行专用的文字颜色（ARGB int，仅 [_isActive] 时生效）。
-  /// 动态字体颜色：由封面提取色按「70% 白 + 30% 提取色」混色得到，
-  /// null 表示不使用（回退到 LyricLayout.textColorValue）。
-  int? _activeColorValue;
-
   /// 当前绑定的 LyricLine 引用。
   ///
   /// 用于检测 line 切换，触发强制 set text + layout，
@@ -168,14 +163,13 @@ class LineRenderer {
 
   // ============== setLineState 输入缓存 ==============
   //
-  // 播放稳态下，每帧都调用 setLineState 但 isActive/scale/activeColorValue
-  // 三个输入其实都没变，dynamicDark/dynamicBright 公式重算纯属浪费。
-  // 缓存这三个输入，全相等时直接早退，跳过 ~5 次浮点运算 + target 比较 +
+  // 播放稳态下，每帧都调用 setLineState 但 isActive/scale 两个输入其实都没变，
+  // dynamicDark/dynamicBright 公式重算纯属浪费。
+  // 缓存这两个输入，全相等时直接早退，跳过 ~5 次浮点运算 + target 比较 +
   // _isConverged 重置判断。每帧 30 行 × 120Hz = 3600 次/秒无意义计算。
 
   bool _lastIsActive = false;
   double _lastScale = double.nan;
-  int? _lastActiveColorValue;
 
   // ============== 状态查询 ==============
 
@@ -213,20 +207,15 @@ class LineRenderer {
   void setLineState({
     required bool isActive,
     required double scale,
-    int? activeColorValue,
   }) {
-    // 输入缓存早退：稳态下 5 个输入全相等 → 跳过 dynamic 公式重算与 target 比较
-    if (isActive == _lastIsActive &&
-        scale == _lastScale &&
-        activeColorValue == _lastActiveColorValue) {
+    // 输入缓存早退：稳态下输入全相等 → 跳过 dynamic 公式重算与 target 比较
+    if (isActive == _lastIsActive && scale == _lastScale) {
       return;
     }
     _lastIsActive = isActive;
     _lastScale = scale;
-    _lastActiveColorValue = activeColorValue;
 
     _isActive = isActive;
-    _activeColorValue = activeColorValue;
     final double factor =
         ((scale - LyricLayout.inactiveScale) /
                 (LyricLayout.activeScale - LyricLayout.inactiveScale))
@@ -321,10 +310,7 @@ class LineRenderer {
     double maxWidth = double.infinity,
   }) {
     if (line.text.isEmpty) return;
-    // 解析当前行实际文字颜色：动态字体颜色（仅当前行）优先，否则回退主题默认色
-    final int textColorValue = (_isActive && _activeColorValue != null)
-        ? _activeColorValue!
-        : LyricLayout.textColorValue;
+    final int textColorValue = LyricLayout.textColorValue;
     final int textRed = (textColorValue >> 16) & 0xFF;
     final int textGreen = (textColorValue >> 8) & 0xFF;
     final int textBlue = textColorValue & 0xFF;
@@ -349,8 +335,7 @@ class LineRenderer {
       _painter.text = TextSpan(
         text: line.text,
         style: TextStyle(
-          // 文字颜色从 LyricLayout 获取，支持主题动态切换；
-          // 当前行动态字体颜色时用混色后的 RGB
+          // 文字颜色从 LyricLayout 获取，支持主题动态切换
           color: Color.fromRGBO(textRed, textGreen, textBlue, _currentAlpha),
           fontSize: fontSize,
           height: LyricLayout.lineHeight,
@@ -685,11 +670,9 @@ class LineRenderer {
     _lastFontWeight = FontWeight.normal;
     _lastSetLineHeight = -1;
     _boundLine = null;
-    _activeColorValue = null;
     // 同步重置 setLineState 输入缓存，避免 reset 后下次 setLineState 误命中早退
     _lastIsActive = false;
     _lastScale = double.nan;
-    _lastActiveColorValue = null;
   }
 
   /// 最终释放渲染器持有的测量与绘制器。

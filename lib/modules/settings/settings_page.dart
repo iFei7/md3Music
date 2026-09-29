@@ -112,8 +112,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _useGlowEffect = true;
   // 歌词省电模式开关（默认开启，开启后歌词界面锁定 60fps，滑动时解锁）
   bool _lyricEcoMode = true;
-  // 歌词动态字体颜色开关（默认开启，仅 AM 播放器生效）
-  bool _lyricDynamicColor = true;
   String _appVersion = '';
   // 实时歌词推送协议选择（三选一 + 关闭）
   String _lyricPushProtocol = 'none';
@@ -500,7 +498,6 @@ class _SettingsPageState extends State<SettingsPage>
       _textShadowBlur = textShadowBlur;
       _useGlowEffect = LyricPreferences.instance.useGlowEffect;
       _lyricEcoMode = LyricPreferences.instance.ecoMode;
-      _lyricDynamicColor = LyricPreferences.instance.useDynamicLyricColor;
       _bluetoothLyricEnabled = bluetoothLyricEnabled;
       _bluetoothLyricCompressArt = bluetoothLyricCompressArt;
       _depthCoverEnabled = depthCoverEnabled;
@@ -2125,19 +2122,8 @@ class _SettingsPageState extends State<SettingsPage>
             ),
             trailing: _statusText('${(_artistPhotoOpacity * 100).round()}%'),
           ),
-        // 歌词特效：内容/排版 → 颜色 → 特效 → 性能兜底
+        // 歌词特效：特效 → 背景 → 性能兜底
         _buildGroupLabel('歌词特效', colorScheme),
-        // 歌词动态字体颜色：当前行按「85% 白 + 15% 封面提取色」混色（仅 AM 播放器）
-        // search: 动态颜色 混色
-        SwitchListTile(
-          title: const Text('歌词动态颜色'),
-          value: _lyricDynamicColor,
-          onChanged: (v) {
-            HapticFeedback.lightImpact();
-            setState(() => _lyricDynamicColor = v);
-            LyricPreferences.instance.setUseDynamicLyricColor(v);
-          },
-        ),
         // search: 辉光 发光
         SwitchListTile(
           title: const Text('歌词辉光效果'),

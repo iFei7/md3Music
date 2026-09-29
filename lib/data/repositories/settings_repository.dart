@@ -887,7 +887,7 @@ class SettingsRepository {
   static const String _keySpectrumCurveOpacity = 'settings_spectrum_curve_opacity';
 
   /// 频谱动态取色（独立开关，默认关闭）：开启后 AM 播放器频谱颜色取封面主色
-  /// 与白色 50/50 混合（与歌词动态取色无关）。
+  /// 与白色 50/50 混合。
   static const String _keySpectrumDynamicColor = 'settings_spectrum_dynamic_color';
 
   /// 柱状图频谱透明度（0.1~1.0，默认 1.0 不透明）。

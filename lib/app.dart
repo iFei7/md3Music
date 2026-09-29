@@ -193,7 +193,7 @@ class _AppViewState extends State<_AppView> {
   // 持有引用以便 dispose 时移除 listener（provider 销毁顺序晚于 _AppViewState）。
   PlayerProvider? _playerProvider;
   // 上一次已提取/正在提取的封面 url：同一首歌反复 notify 不重复提取，
-  // 且异步提取期间切歌时丢弃过期结果（参考 AM 歌词动态取色 _lastAccentUrl 模式）。
+  // 且异步提取期间切歌时丢弃过期结果。
   String? _lastCoverUrl;
   // 背景图莫奈取色桥接：监听 ThemeProvider 背景图路径变化 → 提取主色注入 seed 链。
   // 持有引用以便 dispose 时移除 listener。
@@ -276,7 +276,7 @@ class _AppViewState extends State<_AppView> {
     if (url == null || url == _lastCoverUrl) return;
     _lastCoverUrl = url;
     final color = await ArtworkColorExtractor.extract(url);
-    // 过期校验：提取期间已切歌则丢弃结果（参考 AM 歌词动态取色模式）
+    // 过期校验：提取期间已切歌则丢弃结果
     if (context.read<PlayerProvider>().currentSong?.artworkUri != url) return;
     context.read<ThemeProvider>().setCoverSeedColor(color);
   }

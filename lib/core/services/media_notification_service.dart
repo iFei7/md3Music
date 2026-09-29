@@ -395,8 +395,9 @@ class MediaNotificationService {
     } catch (_) {}
   }
 
-  /// 封面主色异步提取完成后推送：当前行歌词按「85% 白 + 15% 主色」混色
-  /// （与 AM 歌词动态取色一致）。[colorValue] 为 0 表示无主色（纯白）。
+  /// 推送锁屏歌词强调色。[colorValue] 为 0 表示无主色（原生侧使用纯白）。
+  ///
+  /// Lite 已下线歌词动态取色，当前唯一调用方固定推送 0。
   static Future<void> updateLockScreenAccent(int colorValue) async {
     try {
       await _channel.invokeMethod('updateLockScreenAccent', {

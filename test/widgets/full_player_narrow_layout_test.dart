@@ -22,7 +22,6 @@ import 'package:md3music/services/kugou_api/kugou_models.dart';
 import 'package:md3music/widgets/player_tab_strip.dart';
 import 'package:md3music/widgets/md3e_transport_row.dart';
 import 'package:md3music/widgets/playback_status_feedback.dart';
-import 'package:md3music/widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'package:md3music/widgets/dynamic_cover_view.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -407,9 +406,6 @@ void main() {
           'settings_spectrum_dynamic_color': false,
         });
         _mockPlatformChannels();
-        final lyricPreferences = LyricPreferences.instance;
-        final originalDynamicLyricColor = lyricPreferences.useDynamicLyricColor;
-        await lyricPreferences.setUseDynamicLyricColor(false);
         KugouProvider.restoreLyric = (_) async => const KugouLyric(
           content: '[00:00.00]test lyric',
           decodedContent: '[00:00.00]test lyric',
@@ -491,9 +487,6 @@ void main() {
           AudioServiceLoader.setTestOverride(null);
           KugouProvider.restoreLyric = null;
           CachedNetworkImageProvider.defaultCacheManager = originalCacheManager;
-          await lyricPreferences.setUseDynamicLyricColor(
-            originalDynamicLyricColor,
-          );
           tester.view.physicalSize = originalPhysicalSize;
           tester.view.devicePixelRatio = originalDevicePixelRatio;
         }

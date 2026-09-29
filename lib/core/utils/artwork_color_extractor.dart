@@ -8,7 +8,7 @@ import 'package:palette_generator/palette_generator.dart';
 import '../services/local_artwork_cache.dart';
 import '../services/media_store_service.dart';
 
-/// 从专辑封面提取单个主色调，供歌词「动态字体颜色」、全局「封面动态取色」等场景使用。
+/// 从专辑封面提取单个主色调，供全局「封面动态取色」等场景使用。
 ///
 /// 提取思路复用动态流光背景的部分逻辑：
 /// - 用 [PaletteGenerator] 从封面图片提取候选色（按像素占比降序）

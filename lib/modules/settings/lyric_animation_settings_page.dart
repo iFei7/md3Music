@@ -14,7 +14,7 @@ import 'package:md3music/widgets/apple_lyrics/layout/lyric_preferences.dart';
 ///
 /// AppBar 的重置按钮可**二次确认后**把本页全部参数恢复默认——
 /// 注意只重置本页 4 个参数，绝不调用 [LyricPreferences.reset]
-/// （那会把字号/行距/动态颜色等不在本页的设置一并清掉）。
+/// （那会把字号/行距/字重等不在本页的设置一并清掉）。
 ///
 /// 监听 [LyricPreferences] 实时刷新；拖动中只刷新标签（onChanged），
 /// 松手写入偏好（onChangeEnd），避免拖动过程反复触发歌词组件重渲染。
@@ -101,7 +101,7 @@ class LyricAnimationSettingsPage extends StatelessWidget {
   /// 二次确认后把本页全部参数恢复默认。
   ///
   /// **只重置本页 4 个参数**，绝不调用 [LyricPreferences.reset]
-  /// （那会把字号/行距/动态颜色等不在本页的设置一并清掉）。
+  /// （那会把字号/行距/字重等不在本页的设置一并清掉）。
   Future<void> _confirmResetAll(
     BuildContext context,
     LyricPreferences prefs,
