@@ -2,10 +2,8 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
 
 import '../../core/theme/motion_constants.dart';
-import '../../providers/car_mode_provider.dart';
 import '../../utils/landscape_immersive.dart';
 import 'full_player.dart';
 
@@ -78,12 +76,6 @@ bool get isFullPlayerOnTop => playerExpansion.value > 0.5;
 /// - 播放页在栈中但被其它页面盖住 → 回退到它（不再新建）
 /// - 不存在 → push 新路由
 void openFullPlayer(BuildContext context) {
-  // 车机模式：播放器已常驻在面板里，任何「打开全屏播放页」的入口都忽略。
-  // 否则会在面板之外再 push 一个播放页 —— 两个实例各自驱动歌词/进度等动画，
-  // 整页帧率翻倍。
-  // active 含自动检测：命中车机屏同样忽略。
-  if (context.read<CarModeProvider>().active) return;
-
   // rootNavigator: true —— 桌面布局下内容区是嵌套 Navigator，若走最近的
   // Navigator 会把完整播放页 push 进中央内容区（只盖住内容区、盖不住侧栏与
   // 底部播放栏）。改用根 Navigator 让播放页覆盖整个 shell。手机布局下根

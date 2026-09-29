@@ -12,7 +12,6 @@ import '../../core/layout/responsive_layout.dart';
 import '../../core/services/player_frame_driver.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../data/repositories/settings_repository.dart';
-import '../../providers/car_mode_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../widgets/smart_artwork_image.dart';
 import 'full_player_route.dart';
@@ -160,8 +159,7 @@ class _SecondaryMiniPlayerHostState extends State<SecondaryMiniPlayerHost> {
     final hasSong = context.select<PlayerProvider, bool>(
       (p) => p.currentSong != null,
     );
-    final carMode = context.select<CarModeProvider, bool>((p) => p.enabled);
-    final reserve = (hasSong && !carMode) ? _kReservedBottom : 0.0;
+    final reserve = hasSong ? _kReservedBottom : 0.0;
     final mq = MediaQuery.of(context);
     // 标记本宿主正在承载悬浮条，供子树内的嵌套宿主检测后退化透传。
     return _SecondaryPlayerHostScope(
@@ -257,7 +255,7 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
   /// 是否已挂在共享 60fps 帧驱动上。
   bool _boundToDriver = false;
 
-  /// 由 build 计算出的「播放中 + 卡片可见」（含无歌 / 车机模式 / 全屏已展开）。
+  /// 由 build 计算出的「播放中 + 卡片可见」（含无歌 / 全屏已展开）。
   bool _shouldSpin = false;
 
   /// TickerMode 是否被关闭（被不透明路由覆盖 / TabBarView 切走）。
@@ -411,11 +409,6 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
     // 注意：两条早退都必须先收口驱动，否则 `_shouldSpin` 会残留上一次的 true，
     // 表现为「已经不可见却仍在产帧」（§10.4.3）。
     if (song == null) {
-      _setShouldSpin(0.0, false);
-      return const SizedBox.shrink();
-    }
-    // 车机模式：播放器常驻侧边面板，任何界面都不显示悬浮播放器（沿用现有规则）。
-    if (context.watch<CarModeProvider>().enabled) {
       _setShouldSpin(0.0, false);
       return const SizedBox.shrink();
     }

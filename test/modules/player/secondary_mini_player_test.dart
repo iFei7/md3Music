@@ -10,7 +10,6 @@ import 'package:md3music/data/models/song.dart';
 import 'package:md3music/modules/player/full_player_route.dart';
 import 'package:md3music/modules/player/mini_player.dart';
 import 'package:md3music/modules/player/secondary_mini_player.dart';
-import 'package:md3music/providers/car_mode_provider.dart';
 import 'package:md3music/providers/device_provider.dart';
 import 'package:md3music/providers/player_provider.dart';
 import 'package:md3music/providers/theme_provider.dart';
@@ -64,7 +63,6 @@ void main() {
   );
 
   late _FakePlayer player;
-  late CarModeProvider carMode;
   late ValueNotifier<bool> collapsed;
 
   setUp(() {
@@ -75,13 +73,11 @@ void main() {
     kSecondaryPlayerDock.value = SecondaryPlayerDockSide.center;
     collapsed = ValueNotifier<bool>(true);
     player = _FakePlayer()..simulate(song: song('s0'), playing: true);
-    carMode = CarModeProvider();
   });
 
   tearDown(() {
     collapsed.dispose();
     player.dispose();
-    carMode.dispose();
     playerExpansion.value = 0.0;
     kSecondaryPlayerEnabled.value = true;
     kSecondaryPlayerDock.value = SecondaryPlayerDockSide.center;
@@ -91,7 +87,6 @@ void main() {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<PlayerProvider>.value(value: player),
-        ChangeNotifierProvider<CarModeProvider>.value(value: carMode),
         ChangeNotifierProvider<DeviceProvider>(create: (_) => DeviceProvider()),
         ChangeNotifierProvider<ThemeProvider>(create: (_) => ThemeProvider()),
       ],
@@ -128,7 +123,6 @@ void main() {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<PlayerProvider>.value(value: player),
-        ChangeNotifierProvider<CarModeProvider>.value(value: carMode),
         ChangeNotifierProvider<DeviceProvider>(create: (_) => DeviceProvider()),
         ChangeNotifierProvider<ThemeProvider>(create: (_) => ThemeProvider()),
       ],
@@ -156,7 +150,6 @@ void main() {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<PlayerProvider>.value(value: player),
-        ChangeNotifierProvider<CarModeProvider>.value(value: carMode),
         ChangeNotifierProvider<DeviceProvider>(create: (_) => DeviceProvider()),
         ChangeNotifierProvider<ThemeProvider>(create: (_) => ThemeProvider()),
       ],

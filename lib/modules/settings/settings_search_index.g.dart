@@ -6,10 +6,6 @@
 /// aliases 来自源码中的 `// search: ...` 标注（补充同义词匹配）。
 const List<({String label, String category, String aliases})>
     kSettingsSearchIndex = [
-  (label: '车机模式', category: '外观', aliases: '车机 车载 常驻 面板 大屏 副屏 副驾 miniplayer 迷你条'),
-  (label: '检测到车机屏幕时自动开启', category: '外观', aliases: '车机 车载 自动 检测 屏幕 分辨率 识别 竖屏 方屏'),
-  (label: 'dock 避让高度', category: '外观', aliases: '车机 车联 dock 避让 底部 空隙 高度'),
-  (label: '面板位置', category: '外观', aliases: '车机 面板 左侧 右侧 停靠 位置'),
   (label: 'OLED 纯黑深色', category: '外观', aliases: 'oled 纯黑 深色 黑色'),
   (label: '使用系统主题色', category: '外观', aliases: '系统主题 壁纸 莫奈'),
   (label: '封面动态取色', category: '外观', aliases: '动态取色 封面'),
