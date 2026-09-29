@@ -39,7 +39,7 @@ const List<({String label, String category, String aliases})>
   (label: '歌词辉光效果', category: '播放页样式', aliases: '辉光 发光'),
   (label: '播放页背景模糊', category: '播放页样式', aliases: '模糊 背景 播放器 毛玻璃 封面'),
   (label: '歌词省电模式', category: '播放页样式', aliases: '省电 限帧'),
-  (label: '歌词动画', category: '播放页样式', aliases: '歌词 动画 当前行 上浮 非当前行 缩放 位置 错峰 步长 衰减'),
+  (label: '歌词动画', category: '播放页样式', aliases: '歌词 动画 当前行 上浮 非当前行 缩放 位置'),
   (label: '辉光触发阈值', category: '播放页样式', aliases: '辉光 发光 阈值 灵敏度'),
   (label: '音乐频谱环绕', category: '播放页样式', aliases: '频谱 环绕 可视化'),
   (label: '频谱柱数量', category: '播放页样式', aliases: '频谱'),

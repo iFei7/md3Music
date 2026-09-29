@@ -2189,7 +2189,7 @@ class _SettingsPageState extends State<SettingsPage>
         ),
         // 歌词动画入口：动画参数与辉光触发阈值统一在独立子页无极调节，
         // 排在歌词省电模式（特效兜底开关）之后、音乐频谱分组之前。
-        // search: 歌词 动画 当前行 上浮 非当前行 缩放 位置 错峰 步长 衰减
+        // search: 歌词 动画 当前行 上浮 非当前行 缩放 位置
         ListTile(
           leading: const Icon(Icons.animation),
           title: const Text('歌词动画'),
