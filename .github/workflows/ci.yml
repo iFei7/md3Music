@@ -163,23 +163,30 @@ jobs:
             mv "$standard_backup" "$standard_apk"
           fi
 
-      # 构建失败时把日志尾部写进 check-run summary：
-      # summary 经 check-runs API 公开可读，无需登录即可拉取失败日志（agent 闭环用）
+      # 构建失败时把关键日志行经 ::error:: 写入 check-run annotations：
+      # 注解经 check-runs API 匿名可读（GITHUB_STEP_SUMMARY 不进 API，仅网页展示）
       - name: Report build diagnostics
         if: failure()
         run: |
-          {
-            echo "## Build failure diagnostics"
-            for f in "$RUNNER_TEMP"/build_standard.log "$RUNNER_TEMP"/build_depth3d.log "$RUNNER_TEMP"/build_apple.log; do
-              if [[ -f "$f" ]]; then
-                echo ""
-                echo "### $(basename "$f") (tail)"
-                echo '<pre>'
-                tail -c 40000 "$f"
-                echo '</pre>'
-              fi
-            done
-          } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          for f in "$RUNNER_TEMP"/build_standard.log "$RUNNER_TEMP"/build_depth3d.log "$RUNNER_TEMP"/build_apple.log; do
+            if [[ -f "$f" ]]; then
+              echo "### $(basename "$f") 关键错误行" >> "$GITHUB_STEP_SUMMARY"
+              {
+                grep -nE "Error detected|FAILURE: Build failed|What went wrong|error:|Error:|failed|Exception" "$f" | head -30 || true
+                echo "---- tail ----"
+                tail -c 2000 "$f"
+              } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+              # 注解（API 可读，每步上限 10 条）
+              grep -E "Error detected|FAILURE: Build failed|What went wrong|error:|Error:" "$f" | head -5 | while IFS= read -r line; do
+                echo "::error::${line:0:400}"
+              done || true
+              # 最后 4 行（含真实失败原因）也作为注解
+              tail -n 4 "$f" | while IFS= read -r line; do
+                echo "::error::${line:0:400}"
+              done
+            fi
+          done
+          exit 0
 
       # ============================================================
       # 产物改名为中文（便于区分）
