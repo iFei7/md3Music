@@ -1,5 +1,4 @@
 import 'package:material_ui/material_ui.dart';
-import 'package:provider/provider.dart';
 
 import 'full_player.dart';
 import 'full_player_route.dart';
@@ -75,5 +74,7 @@ class _DragPlayerContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Lite：播放页已统一为 MD3 单一风格（AmStyleFullPlayer 已下线）。
+    return const FullPlayer();
   }
 }

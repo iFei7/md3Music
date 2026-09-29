@@ -1980,7 +1980,7 @@ class _LyricsPainter extends CustomPainter {
       // 保存画布状态，应用 scale 变换。
       // pivotX 取左边缘：scale<1.0 时文本以左边缘为中心收缩，对齐不会偏移。
       canvas.save();
-      const double pivotX = startX;
+      final double pivotX = startX;
       final double pivotY = y + lineHeight / 2;
       canvas.translate(pivotX, pivotY);
       canvas.scale(alphaScale, alphaScale);
