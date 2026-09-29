@@ -9,7 +9,8 @@ import 'package:md3music/widgets/apple_lyrics/renderers/line_renderer.dart';
 
 /// LineRenderer 单元测试
 ///
-/// 覆盖：初始状态、setLineState、tick 指数衰减、变亮比变暗快、reset、paintLine 不崩溃、
+/// 覆盖：初始状态、setLineState、tick 指数衰减、变亮比变暗快、reset、行退场淡出交接、
+/// paintLine 不崩溃、
 /// 整行模式无 mask 渐变（与 WordRenderer 区分）。
 ///
 /// 主要验证状态逻辑（alpha 计算与 tick 推进），不验证绘制像素。
@@ -84,7 +85,6 @@ void main() {
       renderer.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurActive: false,
       );
       expect(renderer.targetAlpha, closeTo(0.2, 1e-9));
       expect(renderer.isActive, isFalse);
@@ -100,7 +100,6 @@ void main() {
       renderer.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurActive: false,
       );
       for (int i = 0; i < 300; i++) {
         renderer.tick(0.016);
@@ -123,7 +122,6 @@ void main() {
       renderer.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurActive: false,
       );
       for (int i = 0; i < 500; i++) {
         renderer.tick(0.016);
@@ -187,7 +185,6 @@ void main() {
       downRenderer.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurActive: false,
       );
       int downTicks = 0;
       while ((downRenderer.currentAlpha - 0.2).abs() >= 0.01) {
@@ -220,7 +217,6 @@ void main() {
       downRenderer.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurActive: false,
       );
       for (int i = 0; i < 5; i++) {
         downRenderer.tick(0.016);
@@ -277,7 +273,6 @@ void main() {
       renderer.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurActive: false,
       );
       renderer.paintLine(makeCanvas(), ui.Offset.zero, line, 24);
     });
@@ -322,7 +317,6 @@ void main() {
       renderer.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurActive: false,
       );
       // 即使 tick，alpha 仍保持 0.2（目标也是 0.2，无变化）
       for (int i = 0; i < 100; i++) {
@@ -445,15 +439,13 @@ void main() {
   // ==================== 10. 行退场淡出交接 ====================
 
   group('beginExitFadeFrom（行退场清晰层淡出，消除硬切）', () {
-    LineRenderer createConvergedHidden() {
+    LineRenderer createConvergedInactive() {
       final r = LineRenderer()
         ..setLineState(
           isActive: false,
           scale: LyricLayout.inactiveScale,
-          blurFade: 1.0,
-          blurActive: true,
         );
-      // 收敛到"非当前行 + 高斯模糊全开"的不可见稳态（alpha 目标 0）
+      // 收敛到非当前行暗态稳态（alpha 目标 = dynamicDark = 0.2）
       for (int i = 0; i < 300; i++) {
         r.tick(0.016);
       }
@@ -461,38 +453,34 @@ void main() {
     }
 
     test('播种 alpha 并置位 isExitFading', () {
-      final r = createConvergedHidden();
-      expect(r.currentAlpha, closeTo(0, 1e-3));
+      final r = createConvergedInactive();
+      expect(r.currentAlpha, closeTo(0.2, 1e-3));
       r.beginExitFadeFrom(0.8);
       expect(r.currentAlpha, 0.8);
       expect(r.isExitFading, isTrue);
       expect(r.isConverged, isFalse);
     });
 
-    test('作废 setLineState 输入缓存，目标重算为 0 而非构造初值 0.2', () {
-      final r = createConvergedHidden();
+    test('作废 setLineState 输入缓存，目标随新输入重算而非复用旧值', () {
+      final r = createConvergedInactive();
       r.beginExitFadeFrom(0.8);
-      // 同样的输入：若输入缓存未作废会早退，_targetAlpha 停在 0.2
+      // 改用 activeScale（factor=1 → dynamicDark=0.4）：若输入缓存未作废，
+      // setLineState 会因与上次输入相同而早退，_targetAlpha 停在 0.2
       r.setLineState(
         isActive: false,
-        scale: LyricLayout.inactiveScale,
-        blurFade: 1.0,
-        blurActive: true,
+        scale: LyricLayout.activeScale,
       );
-      expect(r.targetAlpha, closeTo(0, 1e-9));
+      expect(r.targetAlpha, closeTo(0.4, 1e-9));
     });
 
-    test('退场时长约 1s：0.3s 时仍明显可见', () {
-      final r = createConvergedHidden();
+    test('退场约 0.3s 时仍明显可见（不硬切）', () {
+      final r = createConvergedInactive();
       r.beginExitFadeFrom(0.8);
       r.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurFade: 1.0,
-        blurActive: true,
       );
-      // 0.3s ≈ 19 帧：rate=6.7 → 0.8×e^-2.01 ≈ 0.108
-      // 旧值 rate=18 时同一时刻只剩 0.0037，会被本断言挡住
+      // 0.3s ≈ 19 帧：rate=6.7 → 0.2 + 0.6×e^-2.01 ≈ 0.278
       for (int i = 0; i < 19; i++) {
         r.tick(0.016);
       }
@@ -500,42 +488,38 @@ void main() {
       expect(r.isExitFading, isTrue);
     });
 
-    test('退场时长约 1s：1.0s 内衰减到吸附阈值并清除标志', () {
-      final r = createConvergedHidden();
+    test('退场约 1s 内衰减到吸附阈值并清除标志', () {
+      final r = createConvergedInactive();
       r.beginExitFadeFrom(0.8);
       r.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurFade: 1.0,
-        blurActive: true,
       );
-      // 1.0s ≈ 63 帧：rate=6.7 → 0.8×e^-6.7 ≈ 0.00094 < alphaEpsilon(0.001)
-      // → 吸附到 0、_isExitFading 清除
+      // 1.0s ≈ 63 帧：rate=6.7 → |0.2 + 0.6×e^-6.7 − 0.2| ≈ 0.00074
+      //   < alphaEpsilon(0.001) → 吸附到 0.2、_isExitFading 清除
       for (int i = 0; i < 63; i++) {
         r.tick(0.016);
       }
-      expect(r.currentAlpha, lessThan(0.002));
+      expect(r.currentAlpha, closeTo(0.2, 1e-3));
       expect(r.isExitFading, isFalse);
       // _isConverged 基于"本帧位移 < 1e-6"判定，吸附帧的位移仍是吸附前的量级，
-      // 需再走一帧才置真（此时 alpha 已恒为 0）
+      // 需再走一帧才置真（此时 alpha 已恒为 0.2）
       r.tick(0.016);
-      expect(r.currentAlpha, 0);
+      expect(r.currentAlpha, 0.2);
       expect(r.isConverged, isTrue);
     });
 
     test('收敛到目标后自动清除 isExitFading', () {
-      final r = createConvergedHidden();
+      final r = createConvergedInactive();
       r.beginExitFadeFrom(0.8);
       r.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurFade: 1.0,
-        blurActive: true,
       );
       for (int i = 0; i < 400; i++) {
         r.tick(0.016);
       }
-      expect(r.currentAlpha, closeTo(0, 1e-3));
+      expect(r.currentAlpha, closeTo(0.2, 1e-3));
       expect(r.isExitFading, isFalse);
       expect(r.isConverged, isTrue);
     });
@@ -624,7 +608,6 @@ void main() {
       renderer.setLineState(
         isActive: false,
         scale: LyricLayout.inactiveScale,
-        blurActive: false,
       );
       renderer.translationExpand = 0.5;
       renderer.translationFade = 0.5;

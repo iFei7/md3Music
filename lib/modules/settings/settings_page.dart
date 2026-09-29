@@ -106,7 +106,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _useDynamicColor = false;
   // 封面动态取色开关（与系统主题色独立、可叠加；开启时封面优先）
   bool _useCoverSeedColor = false;
-  bool _useGaussianBlur = true;
   bool _useArtistPhotoBackground = false;
   int _artistPhotoInterval = 15;
   double _artistPhotoOpacity = 0.55;
@@ -500,7 +499,6 @@ class _SettingsPageState extends State<SettingsPage>
       _useBackgroundMonet = useBackgroundMonet;
       _useTextShadow = useTextShadow;
       _textShadowBlur = textShadowBlur;
-      _useGaussianBlur = LyricPreferences.instance.useGaussianBlur;
       _useGlowEffect = LyricPreferences.instance.useGlowEffect;
       _useDuetLayout = LyricPreferences.instance.useDuetLayout;
       _lyricEcoMode = LyricPreferences.instance.ecoMode;
@@ -2152,18 +2150,6 @@ class _SettingsPageState extends State<SettingsPage>
             LyricPreferences.instance.setUseDynamicLyricColor(v);
           },
         ),
-        // search: 高斯模糊 模糊
-        SwitchListTile(
-          title: const Text('歌词高斯模糊'),
-          // 标题说明了是什么，副标题只留影响决策的功耗代价
-          subtitle: const Text('高功耗'),
-          value: _useGaussianBlur,
-          onChanged: (v) {
-            HapticFeedback.lightImpact();
-            setState(() => _useGaussianBlur = v);
-            LyricPreferences.instance.setUseGaussianBlur(v);
-          },
-        ),
         // search: 辉光 发光
         SwitchListTile(
           title: const Text('歌词辉光效果'),
@@ -2213,13 +2199,13 @@ class _SettingsPageState extends State<SettingsPage>
             LyricPreferences.instance.setEcoMode(v);
           },
         ),
-        // 歌词动画入口：动画参数、歌词模糊强度、辉光触发阈值统一在独立子页无极调节，
+        // 歌词动画入口：动画参数与辉光触发阈值统一在独立子页无极调节，
         // 排在歌词省电模式（特效兜底开关）之后、音乐频谱分组之前。
         // search: 歌词 动画 当前行 上浮 非当前行 缩放 位置 错峰 步长 衰减
         ListTile(
           leading: const Icon(Icons.animation),
           title: const Text('歌词动画'),
-          subtitle: const Text('动画细节 · 模糊强度 · 辉光阈值'),
+          subtitle: const Text('动画细节 · 辉光阈值'),
           trailing: const Icon(Icons.chevron_right, size: 20),
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute(
@@ -2230,7 +2216,6 @@ class _SettingsPageState extends State<SettingsPage>
         // 歌词动画子页内的设置项在本页没有对应 tile，用手写条目补索引。
         // 必须挂在非 tile 节点上：生成器遇到 search-item 注释所在的 tile 会
         // 走手写分支、跳过该 tile 的标题自动收集（丢「歌词动画」自身条目）。
-        // search-item: 歌词模糊强度 | 歌词 模糊 强度 程度 高斯模糊
         // search-item: 辉光触发阈值 | 辉光 发光 阈值 灵敏度
         // ⑤ 音乐频谱：两种风格均支持。开关 → 样式（决定下方哪些参数有效）
         // → 柱数量 → 取色 → 该样式的透明度/高度

@@ -173,15 +173,13 @@ class LineRenderer {
 
   // ============== setLineState 输入缓存 ==============
   //
-  // 播放稳态下（无用户交互、无 blurFade 变化），每帧都调用 setLineState 但
-  // isActive/scale/blurFade/blurActive 四个输入其实都没变，dynamicDark/dynamicBright
-  // 公式重算纯属浪费。缓存这四个输入，全相等时直接早退，跳过 ~5 次浮点运算 +
-  // target 比较 + _isConverged 重置判断。每帧 30 行 × 120Hz = 3600 次/秒无意义计算。
+  // 播放稳态下，每帧都调用 setLineState 但 isActive/scale/activeColorValue
+  // 三个输入其实都没变，dynamicDark/dynamicBright 公式重算纯属浪费。
+  // 缓存这三个输入，全相等时直接早退，跳过 ~5 次浮点运算 + target 比较 +
+  // _isConverged 重置判断。每帧 30 行 × 120Hz = 3600 次/秒无意义计算。
 
   bool _lastIsActive = false;
   double _lastScale = double.nan;
-  double _lastBlurFade = double.nan;
-  bool _lastBlurActive = false;
   int? _lastActiveColorValue;
 
   // ============== 状态查询 ==============
@@ -213,8 +211,6 @@ class LineRenderer {
   /// [isActive] 为 true 时整行高亮（alpha 目标 dynamicBrightAlpha），
   /// 为 false 时整行 SOLID 暗态（alpha 目标 dynamicDarkAlpha）。
   /// [scale] 是行缩放，0.850（inactive）~1.0（active）。
-  /// [blurFade] 控制非当前行透明度：1.0=透明（模糊图片覆盖），0.0=正常显示。
-  /// [blurActive] 是否启用高斯模糊：false 时不降低非当前行透明度。
   ///
   /// **v4 bug 修复**：检测 _targetAlpha 变化时重置 _isConverged=false。
   /// 之前 setLineState 修改 _targetAlpha 但不重置 _isConverged，
@@ -222,22 +218,16 @@ class LineRenderer {
   void setLineState({
     required bool isActive,
     required double scale,
-    double blurFade = 1.0,
-    bool blurActive = true,
     int? activeColorValue,
   }) {
     // 输入缓存早退：稳态下 5 个输入全相等 → 跳过 dynamic 公式重算与 target 比较
     if (isActive == _lastIsActive &&
         scale == _lastScale &&
-        blurFade == _lastBlurFade &&
-        blurActive == _lastBlurActive &&
         activeColorValue == _lastActiveColorValue) {
       return;
     }
     _lastIsActive = isActive;
     _lastScale = scale;
-    _lastBlurFade = blurFade;
-    _lastBlurActive = blurActive;
     _lastActiveColorValue = activeColorValue;
 
     _isActive = isActive;
@@ -249,11 +239,7 @@ class LineRenderer {
             .toDouble();
     final double dynamicDark = factor * 0.2 + 0.2;
     final double dynamicBright = factor * 0.8 + 0.2;
-    // 非当前行 alpha = dynamicDark * (1 - blurFade)，blurActive=false 时不降低
-    final double effectiveFade = blurActive ? blurFade : 0.0;
-    final double newTargetAlpha = isActive
-        ? dynamicBright
-        : dynamicDark * (1.0 - effectiveFade);
+    final double newTargetAlpha = isActive ? dynamicBright : dynamicDark;
     // v4 修复：target 变化时重置 _isConverged，让 tick 重新计算 alpha
     if ((newTargetAlpha - _targetAlpha).abs() > 1e-6) {
       _isConverged = false;
@@ -272,7 +258,7 @@ class LineRenderer {
   /// 明亮的当前歌词直接消失（硬切），没有可淡出的量。
   ///
   /// 这里同时把 `_lastScale` 置为 NaN 作废输入缓存，让下一次 `setLineState`
-  /// 重新算出真实目标（开启高斯模糊时为 0）。
+  /// 重新算出真实目标（非当前行暗态 = dynamicDark）。
   void beginExitFadeFrom(double value, {double? rate}) {
     _exitRate = rate ?? _exitFadeSpeed;
     _currentAlpha = value;
@@ -774,8 +760,6 @@ class LineRenderer {
     // 同步重置 setLineState 输入缓存，避免 reset 后下次 setLineState 误命中早退
     _lastIsActive = false;
     _lastScale = double.nan;
-    _lastBlurFade = double.nan;
-    _lastBlurActive = false;
     _lastActiveColorValue = null;
   }
 

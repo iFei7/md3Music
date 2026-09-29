@@ -373,13 +373,9 @@ class WordRenderer {
   /// [isActive] 为 true 时启用 GRADIENT 模式（已播亮 / 未播暗），
   /// 为 false 时启用 SOLID 模式（整行均匀暗）。
   /// [scale] 是行缩放，0.850（inactive）~1.0（active）。
-  /// [blurFade] 控制非当前行透明度：1.0=透明（模糊图片覆盖），0.0=正常显示。
-  /// [blurActive] 是否启用高斯模糊：false 时不降低非当前行透明度。
   void setLineState({
     required bool isActive,
     required double scale,
-    double blurFade = 1.0,
-    bool blurActive = true,
     int? activeColorValue,
   }) {
     _isActive = isActive;
