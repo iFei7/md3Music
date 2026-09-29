@@ -347,28 +347,42 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # lite 分支：构建成功后发布到固定 Release（tag 固定为 lite-latest，
-      # 同名资产覆盖 —— 用户永远在一个入口拿到最新 Lite 构建，不堆积 release）
+      # 每次构建清空旧资产后重传 —— 单个入口始终提供最新 Lite 构建，不堆积 release）。
+      # 不用 softprops/action-gh-release：其 overwrite_files 对不存在的资产 PATCH 会 404。
       - name: Create lite Release (lite-latest)
         if: github.event_name == 'push' && github.ref_name == 'lite'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: lite-latest
-          name: Lite 最新构建（${{ env.VER }}）
-          body: |
-            ## md3Music Lite 自动构建
-
-            **提交:** [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-            **时间:** ${{ github.event.head_commit.timestamp }}
-
-            ### 下载（每次推送成功构建后自动覆盖更新）
-            - **（推荐）MD3音乐-${{ env.VER }}-标准版-64位.apk** — 推荐：大多数现代 Android 设备
-            - **MD3音乐-${{ env.VER }}-标准版-32位.apk** — 较旧的 32 位设备
-            - **MD3音乐-${{ env.VER }}-随身听兼容版-64位.apk** — Vivo 原子随身听兼容包（包名 `com.apple.android.music`）
-
-            > 此为 Lite 分支 CI 自动构建（预发布），非正式发布版本。
-          prerelease: true
-          overwrite_files: true
-          files: |
-            build/app/outputs/flutter-apk/*MD3音乐-*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${REPO}"
+          auth="Authorization: Bearer ${GITHUB_TOKEN}"
+          tag="lite-latest"
+
+          # 已有 release 则复用并清空旧资产；没有则新建（tag 指向当前提交）
+          rel_id=$(curl -sf -H "$auth" "$api/releases/tags/${tag}" | jq -r '.id // empty' || true)
+          if [[ -z "$rel_id" ]]; then
+            echo "创建 release ${tag} ..."
+            rel_id=$(curl -sf -X POST -H "$auth" \
+              -d "{\"tag_name\":\"${tag}\",\"target_commitish\":\"${GITHUB_REF_NAME}\",\"name\":\"Lite 最新构建\",\"prerelease\":true,\"body\":\"Lite 分支 CI 自动构建。每次成功构建后自动覆盖更新；版本与变更详情见 [Actions 运行记录](https://github.com/${REPO}/actions/workflows/ci.yml)。\"}" \
+              "$api/releases" | jq -r '.id')
+          else
+            echo "复用 release #${rel_id}，清理旧资产..."
+            curl -sf -H "$auth" "$api/releases/${rel_id}/assets?per_page=100" \
+              | jq -r '.[].id' | while read -r aid; do
+                curl -sf -X DELETE -H "$auth" "$api/releases/assets/${aid}" || true
+              done
+          fi
+
+          # 上传全部 APK（文件名含中文，需 URL 编码）
+          for f in build/app/outputs/flutter-apk/*MD3音乐-*.apk; do
+            fname=$(basename "$f")
+            enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$fname")
+            echo "上传 ${fname} ($(du -h "$f" | cut -f1)) ..."
+            curl -sf -X POST -H "$auth" -H "Content-Type: application/octet-stream" \
+              --data-binary "@${f}" \
+              "https://uploads.github.com/repos/${REPO}/releases/${rel_id}/assets?name=${enc}"
+            echo "  ✓ ${fname}"
+          done
+          echo "✅ Release ${tag} 已更新: https://github.com/${REPO}/releases/tag/${tag}"
