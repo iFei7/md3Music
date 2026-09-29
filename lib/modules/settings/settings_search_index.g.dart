@@ -1,6 +1,5 @@
 // GENERATED FILE — 请勿手改。
-// 由 scripts/tools/gen_settings_search_index.dart 从设置页源码生成。
-// 重新生成：dart run scripts/tools/gen_settings_search_index.dart
+// 从设置页源码生成（Lite：生成脚本已随精简移除，条目随设置页改动手工维护）。
 
 /// 设置搜索索引：label 取自各分类页 tile 的标题，category 为所属分类，
 /// aliases 来自源码中的 `// search: ...` 标注（补充同义词匹配）。

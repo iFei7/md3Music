@@ -816,8 +816,7 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   /// 按查询词过滤搜索索引（label + aliases 包含匹配）。
-  /// 索引由 scripts/tools/gen_settings_search_index.dart 从本文件源码生成，
-  /// 新增/改名设置项后重新生成即可，无需手工维护条目。
+  /// 索引见 settings_search_index.g.dart（Lite：随设置页改动手工维护）。
   List<({String label, String category, String aliases})> _searchResults(
     String query,
   ) {
