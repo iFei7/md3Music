@@ -1245,7 +1245,7 @@ class _FullPlayerState extends State<FullPlayer>
         setState(() {
           _isLoadingLyrics = false;
           // 统一用 LyricParserChain 解析为 List<LyricLine> 直接交给
-          // AppleLyricsView（覆盖 LRC/KRC/TTML/增强型 LRC 全格式）。
+          // AppleLyricsView（覆盖 LRC/KRC/增强型 LRC 全格式）。
           _lyricMetadata = parsedLyrics;
           _hasTranslation = parsedLyrics.any(
             (line) => line.translation != null && line.translation!.isNotEmpty,

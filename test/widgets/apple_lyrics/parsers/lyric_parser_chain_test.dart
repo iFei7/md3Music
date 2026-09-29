@@ -310,42 +310,7 @@ Plain again
     });
   });
 
-  group('LyricParserChain - TTML 接入', () {
-    const ttmlInput = '''<?xml version="1.0" encoding="utf-8"?>
-<tt xmlns="http://www.w3.org/ns/ttml">
-  <body>
-    <div>
-      <p begin="1.000" end="2.000">Hello world</p>
-    </div>
-  </body>
-</tt>''';
-
-    test('14. detectFormat：<tt 根开头 → ttml', () {
-      expect(LyricParserChain.detectFormat(ttmlInput), LyricFormat.ttml);
-    });
-
-    test('14b. detectFormat：XML 声明 + 注释 + <tt → 仍识别 ttml', () {
-      const withComment = '''<?xml version="1.0"?>
-<!-- generated -->
-<tt xmlns="http://www.w3.org/ns/ttml">
-  <body><div><p begin="1.000" end="2.000">A</p></div></body>
-</tt>''';
-      expect(LyricParserChain.detectFormat(withComment), LyricFormat.ttml);
-    });
-
-    test('15. parse：TTML 文本 → 解析出行', () {
-      final result = LyricParserChain.parse(ttmlInput);
-      expect(result, hasLength(1));
-      expect(result.first.text, 'Hello world');
-      expect(result.first.startTime, 1000);
-    });
-
-    test('15b. parseAs(ttml)：强制走 TTML 解析器', () {
-      final result = LyricParserChain.parseAs(ttmlInput, LyricFormat.ttml);
-      expect(result, hasLength(1));
-      expect(result.first.text, 'Hello world');
-    });
-
+  group('LyricParserChain - 增强型 LRC 与边界', () {
     test('16. 增强型 LRC 自动检测：行首 [mm:ss.xx] → lrc（走 LrcParser 尖括号路径）', () {
       const input = '[02:04.818]<02:04.818>Wait <02:09.158>and';
       expect(LyricParserChain.detectFormat(input), LyricFormat.lrc);
