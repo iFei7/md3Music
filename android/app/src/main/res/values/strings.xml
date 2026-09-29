@@ -20,6 +20,5 @@
     <string name="fm_play_desc">播放/暂停</string>
     <string name="fm_station_desc">电台档位</string>
     <string name="shortcut_favorites">我的收藏</string>
-    <string name="shortcut_recognition">听歌识曲</string>
     <string name="shortcut_search">搜索</string>
 </resources>

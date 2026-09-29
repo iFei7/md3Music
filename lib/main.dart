@@ -299,7 +299,7 @@ Future<void> _restoreLandscapeImmersivePref() async {
 /// 通过全局 [appNavigatorKey] 获取 NavigatorState，避免依赖具体 BuildContext。
 ///
 /// 快捷方式类型统一为 `action_open_<tabId>`（与现有
-/// action_open_favorites/recognition/search 兼容）。这里只把 tab id 交给
+/// action_open_favorites/search 兼容）。这里只把 tab id 交给
 /// _MainLayout，由它按当前 tab 配置解析：可见 → 切主 tab；隐藏 → 二级页打开。
 void handleShortcut(String shortcutType) {
   final nav = appNavigatorKey.currentState;

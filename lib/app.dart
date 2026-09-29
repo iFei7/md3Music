@@ -690,30 +690,12 @@ class _MainLayoutState extends State<_MainLayout>
   NavigationDestination _buildDestination(TabItem tab, int index) {
     final isSelected = index == _selectedIndex;
     switch (tab.id) {
-      case 'launchpad':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.grid_view_outlined,
-            filledIcon: Icons.grid_view,
-          ),
-          label: tab.label,
-        );
       case 'discover':
         return NavigationDestination(
           icon: _AnimatedTabIcon(
             selected: isSelected,
             outlinedIcon: Icons.explore_outlined,
             filledIcon: Icons.explore,
-          ),
-          label: tab.label,
-        );
-      case 'coverflow':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.album_outlined,
-            filledIcon: Icons.album,
           ),
           label: tab.label,
         );
@@ -762,69 +744,6 @@ class _MainLayoutState extends State<_MainLayout>
           ),
           label: tab.label,
         );
-      case 'ip':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.edit_note_outlined,
-            filledIcon: Icons.edit_note,
-          ),
-          label: tab.label,
-        );
-      case 'recognition':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.mic_none_outlined,
-            filledIcon: Icons.mic,
-          ),
-          label: tab.label,
-        );
-      case 'audiobook':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.auto_stories_outlined,
-            filledIcon: Icons.auto_stories,
-          ),
-          label: tab.label,
-        );
-      case 'scene':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.landscape_outlined,
-            filledIcon: Icons.landscape,
-          ),
-          label: tab.label,
-        );
-      case 'channel':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.dynamic_feed_outlined,
-            filledIcon: Icons.dynamic_feed,
-          ),
-          label: tab.label,
-        );
-      case 'brush':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.swipe_outlined,
-            filledIcon: Icons.swipe,
-          ),
-          label: tab.label,
-        );
-      case 'listen_together':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.groups_outlined,
-            filledIcon: Icons.groups,
-          ),
-          label: tab.label,
-        );
       case 'settings':
         return NavigationDestination(
           icon: _AnimatedTabIcon(
@@ -861,22 +780,10 @@ class _MainLayoutState extends State<_MainLayout>
     //（与底部 NavigationBar 一致；仅图标模式下文字被隐藏，label 仍用于无障碍朗读）。
     final label = Text(tab.label);
     switch (tab.id) {
-      case 'launchpad':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.grid_view_outlined),
-          selectedIcon: const Icon(Icons.grid_view),
-          label: label,
-        );
       case 'discover':
         return NavigationRailDestination(
           icon: const Icon(Icons.explore_outlined),
           selectedIcon: const Icon(Icons.explore),
-          label: label,
-        );
-      case 'coverflow':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.album_outlined),
-          selectedIcon: const Icon(Icons.album),
           label: label,
         );
       case 'library':
@@ -907,48 +814,6 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationRailDestination(
           icon: const Icon(Icons.leaderboard_outlined),
           selectedIcon: const Icon(Icons.leaderboard),
-          label: label,
-        );
-      case 'ip':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.edit_note_outlined),
-          selectedIcon: const Icon(Icons.edit_note),
-          label: label,
-        );
-      case 'recognition':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.mic_none_outlined),
-          selectedIcon: const Icon(Icons.mic),
-          label: label,
-        );
-      case 'audiobook':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.auto_stories_outlined),
-          selectedIcon: const Icon(Icons.auto_stories),
-          label: label,
-        );
-      case 'scene':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.landscape_outlined),
-          selectedIcon: const Icon(Icons.landscape),
-          label: label,
-        );
-      case 'channel':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.dynamic_feed_outlined),
-          selectedIcon: const Icon(Icons.dynamic_feed),
-          label: label,
-        );
-      case 'brush':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.swipe_outlined),
-          selectedIcon: const Icon(Icons.swipe),
-          label: label,
-        );
-      case 'listen_together':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.groups_outlined),
-          selectedIcon: const Icon(Icons.groups),
           label: label,
         );
       case 'settings':
@@ -974,24 +839,10 @@ class _MainLayoutState extends State<_MainLayout>
 
   NavigationDrawerDestination _buildDrawerDestination(TabItem tab) {
     switch (tab.id) {
-      case 'launchpad':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.grid_view_outlined),
-          selectedIcon: const Icon(Icons.grid_view),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
       case 'discover':
         return NavigationDrawerDestination(
           icon: const Icon(Icons.explore_outlined),
           selectedIcon: const Icon(Icons.explore),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'coverflow':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.album_outlined),
-          selectedIcon: const Icon(Icons.album),
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
@@ -1027,55 +878,6 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationDrawerDestination(
           icon: const Icon(Icons.leaderboard_outlined),
           selectedIcon: const Icon(Icons.leaderboard),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'ip':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.edit_note_outlined),
-          selectedIcon: const Icon(Icons.edit_note),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'recognition':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.mic_none_outlined),
-          selectedIcon: const Icon(Icons.mic),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'audiobook':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.auto_stories_outlined),
-          selectedIcon: const Icon(Icons.auto_stories),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'scene':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.landscape_outlined),
-          selectedIcon: const Icon(Icons.landscape),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'channel':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.dynamic_feed_outlined),
-          selectedIcon: const Icon(Icons.dynamic_feed),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'brush':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.swipe_outlined),
-          selectedIcon: const Icon(Icons.swipe),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'listen_together':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.groups_outlined),
-          selectedIcon: const Icon(Icons.groups),
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
