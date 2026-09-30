@@ -38,8 +38,12 @@ android {
     defaultConfig {
         // CI 的原子随身听兼容包只覆盖 applicationId；namespace、Kotlin 包路径和
         // MethodChannel 名保持不变，避免复制或改写原生代码。
+        // Lite：默认包名加 .lite 后缀与完整版共存安装（FileProvider authority
+        // 走 ${applicationId} 占位符自动跟随；MethodChannel 名/广播 action 为
+        // 独立字符串不受影响）。随身听兼容包仍由 CI 显式覆盖为
+        // com.apple.android.music（伪装包名正是其存在意义，不加后缀）。
         applicationId = providers.gradleProperty("md3ApplicationId")
-            .getOrElse("com.md3music.md3music")
+            .getOrElse("com.md3music.md3music.lite")
         minSdk = flutter.minSdkVersion
         targetSdk = 35
         versionCode = flutter.versionCode

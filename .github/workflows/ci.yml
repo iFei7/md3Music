@@ -126,12 +126,15 @@ jobs:
       # flavor 化之后必须显式 --flavor：定义 productFlavors 后 AGP 不再生成 assembleRelease
       # --target-platform：Lite 收窄为 arm64/armv7。不加的话 Flutter 插件注入的
       # splits.abi 会含 x86_64，打出无 libkugou_server.so 的废包（模拟器包已下线）。
+      # --obfuscate：Dart 符号混淆，libapp.so 减小约 1.5-2.5MB；符号表存
+      # build/symbols（随 artifacts 上传），崩溃栈还原时使用。
       - name: Flutter build APK (standard, release, split per ABI)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.apple_only == false }}
         run: |
           set -o pipefail
           flutter build apk --release --flavor standard --split-per-abi \
             --target-platform android-arm64,android-arm \
+            --obfuscate --split-debug-info=build/symbols \
             --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_standard.log"
 
       # depth3d flavor：3D 全量包（内置 onnxruntime so + 深度模型），仅 arm64-v8a
@@ -140,6 +143,7 @@ jobs:
         run: |
           flutter build apk --release --flavor depth3d \
             --dart-define=ENABLE_DEPTH_3D=true --split-per-abi --target-platform android-arm64 \
+            --obfuscate --split-debug-info=build/symbols \
             --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_depth3d.log"
 
       # 原子随身听按包名识别合作应用：额外构建一个 arm64-v8a 兼容包。
@@ -157,6 +161,7 @@ jobs:
           flutter build apk --release --flavor standard --split-per-abi \
             --target-platform android-arm64 \
             --android-project-arg=md3ApplicationId=com.apple.android.music \
+            --obfuscate --split-debug-info=build/symbols \
             --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_apple.log"
           mv "$standard_apk" "$apk_dir/app-apple-music-arm64-v8a-release.apk"
           if [[ -f "$standard_backup" ]]; then
@@ -316,6 +321,17 @@ jobs:
           path: build/app/outputs/flutter-apk/MD3音乐-${{ env.VER }}-随身听兼容版-64位.apk
           if-no-files-found: error
           retention-days: 7
+
+      # --obfuscate 的 Dart 符号表：崩溃栈还原（flutter symbolize）专用，
+      # 与本次构建的 libapp.so 一一对应，随 artifacts 留档
+      - name: Upload Dart obfuscation symbols
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.apple_only == false }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dart-symbols-${{ env.VER }}-${{ github.sha }}
+          path: build/symbols/
+          if-no-files-found: ignore
+          retention-days: 30
 
       # 自动创建 Release 并上传 APK（仅 push 到 main/master 时）
       - name: Create CI Release
