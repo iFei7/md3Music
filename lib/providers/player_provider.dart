@@ -3070,8 +3070,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       if (_originalPlaylist[i].id == song.id) _originalPlaylist[i] = song;
     }
     _updateNotification();
-    // 歌词渠道补推：这些渠道都按 song.id 去重（lyricInfo 更是每首只推一次），
-    // 而回写保持 id 不变 → 不显式通知就会永久停在「未知歌曲」占位标题。
+    // 歌词渠道补推：这些渠道都按 song.id 去重，而回写保持 id 不变 →
+    // 不显式通知就会永久停在「未知歌曲」占位标题。
     // Lyricon 例外：它由 _handleLyriconSongChange 的元数据签名自动触发重推。
     unawaited(LyricPushService.instance.notifySongMetadataChanged());
     notifyListeners();

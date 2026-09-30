@@ -45,7 +45,7 @@ void main() {
     final originalBaseUrl = KugouEndpoints.baseUrl;
     final originalAdapter = client.dio.httpClientAdapter;
     final adapter = _PageLyricPushAdapter();
-    client.updateBaseUrl('http://page-desktop-lyric.invalid');
+    client.updateBaseUrl('http://page-lyric-push.invalid');
     client.dio.httpClientAdapter = adapter;
     KugouApiClient.markServerReady();
 
@@ -81,15 +81,13 @@ void main() {
         _ => null,
       },
     );
-    final lockScreenPayloads = <Map<Object?, Object?>>[];
+    final bluetoothLyricPayloads = <String>[];
     messenger.setMockMethodCallHandler(
       const services.MethodChannel('com.md3music.md3music/floating_lyric'),
       (call) async {
-        if (call.method == 'updateLockScreenLyricData' &&
-            call.arguments is Map) {
-          lockScreenPayloads.add(
-            Map<Object?, Object?>.from(call.arguments as Map),
-          );
+        if (call.method == 'updateBluetoothLyric' && call.arguments is Map) {
+          final lyric = (call.arguments as Map)['lyric'];
+          if (lyric is String) bluetoothLyricPayloads.add(lyric);
         }
         return null;
       },
@@ -160,8 +158,8 @@ void main() {
       );
       expect(adapter.searchRequestCount, 1);
 
-      await lyricPush.setLockScreenLyricEnabled(true);
-      // 测试音频替身在 source load 后可能仍为暂停态；锁屏歌词暂停 tick 是 1s。
+      await lyricPush.setBluetoothLyricEnabled(true);
+      // 测试音频替身在 source load 后可能仍为暂停态；暂停态 tick 周期为 1s。
       await tester.pump(const Duration(milliseconds: 1200));
       expect(adapter.searchRequestCount, 1);
 
@@ -178,7 +176,9 @@ void main() {
       expect(adapter.requestedFormats, containsAll(['lrc', 'krc']));
       adapter.completeLyrics();
 
-      await tester.pump(const Duration(milliseconds: 500));
+      // 蓝牙歌词走 tick 内「行切换」路径推送，给足一个 tick 周期。
+      await tester.pump(const Duration(milliseconds: 1200));
+      await tester.pump();
       expect(tester.takeException(), isNull);
       expect(find.byType(FullPlayer), findsOneWidget);
       expect(
@@ -186,22 +186,14 @@ void main() {
         contains('Shared lyric integration line'),
       );
       expect(
-        lockScreenPayloads.any((payload) {
-          final lines = payload['lines'];
-          return lines is List &&
-              lines.any(
-                (line) =>
-                    line is Map &&
-                    line['text'] == 'Shared lyric integration line',
-              );
-        }),
+        bluetoothLyricPayloads.contains('Shared lyric integration line'),
         isTrue,
-        reason: '桌面/锁屏服务应提交同一歌词查询的解析结果',
+        reason: '歌词外显推送应复用播放页同一首歌的歌词解析结果',
       );
       expect(adapter.searchRequestCount, 1);
       expect(adapter.lyricRequestCount, 2);
     } finally {
-      await lyricPush.setLockScreenLyricEnabled(false);
+      await lyricPush.setBluetoothLyricEnabled(false);
       await tester.pumpWidget(const SizedBox.shrink());
       tester.view.physicalSize = originalPhysicalSize;
       tester.view.devicePixelRatio = originalDevicePixelRatio;

@@ -2,6 +2,35 @@
 
 > 精简分支（`applicationId = com.md3music.md3music.lite`，与完整版共存）。以下为本分支相对上游的删减记录。
 
+### 2026-09-30 — 下线锁屏歌词 / 魅族状态栏歌词 / LyricInfo 转发
+
+- 移除锁屏歌词整链：原生 `LockScreenLyricActivity`（锁屏全屏滚动歌词）、`LockScreenLyricReceiver`
+  （SCREEN_OFF / SCREEN_ON 拉起）、`Theme.MD3Music.LockScreen` 样式与 Manifest 声明；
+  Dart 侧开关、整包数据 / 轻量进度 / 主色三路推送、`LockScreenProgressPushGate` 节流门控
+  与设置页「锁屏歌词（实验性）」分组
+- 移除魅族状态栏歌词整链：原生 `FlymeLyricBridge`（复用媒体通知 tickerText + Flyme 私有 flag）、
+  `MD3MusicMediaSessionService` 的 `FlymeNotificationProvider` 包装层；Dart 侧开关、行级推送、
+  设置页「提前量」面板与设备能力探测
+- 移除 LyricInfo 转发协议：Dart 侧 `lyric_info_json_builder`（ELRC / ColorOS Bridge 两种 payload）
+  与 `MediaSession extras.lyricInfo` 推送；原生侧 `applyLyricInfoUpdate`、`settings_lyric_info_*`
+  偏好与设置页协议选项
+- **连带影响**：LyricInfo 是 Vivo 原子随身听（vivomusicmix）与 Vivo 车载歌词（ucar
+  `LYRICS_WHOLE`）的数据源，两者随之下线；原生 `pushVivoAtomicExtras` 与 fork 内
+  `extractCarLyricsFromLyricInfo` / UCAR extras 注入一并删除
+- 移除 media3 通知栏「歌词翻译」自定义按钮与 `CMD_TOGGLE_TRANSLATION` 会话命令（ColorOS Bridge 专用），
+  同时移除随之失去用途的 `ic_translation` 资源
+- `lyric_push_service.dart` 收敛为「蓝牙歌词 + SuperLyric」两个通道（1,115 → 646 行）
+- 行为变化：`btLyricRewriteActive()` 原以「推送协议 == lyric_info」作为不改写媒体会话 TITLE
+  的条件（保 ColorOS 自带桌面歌词的真实曲名）；该协议下线后条件退化为「蓝牙歌词开启且有当前歌词行」，
+  即恢复上游 AVRCP 行为
+- 设置迁移：读取到历史值 `lyric_push_protocol = 'lyric_info'` 时回落为 `'none'`
+- 已知不可达残留（有意保留）：vendored media3 `MediaSessionCompat` 的 `resendVivoLrcChange`
+  与 setMetadata 车载歌词钩子已无生产方；`LegacyConversions` 的 `support_event` 能力位服务于
+  原子随身听播控能力位判定，与本批次目标无关，故未改动
+- 测试：删除 `lyric_info_json_builder_test.dart`；`lyric_push_parse_test.dart` 去掉锁屏节流用例；
+  `page_lyric_push_dedup_test.dart` 的同键并发去重断言由锁屏通道改挂到蓝牙歌词通道
+
+---
 ### 2026-09-30 — 下线桌面歌词悬浮窗
 
 - 移除桌面歌词功能：原生 `FloatingLyricService`（悬浮窗 + specialUse 前台服务）、MethodChannel 浮窗方法、

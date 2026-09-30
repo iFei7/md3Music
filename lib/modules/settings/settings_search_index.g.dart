@@ -46,8 +46,6 @@ const List<({String label, String category, String aliases})>
   (label: '优先翻译（同时存在时）', category: '歌词', aliases: '优先 翻译'),
   (label: '蓝牙歌词', category: '歌词', aliases: '蓝牙'),
   (label: '压缩封面图', category: '歌词', aliases: '蓝牙 封面 压缩'),
-  (label: '锁屏歌词（实验性）', category: '歌词', aliases: '锁屏'),
-  (label: '状态栏歌词', category: '歌词', aliases: '魅族 flyme 状态栏'),
   (label: '网络音质', category: '播放', aliases: '音质 清晰度 wifi 移动'),
   (label: '自动领取VIP', category: '播放', aliases: 'vip 会员 自动领取'),
   (label: '32bit 播放支持', category: '播放', aliases: '32bit 无损 高解析 音质 float'),

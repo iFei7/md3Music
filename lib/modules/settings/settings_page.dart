@@ -109,10 +109,8 @@ class _SettingsPageState extends State<SettingsPage>
   // 歌词省电模式开关（默认开启，开启后歌词界面锁定 60fps，滑动时解锁）
   bool _lyricEcoMode = true;
   String _appVersion = '';
-  // 实时歌词推送协议选择（三选一 + 关闭）
+  // 实时歌词推送协议选择（二选一 + 关闭）
   String _lyricPushProtocol = 'none';
-  // LyricInfo 协议下的 ColorOS Bridge 兼容模式（默认关闭）
-  bool _lyricInfoColorOs = false;
   // 共用偏好：翻译 / 罗马音 / 优先翻译（同时存在时）
   bool _lyricPushTranslation = true;
   bool _lyricPushRoma = false;
@@ -149,39 +147,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _depthCoverNeuralInpaint = true;
   // 深度图缓存占用（字节，仅统计可重建的分层/深度图）
   int _depthCacheBytes = 0;
-  // 魅族 Flyme 状态栏歌词：仅 Flyme 设备显示（原生把歌词贴到媒体通知 tickerText 上）
-  bool _flymeStatusBarLyricEnabled = false;
-  bool _flymeStatusBarLyricSupported = false;
-
-  static const _flymeChannel =
-      MethodChannel('com.md3music.md3music/flyme_status_bar_lyric');
-
-  /// 查询本机是否 Flyme，并回读已保存的开关。非 Flyme 时整项隐藏，
-  /// 避免用户在别的品牌上打开却完全看不到效果。
-  Future<void> _loadFlymeStatusBarLyric() async {
-    bool supported = false;
-    try {
-      supported = await _flymeChannel
-              .invokeMethod<bool>('isFlymeStatusBarLyricSupported') ??
-          false;
-    } catch (_) {
-      supported = false;
-    }
-    if (!supported) {
-      if (mounted) setState(() => _flymeStatusBarLyricSupported = false);
-      return;
-    }
-    final enabled = await _settingsRepository.getFlymeStatusBarLyricEnabled();
-    if (mounted) {
-      setState(() {
-        _flymeStatusBarLyricSupported = true;
-        _flymeStatusBarLyricEnabled = enabled;
-      });
-    }
-  }
-  // 样式（字号/行距/字重/字体等）全部跟随 AM 歌词偏好，与播放页 Zen 模式一致
-  // 锁屏歌词开关：锁屏时全屏显示滚动歌词（覆盖在系统锁屏上方），默认关闭
-  bool _lockScreenLyricEnabled = false;
   // 禁用本应用挂载的 Android 系统音效链，避免与手机厂商音效叠加后播放音乐炸音
   bool _disableSystemAudioEffects = false;
   // 暂停淡入淡出开关
@@ -266,7 +231,6 @@ class _SettingsPageState extends State<SettingsPage>
     _loadVersion();
     _loadLyricPushSettings();
     _loadAndroidSdkVersion();
-    _loadFlymeStatusBarLyric();
     _initEnable32bit();
     LyriconProviderService.instance.addListener(_onLyriconStateChanged);
   }
@@ -293,7 +257,6 @@ class _SettingsPageState extends State<SettingsPage>
     final roma = await _settingsRepository.getLyricPushRoma();
     final preferTranslation = await _settingsRepository
         .getLyricPushPreferTranslation();
-    final colorOs = await _settingsRepository.getLyricInfoColorOs();
     if (mounted) {
       setState(() {
         _lyricPushProtocol = protocol;
@@ -316,9 +279,6 @@ class _SettingsPageState extends State<SettingsPage>
         );
         await LyriconProviderService.instance.setDisplayRoma(roma);
       } catch (_) {}
-    }
-    if (mounted) {
-      setState(() => _lyricInfoColorOs = colorOs);
     }
   }
 
@@ -394,9 +354,6 @@ class _SettingsPageState extends State<SettingsPage>
     // 读取 3D 封面深度图缓存占用
     final depthCacheBytes = await DepthCoverService.instance.cache
         .cacheSizeBytes();
-    // 读取锁屏歌词开关
-    final lockScreenLyricEnabled = await _settingsRepository
-        .getLockScreenLyricEnabled();
     final disableSystemAudioEffects = await _settingsRepository
         .getDisableSystemAudioEffects();
     final pauseFadeEnabled = await _settingsRepository.getPauseFadeEnabled();
@@ -488,7 +445,6 @@ class _SettingsPageState extends State<SettingsPage>
       _depthCacheBytes = depthCacheBytes;
       // 同步全局开关信号（播放页若在场即时响应；播放页 host 首次加载也读它）
       DepthCoverService.enabledSignal.value = depthCoverEnabled;
-      _lockScreenLyricEnabled = lockScreenLyricEnabled;
       _disableSystemAudioEffects = disableSystemAudioEffects;
       _pauseFadeEnabled = pauseFadeEnabled;
       _crossfadeEnabled = crossfadeEnabled;
@@ -950,11 +906,6 @@ class _SettingsPageState extends State<SettingsPage>
                 selected: _lyricPushProtocol == 'super_lyric',
                 disabled: !_superLyricSupported,
               ),
-              M3EDropdownItem(
-                label: 'LyricInfo',
-                value: 'lyric_info',
-                selected: _lyricPushProtocol == 'lyric_info',
-              ),
             ],
             singleSelect: true,
             // 单选下关闭 chip 动画，当前值才会渲染为可省略的纯文本
@@ -977,16 +928,6 @@ class _SettingsPageState extends State<SettingsPage>
             },
           ),
         ),
-        // 仅 LyricInfo 协议下显示：ColorOS Bridge 兼容字段开关
-        if (_lyricPushProtocol == 'lyric_info')
-          SwitchListTile(
-            title: const Text('ColorOS Bridge 兼容字段'),
-            value: _lyricInfoColorOs,
-            onChanged: (v) {
-              // ignore: discarded_futures
-              _setLyricInfoColorOs(v);
-            },
-          ),
         // 选中 Lyricon 时显示连接状态
         if (_lyricPushProtocol == 'lyricon')
           Padding(
@@ -1016,12 +957,8 @@ class _SettingsPageState extends State<SettingsPage>
         // search: 罗马音 拼音
         SwitchListTile(
           title: const Text('罗马音歌词'),
-          // 只在协议确实不支持时提示约束，其余情况标题已足够表意
-          subtitle: _lyricPushProtocol == 'lyric_info'
-              ? const Text('LyricInfo 仅支持翻译，不支持罗马音')
-              : null,
           value: _lyricPushRoma,
-          onChanged: protocolActive && _lyricPushProtocol != 'lyric_info'
+          onChanged: protocolActive
               ? (value) {
                   // ignore: discarded_futures
                   _setLyricPushRoma(value);
@@ -1031,11 +968,8 @@ class _SettingsPageState extends State<SettingsPage>
         // search: 优先 翻译
         SwitchListTile(
           title: const Text('优先翻译（同时存在时）'),
-          subtitle: _lyricPushProtocol == 'lyric_info'
-              ? const Text('LyricInfo 仅支持翻译，无罗马音可选')
-              : null,
           value: _lyricPushPreferTranslation,
-          onChanged: protocolActive && _lyricPushProtocol != 'lyric_info'
+          onChanged: protocolActive
               ? (value) {
                   // ignore: discarded_futures
                   _setLyricPushPreferTranslation(value);
@@ -1068,43 +1002,6 @@ class _SettingsPageState extends State<SettingsPage>
             await _settingsRepository.setBluetoothLyricCompressArt(value);
           },
         ),
-        // ③ 锁屏歌词：主开关（字号/行距/字重/字体等样式全部跟随 AM 歌词偏好，
-        // 与播放页 Zen 沉浸模式一致，在播放页歌词设置中调整）
-        _buildGroupLabel('锁屏歌词', colorScheme),
-        // search: 锁屏
-        SwitchListTile(
-          title: const Text('锁屏歌词（实验性）'),
-          // 缺权限就完全不生效，属于必要前提；其余行为说明删除
-          subtitle: const Text('需开启悬浮窗、后台弹出界面与锁屏通知权限'),
-          value: _lockScreenLyricEnabled,
-          onChanged: (value) async {
-            HapticFeedback.lightImpact();
-            setState(() => _lockScreenLyricEnabled = value);
-            await _settingsRepository.setLockScreenLyricEnabled(value);
-            // 同步到歌词服务（启停定时器）与原生端（开关状态/关闭界面）
-            await LyricPushService.instance.setLockScreenLyricEnabled(value);
-          },
-        ),
-        // ③½ 魅族 Flyme 状态栏歌词：仅 Flyme 设备显示
-        if (_flymeStatusBarLyricSupported) ...[
-          _buildGroupLabel('魅族状态栏歌词', colorScheme),
-          // search: 魅族 flyme 状态栏
-          SwitchListTile(
-            title: const Text('状态栏歌词'),
-            subtitle: const Text('歌词显示在状态栏时钟旁，由 Flyme 系统渲染'),
-            value: _flymeStatusBarLyricEnabled,
-            onChanged: (value) async {
-              HapticFeedback.lightImpact();
-              setState(() => _flymeStatusBarLyricEnabled = value);
-              await _settingsRepository.setFlymeStatusBarLyricEnabled(value);
-              // 启停歌词定时器，并把开关与当前行同步到原生
-              await LyricPushService.instance
-                  .setFlymeStatusBarLyricEnabled(value);
-            },
-          ),
-          // search: 状态栏 提前 提前量 快 慢
-          if (_flymeStatusBarLyricEnabled) const _FlymeLyricAdvanceTile(),
-        ],
         // ④ 歌词同步：逐字歌词时间偏移（仅在线音乐生效）
         _buildGroupLabel('歌词同步', colorScheme),
         const _LyricTimeOffsetTile(),
@@ -1121,15 +1018,6 @@ class _SettingsPageState extends State<SettingsPage>
     await _applyLyricPushProtocol(protocol);
   }
 
-  /// LyricInfo 的 ColorOS Bridge 兼容模式开关：持久化 + 同步到歌词服务（即时重推）。
-  Future<void> _setLyricInfoColorOs(bool value) async {
-    HapticFeedback.lightImpact();
-    setState(() => _lyricInfoColorOs = value);
-    await _settingsRepository.setLyricInfoColorOs(value);
-    // ignore: discarded_futures
-    LyricPushService.instance.setLyricInfoColorOs(value);
-  }
-
   /// 应用协议选择：关闭所有协议，启用选中协议，并同步偏好到各协议。
   Future<void> _applyLyricPushProtocol(String protocol) async {
     // 先全部关闭（幂等）
@@ -1138,12 +1026,9 @@ class _SettingsPageState extends State<SettingsPage>
     } catch (_) {}
     // ignore: discarded_futures
     LyricPushService.instance.setSuperLyricEnabled(false);
-    // ignore: discarded_futures
-    await LyricPushService.instance.setLyricInfoEnabled(false);
     // 记录各协议 enabled 状态（兼容 Kotlin restoreLyricon 读 lyricon_enabled）
     await _settingsRepository.setLyriconEnabled(protocol == 'lyricon');
     await _settingsRepository.setSuperLyricEnabled(protocol == 'super_lyric');
-    await _settingsRepository.setLyricInfoEnabled(protocol == 'lyric_info');
 
     if (protocol == 'none') return;
 
@@ -1161,12 +1046,6 @@ class _SettingsPageState extends State<SettingsPage>
         // ignore: discarded_futures
         LyricPushService.instance.setSuperLyricEnabled(true);
       }
-    } else if (protocol == 'lyric_info') {
-      // 先同步 ColorOS 模式再启用推送，避免启动瞬间先推旧格式
-      // ignore: discarded_futures
-      LyricPushService.instance.setLyricInfoColorOs(_lyricInfoColorOs);
-      // ignore: discarded_futures
-      await LyricPushService.instance.setLyricInfoEnabled(true);
     }
     // ignore: discarded_futures
     LyricPushService.instance.setLyricPushPreferences(
@@ -3733,144 +3612,3 @@ class _DisplayScaleConfirmDialogState
   }
 }
 
-/// 魅族状态栏歌词「提前量」。只影响状态栏这一路，不动播放页/悬浮窗/蓝牙的时间轴。
-class _FlymeLyricAdvanceTile extends StatefulWidget {
-  const _FlymeLyricAdvanceTile();
-
-  @override
-  State<_FlymeLyricAdvanceTile> createState() => _FlymeLyricAdvanceTileState();
-}
-
-class _FlymeLyricAdvanceTileState extends State<_FlymeLyricAdvanceTile> {
-  static const int _sliderMax = SettingsRepository.kFlymeLyricAdvanceMaxMs;
-  // 上限取自仓库常量而非本地字面量：UI 钳位与持久化钳位必须同源，
-  // 否则改一处就会出现"滑块能拖到 600、存进去被截到 300"这类不一致。
-
-  final TextEditingController _controller = TextEditingController();
-  late int _advance;
-
-  @override
-  void initState() {
-    super.initState();
-    _advance = SettingsRepository.kFlymeLyricAdvanceDefaultMs;
-    // 先用默认值占位再异步读持久化值：SharedPreferences 是异步的，
-    // 直接 await 会让这一行首帧空白。与 _LyricTimeOffsetTile 同一写法。
-    _controller.text = _advance.toString();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final v = await SettingsRepository().getFlymeLyricAdvanceMs();
-    if (!mounted) return;
-    setState(() {
-      _advance = v;
-      _controller.text = v.toString();
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _apply(int v) {
-    final clamped = v.clamp(0, _sliderMax);
-    setState(() {
-      _advance = clamped;
-      _controller.text = clamped.toString();
-    });
-    final repo = SettingsRepository();
-    // ignore: discarded_futures
-    repo.setFlymeLyricAdvanceMs(clamped);
-    // 即时生效：不重推的话要等到下一行才看得出变化
-    // ignore: discarded_futures
-    LyricPushService.instance.setFlymeAdvanceMs(clamped);
-  }
-
-  void _submitFromField() {
-    final v = int.tryParse(_controller.text.trim());
-    if (v == null) {
-      _controller.text = _advance.toString();
-      return;
-    }
-    _apply(v);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.fast_rewind, size: 20, color: colorScheme.primary),
-              const SizedBox(width: 8),
-              Text(
-                '状态栏歌词提前量',
-                style: textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                '${_advance}ms',
-                style: textTheme.labelLarge?.copyWith(
-                  color: colorScheme.primary,
-                ),
-              ),
-            ],
-          ),
-          M3ESlider(
-            value: _advance.clamp(0, _sliderMax).toDouble(),
-            min: 0,
-            max: _sliderMax.toDouble(),
-            label: '${_advance}ms',
-            onChanged: (v) => _apply(v.round()),
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '滑块 0–$_sliderMax ms',
-                  style: textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              SizedBox(
-                width: 120,
-                child: TextField(
-                  controller: _controller,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    signed: false,
-                  ),
-                  textAlign: TextAlign.end,
-                  style: textTheme.bodyMedium,
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    suffixText: 'ms',
-                    hintText: '0',
-                  ),
-                  onSubmitted: (_) => _submitFromField(),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '状态栏歌词是通知驱动的，系统渲染有约 100ms 延迟，所以默认提前 120ms 抵消它。'
-            '觉得字出太早就调小，太晚就调大；只影响状态栏，不影响播放页与悬浮窗。',
-            style: textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}

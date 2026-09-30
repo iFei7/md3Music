@@ -107,15 +107,6 @@
                 <action android:name="com.vivo.musicwidgetmix.support.service" />
             </intent-filter>
         </service>
-        <!-- 锁屏歌词：全屏覆盖在锁屏上方，显示逐字歌词 -->
-        <activity
-            android:name=".LockScreenLyricActivity"
-            android:exported="false"
-            android:launchMode="singleInstance"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:showWhenLocked="true"
-            android:theme="@style/Theme.MD3Music.LockScreen" />
         <!-- 用 Lyrico 外部编辑本地歌曲：通过 FileProvider 把音频文件以 content:// URI
              授权给 Lyrico 读写（用户对本地文件拥有完整编辑权，保存由 Lyrico 写回）。 -->
         <provider

@@ -120,7 +120,7 @@ Future<(bool, bool)> runBootstrap() async {
     EqualizerService.instance.init().catchError((_) {}),
     // 初始化蝰蛇母带服务（恢复开关与 10 段增益并推送原生处理链）
     ViperMasterService.instance.init().catchError((_) {}),
-    // 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric/LyricInfo 三选一）：
+    // 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric 二选一）：
     // 让歌词服务定时器在需要时启动、启用选中协议。
     // 原生端 AudioPlaybackService.onCreate 会自行从 SharedPreferences 恢复开关。
     _restoreLyricPushPref(),
@@ -212,7 +212,7 @@ Future<(bool, bool)> runBootstrap() async {
   return (needsOnboarding, needsUserAgreement);
 }
 
-/// 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric/LyricInfo 三选一 + 关闭）。
+/// 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric 二选一 + 关闭）。
 /// 从 SettingsRepository 读取协议与共用偏好，启用选中协议、禁用其他，并同步偏好。
 Future<void> _restoreLyricPushPref() async {
   try {
@@ -224,22 +224,6 @@ Future<void> _restoreLyricPushPref() async {
     final btLyricEnabled = await settings.getBluetoothLyricEnabled();
     await LyricPushService.instance.setBluetoothLyricEnabled(btLyricEnabled);
 
-    // 锁屏歌词（独立开关）：开启后歌词服务定时器运行以推送整首歌词
-    // （样式全部跟随 AM 歌词偏好，与播放页 Zen 沉浸模式一致）
-    final lockScreenLyricEnabled = await settings.getLockScreenLyricEnabled();
-    // ignore: discarded_futures
-    LyricPushService.instance.setLockScreenLyricEnabled(lockScreenLyricEnabled);
-
-    // 魅族 Flyme 状态栏歌词（独立开关）：冷启动/后台唤醒后无需进设置页即可继续推送
-    // 顺序有讲究：先灌提前量再开开关。开启会立刻回灌当前行，
-    // 若此时提前量还是 0，第一行就按未提前的时间轴显示，要等到下次翻行才对。
-    final flymeAdvance = await settings.getFlymeLyricAdvanceMs();
-    // ignore: discarded_futures
-    LyricPushService.instance.setFlymeAdvanceMs(flymeAdvance);
-    final flymeLyricEnabled = await settings.getFlymeStatusBarLyricEnabled();
-    // ignore: discarded_futures
-    LyricPushService.instance.setFlymeStatusBarLyricEnabled(flymeLyricEnabled);
-
     // 实时歌词推送协议
     final protocol = await settings.getLyricPushProtocol();
     final translation = await settings.getLyricPushTranslation();
@@ -248,7 +232,6 @@ Future<void> _restoreLyricPushPref() async {
     // 记录各协议 enabled key（兼容 Kotlin restoreLyricon 读 lyricon_enabled）
     await settings.setLyriconEnabled(protocol == 'lyricon');
     await settings.setSuperLyricEnabled(protocol == 'super_lyric');
-    await settings.setLyricInfoEnabled(protocol == 'lyric_info');
     // 应用共用偏好
     // ignore: discarded_futures
     LyricPushService.instance.setLyricPushPreferences(
@@ -266,20 +249,7 @@ Future<void> _restoreLyricPushPref() async {
     } else if (protocol == 'super_lyric') {
       // ignore: discarded_futures
       LyricPushService.instance.setSuperLyricEnabled(true);
-    } else if (protocol == 'lyric_info') {
-      // 先恢复 ColorOS Bridge 兼容模式，再启用推送（避免首推旧格式）
-      final colorOs = await settings.getLyricInfoColorOs();
-      // ignore: discarded_futures
-      LyricPushService.instance.setLyricInfoColorOs(colorOs);
-      // ignore: discarded_futures
-      await LyricPushService.instance.setLyricInfoEnabled(true);
     }
-    // MD3Music fork: lyricInfo 推送无条件启用（Vivo 车载歌词依赖此链路：extras LYRICS_WHOLE
-    // + 原子随身听 lrc_change）。协议开关只控制 lyricon/super_lyric 等展示通道；
-    // 此前受开关控制 + 覆盖安装残留旧设置（lyric_push_protocol='none'）导致链路关闭，
-    // 原子随身听缺 8/16 能力位（无歌词无进度条）、车机无歌词。
-    // ignore: discarded_futures
-    LyricPushService.instance.setLyricInfoEnabled(true);
   } catch (_) {}
 }
 

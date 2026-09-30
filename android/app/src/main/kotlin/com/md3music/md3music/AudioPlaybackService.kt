@@ -81,11 +81,6 @@ class AudioPlaybackService : Service() {
         const val EXTRA_IS_FAVORITED = "isFavorited"
         const val EXTRA_BT_LYRIC_TEXT = "btLyricText"
         const val EXTRA_BT_LYRIC_ENABLED = "btLyricEnabled"
-        // LyricInfo 歌词转发：通过 MediaSession 元数据 extras.lyricInfo 发布整首歌词
-        const val ACTION_UPDATE_LYRIC_INFO = "com.md3music.md3music.ACTION_UPDATE_LYRIC_INFO"
-        const val EXTRA_LYRIC_INFO = "lyricInfo"
-        const val EXTRA_HAS_LYRIC_TRANSLATION = "hasLyricTranslation"
-        const val EXTRA_LYRIC_SESSION_GENERATION = "lyricSessionGeneration"
         // 桌面小组件按钮动作（由 MusicWidgetProvider 转发）
         const val ACTION_WIDGET_PLAY_PAUSE = "com.md3music.md3music.ACTION_WIDGET_PLAY_PAUSE"
         const val ACTION_WIDGET_NEXT = "com.md3music.md3music.ACTION_WIDGET_NEXT"
@@ -137,9 +132,6 @@ class AudioPlaybackService : Service() {
         @Volatile
         private var playerReadyEngine: FlutterEngine? = null
 
-        /// 当前是否正在播放（供 LockScreenLyricReceiver 判断锁屏时是否拉起歌词界面）。
-        @Volatile
-        var isNowPlaying = false
         /// MD3Music fork（方案A·封面兜底）：前台服务启动被拒（mAllowStartForeground=false，
         /// 如后台切歌/跨fade 收敛瞬间）时由 MainActivity 直接调用注入封面，
         /// 不依赖 AudioPlaybackService 启动。处理 http(s) 在线封面，命中内存缓存免下载。
@@ -829,7 +821,6 @@ class AudioPlaybackService : Service() {
 
     private var notificationManager: NotificationManager? = null
     private var receiver: BroadcastReceiver? = null
-    private var lockScreenReceiver: BroadcastReceiver? = null
     private var flutterEngine: FlutterEngine? = null
     // Lyricon Provider 是否已 register（restoreLyriconStateIfNeeded 可能被调用多次，需幂等）
     private var lyriconRegistered = false
@@ -843,20 +834,6 @@ class AudioPlaybackService : Service() {
     private var originalArtist = ""
     @Volatile
     private var metadataGeneration = 0L
-    // LyricInfo 歌词转发：缓存整首歌词 JSON（空 = 不发布），
-    // 写入 MediaSession 元数据 extras.lyricInfo 供第三方系统读取
-    @Volatile
-    private var currentLyricInfo = ""
-    @Volatile
-    private var currentLyricInfoMediaId = ""
-    @Volatile
-    private var currentLyricSessionGeneration = 0
-    // 当前 lyricInfo 是否含可用翻译（colorOs 模式 JSON 有非空 translationLyric）。
-    // 决定是否发布 ColorOS 翻译切换按钮（Bridge 在 OPlus 锁屏接管显示）。
-    @Volatile
-    private var hasLyricTranslation = false
-    // 上次已写入元数据的 lyricInfo，用于 refreshMetadata 判断是否需强制刷新
-    private var lastShownLyricInfo = ""
     // 封面缓存：后台封面线程写入，主线程 refreshMetadata（蓝牙歌词）读取，
     // 必须 @Volatile 保证跨线程可见性
     @Volatile
@@ -922,19 +899,6 @@ class AudioPlaybackService : Service() {
         createNotificationChannel()
         notificationManager = getSystemService(NotificationManager::class.java)
         registerReceiver()
-        // 锁屏歌词：动态注册 SCREEN_OFF/SCREEN_ON 广播（前台服务存活期间注册，
-        // 比 manifest 静态广播在 MIUI 等 ROM 上更可靠）
-        try {
-            lockScreenReceiver = LockScreenLyricReceiver()
-            val filter = IntentFilter().apply {
-                addAction(Intent.ACTION_SCREEN_OFF)
-                addAction(Intent.ACTION_SCREEN_ON)
-            }
-            registerReceiver(lockScreenReceiver, filter)
-            android.util.Log.i("LockScreenLyric", "AudioPlaybackService.onCreate: lock screen receiver registered")
-        } catch (e: Exception) {
-            android.util.Log.e("LockScreenLyric", "register lock screen receiver failed: $e")
-        }
         // P0: 不再在 onCreate 无条件持有 WakeLock（此时未必在播放）。
         // 仅当 onStartCommand 收到 isPlaying=true 时才持有，暂停时释放。
 
@@ -1066,9 +1030,6 @@ class AudioPlaybackService : Service() {
             ACTION_STOP -> {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 releaseWakeLock()
-                isNowPlaying = false
-                // 停止播放/退出 App 后锁屏歌词不应残留
-                LockScreenLyricActivity.dismiss()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -1097,17 +1058,6 @@ class AudioPlaybackService : Service() {
             ACTION_SET_BT_LYRIC_ENABLED -> {
                 bluetoothLyricEnabled = intent?.getBooleanExtra(EXTRA_BT_LYRIC_ENABLED, false) ?: false
                 refreshMetadata()
-                return START_STICKY
-            }
-            ACTION_UPDATE_LYRIC_INFO -> {
-                applyLyricInfoUpdate(
-                    intent?.getStringExtra(EXTRA_LYRIC_INFO) ?: "",
-                    intent?.getStringExtra(EXTRA_MEDIA_ID) ?: "",
-                    intent?.getIntExtra(EXTRA_LYRIC_SESSION_GENERATION, 0) ?: 0,
-                    if (intent?.hasExtra(EXTRA_HAS_LYRIC_TRANSLATION) == true)
-                        intent.getBooleanExtra(EXTRA_HAS_LYRIC_TRANSLATION, false)
-                    else null
-                )
                 return START_STICKY
             }
         }
@@ -1147,44 +1097,6 @@ class AudioPlaybackService : Service() {
         )
 
         return START_STICKY
-    }
-
-    private fun applyLyricInfoUpdate(
-        incomingLyricInfo: String,
-        incomingMediaId: String,
-        incomingGeneration: Int,
-        explicitHasTranslation: Boolean?
-    ) {
-        if (incomingGeneration > 0 &&
-            currentLyricSessionGeneration > 0 &&
-            incomingGeneration < currentLyricSessionGeneration) {
-            Log.w(
-                TAG,
-                "Ignored stale lyricInfo generation=$incomingGeneration " +
-                    "current=$currentLyricSessionGeneration"
-            )
-            return
-        }
-        currentLyricInfo = incomingLyricInfo
-        currentLyricInfoMediaId = incomingMediaId
-        currentLyricSessionGeneration = incomingGeneration
-        hasLyricTranslation = explicitHasTranslation ?: try {
-            if (incomingLyricInfo.isEmpty()) false
-            else org.json.JSONObject(incomingLyricInfo).let {
-                it.optString("translationLyric").isNotEmpty() ||
-                    it.optString("translation") == "lrc"
-            }
-        } catch (_: Exception) {
-            false
-        }
-        Log.i(
-            TAG,
-            "LyricInfo updated hasTranslation=$hasLyricTranslation " +
-                "payloadChars=${currentLyricInfo.length} " +
-                "mediaIdMatched=${incomingMediaId.isEmpty() || incomingMediaId == originalMediaId} " +
-                "generation=$incomingGeneration"
-        )
-        refreshMetadata()
     }
 
     /** MediaSession / 广播接收器的既有入口：只有 action、无参数。 */
@@ -1598,20 +1510,9 @@ class AudioPlaybackService : Service() {
                         )
                         result.success(true)
                     }
-                    "updateLyricInfo" -> {
-                        applyLyricInfoUpdate(
-                            call.argument<String>("lyricInfo") ?: "",
-                            call.argument<String>("songId") ?: "",
-                            call.argument<Int>("sessionGeneration") ?: 0,
-                            call.argument<Boolean>("hasTranslation")
-                        )
-                        result.success(true)
-                    }
                     "hideNotification" -> {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         releaseWakeLock()
-                        isNowPlaying = false
-                        LockScreenLyricActivity.dismiss()
                         stopSelf()
                         result.success(true)
                     }
@@ -1631,26 +1532,6 @@ class AudioPlaybackService : Service() {
                         refreshMetadata()
                         result.success(true)
                     }
-                    // 锁屏歌词：开关 / 数据推送（正常启动走 MainActivity，headless 在此兜底）
-                    "showLockScreenLyric" -> {
-                        result.success(true)
-                    }
-                    "hideLockScreenLyric" -> {
-                        LockScreenLyricActivity.dismiss()
-                        result.success(true)
-                    }
-                    "updateLockScreenLyricData" -> {
-                        LockScreenLyricActivity.applyDataCall(call)
-                        result.success(true)
-                    }
-                    "updateLockScreenProgress" -> {
-                        LockScreenLyricActivity.applyProgressCall(call)
-                        result.success(true)
-                    }
-                    "updateLockScreenAccent" -> {
-                        LockScreenLyricActivity.applyAccentCall(call)
-                        result.success(true)
-                    }
                     else -> result.notImplemented()
                 }
             }
@@ -1660,8 +1541,6 @@ class AudioPlaybackService : Service() {
             registerLyriconChannel(engine)
             // SuperLyric channel 原生 handler 同样只能在 headless 场景下在此注册
             registerSuperLyricChannel(engine)
-            // 魅族状态栏歌词：headless 引擎同样需要，否则后台切歌时收不到歌词行推送
-            FlymeLyricBridge.registerChannel(engine, applicationContext)
             restoreLyriconStateIfNeeded()
             // 音量均衡通道：headless 引擎同样需要，播放/AudioService 在此 isolate 运行。
             registerVolumeNormalizationChannel(engine)
@@ -1991,12 +1870,6 @@ class AudioPlaybackService : Service() {
         if (mediaId.isNotEmpty() && mediaId != originalMediaId) {
             originalMediaId = mediaId
             metadataGeneration++
-            if (currentLyricInfoMediaId.isNotEmpty() &&
-                currentLyricInfoMediaId != mediaId) {
-                currentLyricInfo = ""
-                hasLyricTranslation = false
-                lastShownLyricInfo = ""
-            }
         }
         val requestMediaId = mediaId.ifEmpty { originalMediaId }
         val requestGeneration = metadataGeneration
@@ -2004,17 +1877,12 @@ class AudioPlaybackService : Service() {
         originalTitle = title
         originalArtist = artist
         lastArtUrl = artUrl
-        // 同步「正在播放」状态，供锁屏歌词广播（ACTION_SCREEN_OFF）判断
-        isNowPlaying = isPlaying
         lastIsFavorited = isFavorited
         lastDuration = duration
         // 通知会在下方所有分支中调用 startForeground，标记已进入前台
         foregroundStarted = true
         // 方案B阶段4：随通知更新把收藏状态推到媒体3会话（渲染成通知栏按钮）。
-        pushMedia3CustomActions(
-            isFavorited,
-            hasTranslationForCurrentTrack()
-        )
+        pushMedia3CustomActions(isFavorited)
         val displayTitle = originalTitle
         val displayArtist = originalArtist
 
@@ -2136,18 +2004,11 @@ class AudioPlaybackService : Service() {
 
     /// 方案B阶段4：把当前收藏状态推给媒体3会话，渲染为通知栏自定义按钮。
     /// 图标资源在 app 模块（R.drawable），fork 仅持有 command/回调，不依赖资源。
-    /// 阶段6：下一首已改回 media3 原生按钮，这里保留 收藏/翻译(可选)。
-    /// 翻译按钮仅在 hasLyricTranslation 时发布（ColorOS Bridge 消费）；占位图标必须是
-    /// 包内有效资源（CustomAction.Builder 需要有效 iconResId，SystemUI 建立 Action 时
-    /// 先解析该资源）。Bridge 识别 Action 后会换成自己的标准翻译图标。
-    private fun pushMedia3CustomActions(
-        isFavorited: Boolean,
-        hasTranslation: Boolean,
-    ) {
+    /// 阶段6：下一首已改回 media3 原生按钮，这里只保留 收藏。
+    private fun pushMedia3CustomActions(isFavorited: Boolean) {
         try {
             AudioPlayer.setActiveSessionCustomActions(
-                isFavorited, hasTranslation,
-                R.drawable.ic_translation,
+                isFavorited,
                 R.drawable.ic_favorite_on, R.drawable.ic_favorite_off,
             )
         } catch (e: Throwable) {
@@ -2156,19 +2017,9 @@ class AudioPlaybackService : Service() {
     }
 
     /// 方案B：是否允许用歌词行改写 MediaSession TITLE。
-    /// 蓝牙歌词开启 + 有当前歌词行时才允许；但 LyricInfo(ColorOS) 协议激活时
-    /// 保留真实曲名（ColorOS 自带桌面歌词走 extras.lyricInfo，不依赖 TITLE）。
-    private fun btLyricRewriteActive(): Boolean {
-        if (!bluetoothLyricEnabled) return false
-        if (currentBtLyricText.isEmpty()) return false
-        val colorOsActive = try {
-            getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-                .getString("flutter.lyric_push_protocol", "") == "lyric_info"
-        } catch (_: Exception) {
-            false
-        }
-        return !colorOsActive
-    }
+    /// 蓝牙歌词开启 + 有当前歌词行时才允许（AVRCP 车机据此显示歌词）。
+    private fun btLyricRewriteActive(): Boolean =
+        bluetoothLyricEnabled && currentBtLyricText.isNotEmpty()
 
     private fun btLyricDisplayTitle(): String =
         if (btLyricRewriteActive()) currentBtLyricText else originalTitle
@@ -2182,31 +2033,15 @@ class AudioPlaybackService : Service() {
     /// 重建通知和 MediaSession 元数据，不重新下载封面。
     /// 仅在 showNotification 至少被调用过一次后有效（originalTitle 非空判定）。
     private fun refreshMetadata() {
-        val effectiveLyricInfo = lyricInfoForCurrentTrack()
-        val lyricInfoChanged = effectiveLyricInfo != lastShownLyricInfo
-        if (originalTitle.isEmpty() && originalArtist.isEmpty()) {
-            // 阶段6修复：标题/艺术家尚未由 showNotification 设置（如冷启动恢复播放态时
-            // lyricInfo 推送先于首次通知更新到达）时，不能整体 return——否则本次 lyricInfo
-            // 被丢弃。Dart 端每首歌只推一次（_lyricInfoPushed 去重），丢弃后不再重试，
-            // 该曲的 lyricInfo 就永久丢失。此处仅当 lyricInfo 无变化才跳过。
-            if (!lyricInfoChanged) return
-            lastShownLyricInfo = effectiveLyricInfo
-            scheduleMetadataRefresh()
-            return
-        }
-        // 方案B：蓝牙歌词开启且非 ColorOS(LyricInfo) 场景时，把歌词行写入 TITLE
-        // （AVRCP 设备据此显示歌词）；ColorOS 场景保留真实曲名（歌词走 extras.lyricInfo）。
+        if (originalTitle.isEmpty() && originalArtist.isEmpty()) return
+        // 方案B：蓝牙歌词开启时把歌词行写入 TITLE（AVRCP 设备据此显示歌词）。
         val displayTitle = btLyricDisplayTitle()
         val displayArtist = btLyricDisplayArtist()
 
         // P0: 文本未变化（歌词行未变 / 开关未切换）时直接跳过，避免无效刷新。
-        // 但 LyricInfo 歌词转发（currentLyricInfo 变化）不依赖 title/artist 变化，
-        // 即使 title/artist 未变也需要更新 MediaSession 元数据以写入 extras.lyricInfo，
-        // 因此本跳过逻辑仅在 lyricInfo 不变时生效。
-        if (displayTitle == lastShownBtLyricTitle && displayArtist == lastShownBtLyricArtist && !lyricInfoChanged) return
+        if (displayTitle == lastShownBtLyricTitle && displayArtist == lastShownBtLyricArtist) return
         lastShownBtLyricTitle = displayTitle
         lastShownBtLyricArtist = displayArtist
-        lastShownLyricInfo = effectiveLyricInfo
 
         // 方案B阶段5：保活通知走 IMPORTANCE_NONE 渠道（系统不显示），
         // 不再在此显式 notify（否则第二条无封面卡片会重新出现，造成"封面消失"观感）。
@@ -2235,83 +2070,22 @@ class AudioPlaybackService : Service() {
     private fun performMetadataRefresh() {
         val mediaId = originalMediaId
         if (mediaId.isEmpty()) return
-        val effectiveLyricInfo = lyricInfoForCurrentTrack()
         // 方案B阶段5：自定义会话已移除，不再 setMetadata。
-        // 媒体3会话的元数据（标题/艺术家/封面/LyricInfo）由下方 updateActiveSession* 同步，
+        // 媒体3会话的元数据（标题/艺术家/封面）由下方 updateActiveSession* 同步，
         // 播放态由 ExoPlayer 自动驱动系统媒体卡片；封面压缩开关不再影响 MediaSession 下发。
-        // 根因3修复：标题/艺术家 与 extras.lyricInfo 合并为一次 replaceMediaItem，
-        // 消除 OPlus 防抖窗口内紧邻补丁导致的 lyricInfo 丢弃（within debounce period, ignore）。
-        // 一次提交稳定 title/artist 与当前歌曲匹配的 lyricInfo。
-        AudioPlayer.updateActiveSessionTitleArtistAndLyricInfo(
+        // 根因3修复：标题/艺术家 合并为一次 replaceMediaItem，消除 OPlus 防抖窗口内
+        // 紧邻补丁导致的第二次提交被丢弃（within debounce period, ignore）。
+        AudioPlayer.updateActiveSessionTitleArtist(
             mediaId,
             metadataGeneration,
             originalTitle,
             originalArtist,
-            effectiveLyricInfo,
             btLyricDisplayTitle(),
             btLyricDisplayArtist()
         )
         // 方案B阶段4：按当前开关状态渲染媒体3通知栏的自定义按钮（收藏）。
-        pushMedia3CustomActions(
-            lastIsFavorited,
-            hasTranslationForCurrentTrack()
-        )
-        // MD3Music fork: Vivo 原子随身听（vivomusicmix）歌词推送（歌词就绪后发一次，
-        // 定时器 25s 重发兜底）。
-        pushVivoAtomicExtras()
+        pushMedia3CustomActions(lastIsFavorited)
     }
-
-    // ==== MD3Music fork: Vivo 原子随身听（vivomusicmix）歌词推送 ====
-    // 协议字段照抄 vivo 官方拼写错误（meida / meidia），写成正确拼写反而收不到。
-    private val vivoAtomicHandler = Handler(Looper.getMainLooper())
-    private var lastVivoLrcSentAt = 0L
-    private var lastVivoLrcMediaId = ""
-
-    private fun startVivoAtomicTimer() {
-        vivoAtomicHandler.removeCallbacksAndMessages(null)
-        vivoAtomicHandler.postDelayed(object : Runnable {
-            override fun run() {
-                pushVivoAtomicExtras()
-                vivoAtomicHandler.postDelayed(this, 25_000L)
-            }
-        }, 25_000L)
-    }
-
-    /// 原子随身听歌词：通过 legacy MediaSessionCompat 静态通道向活跃 session 重发
-    /// lrc_change extras（framework extras，25s 定时兜底：覆盖"原子在首次发送后才连上"）。
-    /// meidia_id 必须与 hook 补进 metadata 的身份完全一致（title|artist），
-    /// 否则原子 E0()/z1() 匹配失败 → 封面纯色、歌词不显示（实测 songId 数字 ID 不匹配）。
-    /// 无整段歌词时安全跳过，不推空 Bundle。
-    private fun pushVivoAtomicExtras() {
-        try {
-            val mediaId = if (originalMediaId.isNotEmpty()) originalMediaId
-                else "$originalTitle|$originalArtist"
-            // 与 hook 补的 MEDIA_ID 保持一致：统一用 title|artist 身份
-            val atomicMediaId = "$originalTitle|$originalArtist"
-            if (originalTitle.isEmpty()) return
-            val lrc = AudioPlayer.extractCarLyricsFromLyricInfo(lyricInfoForCurrentTrack())
-                ?: return
-            androidx.media3.session.legacy.MediaSessionCompat
-                .resendVivoLrcChange(lrc, atomicMediaId)
-            lastVivoLrcSentAt = System.currentTimeMillis()
-            lastVivoLrcMediaId = atomicMediaId
-            lastVivoLrcSentLrc = lrc
-        } catch (e: Throwable) {
-            Log.w(TAG, "pushVivoAtomicExtras failed: ${e.message}", e)
-        }
-    }
-
-    @Volatile
-    private var lastVivoLrcSentLrc = ""
-
-    private fun lyricInfoForCurrentTrack(): String {
-        if (currentLyricInfo.isEmpty()) return ""
-        return if (currentLyricInfoMediaId.isEmpty() ||
-            currentLyricInfoMediaId == originalMediaId) currentLyricInfo else ""
-    }
-
-    private fun hasTranslationForCurrentTrack(): Boolean =
-        lyricInfoForCurrentTrack().isNotEmpty() && hasLyricTranslation
 
     private fun isMetadataRequestCurrent(mediaId: String, generation: Long): Boolean =
         mediaId.isNotEmpty() &&
@@ -2324,12 +2098,6 @@ class AudioPlaybackService : Service() {
                 unregisterReceiver(it)
             } catch (_: Exception) {}
         }
-        lockScreenReceiver?.let {
-            try {
-                unregisterReceiver(it)
-            } catch (_: Exception) {}
-        }
-        lockScreenReceiver = null
         // 释放 Lyricon Provider
         try {
             lyriconProvider?.unregister()
@@ -2342,8 +2110,6 @@ class AudioPlaybackService : Service() {
         setLyriconEnabledState(false)
         // P0: 取消排期中的 setMetadata 合并刷新，防止服务销毁后仍回调
         metadataRefreshHandler.removeCallbacksAndMessages(null)
-        // MD3Music fork: 取消原子随身听 25s 重发定时器
-        vivoAtomicHandler.removeCallbacksAndMessages(null)
         releaseWakeLock()
         // lastArtBitmap 可能仍由 MediaSession 或桌面组件引用，销毁服务时不能 recycle。
         lastArtBitmap = null

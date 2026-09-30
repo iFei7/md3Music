@@ -334,14 +334,15 @@ class SettingsRepository {
   }
 
   // ===== 实时歌词推送协议 =====
-  // 三种协议（Lyricon / SuperLyric / LyricInfo）三选一 + 关闭，翻译/罗马音等偏好共用。
+  // 两种协议（Lyricon / SuperLyric）二选一 + 关闭，翻译/罗马音等偏好共用。
 
-  /// 当前选中的推送协议：'none' / 'lyricon' / 'super_lyric' / 'lyric_info'。
+  /// 当前选中的推送协议：'none' / 'lyricon' / 'super_lyric'。
   Future<String> getLyricPushProtocol() async {
     final prefs = await SharedPreferences.getInstance();
-    // MD3Music fork: 默认 lyric_info（Vivo 车载歌词依赖此链路推送整首歌词；
-    // 原默认 none 导致 lyricInfo 不推，原子随身听缺 8/16 能力位、车机无歌词）。
-    return prefs.getString('lyric_push_protocol') ?? 'lyric_info';
+    // Lite：LyricInfo 协议已下线（原 fork 默认值），历史值一并回落为 none。
+    final saved = prefs.getString('lyric_push_protocol');
+    if (saved == null || saved == 'lyric_info') return 'none';
+    return saved;
   }
 
   Future<void> setLyricPushProtocol(String v) async {
@@ -449,44 +450,6 @@ class SettingsRepository {
     await prefs.setBool('super_lyric_prefer_translation', v);
   }
 
-  // ===== 魅族 Flyme 状态栏歌词 =====
-  // 键名必须与原生 FlymeLyricBridge.PREF_KEY（加 flutter. 前缀后）一致，
-  // 因为进程被 MediaSession 唤醒时原生要先于 Dart 恢复开关状态。
-  static const String _keyFlymeStatusBarLyricEnabled =
-      'settings_flyme_status_bar_lyric_enabled';
-
-  Future<bool> getFlymeStatusBarLyricEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyFlymeStatusBarLyricEnabled) ?? false;
-  }
-
-  Future<void> setFlymeStatusBarLyricEnabled(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyFlymeStatusBarLyricEnabled, v);
-  }
-
-  /// 状态栏歌词提前量（ms）。默认值与上限只在这里定义，其它地方读取。
-  /// 120ms 的来由：notify() → SystemUI 取通知并重绘约 100ms 量级，
-  /// 加上 LRC 时间戳普遍标在"字已出声"之后，抵消后大致同步。
-  static const int kFlymeLyricAdvanceDefaultMs = 120;
-  static const int kFlymeLyricAdvanceMaxMs = 600;
-  // 与 LyricPushService.setFlymeAdvanceMs 的钳位保持一致，两处都要改才同步
-  static const String _keyFlymeLyricAdvanceMs = 'settings_flyme_lyric_advance_ms';
-
-  // 注意：这个值不需要原生侧对应键 —— 提前量参与的是 Dart 侧"选哪一行"，
-  // 原生只会收到已经选好的一行文本。与开关不同（开关必须原生也能恢复）。
-  Future<int> getFlymeLyricAdvanceMs() async {
-    final prefs = await SharedPreferences.getInstance();
-    return (prefs.getInt(_keyFlymeLyricAdvanceMs) ?? kFlymeLyricAdvanceDefaultMs)
-        .clamp(0, kFlymeLyricAdvanceMaxMs);
-  }
-
-  Future<void> setFlymeLyricAdvanceMs(int v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(
-        _keyFlymeLyricAdvanceMs, v.clamp(0, kFlymeLyricAdvanceMaxMs));
-  }
-
   // ===== 蓝牙歌词配置 =====
   // 通过修改 MediaSession 元数据（title 显示歌词，artist 显示「作者 - 标题」），
   // 在蓝牙 AVRCP 协议下让汽车主机等设备显示当前歌词。
@@ -555,49 +518,6 @@ class SettingsRepository {
   Future<void> setDepthCoverNeuralInpaint(bool v) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyDepthCoverNeuralInpaint, v);
-  }
-
-  // ===== LyricInfo 歌词转发 =====
-  // 通过 MediaSession 元数据 extras.lyricInfo 发布整首歌词（LRC/ELRC），
-  // 供 ColorOS 自带桌面歌词 / LyricInfo 模块等第三方系统读取。
-  static const String _keyLyricInfoEnabled = 'settings_lyric_info_enabled';
-
-  Future<bool> getLyricInfoEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyLyricInfoEnabled) ?? false;
-  }
-
-  static const String _keyLyricInfoColorOs = 'settings_lyric_info_coloros';
-
-  /// ColorOS Bridge 兼容模式：lyricInfo JSON 输出 lyric=纯 LRC + rawLyric=ELRC，
-  /// 适配 ColorOS-Live-Lyrics-Bridge 插件（逐字高亮等增强）。默认关闭。
-  Future<bool> getLyricInfoColorOs() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyLyricInfoColorOs) ?? false;
-  }
-
-  Future<void> setLyricInfoColorOs(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyLyricInfoColorOs, v);
-  }
-
-  Future<void> setLyricInfoEnabled(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyLyricInfoEnabled, v);
-  }
-
-  // ===== 锁屏歌词 =====
-  // 锁屏时全屏显示逐字歌词（覆盖在系统锁屏上方），默认关闭。
-  static const String _keyLockScreenLyricEnabled = 'settings_lock_screen_lyric_enabled';
-
-  Future<bool> getLockScreenLyricEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyLockScreenLyricEnabled) ?? false;
-  }
-
-  Future<void> setLockScreenLyricEnabled(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyLockScreenLyricEnabled, v);
   }
 
   // ===== UI 缩放 =====
