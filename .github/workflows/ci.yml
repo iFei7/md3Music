@@ -259,7 +259,7 @@ jobs:
           am_apk="$apk_dir/MD3音乐-${VER}-随身听兼容版-64位.apk"
           test "$(apk_id "$am_apk")" = "com.apple.android.music"
           if [[ -f "$std_apk" ]]; then
-            test "$(apk_id "$std_apk")" = "com.md3music.md3music"
+            test "$(apk_id "$std_apk")" = "com.md3music.md3music.lite"
             # flavor 隔离：standard 包不得含 ORT so / 深度模型
             if unzip -l "$std_apk" | grep -qE 'libonnxruntime|assets/models/'; then
               echo "::error::standard 包含有 3D 资产（flavor 隔离失效）"
