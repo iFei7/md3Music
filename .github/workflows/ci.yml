@@ -377,16 +377,17 @@ jobs:
           auth="Authorization: Bearer ${GITHUB_TOKEN}"
           tag="lite-${SHA_SHORT::7}"
           ver="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1)"
+          stamp="$(date -u +%Y%m%d%H%M%S)"
 
-          rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" \
+          rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg stamp "$stamp" \
             '{tag_name:$tag, target_commitish:$sha, prerelease:true,
               name:("Lite v" + $ver + " (" + $tag + ")"),
               body:("Lite 分支 CI 自动构建。\n\n"
                   + "- 版本: v" + $ver + "\n- 提交: " + $sha + "\n\n"
                   + "### 下载\n"
-                  + "- **MD3Lite-v" + $ver + "-standard-arm64.apk** — 标准版 64 位（大多数现代设备，推荐）\n"
-                  + "- **MD3Lite-v" + $ver + "-standard-arm32.apk** — 标准版 32 位（较旧设备）\n"
-                  + "- **MD3Lite-v" + $ver + "-apple-music-arm64.apk** — 原子随身听兼容版（包名 com.apple.android.music）")}')
+                  + "- **MD3Lite-v" + $ver + "-" + $stamp + "-standard-arm64.apk** — 标准版 64 位（大多数现代设备，推荐）\n"
+                  + "- **MD3Lite-v" + $ver + "-" + $stamp + "-standard-arm32.apk** — 标准版 32 位（较旧设备）\n"
+                  + "- **MD3Lite-v" + $ver + "-" + $stamp + "-apple-music-arm64.apk** — 原子随身听兼容版（包名 com.apple.android.music）")}')
           rel_out=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" \
             -d "$rbody" -w $'\n%{http_code}' "$api/releases") || true
           rl_code="${rel_out##*$'\n'}"; rl_body="${rel_out%$'\n'*}"
@@ -418,9 +419,9 @@ jobs:
           for f in build/app/outputs/flutter-apk/*MD3音乐-*.apk; do
             base=$(basename "$f")
             case "$base" in
-              *标准版-64位*)   out="MD3Lite-v${ver}-standard-arm64.apk" ;;
-              *标准版-32位*)   out="MD3Lite-v${ver}-standard-arm32.apk" ;;
-              *随身听兼容版*)  out="MD3Lite-v${ver}-apple-music-arm64.apk" ;;
+              *标准版-64位*)   out="MD3Lite-v${ver}-${stamp}-standard-arm64.apk" ;;
+              *标准版-32位*)   out="MD3Lite-v${ver}-${stamp}-standard-arm32.apk" ;;
+              *随身听兼容版*)  out="MD3Lite-v${ver}-${stamp}-apple-music-arm64.apk" ;;
               *) echo "  跳过未识别产物: ${base}"; continue ;;
             esac
             cp "$f" "$RUNNER_TEMP/${out}"
