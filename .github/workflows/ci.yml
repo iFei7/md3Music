@@ -365,7 +365,12 @@ jobs:
           rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" \
             '{tag_name:$tag, target_commitish:$sha, prerelease:true,
               name:("Lite v" + $ver + " (" + $tag + ")"),
-              body:("Lite 分支 CI 自动构建。\n\n- 版本: v" + $ver + "\n- 提交: " + $sha)}')
+              body:("Lite 分支 CI 自动构建。\n\n"
+                  + "- 版本: v" + $ver + "\n- 提交: " + $sha + "\n\n"
+                  + "### 下载\n"
+                  + "- **MD3Lite-v" + $ver + "-standard-arm64.apk** — 标准版 64 位（大多数现代设备，推荐）\n"
+                  + "- **MD3Lite-v" + $ver + "-standard-arm32.apk** — 标准版 32 位（较旧设备）\n"
+                  + "- **MD3Lite-v" + $ver + "-apple-music-arm64.apk** — 原子随身听兼容版（包名 com.apple.android.music）")}')
           rel_out=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" \
             -d "$rbody" -w $'\n%{http_code}' "$api/releases") || true
           rl_code="${rel_out##*$'\n'}"; rl_body="${rel_out%$'\n'*}"
@@ -376,24 +381,44 @@ jobs:
           fi
           rel_id=$(printf '%s' "$rl_body" | jq -r '.id')
 
-          # 上传全部 APK（文件名含中文，URL 编码；失败重试 3 次）
+          # 清理历史遗留的 lite-latest release（资产名被 GitHub 剥中文成乱码）
+          legacy=$(curl -sS -H "$auth" "$api/releases/tags/lite-latest" || true)
+          legacy_id=$(printf '%s' "$legacy" | jq -r '.id // empty' 2>/dev/null || true)
+          if [[ -n "$legacy_id" && "$legacy_id" != "null" ]]; then
+            echo "清理遗留 release lite-latest (#${legacy_id})..."
+            curl -sS -X DELETE -H "$auth" -o /dev/null \
+              -w "  DELETE release -> HTTP %{http_code}\n" "$api/releases/${legacy_id}" || true
+            curl -sS -X DELETE -H "$auth" -o /dev/null \
+              -w "  DELETE tag ref -> HTTP %{http_code}\n" "$api/git/refs/tags/lite-latest" || true
+          fi
+
+          # 上传全部 APK。
+          # ⚠️ GitHub 会剥掉资产名中的非 ASCII 字符（中文），导致「标准版-64位」与
+          # 「随身听兼容版-64位」规范化后同名（MD3.-5.7.0-.-64.apk）→ 422 already_exists。
+          # 故先复制为 ASCII 安全名再上传。
           for f in build/app/outputs/flutter-apk/*MD3音乐-*.apk; do
-            fname=$(basename "$f")
-            enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$fname")
-            echo "上传 ${fname} ($(du -h "$f" | cut -f1))..."
+            base=$(basename "$f")
+            case "$base" in
+              *标准版-64位*)   out="MD3Lite-v${ver}-standard-arm64.apk" ;;
+              *标准版-32位*)   out="MD3Lite-v${ver}-standard-arm32.apk" ;;
+              *随身听兼容版*)  out="MD3Lite-v${ver}-apple-music-arm64.apk" ;;
+              *) echo "  跳过未识别产物: ${base}"; continue ;;
+            esac
+            cp "$f" "$RUNNER_TEMP/${out}"
+            echo "上传 ${base} -> ${out} ($(du -h "$f" | cut -f1))..."
             ok=""
             for try in 1 2 3; do
               uresp=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/octet-stream" \
-                --data-binary "@${f}" -w $'\n%{http_code}' \
-                "https://uploads.github.com/repos/${REPO}/releases/${rel_id}/assets?name=${enc}") || true
+                --data-binary "@${RUNNER_TEMP}/${out}" -w $'\n%{http_code}' \
+                "https://uploads.github.com/repos/${REPO}/releases/${rel_id}/assets?name=${out}") || true
               ucode="${uresp##*$'\n'}"; ubody="${uresp%$'\n'*}"
               echo "  -> HTTP ${ucode} (try ${try})"
               if [[ "$ucode" =~ ^2 ]]; then ok=1; break; fi
-              echo "::error::upload ${fname} try${try} HTTP ${ucode} :: ${ubody:0:280}"
+              echo "::error::upload ${out} try${try} HTTP ${ucode} :: ${ubody:0:280}"
               if [[ "$ucode" == "422" ]]; then
                 # 同名资产残留：定位删除后再重试
                 aid=$(curl -sS -H "$auth" "$api/releases/${rel_id}/assets?per_page=100" \
-                  | jq -r --arg n "$fname" '.[] | select(.name==$n) | .id' | head -1)
+                  | jq -r --arg n "$out" '.[] | select(.name==$n) | .id' | head -1)
                 if [[ -n "$aid" ]]; then
                   echo "  清理同名资产 #${aid} ..."
                   curl -sS -X DELETE -H "$auth" -o /dev/null \
@@ -402,7 +427,7 @@ jobs:
               fi
               sleep 10
             done
-            [[ -n "$ok" ]] || { echo "::error::上传 ${fname} 三次均失败"; exit 22; }
-            echo "  ✓ ${fname}"
+            [[ -n "$ok" ]] || { echo "::error::上传 ${out} 三次均失败"; exit 22; }
+            echo "  ✓ ${out}"
           done
           echo "✅ Release ${tag} 已发布: https://github.com/${REPO}/releases/tag/${tag}"
