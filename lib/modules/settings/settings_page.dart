@@ -120,9 +120,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _enable32bitOutput = false;
   // 长按封面进入/退出 Zen 模式开关（默认开启）
   bool _zenCoverLongPress = true;
-  // 专辑动态封面开关（主开关默认开启；移动网络子开关默认关闭）
-  bool _dynamicAlbumCover = true;
-  bool _dynamicAlbumCoverOnMobile = false;
   // 全屏播放器横屏自动隐藏系统栏开关（默认开启）
   bool _landscapeImmersiveEnabled = true;
   // 音质降级提示开关（默认关闭）：所选音质不可用自动降级时弹出提示
@@ -161,12 +158,6 @@ class _SettingsPageState extends State<SettingsPage>
   // 播放时保持屏幕常亮开关
   bool _keepScreenOn = false;
 
-  /// MV 弹幕开关（设置页与播放页浮层按钮共用同一个持久化 key）。
-  bool _mvDanmakuEnabled = false;
-
-  /// MV 弹幕透明度（0.1–1.0）。用状态字段而非 FutureBuilder：
-  /// FutureBuilder 每次 setState 都会新建 Future → 拖动时值会被旧快照覆盖（回弹）。
-  double _mvDanmakuOpacity = 1.0;
   // 忽略音频焦点开关（默认开启：允许与其他应用同时播放音频）
   bool _ignoreAudioFocus = true;
   // 音频焦点中断策略（默认：保持播放）
@@ -385,9 +376,6 @@ class _SettingsPageState extends State<SettingsPage>
     final uploadListeningDuration = await _settingsRepository
         .getUploadListeningDuration();
     final zenCoverLongPress = await _settingsRepository.getZenCoverLongPress();
-    final dynamicAlbumCover = await _settingsRepository.getDynamicAlbumCover();
-    final dynamicAlbumCoverOnMobile = await _settingsRepository
-        .getDynamicAlbumCoverOnMobile();
     final landscapeImmersiveEnabled = await _settingsRepository
         .getLandscapeImmersiveEnabled();
     final showQualityDowngradeToast = await _settingsRepository
@@ -396,8 +384,6 @@ class _SettingsPageState extends State<SettingsPage>
         .getRestoreMemoryEnabled();
     final closeLocalMusicComments = await _settingsRepository
         .getCloseLocalMusicComments();
-    final mvDanmakuEnabled = await _settingsRepository.getMvDanmakuEnabled();
-    final mvDanmakuOpacity = await _settingsRepository.getMvDanmakuOpacity();
     final updateReminderEnabled = await _settingsRepository
         .getUpdateReminderEnabled();
     final pendingUpdateVersion = await _settingsRepository
@@ -455,14 +441,10 @@ class _SettingsPageState extends State<SettingsPage>
       _ignoreAudioFocus = ignoreAudioFocus;
       _audioFocusInterruptionMode = audioFocusInterruptionMode;
       _zenCoverLongPress = zenCoverLongPress;
-      _dynamicAlbumCover = dynamicAlbumCover;
-      _dynamicAlbumCoverOnMobile = dynamicAlbumCoverOnMobile;
       _landscapeImmersiveEnabled = landscapeImmersiveEnabled;
       _showQualityDowngradeToast = showQualityDowngradeToast;
       _restoreMemoryEnabled = restoreMemoryEnabled;
       _closeLocalMusicComments = closeLocalMusicComments;
-      _mvDanmakuEnabled = mvDanmakuEnabled;
-      _mvDanmakuOpacity = mvDanmakuOpacity;
       // 启动时把音量均衡设置同步给播放器（当前曲目若已加载会自动重算）
       AudioService().setVolumeNormalization(
         enabled: volumeNormalizationEnabled,
@@ -1600,34 +1582,6 @@ class _SettingsPageState extends State<SettingsPage>
             context.read<ThemeProvider>().setLyricDoubleTapToJump(v);
           },
         ),
-        // 全屏播放器专辑封面播放专辑动态封面短视频（MD/AM 两种风格通用）
-        // search: 动态封面 专辑封面 短视频 全屏播放器 封面动画
-        SwitchListTile(
-          title: const Text('专辑动态封面'),
-          subtitle: const Text('全屏播放器封面播放专辑动态封面短视频'),
-          value: _dynamicAlbumCover,
-          onChanged: (value) {
-            HapticFeedback.lightImpact();
-            setState(() => _dynamicAlbumCover = value);
-            _settingsRepository.setDynamicAlbumCover(value);
-          },
-        ),
-        // 动态封面单首约 9.5MB，默认仅 Wi-Fi 自动加载；开启后移动网络也会加载
-        // search: 动态封面 移动网络 流量 蜂窝 wifi
-        SwitchListTile(
-          title: const Text('移动网络下加载动态封面'),
-          subtitle: const Text('动态封面单首约 9.5MB，开启后移动网络也会加载'),
-          value: _dynamicAlbumCoverOnMobile,
-          // 主开关关闭时禁用子开关（此 Flutter 版本的 SwitchListTile 无 enabled
-          // 参数，故用 null onChanged 实现等价禁用外观与交互）
-          onChanged: _dynamicAlbumCover
-              ? (value) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _dynamicAlbumCoverOnMobile = value);
-                  _settingsRepository.setDynamicAlbumCoverOnMobile(value);
-                }
-              : null,
-        ),
         // 3D 封面（深度视差）：仅 depth3d 全量包启用；standard 包整体隐藏。
         // 开启后陀螺仪驱动封面深度视差（模型内置，亦可导入更新）
         if (kDepthCoverAvailable) ...[
@@ -2574,61 +2528,6 @@ class _SettingsPageState extends State<SettingsPage>
             WakelockService.instance.setSettingEnabled(value);
           },
         ),
-        // MV 画中画：按 Home 自动进入（手动按钮始终可用）
-        FutureBuilder<bool>(
-          future: SettingsRepository().getAutoPipEnabled(),
-          builder: (context, snapshot) {
-            final enabled = snapshot.data ?? false;
-            // search: 画中画 pip 悬浮
-            return SwitchListTile(
-              secondary: Icon(
-                Icons.picture_in_picture_alt,
-                color: colorScheme.primary,
-              ),
-              title: const Text('播放 MV 时自动画中画'),
-              value: enabled,
-              onChanged: (v) async {
-                HapticFeedback.lightImpact();
-                await SettingsRepository().setAutoPipEnabled(v);
-                setState(() {});
-              },
-            );
-          },
-        ),
-        // MV 弹幕：控制是否在 MV 播放页叠加弹幕层
-        // search: MV 弹幕 弹幕 视频 滚动
-        SwitchListTile(
-          secondary: Icon(Icons.subtitles_outlined, color: colorScheme.primary),
-          title: const Text('显示 MV 弹幕'),
-          subtitle: const Text('在 MV 播放页叠加弹幕'),
-          value: _mvDanmakuEnabled,
-          onChanged: (v) async {
-            HapticFeedback.lightImpact();
-            setState(() => _mvDanmakuEnabled = v);
-            await _settingsRepository.setMvDanmakuEnabled(v);
-          },
-        ),
-        // MV 弹幕透明度：弹幕关闭时不显示（无可调对象）
-        if (_mvDanmakuEnabled)
-          // search: 弹幕透明度 弹幕 浓度
-          ListTile(
-            leading: Icon(Icons.opacity_outlined, color: colorScheme.primary),
-            title: const Text('弹幕透明度'),
-            subtitle: M3ESlider(
-              decoration: const M3ESliderDecoration(
-                haptic: M3EHapticFeedback.medium,
-              ),
-              value: _mvDanmakuOpacity,
-              min: 0.1,
-              max: 1.0,
-              divisions: 9,
-              label: '${(_mvDanmakuOpacity * 100).round()}%',
-              // 拖动只改本地状态；松手才落盘，避免拖动过程中反复写 SharedPreferences
-              onChanged: (v) => setState(() => _mvDanmakuOpacity = v),
-              onChangeEnd: (v) => _settingsRepository.setMvDanmakuOpacity(v),
-            ),
-            trailing: _statusText('${(_mvDanmakuOpacity * 100).round()}%'),
-          ),
         // ④ 列表与交互：不改变音频本身，只影响操作手势与列表排序
         _buildGroupLabel('列表与交互', colorScheme),
         // 本地歌曲没有在线评论：默认关闭评论 tab 与「看评论」入口；

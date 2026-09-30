@@ -6,7 +6,6 @@ import '../core/services/lyrico_editor.dart';
 import '../core/utils/app_toast.dart';
 import '../data/models/song.dart';
 import '../modules/player/comments_view.dart';
-import '../modules/player/mv_player_page.dart';
 import '../providers/favorites_provider.dart';
 import '../providers/local_favorites_provider.dart';
 import '../providers/player_provider.dart';
@@ -116,18 +115,6 @@ class SongListItem extends StatelessWidget {
                   } else if (!r.launched) {
                     showToast('无法打开 Lyrico 编辑', long: true);
                   }
-                },
-              ),
-            if (song.isOnline)
-              ListTile(
-                leading: const Icon(Icons.music_video_outlined),
-                title: const Text('查看 MV'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => MvPlayerPage(song: song)),
-                  );
                 },
               ),
             // 可选扩展：私有构建注入的额外菜单条目（默认无）
@@ -309,14 +296,6 @@ class SongListItem extends StatelessWidget {
           // 且与 MV 按钮顺序对调（见改版计划补充一）。
           // 云盘歌曲无 MV；仅在线非云盘歌曲显示 MV 入口。
           if (song.isOnline && !song.isCloud)
-            _iconAction(
-              colorScheme,
-              Icons.music_video_outlined,
-              () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => MvPlayerPage(song: song)),
-              ),
-            ),
           _iconAction(
             colorScheme,
             Icons.more_vert,

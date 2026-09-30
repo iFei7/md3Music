@@ -367,7 +367,7 @@ class _AppViewState extends State<_AppView> {
                   // 全局背景层（主页/底层背景）：复用 AppBackground 组件。
                   // 二级页面由路由过渡内嵌 AppBackground，随页面位移入场。
                   Positioned.fill(child: AppBackground()),
-                  // material_ui 兼容桥：chewie / dynamic_color / cached_network_image 等第三方包
+                  // material_ui 兼容桥：dynamic_color / cached_network_image 等第三方包
                   // 仍导入 package:flutter/material.dart，其 Theme.of(context) 取不到本项目的
                   // material_ui 主题。本桥把 ThemeData / MaterialLocalizations 提供给它们。
                   // 官方定位为过渡工具，待依赖全部迁移到 material_ui 后移除。

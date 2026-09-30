@@ -9,7 +9,6 @@ import 'package:provider/provider.dart';
 import '../../core/layout/responsive_layout.dart';
 import '../../core/services/audio_service.dart';
 import '../../core/services/lyric_push_service.dart';
-import '../../core/services/dynamic_cover_service.dart';
 import '../../core/services/equalizer_service.dart';
 import '../../core/services/spectrum_service.dart';
 import '../../core/services/usb_audio_service.dart';
@@ -28,7 +27,6 @@ import '../artist/artist_detail_page.dart';
 import '../settings/equalizer_settings_page.dart';
 import '../sound/sounds_page.dart';
 import 'artist_photo_background.dart';
-import 'mv_player_page.dart';
 import 'song_info_page.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/kugou_provider.dart';
@@ -51,7 +49,6 @@ import '../../utils/landscape_immersive.dart';
 import '../../widgets/ai_recommend_sheet.dart';
 import '../../widgets/md3e_transport_row.dart';
 import '../../widgets/menu_action_cell.dart';
-import '../../widgets/dynamic_cover_view.dart';
 import '../../widgets/player_artwork_image.dart';
 import '../../widgets/player_seek_bar.dart';
 import '../../widgets/player_tab_strip.dart';
@@ -162,16 +159,7 @@ class _FullPlayerState extends State<FullPlayer>
   bool _zenMode = false;
   // 长按封面进入 Zen 模式开关（设置→播放，默认开启；关闭后禁用长按）
   bool _zenLongPressEnabled = true;
-  // 专辑动态封面开关（设置页「播放页样式」与播放页「界面设置」共用；默认开启）
-  bool _dynamicCoverEnabled = true;
 
-  /// 播放页「界面设置」里「当前歌曲动态封面」的展示值（null = 检测中）
-  ///
-  /// 刻意**不在 dispose() 里销毁**：二级菜单挂在根 Navigator 上，可能比本 State
-  /// 活得更久，销毁后菜单关闭时
-  /// `removeListener` 会命中「used after being disposed」断言。不销毁则菜单关闭后
-  /// notifier 与监听者一起变成垃圾被回收。
-  final ValueNotifier<String?> _dyCoverStatus = ValueNotifier<String?>(null);
   late final AnimationController _zenController;
   late final Animation<double> _zenAnimation;
 
@@ -560,63 +548,7 @@ class _FullPlayerState extends State<FullPlayer>
       context.read<PlayerProvider>().addListener(_onPlayerSongChanged);
       _loadSpectrumSetting();
       _loadZenPressSetting();
-      _loadDynamicCoverSetting();
     });
-  }
-
-  /// 从设置加载「专辑动态封面」开关（默认开启）。
-  Future<void> _loadDynamicCoverSetting() async {
-    final enabled = await SettingsRepository().getDynamicAlbumCover();
-    if (!mounted || enabled == _dynamicCoverEnabled) return;
-    setState(() => _dynamicCoverEnabled = enabled);
-  }
-
-  /// 刷新「界面设置」菜单里的动态封面开关与当前歌曲状态。
-  ///
-  /// 顺带重读开关值（用户可能刚在设置页改过），保证菜单与设置一致；
-  /// 状态优先用 [DynamicCoverService.lastKnownResult] 即时展示，
-  /// 未探测过才发一次请求，失败时显示「未获取到」而不是「无」。
-  Future<void> _refreshDyCoverMenuState() async {
-    final player = context.read<PlayerProvider>();
-    final song = player.currentSong;
-    final isOnline = song is Song && song.isOnline;
-    final albumAudioId = (song is Song ? song.albumAudioId : null) ?? '';
-
-    await _loadDynamicCoverSetting();
-    if (!mounted) return;
-
-    if (!isOnline || albumAudioId.isEmpty) {
-      _dyCoverStatus.value = dyCoverStatusText(
-        isOnline: false,
-        albumAudioId: '',
-        known: null,
-      );
-      return;
-    }
-
-    final known = DynamicCoverService.instance.lastKnownResult(albumAudioId);
-    if (known != null) {
-      _dyCoverStatus.value = dyCoverStatusText(
-        isOnline: true,
-        albumAudioId: albumAudioId,
-        known: known,
-      );
-      return;
-    }
-
-    _dyCoverStatus.value = dyCoverStatusText(
-      isOnline: true,
-      albumAudioId: albumAudioId,
-      known: null,
-      probing: true,
-    );
-    await DynamicCoverService.instance.hasDynamicCover(albumAudioId);
-    if (!mounted) return;
-    _dyCoverStatus.value = dyCoverStatusText(
-      isOnline: true,
-      albumAudioId: albumAudioId,
-      known: DynamicCoverService.instance.lastKnownResult(albumAudioId),
-    );
   }
 
   /// 从设置加载「长按封面进入 Zen 模式」开关。
@@ -830,9 +762,6 @@ class _FullPlayerState extends State<FullPlayer>
     // 切歌可能在本地/在线之间切换 → 评论 tab 有无随之变化；
     // 设置页改「关闭本地音乐评论区」也会经 PlayerProvider 通知走到这里。
     _syncTabLayout();
-    // 设置页可能改过动态封面开关 → 切歌时同步一次（幂等，值未变不触发重建）
-    // ignore: discarded_futures
-    _loadDynamicCoverSetting();
     final player = context.read<PlayerProvider>();
     final song = player.currentSong;
     if (song != null && song.id != _lastSongId) {
@@ -2038,11 +1967,6 @@ class _FullPlayerState extends State<FullPlayer>
             iconSize: iconSize,
             fallbackFilePath: currentSong.localPath,
           ),
-          // 动态封面层：视频就绪后淡入覆盖；无动态封面 / 开关关闭 /
-          // 网络不满足 / 加载失败时该层为空，静态封面完全不受影响。
-          // 频谱模式（style 0/1）在上方已提前 return SpectrumArtwork，不会走到这里。
-          if (currentSong is Song && currentSong.isOnline)
-            DynamicCoverView(song: currentSong, enabled: _dynamicCoverEnabled),
         ],
       ),
     );
@@ -2796,20 +2720,6 @@ class _FullPlayerState extends State<FullPlayer>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 查看 MV：仅在线歌曲显示（原顶栏按钮收纳到菜单，置顶）
-                if (song.isOnline == true)
-                  ListTile(
-                    leading: const Icon(Icons.music_video_outlined),
-                    title: const Text('查看 MV'),
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _pageNavigator(rootContext)?.push(
-                        MaterialPageRoute(
-                          builder: (_) => MvPlayerPage(song: song),
-                        ),
-                      );
-                    },
-                  ),
                 ListTile(
                   leading: const Icon(Icons.album),
                   title: Text(
@@ -2952,9 +2862,6 @@ class _FullPlayerState extends State<FullPlayer>
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    // 打开二级菜单前刷新动态封面开关与当前歌曲状态
-                    // ignore: discarded_futures
-                    _refreshDyCoverMenuState();
                     _showMoreSettingsSheet(rootContext);
                   },
                 ),
@@ -3052,36 +2959,6 @@ class _FullPlayerState extends State<FullPlayer>
                       _toggleSpectrum();
                     },
                   ),
-                // 专辑动态封面：开关（与设置页「播放页样式」联动，关闭即时生效）
-                // + 当前歌曲是否有动态封面的状态
-                ValueListenableBuilder<String?>(
-                  valueListenable: _dyCoverStatus,
-                  builder: (context, status, _) => Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SwitchListTile(
-                        title: const Text('专辑动态封面'),
-                        subtitle: const Text('封面播放专辑动态封面短视频'),
-                        value: _dynamicCoverEnabled,
-                        onChanged: (v) {
-                          HapticFeedback.lightImpact();
-                          setState(() => _dynamicCoverEnabled = v);
-                          // ignore: discarded_futures
-                          SettingsRepository().setDynamicAlbumCover(v);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.album_outlined),
-                        title: const Text('当前歌曲动态封面'),
-                        trailing: Text(
-                          status ?? '检测中…',
-                          style: Theme.of(sheetContext).textTheme.bodyMedium
-                              ?.copyWith(color: colorScheme.primary),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
                 // 3D 封面：与设置页开关同源（写入后 DepthCoverHost 即时响应）
                 StatefulBuilder(
                   builder: (context, setSheetState) => FutureBuilder<bool>(
