@@ -15,7 +15,7 @@ import '../core/services/audio_service.dart';
 import '../core/services/audio_service_io.dart'
     hide AudioService, createAudioSource;
 import '../core/services/audio_source_load_deadline.dart';
-import '../core/services/desktop_lyric_service.dart';
+import '../core/services/lyric_push_service.dart';
 import '../core/services/diagnostic_logger.dart';
 import '../core/services/home_widget_service.dart';
 import '../core/services/lyricon_provider_service.dart';
@@ -794,7 +794,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 「一起听」房主播放态通告：本地暂停/恢复后转报服务端让成员跟随。
   ///
   /// 播放器自身的暂停/恢复按钮没有房间概念（迷你播放器、全屏播放器、
-  /// 桌面歌词、耳机按键等都会走 [pause]/[resume]），若不在这里统一通告，
+  /// 耳机按键等都会走 [pause]/[resume]），若不在这里统一通告，
   /// 房主用播放器按钮暂停时房间与成员端不会同步。
   ///
   /// [playing] 为 true 表示已恢复播放。**只在用户主动操作时触发**：
@@ -2898,7 +2898,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         url,
         speed: _speed,
         // MD3Music fork：传真实歌曲 id，使 aux/main 的 currentSong.id 为真实 hash，
-        // 否则 just_audio 生成随机 id，DesktopLyricService 拉歌词失败（蓝牙歌词/词幕不显示）。
+        // 否则 just_audio 生成随机 id，LyricPushService 拉歌词失败（蓝牙歌词不显示）。
         id: song.id,
         title: song.displayName,
         artist: song.artist,
@@ -3073,7 +3073,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     // 歌词渠道补推：这些渠道都按 song.id 去重（lyricInfo 更是每首只推一次），
     // 而回写保持 id 不变 → 不显式通知就会永久停在「未知歌曲」占位标题。
     // Lyricon 例外：它由 _handleLyriconSongChange 的元数据签名自动触发重推。
-    unawaited(DesktopLyricService.instance.notifySongMetadataChanged());
+    unawaited(LyricPushService.instance.notifySongMetadataChanged());
     notifyListeners();
   }
 
@@ -5703,7 +5703,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       isPlaying: _isPlaying,
       position: _position,
       duration: _duration ?? Duration.zero,
-      desktopLyricEnabled: DesktopLyricService.instance.enabled,
       isFavorited: isFavorited,
     );
   }
@@ -5921,7 +5920,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 拉取歌词 → 解析 → 推送 Lyricon onSongChanged。
   ///
-  /// 参考 [DesktopLyricService._onTick] / [_fetchLyricFor] 的模式：
+  /// 参考 [LyricPushService._onTick] / [_fetchLyricFor] 的模式：
   /// - 通过 appNavigatorKey.currentContext 拿 KugouProvider
   /// - 调 kugou.getLyric 拉 LRC（Task 15 双请求会同时拉 KRC）
   /// - 用 LyricParserChain.parse 自动识别 KRC/LRC/纯文本

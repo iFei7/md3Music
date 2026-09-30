@@ -7,7 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' as services;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:md3music/core/services/desktop_lyric_service.dart';
+import 'package:md3music/core/services/lyric_push_service.dart';
 import 'package:md3music/data/models/song.dart';
 import 'package:md3music/modules/player/full_player.dart';
 import 'package:md3music/providers/comment_display_provider.dart';
@@ -29,7 +29,7 @@ import '../test_helpers/fake_secure_storage.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('全屏页与桌面歌词同键并发时只查询并下载一次', (tester) async {
+  testWidgets('全屏页与歌词外显推送同键并发时只查询并下载一次', (tester) async {
     final originalPhysicalSize = tester.view.physicalSize;
     final originalDevicePixelRatio = tester.view.devicePixelRatio;
     tester.view.physicalSize = const Size(360, 800);
@@ -99,7 +99,7 @@ void main() {
     AudioServiceLoader.setTestOverride(() async => audio);
     final kugou = KugouProvider(registerDeviceOnStart: false);
     PlayerProvider? player;
-    final desktopLyrics = DesktopLyricService.instance;
+    final lyricPush = LyricPushService.instance;
     try {
       await tester.runAsync(() async {
         player = PlayerProvider();
@@ -160,7 +160,7 @@ void main() {
       );
       expect(adapter.searchRequestCount, 1);
 
-      await desktopLyrics.setLockScreenLyricEnabled(true);
+      await lyricPush.setLockScreenLyricEnabled(true);
       // 测试音频替身在 source load 后可能仍为暂停态；锁屏歌词暂停 tick 是 1s。
       await tester.pump(const Duration(milliseconds: 1200));
       expect(adapter.searchRequestCount, 1);
@@ -201,7 +201,7 @@ void main() {
       expect(adapter.searchRequestCount, 1);
       expect(adapter.lyricRequestCount, 2);
     } finally {
-      await desktopLyrics.setLockScreenLyricEnabled(false);
+      await lyricPush.setLockScreenLyricEnabled(false);
       await tester.pumpWidget(const SizedBox.shrink());
       tester.view.physicalSize = originalPhysicalSize;
       tester.view.devicePixelRatio = originalDevicePixelRatio;

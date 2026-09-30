@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:md3music/core/services/desktop_lyric_service.dart';
+import 'package:md3music/core/services/lyric_push_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

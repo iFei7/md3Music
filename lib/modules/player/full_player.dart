@@ -8,10 +8,9 @@ import 'package:provider/provider.dart';
 
 import '../../core/layout/responsive_layout.dart';
 import '../../core/services/audio_service.dart';
-import '../../core/services/desktop_lyric_service.dart';
+import '../../core/services/lyric_push_service.dart';
 import '../../core/services/dynamic_cover_service.dart';
 import '../../core/services/equalizer_service.dart';
-import '../../core/services/media_notification_service.dart';
 import '../../core/services/spectrum_service.dart';
 import '../../core/services/usb_audio_service.dart';
 import '../../widgets/depth_cover_host.dart';
@@ -110,8 +109,6 @@ class _FullPlayerState extends State<FullPlayer>
   // 封面淡入淡出动画
   late final AnimationController _artworkFadeController;
 
-  // 桌面歌词状态监听：长按歌词按钮 toggle 后同步 icon
-  late final VoidCallback _onDesktopLyricChanged;
   late final Animation<double> _artworkFadeAnimation;
   String? _previousArtworkUrl;
 
@@ -529,11 +526,6 @@ class _FullPlayerState extends State<FullPlayer>
       initialIndex: 1,
     );
 
-    // 桌面歌词状态变化时刷新 UI（同步歌词按钮 icon）
-    _onDesktopLyricChanged = () {
-      if (mounted) setState(() {});
-    };
-    DesktopLyricService.instance.addListener(_onDesktopLyricChanged);
     _artworkFadeController = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
@@ -913,7 +905,6 @@ class _FullPlayerState extends State<FullPlayer>
     try {
       context.read<PlayerProvider>().removeListener(_onPlayerSongChanged);
     } catch (_) {}
-    DesktopLyricService.instance.removeListener(_onDesktopLyricChanged);
     WidgetsBinding.instance.removeObserver(this);
     _artworkFadeController.dispose();
     _zenController.dispose();
@@ -2482,13 +2473,7 @@ class _FullPlayerState extends State<FullPlayer>
                   }
                 : null,
           ),
-        PlayerTabItem(
-          // 桌面歌词开启时用实心 icon，与 mini_player 一致
-          icon: DesktopLyricService.instance.enabled
-              ? Icons.lyrics
-              : Icons.lyrics_outlined,
-          onLongPress: _toggleDesktopLyric,
-        ),
+        const PlayerTabItem(icon: Icons.lyrics_outlined),
         if (_tabLayout.hasComments)
           PlayerTabItem(
             icon: Icons.comment_outlined,
@@ -2508,33 +2493,6 @@ class _FullPlayerState extends State<FullPlayer>
     final song = context.read<PlayerProvider>().currentSong;
     if (song == null) return;
     showCommentComposeSheet(context, song: song, target: target);
-  }
-
-  /// 长按歌词段：开关桌面歌词，并同步通知栏的「桌面歌词」按钮状态。
-  Future<void> _toggleDesktopLyric() async {
-    HapticFeedback.lightImpact();
-    await DesktopLyricService.instance.toggle();
-    if (!mounted) return;
-    final player = context.read<PlayerProvider>();
-    final song = player.currentSong;
-    // 收藏状态需实时查询，避免暂停时显示为未收藏
-    bool isFavorited = false;
-    if (song != null) {
-      try {
-        isFavorited = context.read<FavoritesProvider>().isFavorite(song.id);
-      } catch (_) {}
-    }
-    await MediaNotificationService.updateNotification(
-      // 用 displayName 剥离 .mp3 等后缀，避免标题显示文件名
-      title: song?.displayName ?? '',
-      artist: song?.artist ?? '',
-      artUrl: song?.artworkUri,
-      isPlaying: player.isPlaying,
-      position: player.position,
-      duration: player.duration ?? Duration.zero,
-      desktopLyricEnabled: DesktopLyricService.instance.enabled,
-      isFavorited: isFavorited,
-    );
   }
 
   /// 导航条拖动开始：记录起始 tab

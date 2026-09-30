@@ -12,9 +12,6 @@ import '../../providers/favorites_provider.dart';
 import '../../providers/kugou_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/lyric_request_lifecycle.dart';
-import '../../providers/theme_provider.dart';
-import '../../core/layout/ui_density.dart';
-import '../../core/utils/app_toast.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
@@ -23,7 +20,6 @@ import '../../services/kugou_api/kugou_models.dart';
 import '../../services/kugou_api/lyric_lookup_result.dart';
 import 'media_notification_service.dart';
 import 'lyric_info_json_builder.dart';
-import 'diagnostic_logger.dart';
 
 /// 解析歌词文本，超过 32KB 时移入 isolate。
 ///
@@ -78,39 +74,33 @@ class LockScreenProgressPushGate {
   }
 }
 
-/// 桌面歌词服务：管理开关、解析歌词（KRC/LRC/纯文本）、按播放位置同步到原生悬浮窗。
+/// 歌词外显推送服务：统一管理「应用内歌词」之外的各歌词消费方。
 ///
-/// **关键修复**：之前用 `displayLyric`（KRC 优先）+ LRC 正则解析，导致 KRC 文本
-/// 解析全部失败、悬浮窗永远显示「暂无歌词」。现改用 [LyricParserChain.parse]
-/// 自动识别 KRC/LRC/纯文本，输出统一 [LyricLine] 列表。
+/// 用 [LyricParserChain.parse] 自动识别 KRC/LRC/纯文本并输出统一 [LyricLine]
+/// 列表，按播放位置推进当前行，再分发给各通道：蓝牙歌词、锁屏歌词、魅族状态栏
+/// 歌词、SuperLyric（Binder 系统级实时歌词）、LyricInfo（MediaSession extras）。
+/// 所有通道复用同一个 250ms 定时器与同一份歌词列表，避免重复拉词与重复解析。
 ///
-/// **逐字支持**：KRC 解析后每行携带 [LyricWord] 字级时间戳，逐字时间戳随行切换
-/// 整行一次下发（words + positionMs），原生按本地时钟自驱动逐字推进。
-/// LRC/纯文本无字时间戳时 words 为空，原生侧走整行渐变色（保持原行为）。
-class DesktopLyricService {
-  static final DesktopLyricService instance = DesktopLyricService._();
-  DesktopLyricService._() {
+/// Lite 已下线桌面歌词悬浮窗：本服务不再负责任何悬浮窗渲染、悬浮窗配置下发，
+/// 也不再维护「悬浮窗是否开启/是否锁定」这类状态。
+class LyricPushService {
+  static final LyricPushService instance = LyricPushService._();
+  LyricPushService._() {
     // AM 歌词偏好变化（字号/行距/字重/字体/副行）→ 锁屏歌词跟随重推
     LyricPreferences.instance.addListener(_onLyricPrefsChangedForLockScreen);
   }
 
   PlayerProvider? _player;
   KugouProvider? _kugou;
-  // 「显示大小」：悬浮窗是原生 overlay、不在 Flutter 树里，DisplayScaleScope
-  // 够不到它，所以把档位随配置下发给原生，由它乘在歌词字号上。
-  ThemeProvider? _theme;
   final SettingsRepository _settings = SettingsRepository();
 
-  bool _enabled = false;
-  bool get enabled => _enabled;
-
-  // 蓝牙歌词开关：独立于悬浮窗。ColorOS SystemUI 与 AVRCP 共用 MediaSession，
+  // 蓝牙歌词开关。ColorOS SystemUI 与 AVRCP 共用 MediaSession，
   // 4.0 接入后原生端必须保持稳定 title/artist，因此不再用该通道改写会话身份。
   bool _bluetoothLyricEnabled = false;
   bool get bluetoothLyricEnabled => _bluetoothLyricEnabled;
 
   // LyricInfo 歌词转发开关：通过 MediaSession extras.lyricInfo 发布整首歌词
-  // （LRC/ELRC），供 ColorOS 桌面歌词 / LyricInfo 模块等第三方系统读取。
+  // （LRC/ELRC），供 ColorOS 自带桌面歌词 / LyricInfo 模块等第三方系统读取。
   // 复用本服务的定时器与歌词解析管线，歌词加载完成后构造 JSON 推送一次。
   bool _lyricInfoEnabled = false;
   bool get lyricInfoEnabled => _lyricInfoEnabled;
@@ -121,7 +111,7 @@ class DesktopLyricService {
   bool _lyricInfoColorOs = false;
   bool get lyricInfoColorOs => _lyricInfoColorOs;
 
-  // 锁屏歌词开关：独立于悬浮窗/蓝牙歌词/LyricInfo。开启时定时器运行，
+  // 锁屏歌词开关：独立于蓝牙歌词/LyricInfo。开启时定时器运行，
   // 推送整首歌词到原生 LockScreenLyricActivity（锁屏全屏滚动歌词列表，
   // 与 AM 播放页 Zen 沉浸模式视觉对齐；样式全部跟随 AM 歌词偏好）。
   bool _lockScreenLyricEnabled = false;
@@ -194,55 +184,16 @@ class DesktopLyricService {
   bool _awaitingLyric = false;
   int _lyricFetchToken = 0;
   int _sessionGeneration = 0;
-  bool _lastPushedPlaying = false;
+  // 上一次观测到的播放态：只用于边沿检测（恢复播放时立即补一拍），不推原生。
+  bool _lastObservedPlaying = false;
   // 歌词拉取退避：临时失败按 250ms→10s 指数退避，确认无词按5分钟冷却，
   // 防止播放期间重复请求；错误状态分别显示给歌词消费者。
   String? _lyricFailedKey;
   int _lyricFailCount = 0;
   DateTime? _lyricNextRetryAt;
-  // 屏幕亮灭（FloatingLyricService SCREEN_OFF/ON 转发）：熄屏且未开锁屏歌词时 tick 休眠
-  bool _screenOn = true;
-
-  // 当前配置缓存
-  double _fontSize = 18.0;
-  bool _doubleLine = false;
-  int _opacity = 80;
-  int _gradientStart = 0xFF00E5FF;
-  int _gradientEnd = 0xFFFF00FF;
-  int _unplayedColor = 0xFF666666;
-  bool _locked = false;
-
-  /// 悬浮窗是否锁定（锁定后原生端加 FLAG_NOT_TOUCHABLE 点击穿透，
-  /// 悬浮窗自身无法再点击，只能从设置页/通知栏等外部入口解锁）。
-  bool get locked => _locked;
-
-  /// 解锁桌面歌词悬浮窗（锁定时悬浮窗点击穿透，需从外部解锁）。
-  Future<void> unlock() async {
-    if (!_locked) return;
-    _locked = false;
-    await _settings.setDesktopLyricLocked(false);
-    _pushConfig(); // 推送原生端解除 FLAG_NOT_TOUCHABLE
-    _notify();
-  }
-
-  // 通知外部状态变化（让 mini_player 等可以监听刷新）
-  final List<VoidCallback> _listeners = [];
-  void addListener(VoidCallback cb) => _listeners.add(cb);
-  void removeListener(VoidCallback cb) => _listeners.remove(cb);
-  void _notify() {
-    for (final cb in List.of(_listeners)) {
-      cb();
-    }
-  }
 
   /// 在 app 启动时（main 中）调用：注册原生回调
   void registerNativeCallbacks() {
-    MediaNotificationService.onToggleDesktopLyric = () {
-      toggle();
-    };
-    MediaNotificationService.onDesktopLyricAction = (action) {
-      _handleFloatingAction(action);
-    };
     MediaNotificationService.onPrevious = () {
       _player?.previous();
     };
@@ -259,16 +210,6 @@ class DesktopLyricService {
     };
     MediaNotificationService.onToggleFavorite = () {
       _handleToggleFavorite();
-    };
-    MediaNotificationService.onConfigChanged = (config) {
-      _onNativeConfigChanged(config);
-    };
-    MediaNotificationService.onScreenStateChanged = (on) {
-      _screenOn = on;
-      if (on) {
-        // 点亮屏幕立即补一拍：熄屏期间行提交与进度推送已暂停，需对齐漂移
-        _onTick();
-      }
     };
   }
 
@@ -287,155 +228,8 @@ class DesktopLyricService {
     } catch (_) {}
   }
 
-  void _handleFloatingAction(String action) {
-    switch (action) {
-      case 'lock':
-        _locked = !_locked;
-        _settings.setDesktopLyricLocked(_locked);
-        _pushConfig();
-        break;
-      case 'previous':
-        _player?.previous();
-        break;
-      case 'play':
-        if (_player != null) {
-          if (_player!.isPlaying) {
-            _player!.pause();
-          } else {
-            _player!.resume();
-          }
-        }
-        break;
-      case 'next':
-        _player?.next();
-        break;
-      case 'settings':
-        // 设置面板内嵌在 native 浮窗，无需 Dart 处理
-        break;
-    }
-  }
-
-  /// 原生浮窗内修改配置后回传，Dart 负责持久化
-  Future<void> _onNativeConfigChanged(Map<dynamic, dynamic> config) async {
-    final fontSize = (config['fontSize'] as num?)?.toDouble();
-    final doubleLine = config['doubleLine'] as bool?;
-    final opacity = config['opacity'] as int?;
-    final locked = config['locked'] as bool?;
-    final gradientStart = config['gradientStart'] as int?;
-    final gradientEnd = config['gradientEnd'] as int?;
-    final unplayedColor = config['unplayedColor'] as int?;
-
-    if (fontSize != null) {
-      _fontSize = fontSize;
-      await _settings.setDesktopLyricFontSize(fontSize);
-    }
-    if (doubleLine != null) {
-      _doubleLine = doubleLine;
-      await _settings.setDesktopLyricDoubleLine(doubleLine);
-    }
-    if (opacity != null) {
-      _opacity = opacity;
-      await _settings.setDesktopLyricOpacity(opacity);
-    }
-    if (locked != null) {
-      _locked = locked;
-      await _settings.setDesktopLyricLocked(locked);
-    }
-    if (gradientStart != null) {
-      _gradientStart = gradientStart;
-      await _settings.setDesktopLyricGradientStart(gradientStart);
-    }
-    if (gradientEnd != null) {
-      _gradientEnd = gradientEnd;
-      await _settings.setDesktopLyricGradientEnd(gradientEnd);
-    }
-    if (unplayedColor != null) {
-      _unplayedColor = unplayedColor;
-      await _settings.setDesktopLyricUnplayedColor(unplayedColor);
-    }
-    _notify();
-  }
-
-  /// 切换桌面歌词开关（mini_player / 通知栏按钮通用）
-  Future<void> toggle() async {
-    if (_enabled) {
-      await disable();
-    } else {
-      await enable();
-    }
-  }
-
-  Future<void> enable() async {
-    if (_enabled) return;
-    // 权限是独立于 provider 的系统设置检查，放最前：无权限时也走
-    // startFloatingLyric（原生 MainActivity 检测到无权限会跳系统授权页
-    // 并返回 false），并保持 _enabled=false，mini_player 等开关 UI 依据
-    // enabled 自动回弹，不出现"假开启"。旧实现把 provider 绑定放在
-    // 权限检查之前，provider 未就绪时连授权页都不会弹出。
-    final hasPermission = await MediaNotificationService.hasOverlayPermission();
-    if (!hasPermission) {
-      // 原生 MainActivity 在此期间会跳系统「显示在其他应用上层」授权页，
-      // 并以 PERMISSION_DENIED 结束本次调用（Dart 侧被 catch 吞掉）。
-      // ⚠️ Lite 换用 com.md3music.md3music.lite 后是全新应用，旧包名已授予的
-      // 悬浮窗权限不会继承 —— 首次开启必然走这条分支。必须给出可见提示，
-      // 否则用户只看到开关自动回弹，表现为"桌面歌词点了没反应"。
-      DiagnosticLogger.instance.w(
-        '桌面歌词开启失败：缺少悬浮窗权限（SYSTEM_ALERT_WINDOW）',
-      );
-      try {
-        await MediaNotificationService.startFloatingLyric(lyric: '', title: '');
-      } catch (_) {}
-      showToast('请先在系统设置中允许「显示在其他应用上层」后重试');
-      return;
-    }
-    _bindProvidersFromContext();
-    if (_player == null || _kugou == null) {
-      // 无 Navigator context（或 Provider 尚未挂载）时无法取播放状态与歌词，
-      // 直接开启会得到一个永远没有内容的悬浮窗。这里是"点了没反应"的第二种
-      // 成因，补一条日志便于真机导出诊断时区分。
-      DiagnosticLogger.instance.w(
-        '桌面歌词开启被跳过：Provider 未就绪'
-        '（appNavigatorKey.currentContext=${appNavigatorKey.currentContext != null}）',
-      );
-      return;
-    }
-    // startFloatingLyric 返回 false（权限竞态撤销/BadTokenException/显示层拒绝）
-    // 时保持开关为关（原生端会回填真实 addView 结果），避免悬浮窗未出现但按钮
-    // 显示已开启的"假开启"状态，并提示用户授权悬浮窗权限后重试。
-    final started = await MediaNotificationService.startFloatingLyric(
-      lyric: '',
-      title: '',
-    );
-    if (!started) {
-      DiagnosticLogger.instance.e(
-        '桌面歌词开启失败：startFloatingLyric 返回 false'
-        '（权限竞态 / 显示层拒绝 / 前台服务启动被拒，详见原生 FloatingLyricService 日志）',
-      );
-      showToast('桌面歌词开启失败，请检查并开启悬浮窗权限后重试');
-      return;
-    }
-    _enabled = true;
-    await _loadConfig();
-    await _pushConfig();
-    _syncCurrentFromPlayer();
-    _updateTicker();
-    _notify();
-  }
-
-  Future<void> disable() async {
-    if (!_enabled) return;
-    _enabled = false;
-    _updateTicker();
-    _cancelLineTimer();
-    _cancelFlymeLineTimer();
-    try {
-      await MediaNotificationService.stopFloatingLyric();
-    } catch (_) {}
-    _notify();
-  }
-
-  /// 蓝牙歌词开关：独立于悬浮窗。开启后定时器运行以获取当前歌词行，
-  /// 但不弹出悬浮窗；关闭后若悬浮窗也未开启则停止定时器。
+  /// 蓝牙歌词开关。开启后定时器运行以获取当前歌词行并推给车机；
+  /// 关闭后若没有其他通道需要歌词则停止定时器。
   Future<void> setBluetoothLyricEnabled(bool enabled) async {
     if (_bluetoothLyricEnabled == enabled) return;
     _bluetoothLyricEnabled = enabled;
@@ -454,7 +248,7 @@ class DesktopLyricService {
     }
   }
 
-  /// LyricInfo 歌词转发开关：独立于悬浮窗/蓝牙歌词。开启后定时器运行以获取
+  /// LyricInfo 歌词转发开关：独立于蓝牙歌词。开启后定时器运行以获取
   /// 当前歌词并构造 JSON 推送（写入 MediaSession extras）；关闭时移除 lyricInfo。
   Future<void> setLyricInfoEnabled(bool enabled) async {
     if (_lyricInfoEnabled == enabled) return;
@@ -475,7 +269,6 @@ class DesktopLyricService {
         await MediaNotificationService.removeLyricInfo();
       } catch (_) {}
     }
-    _notify();
   }
 
   /// ColorOS Bridge 兼容模式开关：改值后若 LyricInfo 已启用，重置去重标志并
@@ -487,7 +280,6 @@ class DesktopLyricService {
       _lyricInfoPushed = false;
       _maybePushLyricInfo();
     }
-    _notify();
   }
 
   /// 魅族 Flyme 状态栏歌词开关。开启后立即回灌当前行，避免要等到下一句才显示；
@@ -520,7 +312,6 @@ class DesktopLyricService {
       _flymeLastSwitchAt = null;
       _flymePrevPosMs = -1;
     }
-    _notify();
   }
 
   /// 只发行级纯文本。原生侧对空串做清空处理。
@@ -531,7 +322,7 @@ class DesktopLyricService {
     } catch (_) {}
   }
 
-  /// SuperLyric 歌词推送开关：独立于悬浮窗/蓝牙歌词/LyricInfo。
+  /// SuperLyric 歌词推送开关：独立于蓝牙歌词/LyricInfo。
   /// 开启后定时器运行以在切歌/行变化时推送当前行；关闭时推一次空歌词清空。
   Future<void> setSuperLyricEnabled(bool enabled) async {
     if (_superLyricEnabled == enabled) return;
@@ -549,10 +340,9 @@ class DesktopLyricService {
       // 关闭时推一次「仅 title/artist」清空当前歌词
       _pushSuperLyricLine(null);
     }
-    _notify();
   }
 
-  /// 锁屏歌词开关：独立于悬浮窗/蓝牙歌词/LyricInfo/SuperLyric。
+  /// 锁屏歌词开关：独立于蓝牙歌词/LyricInfo/SuperLyric。
   /// 开启后定时器运行，推送整首歌词与样式到原生锁屏歌词界面
   /// （LockScreenLyricActivity，锁屏全屏滚动歌词列表）；关闭时关闭该界面。
   Future<void> setLockScreenLyricEnabled(bool enabled) async {
@@ -580,7 +370,6 @@ class DesktopLyricService {
         await MediaNotificationService.hideLockScreenLyric();
       } catch (_) {}
     }
-    _notify();
   }
 
   /// AM 歌词偏好变化回调：锁屏歌词样式全部跟随 AM 歌词设置
@@ -730,9 +519,8 @@ class DesktopLyricService {
     }
   }
 
-  /// 定时器是否需要运行：悬浮窗、蓝牙歌词、LyricInfo、SuperLyric 或锁屏歌词任一开启即需运行
+  /// 定时器是否需要运行：蓝牙歌词、锁屏歌词、状态栏歌词、SuperLyric、LyricInfo 任一开启即需运行
   bool _shouldTick() =>
-      _enabled ||
       _bluetoothLyricEnabled ||
       _lyricInfoEnabled ||
       _superLyricEnabled ||
@@ -784,7 +572,6 @@ class DesktopLyricService {
     final v = ms < 0 ? 0 : (ms > 600 ? 600 : ms);
     if (_flymeAdvanceMs == v) return;
     _flymeAdvanceMs = v;
-    _notify();
     if (!_flymeStatusBarLyricEnabled) return;
     final player = _player;
     if (player == null || _lines.isEmpty) return;
@@ -847,20 +634,6 @@ class DesktopLyricService {
     _flymeLineTimer = null;
   }
 
-  // 上一次下发给原生的「显示大小」档位，用于过滤 ThemeProvider 的其他通知
-  // （主题色、背景图等每次变更都会 notify，不必重推悬浮窗配置）。
-  double _lastDisplayScale = kDefaultDisplayScale;
-
-  /// 「显示大小」变更 → 重新下发配置，让已显示的悬浮窗歌词立即跟随。
-  void _onThemeChanged() {
-    final scale = _theme?.displayScale ?? kDefaultDisplayScale;
-    if (scale == _lastDisplayScale) return;
-    _lastDisplayScale = scale;
-    if (!_enabled) return;
-    // ignore: discarded_futures
-    _pushConfig();
-  }
-
   void _bindProvidersFromContext() {
     final ctx = appNavigatorKey.currentContext;
     if (ctx == null) return;
@@ -873,56 +646,21 @@ class DesktopLyricService {
         player.addListener(_onPlayerChanged);
       }
       _kugou = ctx.read<KugouProvider>();
-      final theme = ctx.read<ThemeProvider>();
-      if (theme != _theme) {
-        _theme?.removeListener(_onThemeChanged);
-        _theme = theme;
-        _lastDisplayScale = theme.displayScale;
-        theme.addListener(_onThemeChanged);
-      }
     } catch (_) {}
   }
 
-  // 播放状态翻转 → 推送原生（卡拉OK暂停冻结/恢复续跑的信号源）。
-  // 仅翻转时推送，position 刷新触发的 notifyListeners 不受影响。
-  // 基线由 _pushPlaying 成功后更新：失败时 tick 自愈会在下个周期重试。
+  // 播放状态翻转 → 恢复播放时立即补一拍。
+  // 必须边沿触发：position 刷新会高频 notifyListeners，不去重会反复空跑 _onTick。
   void _onPlayerChanged() {
     final playing = _player?.isPlaying ?? false;
-    if (playing == _lastPushedPlaying) return;
-    // ignore: discarded_futures
-    _pushPlaying(playing);
+    if (playing == _lastObservedPlaying) return;
+    _lastObservedPlaying = playing;
     if (playing) {
       // 恢复播放：暂停期 tick 已降频至 1s，立即补一拍对齐当前行与预测调度
       _onTick();
     }
   }
 
-  Future<void> _loadConfig() async {
-    _fontSize = await _settings.getDesktopLyricFontSize();
-    _doubleLine = await _settings.getDesktopLyricDoubleLine();
-    _opacity = await _settings.getDesktopLyricOpacity();
-    _gradientStart = await _settings.getDesktopLyricGradientStart();
-    _gradientEnd = await _settings.getDesktopLyricGradientEnd();
-    _unplayedColor = await _settings.getDesktopLyricUnplayedColor();
-    _locked = await _settings.getDesktopLyricLocked();
-  }
-
-  Future<void> _pushConfig() async {
-    try {
-      await _channel.invokeMethod('setDesktopLyricConfig', {
-        'fontSize': _fontSize,
-        'displayScale': _theme?.displayScale ?? kDefaultDisplayScale,
-        'doubleLine': _doubleLine,
-        'opacity': _opacity,
-        'locked': _locked,
-        'gradientStart': _gradientStart,
-        'gradientEnd': _gradientEnd,
-        'unplayedColor': _unplayedColor,
-      });
-    } catch (_) {}
-  }
-
-  static const _channel = MethodChannel('com.md3music.md3music/floating_lyric');
   static const _superLyricChannel = MethodChannel(
     'com.md3music.md3music/super_lyric',
   );
@@ -930,66 +668,15 @@ class DesktopLyricService {
   static const _flymeChannel =
       MethodChannel('com.md3music.md3music/flyme_status_bar_lyric');
 
-  void _syncCurrentFromPlayer() {
-    if (_player == null) return;
-    final song = _player!.currentSong;
-    if (song != null) {
-      if (_currentSongId != song.id) {
-        _sessionGeneration++;
-        _lyricFetchToken++;
-      }
-      _currentSongId = song.id;
-      _pushProgress(_player!.position, _player!.duration ?? Duration.zero);
-      _pushPlaying(_player!.isPlaying);
-    }
-  }
-
-  Future<void> _pushProgress(Duration pos, Duration dur) async {
-    // 仅悬浮窗开启时推送：蓝牙歌词不需要 position/duration（通过 MediaSession 获取），
-    // 且避免 startService 触发 FloatingLyricService.onCreate 显示悬浮窗通知
-    if (!_enabled) return;
-    try {
-      await _channel.invokeMethod('updateProgress', {
-        'position': pos.inMilliseconds,
-        'duration': dur.inMilliseconds,
-      });
-    } catch (_) {}
-  }
-
-  Future<void> _pushPlaying(bool playing) async {
-    // 同 _pushProgress：仅悬浮窗开启时推送。
-    // 推送成功才更新基线：失败时基线保持旧值，让 tick 自愈机制
-    // 在下个周期重试（否则失败后永远不再推送，暂停冻结失效）。
-    if (!_enabled) return;
-    try {
-      await _channel.invokeMethod('setPlaying', {'isPlaying': playing});
-      _lastPushedPlaying = playing;
-    } catch (_) {}
-  }
-
   void _onTick() {
     if (!_shouldTick()) return;
-    // 熄屏且未开锁屏歌词：悬浮窗不可见，tick 纯耗电，直接休眠
-    // （点亮屏幕时由 screenStateChanged 回调补一拍对齐漂移）
-    if (!_screenOn && !_lockScreenLyricEnabled) {
-      _cancelLineTimer();
-      _cancelFlymeLineTimer();
-      return;
-    }
     // provider 未绑定时（如 app 启动早期 context 未就绪）尝试重新绑定，
     // 绑定成功后下个 tick 即可正常推送；仍失败则跳过本次
     if (_player == null || _kugou == null) {
       _bindProvidersFromContext();
       if (_player == null || _kugou == null) return;
     }
-    // 播放状态自愈：事件驱动的 setPlaying 若曾丢失（channel 异常被吞、
-    // 时序竞争），原生 isPlayingFlag 停在 true → 逐字暂停后仍狂奔。
-    // 每 tick 与 PlayerProvider 对账，不一致即重推（幂等，开销可忽略）。
     final tickPlaying = _player!.isPlaying;
-    if (tickPlaying != _lastPushedPlaying) {
-      // ignore: discarded_futures
-      _pushPlaying(tickPlaying);
-    }
     // 暂停时下一行永不到来：取消预测调度；tick 周期同步降频
     if (!tickPlaying) {
       _cancelLineTimer();
@@ -1021,13 +708,11 @@ class DesktopLyricService {
       _currentLineIndex = -1;
       _lastLineSwitchAt = null;
       _awaitingLyric = false;
-      _lastPushedPosMs = null;
       // 新歌立即尝试拉取：清除上一首的失败退避状态
       _lyricFailedKey = null;
       _lyricFailCount = 0;
       _lyricNextRetryAt = null;
-      _pushPlaying(_player!.isPlaying);
-      _pushLyric('歌词加载中...', '', placeholder: '歌词加载中...');
+      _pushLyric('歌词加载中...', placeholder: '歌词加载中...');
       // SuperLyric：切歌时立即更新 title/artist（清空上一首歌词）
       if (_superLyricEnabled) {
         _pushSuperLyricLine(null);
@@ -1074,14 +759,9 @@ class DesktopLyricService {
     // LyricInfo：歌词加载完成后推送一次整首歌词（_lyricInfoPushed 去重）
     _maybePushLyricInfo();
 
-    // Sync progress (500ms throttle)
+    // 播放位置：仅供下列行查找使用（不再向原生推送进度/时长）
     final pos = _player!.position;
-    final dur = _player!.duration ?? Duration.zero;
     final posMs = pos.inMilliseconds;
-    if (_lastPushedPosMs == null || (posMs - _lastPushedPosMs!).abs() > 500) {
-      _lastPushedPosMs = posMs;
-      _pushProgress(pos, dur);
-    }
 
     // Find current line
     if (_lines.isEmpty) return;
@@ -1106,21 +786,7 @@ class DesktopLyricService {
         _currentLineIndex = newIndex;
         final line = newIndex >= 0 ? _lines[newIndex] : null;
         final current = line?.text ?? '';
-        final next = (_doubleLine && newIndex + 1 < _lines.length)
-            ? _lines[newIndex + 1].text
-            : '';
-        // KRC 逐字：行切换时一次推送整行字级时间戳 + 当时的播放位置，
-        // 原生按本地时钟自驱动逐字推进（每字边界一次 invalidate），
-        // Dart 不再做 100ms 高频推送；LRC/纯文本行 words 为空走整行渐变色
-        // （显式标注类型：三元分支与 const [] 的 LUB 是 List<dynamic>，需上下文类型）
-        final List<Map<String, Object?>> words =
-            (line != null && line.words.isNotEmpty)
-            ? [
-                for (final w in line.words)
-                  {'t': w.text, 's': w.startTime, 'd': w.duration},
-              ]
-            : const [];
-        _pushLyric(current, next, words: words, positionMs: posMs);
+        _pushLyric(current);
         // SuperLyric：行变化时推送当前行（含逐字 words、翻译、副歌词）
         if (_superLyricEnabled) {
           _pushSuperLyricLine(line);
@@ -1157,7 +823,7 @@ class DesktopLyricService {
             // isolate 解析期间可能已切歌：迟到结果直接丢弃
             if (!_isCurrentLyricRequest(token, requestedSongId)) return;
             _lines = lines;
-            if (_lines.isEmpty) _pushLyric('暂无歌词', '', placeholder: '暂无歌词');
+            if (_lines.isEmpty) _pushLyric('暂无歌词', placeholder: '暂无歌词');
             _markLockLyricLoaded(_lines.isEmpty ? '暂无歌词' : '');
             return;
           }
@@ -1260,7 +926,7 @@ class DesktopLyricService {
   }
 
   void _commitNoLyrics(String songId) {
-    _pushLyric('暂无歌词', '', placeholder: '暂无歌词');
+    _pushLyric('暂无歌词', placeholder: '暂无歌词');
     _markLockLyricLoaded('暂无歌词');
     _lyricFailedKey = songId;
     _lyricFailCount = 0;
@@ -1274,7 +940,7 @@ class DesktopLyricService {
     String placeholder,
     LyricLookupStatus status,
   ) {
-    _pushLyric(placeholder, '', placeholder: placeholder);
+    _pushLyric(placeholder, placeholder: placeholder);
     _markLockLyricLoaded(placeholder);
     _lyricFailCount = _lyricFailedKey == songId ? _lyricFailCount + 1 : 1;
     _lyricFailedKey = songId;
@@ -1289,37 +955,16 @@ class DesktopLyricService {
     _lyricNextRetryAt = null;
   }
 
-  int? _lastPushedPosMs;
-
-  /// 推送当前行文本到原生悬浮窗。
+  /// 推送当前行文本到蓝牙歌词通道。
   ///
-  /// - [placeholder] 非空时原生显示占位文案（歌词加载中.../暂无歌词/歌词加载失败）；
-  ///   空串表示正常行：间奏期 current 为空串时原生显示空白，不再误显"加载中"。
-  /// - 蓝牙歌词分支保持既有占位过滤行为不变。
-  Future<void> _pushLyric(
-    String current,
-    String next, {
-    String placeholder = '',
-    List<Map<String, Object?>> words = const [],
-    int positionMs = 0,
-  }) async {
-    if (_enabled) {
-      try {
-        await _channel.invokeMethod('updateLyric', {
-          'lyric': current,
-          'nextLyric': next,
-          'placeholder': placeholder,
-          'words': words,
-          'positionMs': positionMs,
-        });
-      } catch (_) {}
-    }
-    if (_bluetoothLyricEnabled) {
-      final btText = (placeholder.isNotEmpty) ? '' : current;
-      try {
-        await MediaNotificationService.updateBluetoothLyric(btText);
-      } catch (_) {}
-    }
+  /// [placeholder] 非空表示这行是占位文案（歌词加载中.../暂无歌词/歌词加载失败）：
+  /// 蓝牙通道不需要占位，一律清空，避免把「加载中」当歌词发给车机。
+  Future<void> _pushLyric(String current, {String placeholder = ''}) async {
+    if (!_bluetoothLyricEnabled) return;
+    final btText = (placeholder.isNotEmpty) ? '' : current;
+    try {
+      await MediaNotificationService.updateBluetoothLyric(btText);
+    } catch (_) {}
   }
 
   /// 推送当前歌词行到 SuperLyric（基于 Binder 的系统级实时歌词 API）。

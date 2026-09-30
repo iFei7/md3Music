@@ -40,7 +40,7 @@ const List<OnboardingPageData> onboardingPages = [
     icon: Icons.play_circle_fill,
     title: '播放与歌词',
     description: '点击任意歌曲弹出迷你播放条，点击展开全屏播放器，享受逐字歌词体验。',
-    highlights: ['全屏播放器', '逐字歌词', '桌面歌词'],
+    highlights: ['全屏播放器', '逐字歌词', '锁屏歌词'],
   ),
   OnboardingPageData(
     icon: Icons.touch_app,

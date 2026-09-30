@@ -333,78 +333,6 @@ class SettingsRepository {
     await prefs.setInt(_keyLyricTimeOffset, clamped);
   }
 
-  // ===== 桌面歌词配置 =====
-
-  Future<double> getDesktopLyricFontSize() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble('settings_dl_font_size') ?? 18.0;
-  }
-
-  Future<void> setDesktopLyricFontSize(double size) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('settings_dl_font_size', size);
-  }
-
-  Future<bool> getDesktopLyricDoubleLine() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('settings_dl_double_line') ?? false;
-  }
-
-  Future<void> setDesktopLyricDoubleLine(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('settings_dl_double_line', v);
-  }
-
-  Future<int> getDesktopLyricOpacity() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('settings_dl_opacity') ?? 80;
-  }
-
-  Future<void> setDesktopLyricOpacity(int v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('settings_dl_opacity', v);
-  }
-
-  Future<int> getDesktopLyricGradientStart() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('settings_dl_grad_start') ?? 0xFF00E5FF;
-  }
-
-  Future<void> setDesktopLyricGradientStart(int v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('settings_dl_grad_start', v);
-  }
-
-  Future<int> getDesktopLyricGradientEnd() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('settings_dl_grad_end') ?? 0xFFFF00FF;
-  }
-
-  Future<void> setDesktopLyricGradientEnd(int v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('settings_dl_grad_end', v);
-  }
-
-  Future<int> getDesktopLyricUnplayedColor() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('settings_dl_unplayed_color') ?? 0xFF666666;
-  }
-
-  Future<void> setDesktopLyricUnplayedColor(int v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('settings_dl_unplayed_color', v);
-  }
-
-  Future<bool> getDesktopLyricLocked() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('settings_dl_locked') ?? false;
-  }
-
-  Future<void> setDesktopLyricLocked(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('settings_dl_locked', v);
-  }
-
   // ===== 实时歌词推送协议 =====
   // 三种协议（Lyricon / SuperLyric / LyricInfo）三选一 + 关闭，翻译/罗马音等偏好共用。
 
@@ -542,7 +470,7 @@ class SettingsRepository {
   /// 加上 LRC 时间戳普遍标在"字已出声"之后，抵消后大致同步。
   static const int kFlymeLyricAdvanceDefaultMs = 120;
   static const int kFlymeLyricAdvanceMaxMs = 600;
-  // 与 DesktopLyricService.setFlymeAdvanceMs 的钳位保持一致，两处都要改才同步
+  // 与 LyricPushService.setFlymeAdvanceMs 的钳位保持一致，两处都要改才同步
   static const String _keyFlymeLyricAdvanceMs = 'settings_flyme_lyric_advance_ms';
 
   // 注意：这个值不需要原生侧对应键 —— 提前量参与的是 Dart 侧"选哪一行"，

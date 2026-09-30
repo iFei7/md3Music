@@ -44,7 +44,6 @@ const List<({String label, String category, String aliases})>
   (label: '翻译歌词', category: '歌词', aliases: '翻译'),
   (label: '罗马音歌词', category: '歌词', aliases: '罗马音 拼音'),
   (label: '优先翻译（同时存在时）', category: '歌词', aliases: '优先 翻译'),
-  (label: '解锁桌面歌词', category: '歌词', aliases: '桌面歌词 桌面'),
   (label: '蓝牙歌词', category: '歌词', aliases: '蓝牙'),
   (label: '压缩封面图', category: '歌词', aliases: '蓝牙 封面 压缩'),
   (label: '锁屏歌词（实验性）', category: '歌词', aliases: '锁屏'),

@@ -6,7 +6,7 @@ class PlayerTabItem {
 
   final IconData icon;
 
-  /// 长按动作（如封面段长按下载、歌词段长按桌面歌词）
+  /// 长按动作（如封面段长按下载）
   final VoidCallback? onLongPress;
 }
 

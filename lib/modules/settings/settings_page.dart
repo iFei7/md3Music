@@ -21,7 +21,7 @@ import '../../core/services/background_image_loader.dart';
 import '../../core/widgets/app_background.dart' show kDefaultWallpaperAsset;
 import '../../core/services/custom_font_loader.dart';
 import '../../core/utils/app_toast.dart';
-import '../../core/services/desktop_lyric_service.dart';
+import '../../core/services/lyric_push_service.dart';
 import '../../core/services/equalizer_service.dart';
 import '../../core/services/viper_master_service.dart';
 import '../../core/services/listen_report_service.dart';
@@ -269,8 +269,6 @@ class _SettingsPageState extends State<SettingsPage>
     _loadFlymeStatusBarLyric();
     _initEnable32bit();
     LyriconProviderService.instance.addListener(_onLyriconStateChanged);
-    // 桌面歌词状态变化（设置页开关 / 播放器长按 / 通知栏按钮）→ 刷新 UI
-    DesktopLyricService.instance.addListener(_onDesktopLyricChanged);
   }
 
   @override
@@ -278,19 +276,11 @@ class _SettingsPageState extends State<SettingsPage>
     _sectionTransition.dispose();
     _searchController.dispose();
     LyriconProviderService.instance.removeListener(_onLyriconStateChanged);
-    DesktopLyricService.instance.removeListener(_onDesktopLyricChanged);
     super.dispose();
   }
 
   /// Lyricon 服务状态变化回调：触发 UI 刷新
   void _onLyriconStateChanged() {
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  /// 桌面歌词开关状态变化回调：触发 UI 刷新
-  void _onDesktopLyricChanged() {
     if (mounted) {
       setState(() {});
     }
@@ -314,7 +304,7 @@ class _SettingsPageState extends State<SettingsPage>
     }
     // 应用共用偏好到当前启用的推送服务（协议的实际启停由 main.dart 启动恢复处理）
     // ignore: discarded_futures
-    DesktopLyricService.instance.setLyricPushPreferences(
+    LyricPushService.instance.setLyricPushPreferences(
       translation: translation,
       roma: roma,
       preferTranslation: preferTranslation,
@@ -1052,23 +1042,7 @@ class _SettingsPageState extends State<SettingsPage>
                 }
               : null,
         ),
-        // ② 桌面歌词：悬浮窗锁定后点击穿透（无法点击自身解锁），
-        // 且无法下拉通知栏时，可在此一键解锁悬浮窗。
-        _buildGroupLabel('桌面歌词', colorScheme),
-        // search: 桌面歌词 桌面
-        SwitchListTile(
-          title: const Text('解锁桌面歌词'),
-          // 未锁定时该开关无实际作用，只在真的卡住时才说明怎么用
-          subtitle: DesktopLyricService.instance.locked
-              ? const Text('悬浮窗已锁定（点击穿透），点按此开关解除锁定')
-              : null,
-          value: DesktopLyricService.instance.locked,
-          onChanged: (_) async {
-            HapticFeedback.lightImpact();
-            await DesktopLyricService.instance.unlock();
-          },
-        ),
-        // ③ 蓝牙歌词：主开关 + 从属的封面压缩
+        // ② 蓝牙歌词：主开关 + 从属的封面压缩
         _buildGroupLabel('蓝牙歌词', colorScheme),
         // search: 蓝牙
         SwitchListTile(
@@ -1079,7 +1053,7 @@ class _SettingsPageState extends State<SettingsPage>
             setState(() => _bluetoothLyricEnabled = value);
             await _settingsRepository.setBluetoothLyricEnabled(value);
             // 同步到歌词服务（启停定时器）和原生端（元数据替换开关）
-            DesktopLyricService.instance.setBluetoothLyricEnabled(value);
+            LyricPushService.instance.setBluetoothLyricEnabled(value);
             MediaNotificationService.setBluetoothLyricEnabled(value);
           },
         ),
@@ -1094,7 +1068,7 @@ class _SettingsPageState extends State<SettingsPage>
             await _settingsRepository.setBluetoothLyricCompressArt(value);
           },
         ),
-        // ④ 锁屏歌词：主开关（字号/行距/字重/字体等样式全部跟随 AM 歌词偏好，
+        // ③ 锁屏歌词：主开关（字号/行距/字重/字体等样式全部跟随 AM 歌词偏好，
         // 与播放页 Zen 沉浸模式一致，在播放页歌词设置中调整）
         _buildGroupLabel('锁屏歌词', colorScheme),
         // search: 锁屏
@@ -1108,10 +1082,10 @@ class _SettingsPageState extends State<SettingsPage>
             setState(() => _lockScreenLyricEnabled = value);
             await _settingsRepository.setLockScreenLyricEnabled(value);
             // 同步到歌词服务（启停定时器）与原生端（开关状态/关闭界面）
-            await DesktopLyricService.instance.setLockScreenLyricEnabled(value);
+            await LyricPushService.instance.setLockScreenLyricEnabled(value);
           },
         ),
-        // ④½ 魅族 Flyme 状态栏歌词：仅 Flyme 设备显示
+        // ③½ 魅族 Flyme 状态栏歌词：仅 Flyme 设备显示
         if (_flymeStatusBarLyricSupported) ...[
           _buildGroupLabel('魅族状态栏歌词', colorScheme),
           // search: 魅族 flyme 状态栏
@@ -1124,14 +1098,14 @@ class _SettingsPageState extends State<SettingsPage>
               setState(() => _flymeStatusBarLyricEnabled = value);
               await _settingsRepository.setFlymeStatusBarLyricEnabled(value);
               // 启停歌词定时器，并把开关与当前行同步到原生
-              await DesktopLyricService.instance
+              await LyricPushService.instance
                   .setFlymeStatusBarLyricEnabled(value);
             },
           ),
           // search: 状态栏 提前 提前量 快 慢
           if (_flymeStatusBarLyricEnabled) const _FlymeLyricAdvanceTile(),
         ],
-        // ⑤ 歌词同步：逐字歌词时间偏移（仅在线音乐生效）
+        // ④ 歌词同步：逐字歌词时间偏移（仅在线音乐生效）
         _buildGroupLabel('歌词同步', colorScheme),
         const _LyricTimeOffsetTile(),
       ],
@@ -1153,7 +1127,7 @@ class _SettingsPageState extends State<SettingsPage>
     setState(() => _lyricInfoColorOs = value);
     await _settingsRepository.setLyricInfoColorOs(value);
     // ignore: discarded_futures
-    DesktopLyricService.instance.setLyricInfoColorOs(value);
+    LyricPushService.instance.setLyricInfoColorOs(value);
   }
 
   /// 应用协议选择：关闭所有协议，启用选中协议，并同步偏好到各协议。
@@ -1163,9 +1137,9 @@ class _SettingsPageState extends State<SettingsPage>
       LyriconProviderService.instance.setEnabled(false);
     } catch (_) {}
     // ignore: discarded_futures
-    DesktopLyricService.instance.setSuperLyricEnabled(false);
+    LyricPushService.instance.setSuperLyricEnabled(false);
     // ignore: discarded_futures
-    await DesktopLyricService.instance.setLyricInfoEnabled(false);
+    await LyricPushService.instance.setLyricInfoEnabled(false);
     // 记录各协议 enabled 状态（兼容 Kotlin restoreLyricon 读 lyricon_enabled）
     await _settingsRepository.setLyriconEnabled(protocol == 'lyricon');
     await _settingsRepository.setSuperLyricEnabled(protocol == 'super_lyric');
@@ -1185,17 +1159,17 @@ class _SettingsPageState extends State<SettingsPage>
     } else if (protocol == 'super_lyric') {
       if (_superLyricSupported) {
         // ignore: discarded_futures
-        DesktopLyricService.instance.setSuperLyricEnabled(true);
+        LyricPushService.instance.setSuperLyricEnabled(true);
       }
     } else if (protocol == 'lyric_info') {
       // 先同步 ColorOS 模式再启用推送，避免启动瞬间先推旧格式
       // ignore: discarded_futures
-      DesktopLyricService.instance.setLyricInfoColorOs(_lyricInfoColorOs);
+      LyricPushService.instance.setLyricInfoColorOs(_lyricInfoColorOs);
       // ignore: discarded_futures
-      await DesktopLyricService.instance.setLyricInfoEnabled(true);
+      await LyricPushService.instance.setLyricInfoEnabled(true);
     }
     // ignore: discarded_futures
-    DesktopLyricService.instance.setLyricPushPreferences(
+    LyricPushService.instance.setLyricPushPreferences(
       translation: _lyricPushTranslation,
       roma: _lyricPushRoma,
       preferTranslation: _lyricPushPreferTranslation,
@@ -1214,7 +1188,7 @@ class _SettingsPageState extends State<SettingsPage>
       } catch (_) {}
     }
     // ignore: discarded_futures
-    DesktopLyricService.instance.setLyricPushPreferences(
+    LyricPushService.instance.setLyricPushPreferences(
       translation: value,
       roma: _lyricPushRoma,
       preferTranslation: _lyricPushPreferTranslation,
@@ -1232,7 +1206,7 @@ class _SettingsPageState extends State<SettingsPage>
       } catch (_) {}
     }
     // ignore: discarded_futures
-    DesktopLyricService.instance.setLyricPushPreferences(
+    LyricPushService.instance.setLyricPushPreferences(
       translation: _lyricPushTranslation,
       roma: value,
       preferTranslation: _lyricPushPreferTranslation,
@@ -1253,7 +1227,7 @@ class _SettingsPageState extends State<SettingsPage>
       } catch (_) {}
     }
     // ignore: discarded_futures
-    DesktopLyricService.instance.setLyricPushPreferences(
+    LyricPushService.instance.setLyricPushPreferences(
       translation: _lyricPushTranslation,
       roma: _lyricPushRoma,
       preferTranslation: value,
@@ -3811,7 +3785,7 @@ class _FlymeLyricAdvanceTileState extends State<_FlymeLyricAdvanceTile> {
     repo.setFlymeLyricAdvanceMs(clamped);
     // 即时生效：不重推的话要等到下一行才看得出变化
     // ignore: discarded_futures
-    DesktopLyricService.instance.setFlymeAdvanceMs(clamped);
+    LyricPushService.instance.setFlymeAdvanceMs(clamped);
   }
 
   void _submitFromField() {

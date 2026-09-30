@@ -6,12 +6,9 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/layout/bottom_chrome_scope.dart';
-import '../../core/services/desktop_lyric_service.dart';
-import '../../core/services/media_notification_service.dart';
 import '../../core/theme/motion_constants.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../data/repositories/settings_repository.dart';
-import '../../providers/favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../widgets/smart_artwork_image.dart';
@@ -661,50 +658,6 @@ class _MiniPlayerState extends State<MiniPlayer>
                     ),
                   ),
                   // —— 固定区：右侧按钮不参与滑动 ——
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: DesktopLyricService.instance.enabled
-                        ? '关闭桌面歌词'
-                        : '开启桌面歌词',
-                    icon: Icon(
-                      DesktopLyricService.instance.enabled
-                          ? Icons.lyrics
-                          : Icons.lyrics_outlined,
-                      color: DesktopLyricService.instance.enabled
-                          ? colorScheme.primary
-                          : null,
-                    ),
-                    onPressed: () async {
-                      await DesktopLyricService.instance.toggle();
-                      if (context.mounted) {
-                        (context as Element).markNeedsBuild();
-                        // 同步通知栏"桌面歌词"按钮状态
-                        final player = context.read<PlayerProvider>();
-                        final song = player.currentSong;
-                        // 收藏状态需实时查询，避免暂停时显示为未收藏
-                        bool isFavorited = false;
-                        if (song != null) {
-                          try {
-                            isFavorited = context
-                                .read<FavoritesProvider>()
-                                .isFavorite(song.id);
-                          } catch (_) {}
-                        }
-                        await MediaNotificationService.updateNotification(
-                          // 用 displayName 剥离 .mp3 等后缀，避免标题显示文件名
-                          title: song?.displayName ?? '',
-                          artist: song?.artist ?? '',
-                          artUrl: song?.artworkUri,
-                          isPlaying: player.isPlaying,
-                          position: player.position,
-                          duration: player.duration ?? Duration.zero,
-                          desktopLyricEnabled:
-                              DesktopLyricService.instance.enabled,
-                          isFavorited: isFavorited,
-                        );
-                      }
-                    },
-                  ),
                   IconButton(
                     visualDensity: VisualDensity.compact,
                     icon: Icon(
