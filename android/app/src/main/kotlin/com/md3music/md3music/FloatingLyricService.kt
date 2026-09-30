@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -35,6 +36,7 @@ import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 
 /// 单个字的卡拉OK时间戳（text 为该字文本，供原生按 paint 测量字宽）
 class WordTiming(val text: String, val startMs: Long, val durMs: Long)
@@ -156,7 +158,28 @@ class FloatingLyricService : Service() {
             return
         }
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification())
+        // 前台服务启动：Android 14+ 用 ServiceCompat 显式传 specialUse 类型
+        // （manifest 已声明同类型，这里显式传可避免类型判定歧义），低版本走两参重载。
+        // 整段 try/catch 兜底：ForegroundServiceStartNotAllowedException（后台启动前台
+        // 服务被拒）或 SecurityException 若从 onCreate 逸出会直接杀死播放器进程，
+        // 比"悬浮窗没出现"更糟；这里降级为记录日志 + 回填失败 + 停服务。
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    createNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, createNotification())
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "startForeground failed: ${e.javaClass.simpleName}: ${e.message}")
+            MainActivity.completeFloatingStart(false)
+            stopSelf()
+            return
+        }
         if (!createFloatingView()) {
             Log.w(TAG, "Floating view not created; service stopped")
             MainActivity.completeFloatingStart(false)

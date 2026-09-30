@@ -23,6 +23,7 @@ import '../../services/kugou_api/kugou_models.dart';
 import '../../services/kugou_api/lyric_lookup_result.dart';
 import 'media_notification_service.dart';
 import 'lyric_info_json_builder.dart';
+import 'diagnostic_logger.dart';
 
 /// 解析歌词文本，超过 32KB 时移入 isolate。
 ///
@@ -373,13 +374,29 @@ class DesktopLyricService {
     // 权限检查之前，provider 未就绪时连授权页都不会弹出。
     final hasPermission = await MediaNotificationService.hasOverlayPermission();
     if (!hasPermission) {
+      // 原生 MainActivity 在此期间会跳系统「显示在其他应用上层」授权页，
+      // 并以 PERMISSION_DENIED 结束本次调用（Dart 侧被 catch 吞掉）。
+      // ⚠️ Lite 换用 com.md3music.md3music.lite 后是全新应用，旧包名已授予的
+      // 悬浮窗权限不会继承 —— 首次开启必然走这条分支。必须给出可见提示，
+      // 否则用户只看到开关自动回弹，表现为"桌面歌词点了没反应"。
+      DiagnosticLogger.instance.w(
+        '桌面歌词开启失败：缺少悬浮窗权限（SYSTEM_ALERT_WINDOW）',
+      );
       try {
         await MediaNotificationService.startFloatingLyric(lyric: '', title: '');
       } catch (_) {}
+      showToast('请先在系统设置中允许「显示在其他应用上层」后重试');
       return;
     }
     _bindProvidersFromContext();
     if (_player == null || _kugou == null) {
+      // 无 Navigator context（或 Provider 尚未挂载）时无法取播放状态与歌词，
+      // 直接开启会得到一个永远没有内容的悬浮窗。这里是"点了没反应"的第二种
+      // 成因，补一条日志便于真机导出诊断时区分。
+      DiagnosticLogger.instance.w(
+        '桌面歌词开启被跳过：Provider 未就绪'
+        '（appNavigatorKey.currentContext=${appNavigatorKey.currentContext != null}）',
+      );
       return;
     }
     // startFloatingLyric 返回 false（权限竞态撤销/BadTokenException/显示层拒绝）
@@ -390,6 +407,10 @@ class DesktopLyricService {
       title: '',
     );
     if (!started) {
+      DiagnosticLogger.instance.e(
+        '桌面歌词开启失败：startFloatingLyric 返回 false'
+        '（权限竞态 / 显示层拒绝 / 前台服务启动被拒，详见原生 FloatingLyricService 日志）',
+      );
       showToast('桌面歌词开启失败，请检查并开启悬浮窗权限后重试');
       return;
     }

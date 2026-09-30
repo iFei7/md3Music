@@ -450,3 +450,51 @@ jobs:
             echo "  ✓ ${out}"
           done
           echo "✅ Release ${tag} 已发布: https://github.com/${REPO}/releases/tag/${tag}"
+
+  # ============================================================
+  # Dart 单元 / Widget 测试
+  # 独立 job：与 APK 构建并行，不阻塞构建与 Release —— 测试失败时
+  # workflow 结论变红（回归可见），但产物照常发布，避免"因为一个测试
+  # 挂掉而拿不到可安装包"。
+  # ⚠️ bash shell 已自带 -eo pipefail，flutter test 失败会让本步骤失败。
+  # ============================================================
+  dart-tests:
+    name: Dart tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # expanded reporter：失败用例带 文件:行号，便于注解与本地复现
+      - name: Flutter test
+        run: flutter test --reporter expanded 2>&1 | tee "$RUNNER_TEMP/flutter_test.log"
+
+      # 失败时把用例名经 ::error:: 写入 check-run annotations（API 匿名可读，
+      # 与构建诊断同一套通道；GITHUB_STEP_SUMMARY 仅网页可见）
+      - name: Report test failures
+        if: failure()
+        run: |
+          {
+            echo "### flutter test 失败用例"
+            grep -nE "\[E\]" "$RUNNER_TEMP/flutter_test.log" | head -40 || true
+            echo "---- tail ----"
+            tail -c 2000 "$RUNNER_TEMP/flutter_test.log"
+          } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          grep -E "\[E\]" "$RUNNER_TEMP/flutter_test.log" | head -5 | while IFS= read -r line; do
+            echo "::error::${line:0:400}"
+          done || true
+          tail -n 6 "$RUNNER_TEMP/flutter_test.log" | while IFS= read -r line; do
+            echo "::error::${line:0:400}"
+          done
+          exit 0
