@@ -12,8 +12,6 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -108,20 +106,6 @@
             <intent-filter>
                 <action android:name="com.vivo.musicwidgetmix.support.service" />
             </intent-filter>
-        </service>
-        <!-- 桌面歌词悬浮窗：常驻前台服务撑住进程（可见通知 1003），
-             AudioPlaybackService 据此让位不再显示保活空通知。
-             ⚠️ specialUse 类型在 Android 14+ 必须同时在 <service> 内声明
-             android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE 属性（Google 官方
-             「前台服务类型是必填项」要求）；缺失时部分 ROM 会拒绝启动该类型
-             前台服务，Play 审核也会拒。值仅作说明用途，内容不限。 -->
-        <service
-            android:name=".FloatingLyricService"
-            android:foregroundServiceType="specialUse"
-            android:exported="false">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="desktop_lyric_overlay" />
         </service>
         <!-- 锁屏歌词：全屏覆盖在锁屏上方，显示逐字歌词 -->
         <activity

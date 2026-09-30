@@ -193,7 +193,7 @@ class MediaNotificationService {
   }
 
   // LyricInfo 歌词转发：把整首歌词（LRC/ELRC JSON）写入 MediaSession extras，
-  // 供 ColorOS 桌面歌词 / LyricInfo 模块等第三方系统读取。
+  // 供 ColorOS 自带桌面歌词 / LyricInfo 模块等第三方系统读取。
   // 传入空字符串表示移除 lyricInfo（切歌/功能关闭时调用）。
   static Future<void> updateLyricInfo(
     String jsonString, {

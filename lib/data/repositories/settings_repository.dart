@@ -559,7 +559,7 @@ class SettingsRepository {
 
   // ===== LyricInfo 歌词转发 =====
   // 通过 MediaSession 元数据 extras.lyricInfo 发布整首歌词（LRC/ELRC），
-  // 供 ColorOS 桌面歌词 / LyricInfo 模块等第三方系统读取。
+  // 供 ColorOS 自带桌面歌词 / LyricInfo 模块等第三方系统读取。
   static const String _keyLyricInfoEnabled = 'settings_lyric_info_enabled';
 
   Future<bool> getLyricInfoEnabled() async {

@@ -61,14 +61,11 @@ class AudioPlaybackService : Service() {
         const val KEEPALIVE_CHANNEL_ID = "md3music_keepalive_v2"
         const val KEEPALIVE_NOTIFICATION_TEXT = "前台保活增强歌曲留存，长按至系统通知设置关闭"
         const val NOTIFICATION_ID = 1002
-        // 桌面歌词关闭后通知播放服务立即确认前台保活状态
-        const val ACTION_REFRESH_FOREGROUND = "com.md3music.md3music.REFRESH_FOREGROUND"
         const val ACTION_PREV = "com.md3music.md3music.ACTION_PREV"
         const val ACTION_PLAY_PAUSE = "com.md3music.md3music.ACTION_PLAY_PAUSE"
         const val ACTION_PAUSE = "com.md3music.md3music.ACTION_PAUSE"
         const val ACTION_NEXT = "com.md3music.md3music.ACTION_NEXT"
         const val ACTION_STOP = "com.md3music.md3music.ACTION_STOP"
-        const val ACTION_TOGGLE_DESKTOP_LYRIC = "com.md3music.md3music.ACTION_TOGGLE_DESKTOP_LYRIC"
         const val ACTION_TOGGLE_FAVORITE = "com.md3music.md3music.ACTION_TOGGLE_FAVORITE"
         // 蓝牙歌词兼容通道；不得再改写 SystemUI 共用 MediaSession 的 TITLE/ARTIST。
         const val ACTION_UPDATE_BT_LYRIC = "com.md3music.md3music.ACTION_UPDATE_BT_LYRIC"
@@ -81,7 +78,6 @@ class AudioPlaybackService : Service() {
         const val EXTRA_IS_PLAYING = "isPlaying"
         const val EXTRA_POSITION = "position"
         const val EXTRA_DURATION = "duration"
-        const val EXTRA_DESKTOP_LYRIC_ENABLED = "desktopLyricEnabled"
         const val EXTRA_IS_FAVORITED = "isFavorited"
         const val EXTRA_BT_LYRIC_TEXT = "btLyricText"
         const val EXTRA_BT_LYRIC_ENABLED = "btLyricEnabled"
@@ -866,9 +862,7 @@ class AudioPlaybackService : Service() {
     @Volatile
     private var lastArtBitmap: Bitmap? = null
     private var lastArtUrl: String? = null
-    // 缓存最近一次通知构建所需的播放状态，供 refreshMetadata 复用
-    private var lastIsPlaying = false
-    private var lastDesktopLyricEnabled = false
+    // 缓存最近一次收藏状态，供 refreshMetadata 复用
     private var lastIsFavorited = false
     private var lastDuration = 0L
     // 是否已调用过 startForeground（启动前台服务后必须尽快调用，Android 12+ 超时崩溃）
@@ -997,12 +991,11 @@ class AudioPlaybackService : Service() {
             bindService(m3Intent, media3ServiceConnection, Context.BIND_AUTO_CREATE)
             media3ServiceBound = true
         } catch (_: Exception) {}
-        // 方案B阶段4：注册媒体3自定义命令监听。媒体3通知栏按钮（桌面歌词/收藏）
+        // 方案B阶段4：注册媒体3自定义命令监听。媒体3通知栏按钮（收藏）
         // 触发后路由到与既有 ACTION 相同的 Flutter 通道处理逻辑。
         // 阶段6：原生上一首/下一首命令拦截后也走这里，转发 App 自有切歌逻辑。
         try {
             AudioPlayer.setCustomActionListener(object : AudioPlayer.CustomActionListener {
-                override fun onToggleDesktopLyric() { handleAction(ACTION_TOGGLE_DESKTOP_LYRIC) }
                 override fun onToggleFavorite() { handleAction(ACTION_TOGGLE_FAVORITE) }
                 // MediaNotificationService 的切歌命令需要带 commandId 确认；复用媒体键队列
                 // 派发，避免直接 invokeMethod 时因缺少 commandId 被 Dart 端拒绝。
@@ -1080,7 +1073,7 @@ class AudioPlaybackService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_PREV, ACTION_PLAY_PAUSE, ACTION_PAUSE, ACTION_NEXT,
-            ACTION_TOGGLE_DESKTOP_LYRIC, ACTION_TOGGLE_FAVORITE,
+            ACTION_TOGGLE_FAVORITE,
             ACTION_WIDGET_PLAY_PAUSE, ACTION_WIDGET_NEXT,
             ACTION_WIDGET_FM_PLAY_PAUSE, ACTION_WIDGET_FM_TOGGLE_FAVORITE,
             ACTION_WIDGET_FM_SELECT_STATION, ACTION_WIDGET_FM_OPEN_TRACK,
@@ -1117,11 +1110,6 @@ class AudioPlaybackService : Service() {
                 )
                 return START_STICKY
             }
-            ACTION_REFRESH_FOREGROUND -> {
-                // 阶段8：桌面歌词关闭（让位结束），立即恢复保活前台
-                refreshKeepaliveForeground()
-                return START_STICKY
-            }
         }
 
         val mediaId = intent?.getStringExtra(EXTRA_MEDIA_ID) ?: ""
@@ -1132,8 +1120,6 @@ class AudioPlaybackService : Service() {
         val isPlaying = intent?.getBooleanExtra(EXTRA_IS_PLAYING, false) ?: false
         val position = intent?.getLongExtra(EXTRA_POSITION, 0L) ?: 0L
         val duration = intent?.getLongExtra(EXTRA_DURATION, 0L) ?: 0L
-        val desktopLyricEnabled =
-            intent?.getBooleanExtra(EXTRA_DESKTOP_LYRIC_ENABLED, false) ?: false
         val isFavorited =
             intent?.getBooleanExtra(EXTRA_IS_FAVORITED, false) ?: false
 
@@ -1157,7 +1143,6 @@ class AudioPlaybackService : Service() {
             isPlaying,
             position,
             duration,
-            desktopLyricEnabled,
             isFavorited
         )
 
@@ -1216,7 +1201,6 @@ class AudioPlaybackService : Service() {
                 ACTION_PAUSE -> "pause"
                 ACTION_PLAY_PAUSE, ACTION_WIDGET_PLAY_PAUSE -> "togglePlayPause"
                 ACTION_NEXT, ACTION_WIDGET_NEXT -> "next"
-                ACTION_TOGGLE_DESKTOP_LYRIC -> "toggleDesktopLyric"
                 ACTION_TOGGLE_FAVORITE -> "toggleFavorite"
                 // 私人FM小部件动作（PersonalFmWidgetProvider 转发）
                 ACTION_WIDGET_FM_PLAY_PAUSE -> "widgetFmPlayPause"
@@ -1247,7 +1231,6 @@ class AudioPlaybackService : Service() {
             ACTION_PAUSE -> "pause"
             ACTION_PLAY_PAUSE -> "togglePlayPause"
             ACTION_NEXT -> "next"
-            ACTION_TOGGLE_DESKTOP_LYRIC -> "toggleDesktopLyric"
             ACTION_TOGGLE_FAVORITE -> "toggleFavorite"
             else -> return
         }
@@ -1269,8 +1252,8 @@ class AudioPlaybackService : Service() {
     /// 改为常驻 startForeground：保活通知走 IMPORTANCE_MIN 静默渠道，
     /// 通知对象持续存在，服务保持 FGS，进程不降级，后台网络不受限。
     private fun startForegroundDetached(builder: NotificationCompat.Builder) {
-        // 不再给桌面歌词或 Media3 服务让位。播放服务自身保持 FGS，避免其他前台
-        // 服务状态切换期间出现保活空档，导致后台网络、切歌和歌曲留存被系统限制。
+        // 播放服务自身保持 FGS，避免与其他前台服务状态切换期间出现保活空档，
+        // 导致后台网络、切歌和歌曲留存被系统限制。
         try {
             startForeground(NOTIFICATION_ID, builder.build())
             foregroundStarted = true
@@ -1310,33 +1293,6 @@ class AudioPlaybackService : Service() {
                 .setPriority(NotificationCompat.PRIORITY_LOW)
             startForegroundDetached(builder)
         } catch (_: Exception) {}
-    }
-
-    /// 桌面歌词关闭后立即确认播放服务仍处于保活前台。
-    /// 复用 KEEPALIVE_CHANNEL_ID 通知，不等下一次 30s 周期通知更新。
-    private fun refreshKeepaliveForeground() {
-        // 仅在播放中恢复保活前台。暂停/已停止不恢复：暂停期间无切歌需求，
-        // 且本次 startService 若新建了服务实例（服务已被 stopSelf）应立即自停，
-        // 避免「停止播放后关桌面歌词」残留一个常驻前台服务。
-        if (!lastIsPlaying) {
-            try { stopSelf() } catch (_: Throwable) {}
-            return
-        }
-        try {
-            val pendingIntent = launchPendingIntent()
-            val builder = NotificationCompat.Builder(this, KEEPALIVE_CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle("")
-                .setContentText(KEEPALIVE_NOTIFICATION_TEXT)
-                .setContentIntent(pendingIntent)
-                .setOngoing(true)
-                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-                .setPriority(NotificationCompat.PRIORITY_MIN)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(false)
-                .setSilent(true)
-            startForegroundDetached(builder)
-        } catch (_: Throwable) {}
     }
 
     /// 线控耳机媒体键 → 派发命令到 Dart 端。
@@ -1611,7 +1567,7 @@ class AudioPlaybackService : Service() {
     }
 
     /// 为后台（headless）FlutterEngine 注册原生端 MethodChannel handler。
-    /// MainActivity 正常启动时会注册完整 handler（含桌面歌词等）；进程被杀后由
+    /// MainActivity 正常启动时会注册完整 handler；进程被杀后由
     /// 本服务兜底注册，保证通知栏 / MediaSession 在唤醒场景下仍能正常更新。
     private fun setupHeadlessChannels(engine: FlutterEngine) {
         try {
@@ -1638,7 +1594,6 @@ class AudioPlaybackService : Service() {
                             isPlaying = call.argument<Boolean>("isPlaying") ?: false,
                             position = call.argument<Number>("position")?.toLong() ?: 0L,
                             duration = call.argument<Number>("duration")?.toLong() ?: 0L,
-                            desktopLyricEnabled = call.argument<Boolean>("desktopLyricEnabled") ?: false,
                             isFavorited = call.argument<Boolean>("isFavorited") ?: false,
                         )
                         result.success(true)
@@ -1751,7 +1706,6 @@ class AudioPlaybackService : Service() {
             addAction(ACTION_PREV)
             addAction(ACTION_PLAY_PAUSE)
             addAction(ACTION_NEXT)
-            addAction(ACTION_TOGGLE_DESKTOP_LYRIC)
             addAction(ACTION_TOGGLE_FAVORITE)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -2032,7 +1986,6 @@ class AudioPlaybackService : Service() {
         isPlaying: Boolean,
         position: Long,
         duration: Long,
-        desktopLyricEnabled: Boolean = false,
         isFavorited: Boolean = false
     ) {
         if (mediaId.isNotEmpty() && mediaId != originalMediaId) {
@@ -2051,17 +2004,14 @@ class AudioPlaybackService : Service() {
         originalTitle = title
         originalArtist = artist
         lastArtUrl = artUrl
-        lastIsPlaying = isPlaying
         // 同步「正在播放」状态，供锁屏歌词广播（ACTION_SCREEN_OFF）判断
         isNowPlaying = isPlaying
-        lastDesktopLyricEnabled = desktopLyricEnabled
         lastIsFavorited = isFavorited
         lastDuration = duration
         // 通知会在下方所有分支中调用 startForeground，标记已进入前台
         foregroundStarted = true
-        // 方案B阶段4：随通知更新把桌面歌词/收藏状态推到媒体3会话（渲染成通知栏按钮）。
+        // 方案B阶段4：随通知更新把收藏状态推到媒体3会话（渲染成通知栏按钮）。
         pushMedia3CustomActions(
-            desktopLyricEnabled,
             isFavorited,
             hasTranslationForCurrentTrack()
         )
@@ -2184,22 +2134,20 @@ class AudioPlaybackService : Service() {
         } catch (_: Exception) {}
     }
 
-    /// 方案B阶段4：把当前桌面歌词/收藏状态推给媒体3会话，渲染为通知栏自定义按钮。
+    /// 方案B阶段4：把当前收藏状态推给媒体3会话，渲染为通知栏自定义按钮。
     /// 图标资源在 app 模块（R.drawable），fork 仅持有 command/回调，不依赖资源。
-    /// 阶段6：下一首已改回 media3 原生按钮，这里保留 收藏/桌面歌词/翻译(可选)。
+    /// 阶段6：下一首已改回 media3 原生按钮，这里保留 收藏/翻译(可选)。
     /// 翻译按钮仅在 hasLyricTranslation 时发布（ColorOS Bridge 消费）；占位图标必须是
     /// 包内有效资源（CustomAction.Builder 需要有效 iconResId，SystemUI 建立 Action 时
     /// 先解析该资源）。Bridge 识别 Action 后会换成自己的标准翻译图标。
     private fun pushMedia3CustomActions(
-        desktopLyricEnabled: Boolean,
         isFavorited: Boolean,
         hasTranslation: Boolean,
     ) {
         try {
             AudioPlayer.setActiveSessionCustomActions(
-                desktopLyricEnabled, isFavorited, hasTranslation,
+                isFavorited, hasTranslation,
                 R.drawable.ic_translation,
-                R.drawable.ic_lyric_on, R.drawable.ic_lyric_off,
                 R.drawable.ic_favorite_on, R.drawable.ic_favorite_off,
             )
         } catch (e: Throwable) {
@@ -2209,7 +2157,7 @@ class AudioPlaybackService : Service() {
 
     /// 方案B：是否允许用歌词行改写 MediaSession TITLE。
     /// 蓝牙歌词开启 + 有当前歌词行时才允许；但 LyricInfo(ColorOS) 协议激活时
-    /// 保留真实曲名（ColorOS 桌面歌词走 extras.lyricInfo，不依赖 TITLE）。
+    /// 保留真实曲名（ColorOS 自带桌面歌词走 extras.lyricInfo，不依赖 TITLE）。
     private fun btLyricRewriteActive(): Boolean {
         if (!bluetoothLyricEnabled) return false
         if (currentBtLyricText.isEmpty()) return false
@@ -2303,9 +2251,8 @@ class AudioPlaybackService : Service() {
             btLyricDisplayTitle(),
             btLyricDisplayArtist()
         )
-        // 方案B阶段4：按当前开关状态渲染媒体3通知栏的自定义按钮（桌面歌词/收藏）。
+        // 方案B阶段4：按当前开关状态渲染媒体3通知栏的自定义按钮（收藏）。
         pushMedia3CustomActions(
-            lastDesktopLyricEnabled,
             lastIsFavorited,
             hasTranslationForCurrentTrack()
         )

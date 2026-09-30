@@ -10,13 +10,10 @@ import android.annotation.TargetApi
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.provider.Settings
 import android.util.Log
 import android.util.Rational
 import android.view.WindowManager
@@ -26,7 +23,6 @@ import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import com.md3music.md3music.AudioPlaybackService
-import com.md3music.md3music.FloatingLyricService
 import java.io.File
 
 class MainActivity : FlutterActivity() {
@@ -37,7 +33,6 @@ class MainActivity : FlutterActivity() {
     private val MEDIA_STORE_CHANNEL = "com.md3music.md3music/media_store"
     private val PIP_CHANNEL = "com.md3music.md3music/pip"
     private val TASK_CHANNEL = "com.md3music.md3music/task"
-    private var pendingDesktopLyricAction: String? = null
     private var folderPickerResult: MethodChannel.Result? = null
     private var fontPickerResult: MethodChannel.Result? = null
     private var backgroundPickerResult: MethodChannel.Result? = null
@@ -53,7 +48,6 @@ class MainActivity : FlutterActivity() {
 
         // 静态引用：让 Service 也能调用 MethodChannel（无 FlutterEngine 缓存时走这里）
         private var cachedEngine: FlutterEngine? = null
-        private var cachedChannel: MethodChannel? = null
         // KugouApiService 由应用进程持有。Activity 重建/退后台不能关停仍服务后台播放的 API。
         @Volatile private var kugouApiService: KugouApiService? = null
         // 频谱插件引用，Activity 销毁时释放 Visualizer
@@ -63,10 +57,6 @@ class MainActivity : FlutterActivity() {
         @Volatile private var pipVideoActive = false
         // MV 视频宽高比（宽/高），用于画中画窗口比例
         @Volatile private var pipAspectRatio: Rational = Rational(16, 9)
-
-        // 悬浮窗启动结果回填的超时兜底：正常 onCreate 秒级完成；个别 ROM 若因故
-        // 未触发 onCreate，在此按当前状态结算，避免 Dart 端 startFloatingLyric 永久挂起。
-        private const val FLOATING_START_TIMEOUT_MS = 5000L
 
         // 记录自定义插件已注册到的引擎：provideFlutterEngine 复用后台（headless）
         // 引擎时 configureFlutterEngine 会再次执行，若对同一引擎重复注册
@@ -119,32 +109,6 @@ class MainActivity : FlutterActivity() {
             kugouApiService = service
         }
 
-        fun sendDesktopLyricAction(action: String) {
-            cachedChannel?.invokeMethod("desktopLyricAction", action)
-        }
-
-        fun sendDesktopLyricConfigChanged(config: Map<String, Any?>) {
-            cachedChannel?.invokeMethod("desktopLyricConfigChanged", config)
-        }
-
-        // ===== 悬浮窗启动结果回填（同进程直达，杜绝"假开启"） =====
-        // startFloatingLyric 会把结果挂起，等服务 onCreate 真正完成悬浮窗
-        // addView 后再回填真实结果；超时则按当前状态结算，避免 Dart 永久等待。
-        @Volatile private var pendingFloatingStart: MethodChannel.Result? = null
-        private var pendingFloatingTimeout: Runnable? = null
-        private val floatingHandler = Handler(Looper.getMainLooper())
-
-        /** FloatingLyricService 在 onCreate 完成 addView（或失败 stopSelf）后回填。 */
-        fun completeFloatingStart(success: Boolean) {
-            floatingHandler.post {
-                pendingFloatingStart?.let { r ->
-                    pendingFloatingStart = null
-                    pendingFloatingTimeout?.let { floatingHandler.removeCallbacks(it) }
-                    pendingFloatingTimeout = null
-                    if (success) r.success(true) else r.success(false)
-                }
-            }
-        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -360,7 +324,6 @@ class MainActivity : FlutterActivity() {
         // 缓存引擎：Service 端没有 FlutterEngine 时（app 进程被回收场景），能复用
         FlutterEngineCache.getInstance().put("md3music_engine", flutterEngine)
         cachedEngine = flutterEngine
-        cachedChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FLOATING_CHANNEL)
 
         // 外部调用（ACTION_VIEW 音频）通道：原生推送 onExternalMedia，Dart 拉取 takePendingMedia
         ExternalMediaBridge.registerChannel(flutterEngine)
@@ -387,122 +350,6 @@ class MainActivity : FlutterActivity() {
         val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FLOATING_CHANNEL)
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
-                "startFloatingLyric" -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-                        startActivity(intent)
-                        result.error("PERMISSION_DENIED", "需要悬浮窗权限", null)
-                    } else {
-                        // 服务已在运行且悬浮窗已成功添加：直接成功（避免重复拉起服务）
-                        if (FloatingLyricService.isRunning && FloatingLyricService.viewAdded) {
-                            result.success(true)
-                            return@setMethodCallHandler
-                        }
-                        // 挂起结果：等服务 onCreate 真正完成 addView（或权限竞态失败
-                        // stopSelf）后由 completeFloatingStart 回填真实结果，不再提前
-                        // 返回 success，杜绝"开关已开但悬浮窗未出现"的假开启。
-                        pendingFloatingStart = result
-                        val timeout = Runnable { completeFloatingStart(FloatingLyricService.viewAdded) }
-                        pendingFloatingTimeout = timeout
-                        floatingHandler.postDelayed(timeout, FLOATING_START_TIMEOUT_MS)
-                        val intent = Intent(this, FloatingLyricService::class.java).apply {
-                            action = FloatingLyricService.ACTION_UPDATE_LYRIC
-                            putExtra(FloatingLyricService.EXTRA_LYRIC, call.argument<String>("lyric") ?: "")
-                            putExtra(FloatingLyricService.EXTRA_TITLE, call.argument<String>("title") ?: "")
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
-                    }
-                }
-                "updateLyric" -> {
-                    val wordsRaw = call.argument<List<Object>>("words")
-                    val wordsJson = if (wordsRaw != null) {
-                        try {
-                            org.json.JSONArray(wordsRaw).toString()
-                        } catch (e: Exception) {
-                            "[]"
-                        }
-                    } else {
-                        "[]"
-                    }
-                    val intent = Intent(this, FloatingLyricService::class.java).apply {
-                        action = FloatingLyricService.ACTION_UPDATE_LYRIC
-                        putExtra(FloatingLyricService.EXTRA_LYRIC, call.argument<String>("lyric") ?: "")
-                        putExtra(FloatingLyricService.EXTRA_NEXT_LYRIC, call.argument<String>("nextLyric") ?: "")
-                        putExtra(FloatingLyricService.EXTRA_PLACEHOLDER, call.argument<String>("placeholder") ?: "")
-                        putExtra(FloatingLyricService.EXTRA_WORDS, wordsJson)
-                        putExtra(FloatingLyricService.EXTRA_LINE_POSITION,
-                            (call.argument<Number>("positionMs")?.toLong() ?: 0L))
-                    }
-                    startService(intent)
-                    result.success(true)
-                }
-                "updateTitle" -> {
-                    val intent = Intent(this, FloatingLyricService::class.java).apply {
-                        action = FloatingLyricService.ACTION_UPDATE_TITLE
-                        putExtra(FloatingLyricService.EXTRA_TITLE, call.argument<String>("title") ?: "")
-                    }
-                    startService(intent)
-                    result.success(true)
-                }
-                "updateProgress" -> {
-                    val intent = Intent(this, FloatingLyricService::class.java).apply {
-                        action = FloatingLyricService.ACTION_UPDATE_PROGRESS
-                        putExtra(FloatingLyricService.EXTRA_POSITION, (call.argument<Number>("position")?.toLong() ?: 0L))
-                        putExtra(FloatingLyricService.EXTRA_DURATION, (call.argument<Number>("duration")?.toLong() ?: 0L))
-                    }
-                    startService(intent)
-                    result.success(true)
-                }
-                "stopFloatingLyric" -> {
-                    val intent = Intent(this, FloatingLyricService::class.java).apply { action = FloatingLyricService.ACTION_STOP }
-                    startService(intent)
-                    result.success(true)
-                }
-                "hasOverlayPermission" -> {
-                    result.success(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.canDrawOverlays(this) else true)
-                }
-                "setDesktopLyricConfig" -> {
-                    val intent = Intent(this, FloatingLyricService::class.java).apply {
-                        action = FloatingLyricService.ACTION_SET_CONFIG
-                        call.argument<Double>(FloatingLyricService.EXTRA_FONT_SIZE)?.let {
-                            putExtra(FloatingLyricService.EXTRA_FONT_SIZE, it.toFloat())
-                        }
-                        call.argument<Double>(FloatingLyricService.EXTRA_DISPLAY_SCALE)?.let {
-                            putExtra(FloatingLyricService.EXTRA_DISPLAY_SCALE, it.toFloat())
-                        }
-                        call.argument<Boolean>(FloatingLyricService.EXTRA_DOUBLE_LINE)?.let {
-                            putExtra(FloatingLyricService.EXTRA_DOUBLE_LINE, it)
-                        }
-                        call.argument<Int>(FloatingLyricService.EXTRA_OPACITY)?.let {
-                            putExtra(FloatingLyricService.EXTRA_OPACITY, it)
-                        }
-                        call.argument<Boolean>(FloatingLyricService.EXTRA_LOCKED)?.let {
-                            putExtra(FloatingLyricService.EXTRA_LOCKED, it)
-                        }
-                        call.argument<Int>(FloatingLyricService.EXTRA_GRADIENT_START)?.let {
-                            putExtra(FloatingLyricService.EXTRA_GRADIENT_START, it)
-                        }
-                        call.argument<Int>(FloatingLyricService.EXTRA_GRADIENT_END)?.let {
-                            putExtra(FloatingLyricService.EXTRA_GRADIENT_END, it)
-                        }
-                        call.argument<Int>(FloatingLyricService.EXTRA_UNPLAYED_COLOR)?.let {
-                            putExtra(FloatingLyricService.EXTRA_UNPLAYED_COLOR, it)
-                        }
-                    }
-                    startService(intent)
-                    result.success(true)
-                }
-                "setPlaying" -> {
-                    val intent = Intent(this, FloatingLyricService::class.java).apply {
-                        action = FloatingLyricService.ACTION_SET_PLAYING
-                        putExtra(
-                            FloatingLyricService.EXTRA_IS_PLAYING,
-                            call.argument<Boolean>(FloatingLyricService.EXTRA_IS_PLAYING) ?: false
-                        )
-                    }
-                    startService(intent)
-                    result.success(true)
-                }
                 "seekTo" -> {
                     // seekTo 由 MediaSession 直接调用，无需额外处理
                     result.success(true)
@@ -520,10 +367,6 @@ class MainActivity : FlutterActivity() {
                         putExtra(AudioPlaybackService.EXTRA_IS_PLAYING, call.argument<Boolean>("isPlaying") ?: false)
                         putExtra(AudioPlaybackService.EXTRA_POSITION, call.argument<Number>("position")?.toLong() ?: 0L)
                         putExtra(AudioPlaybackService.EXTRA_DURATION, call.argument<Number>("duration")?.toLong() ?: 0L)
-                        putExtra(
-                            AudioPlaybackService.EXTRA_DESKTOP_LYRIC_ENABLED,
-                            call.argument<Boolean>(AudioPlaybackService.EXTRA_DESKTOP_LYRIC_ENABLED) ?: false
-                        )
                         putExtra(
                             AudioPlaybackService.EXTRA_IS_FAVORITED,
                             call.argument<Boolean>(AudioPlaybackService.EXTRA_IS_FAVORITED) ?: false
@@ -1127,7 +970,6 @@ class MainActivity : FlutterActivity() {
         // 释放 Visualizer，保留引擎插件引用，供后续 Activity 继续使用和清理。
         try { spectrumPlugin?.cleanup() } catch (_: Throwable) {}
         cachedEngine = null
-        cachedChannel = null
         pipChannel = null
         pipVideoActive = false
         super.cleanUpFlutterEngine(flutterEngine)

@@ -44,7 +44,7 @@ void main() {
     await client.clearCookies();
     final originalBaseUrl = KugouEndpoints.baseUrl;
     final originalAdapter = client.dio.httpClientAdapter;
-    final adapter = _PageDesktopLyricAdapter();
+    final adapter = _PageLyricPushAdapter();
     client.updateBaseUrl('http://page-desktop-lyric.invalid');
     client.dio.httpClientAdapter = adapter;
     KugouApiClient.markServerReady();
@@ -243,7 +243,7 @@ void main() {
   });
 }
 
-class _PageDesktopLyricAdapter implements HttpClientAdapter {
+class _PageLyricPushAdapter implements HttpClientAdapter {
   final Completer<void> searchRequested = Completer<void>();
   final Completer<ResponseBody> _searchResponse = Completer<ResponseBody>();
   final Completer<void> bothLyricFormatsRequested = Completer<void>();

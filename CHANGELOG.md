@@ -1,3 +1,21 @@
+## lite 分支
+
+> 精简分支（`applicationId = com.md3music.md3music.lite`，与完整版共存）。以下为本分支相对上游的删减记录。
+
+### 2026-09-30 — 下线桌面歌词悬浮窗
+
+- 移除桌面歌词功能：原生 `FloatingLyricService`（悬浮窗 + specialUse 前台服务）、MethodChannel 浮窗方法、
+  Dart 侧悬浮窗逻辑与配置下发、全部入口（设置页 / 播放页 / 迷你播放器 / 通知栏按钮）、引导文案与设置搜索索引
+- `desktop_lyric_service.dart` 更名为 `lyric_push_service.dart`（`DesktopLyricService` → `LyricPushService`）；
+  蓝牙歌词、锁屏歌词、魅族状态栏歌词、SuperLyric、LyricInfo 全部歌词外显通道原样保留
+- 同步移除 `SYSTEM_ALERT_WINDOW`、`FOREGROUND_SERVICE_SPECIAL_USE` 权限与 specialUse 服务声明
+- 移除 `ACTION_REFRESH_FOREGROUND` 广播与 `refreshKeepaliveForeground()`（原用于悬浮窗让位结束后恢复保活前台）
+- 移除 media3 通知栏「桌面歌词」自定义按钮及其会话命令（fork 插件内无条件渲染，须同步摘除）
+- 移除熄屏休眠门控：其存在理由是悬浮窗熄屏不可见，下线后改为单一 tick 路径
+- 保留 ColorOS / LyricInfo 歌词转发协议（独立外部推送，不依赖悬浮窗）
+
+---
+
 ## v5.7.0
 
 - 新增“一起听”房间、广场、创建/加入、成员、聊天、歌单、点歌与生命周期管理功能

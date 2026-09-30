@@ -1150,19 +1150,18 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             // MD3Music fork: 用唯一会话 ID，避免默认空串被 SESSION_ID_TO_SESSION_MAP 判重冲突
             sessionBuilder.setId(sessionId);
             // MD3Music fork: 处理媒体3自定义命令（阶段4，自研交互迁往媒体3）。
-            // 通知栏自定义按钮（桌面歌词/收藏）经 onCustomCommand 到达，转发给 App 处理。
+            // 通知栏自定义按钮（收藏/翻译）经 onCustomCommand 到达，转发给 App 处理。
             sessionBuilder.setCallback(new MediaSession.Callback() {
                 @Override
                 public MediaSession.ConnectionResult onConnect(
                         MediaSession session, MediaSession.ControllerInfo controller) {
-                    // MD3Music fork: 让自定义命令（桌面歌词/收藏）对所有 controller 可用，
+                    // MD3Music fork: 让自定义命令（收藏/翻译）对所有 controller 可用，
                     // 否则内部媒体通知 controller 的 customLayout 会把它们过滤成禁用/移除，
                     // 通知栏自定义按钮无法渲染（阶段4）。
                     MediaSession.ConnectionResult.AcceptedResultBuilder builder =
                             new MediaSession.ConnectionResult.AcceptedResultBuilder(session);
                     androidx.media3.session.SessionCommands.Builder cmdBuilder =
                             new androidx.media3.session.SessionCommands.Builder();
-                    cmdBuilder.add(CMD_TOGGLE_DESKTOP_LYRIC);
                     cmdBuilder.add(CMD_TOGGLE_FAVORITE);
                     cmdBuilder.add(CMD_TOGGLE_TRANSLATION);
                     builder.setAvailableSessionCommands(cmdBuilder.build());
@@ -1217,9 +1216,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     final CustomActionListener listener = sCustomActionListener;
                     if (customCommand != null && listener != null) {
                         String action = customCommand.customAction;
-                        if (CMD_TOGGLE_DESKTOP_LYRIC.customAction.equals(action)) {
-                            listener.onToggleDesktopLyric();
-                        } else if (CMD_TOGGLE_FAVORITE.customAction.equals(action)) {
+                        if (CMD_TOGGLE_FAVORITE.customAction.equals(action)) {
                             listener.onToggleFavorite();
                         }
                     }
@@ -1521,7 +1518,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     // ==== MD3Music fork: 给媒体3会话下发 LyricInfo extras（阶段3b） ====
     // 自定义会话把整首歌词 JSON 写进 MediaSession 元数据 extras.lyricInfo，供
-    // ColorOS 桌面歌词 / LyricInfo 模块等第三方系统读取。这里让媒体3会话的
+    // ColorOS 自带桌面歌词 / LyricInfo 模块等第三方系统读取。这里让媒体3会话的
     // MediaItem.mediaMetadata.extras 同样携带该字段，为后续移除自定义会话做准备。
     private static final String SESSION_LYRIC_INFO_KEY = "lyricInfo";
 
@@ -1626,12 +1623,11 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     // ==== MD3Music fork: 媒体3自定义命令（阶段4，自研 action 迁往媒体3） ====
-    // 桌面歌词开关、收藏以 media3 自定义 Command 承载：App 把状态/图标推给
+    // 收藏、翻译以 media3 自定义 Command 承载：App 把状态/图标推给
     // setActiveSessionCustomActions，渲染为通知栏按钮；点击经 onCustomCommand 回传 App。
     // 上一首/下一首不再用自定义按钮：改由拦截原生 seekToPrevious/seekToNext 命令
     // （onPlayerCommandRequest）转发 App 队列逻辑，见 buildAndHostMediaSession。
     public interface CustomActionListener {
-        void onToggleDesktopLyric();
         void onToggleFavorite();
         // MD3Music fork（阶段6·修复媒体卡片上一首/下一首）：
         // 原生 PREVIOUS/NEXT 命令拦截后回调，走 App 自有切歌逻辑。
@@ -1642,8 +1638,6 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     private static volatile CustomActionListener sCustomActionListener;
     // 用 new Bundle() 而非 Bundle.EMPTY：后者要求 API 26+，本项目 minSdk 为 24/25。
-    private static final SessionCommand CMD_TOGGLE_DESKTOP_LYRIC =
-            new SessionCommand("com.md3music.toggle_desktop_lyric", new android.os.Bundle());
     private static final SessionCommand CMD_TOGGLE_FAVORITE =
             new SessionCommand("com.md3music.toggle_favorite", new android.os.Bundle());
     // MD3Music fork: ColorOS-Live-Lyrics-Bridge 公开翻译切换动作（LYRIC_INFO 协议）。
@@ -1660,35 +1654,29 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     /// 由 App 在元数据/开关变化时推送媒体3通知栏的自定义按钮（图标按开/关态切换）。
-    /// 阶段6：下一首已改回原生按钮，这里保留收藏/桌面歌词两个固定自定义按钮。
+    /// 阶段6：下一首已改回原生按钮，这里保留收藏一个固定自定义按钮。
     /// hasTranslation=true 时追加 ColorOS 翻译切换按钮（仅 Bridge 消费，播放器不处理
     /// 其回调）；翻译图标缺省用模块自带（未新增 ic_translation）。
     public static void setActiveSessionCustomActions(
-            boolean desktopLyricEnabled,
             boolean isFavorited,
             boolean hasTranslation,
             int translationIconResId,
-            int desktopLyricOnIcon,
-            int desktopLyricOffIcon,
             int favoriteOnIcon,
             int favoriteOffIcon) {
         AudioPlayer p = sActivePlayer;
         if (p != null) {
             p.applySessionCustomActions(
-                    desktopLyricEnabled, isFavorited, hasTranslation, translationIconResId,
-                    desktopLyricOnIcon, desktopLyricOffIcon, favoriteOnIcon, favoriteOffIcon);
+                    isFavorited, hasTranslation, translationIconResId,
+                    favoriteOnIcon, favoriteOffIcon);
         } else {
             Log.w("AudioFocusFork", "setActiveSessionCustomActions: no active AudioPlayer");
         }
     }
 
     private void applySessionCustomActions(
-            final boolean desktopLyricEnabled,
             final boolean isFavorited,
             final boolean hasTranslation,
             final int translationIconResId,
-            final int desktopLyricOnIcon,
-            final int desktopLyricOffIcon,
             final int favoriteOnIcon,
             final int favoriteOffIcon) {
         try {
@@ -1705,12 +1693,6 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                             .setSessionCommand(CMD_TOGGLE_FAVORITE)
                             .setDisplayName("收藏")
                             .setIconResId(isFavorited ? favoriteOnIcon : favoriteOffIcon)
-                            .setEnabled(true)
-                            .build());
-                    layout.add(new CommandButton.Builder()
-                            .setSessionCommand(CMD_TOGGLE_DESKTOP_LYRIC)
-                            .setDisplayName("桌面歌词")
-                            .setIconResId(desktopLyricEnabled ? desktopLyricOnIcon : desktopLyricOffIcon)
                             .setEnabled(true)
                             .build());
                     if (hasTranslation) {

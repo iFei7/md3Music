@@ -55,10 +55,10 @@ MD3Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌
 - **在线音乐** — 搜索、每日推荐、排行榜、私人 FM、歌单/专辑/歌手/评论/MV、云盘、听书、场景音乐、频道、刷刷短视频
 - **本地音乐** — 文件夹浏览、内嵌封面与歌词、本地收藏、音质标签、多维度排序
 - **播放体验** — 多音质选择（标准/高质/无损/Hi-Res）、USB 独占输出、均衡器、DLNA 投屏、睡眠定时、倍速、进度记忆、画中画
-- **歌词** — Apple Music 风格逐字歌词（KRC/LRC），支持翻译/罗马音、辉光、模糊、动态取色，以及桌面/锁屏/蓝牙歌词与 SuperLyric 推送
+- **歌词** — Apple Music 风格逐字歌词（KRC/LRC），支持翻译/罗马音、辉光、模糊、动态取色，以及锁屏/蓝牙歌词与 SuperLyric 推送
 - **状态栏歌词** — 魅族 Flyme 机型可将当前歌词显示在状态栏，支持提前量微调
 - **用户中心** — VIP 双签到、多账号管理、听歌等级/排行/识曲、收藏与播放历史、桌面小组件
-- **个性化** — MD3/AM 双风格、主题色与动态取色、深色模式、全局背景图、桌面歌词、主页 Tab 自定义、设置搜索
+- **个性化** — MD3/AM 双风格、主题色与动态取色、深色模式、全局背景图、主页 Tab 自定义、设置搜索
 
 ***
 
@@ -218,7 +218,7 @@ md3Music/
 │   ├── app.dart                # 主应用组件
 │   ├── core/                   # 核心模块
 │   │   ├── layout/             # 响应式布局
-│   │   ├── services/           # 平台服务（音频/USB 独占/均衡器/DLNA 投屏/频谱/桌面歌词/词幕/小组件）
+│   │   ├── services/           # 平台服务（音频/USB 独占/均衡器/DLNA 投屏/频谱/词幕/小组件）
 │   │   ├── theme/              # 主题配置
 │   │   └── utils/              # 工具类
 │   ├── data/                   # 数据层
@@ -299,7 +299,7 @@ md3Music/
 | **MV 播放**    | video\_player + chewie                                           |
 | **USB 独占输出** | 原生 JNI + CMake C++（usbdevfs）                                     |
 | **取色**       | palette\_generator + dynamic\_color + material\_color\_utilities |
-| **桌面歌词**     | Lyricon Provider                                                 |
+| **词幕歌词**     | Lyricon Provider                                                 |
 | **状态栏歌词**   | Flyme 状态栏 ticker（魅族私有 flag）                                 |
 | **听歌识曲**     | record（录音）+ Rust PCM 预处理                                         |
 | **原生通知**     | fluttertoast（Toast）                                              |
@@ -387,7 +387,7 @@ A: 该开关仅在魅族 Flyme 机型上出现（由设备能力探测决定）�
 
 - [EchoMusic](https://github.com/hoowhoami/EchoMusic) — UI 设计和架构参考
 - [apple-music-like-lyrics](https://github.com/amll-dev/applemusic-like-lyrics) — Apple Music 风格逐字歌词渲染参考
-- [Lyricon](https://github.com/tomakino/lyricon) — 桌面歌词 Provider（词幕 / 悬浮歌词）
+- [Lyricon](https://github.com/tomakino/lyricon) — 词幕歌词 Provider（Lyricon 开放协议）
 - [SuperLyric](https://github.com/HChenX/SuperLyric) — 系统级实时歌词（Lyricon/SuperLyric 协议）
 - [LyricInfo](https://github.com/limczhh/LyricInfo) — 蓝牙歌词（AVRCP/LyricInfo 歌词推送参考）
 - [Lyrico](https://github.com/Replica0110/Lyrico) — 本地音乐标签编辑 / Lyrico 外部编辑协作
