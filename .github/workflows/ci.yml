@@ -381,16 +381,19 @@ jobs:
           fi
           rel_id=$(printf '%s' "$rl_body" | jq -r '.id')
 
-          # 清理历史遗留的 lite-latest release（资产名被 GitHub 剥中文成乱码）
-          legacy=$(curl -sS -H "$auth" "$api/releases/tags/lite-latest" || true)
-          legacy_id=$(printf '%s' "$legacy" | jq -r '.id // empty' 2>/dev/null || true)
-          if [[ -n "$legacy_id" && "$legacy_id" != "null" ]]; then
-            echo "清理遗留 release lite-latest (#${legacy_id})..."
+          # 自愈清理：删除资产名乱码（GitHub 剥非 ASCII 前缀 MD3.-）的历史 lite release
+          bad=$(curl -sS -H "$auth" "$api/releases?per_page=50" | jq -r '
+            .[] | select(.tag_name | startswith("lite-"))
+               | select(any(.assets[]; .name | startswith("MD3.")))
+               | "\(.id) \(.tag_name)"' || true)
+          while IFS= read -r line && [[ -n "$line" ]]; do
+            rid="${line%% *}"; rtag="${line#* }"
+            echo "清理乱码 release ${rtag} (#${rid})..."
             curl -sS -X DELETE -H "$auth" -o /dev/null \
-              -w "  DELETE release -> HTTP %{http_code}\n" "$api/releases/${legacy_id}" || true
+              -w "  DELETE release -> HTTP %{http_code}\n" "$api/releases/${rid}" || true
             curl -sS -X DELETE -H "$auth" -o /dev/null \
-              -w "  DELETE tag ref -> HTTP %{http_code}\n" "$api/git/refs/tags/lite-latest" || true
-          fi
+              -w "  DELETE tag ref -> HTTP %{http_code}\n" "$api/git/refs/tags/${rtag}" || true
+          done <<< "$bad"
 
           # 上传全部 APK。
           # ⚠️ GitHub 会剥掉资产名中的非 ASCII 字符（中文），导致「标准版-64位」与
