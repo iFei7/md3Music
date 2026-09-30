@@ -360,35 +360,36 @@ jobs:
           auth="Authorization: Bearer ${GITHUB_TOKEN}"
           tag="lite-latest"
 
-          # 查找已存在的 release（404 视为不存在，其余非 2xx 报错并进注解）
+          # 每轮删除整个 release + tag 后重建（逐资产 DELETE 有幽灵残留导致
+          # 上传 422 already_exists 的前科，整删重建最干净），tag 始终指向最新提交
           resp=$(curl -sS -H "$auth" -w $'\n%{http_code}' "$api/releases/tags/${tag}") || true
           code="${resp##*$'\n'}"; body="${resp%$'\n'*}"
           echo "GET /releases/tags/${tag} -> HTTP ${code}"
           if [[ "$code" == "200" ]]; then
             rel_id=$(printf '%s' "$body" | jq -r '.id')
-            echo "复用 release #${rel_id}，清理旧资产..."
-            for aid in $(printf '%s' "$body" | jq -r '.assets[].id // empty'); do
-              curl -sS -X DELETE -H "$auth" -o /dev/null \
-                -w "  DELETE asset ${aid} -> HTTP %{http_code}\n" "$api/releases/assets/${aid}" || true
-            done
-          elif [[ "$code" == "404" ]]; then
-            echo "创建 release ${tag} ..."
-            rbody=$(jq -n --arg sha "${GITHUB_REF_NAME}" \
-              '{tag_name:"lite-latest", target_commitish:$sha, name:"Lite 最新构建", prerelease:true,
-                body:"Lite 分支 CI 自动构建。每次成功构建后自动覆盖更新；变更详情见 Actions 运行记录。"}')
-            rel_out=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" \
-              -d "$rbody" -w $'\n%{http_code}' "$api/releases") || true
-            rl_code="${rel_out##*$'\n'}"; rl_body="${rel_out%$'\n'*}"
-            echo "POST /releases -> HTTP ${rl_code}"
-            if [[ ! "$rl_code" =~ ^2 ]]; then
-              echo "::error::POST /releases HTTP ${rl_code} :: ${rl_body:0:280}"
-              exit 22
-            fi
-            rel_id=$(printf '%s' "$rl_body" | jq -r '.id')
-          else
+            echo "删除旧 release #${rel_id} ..."
+            curl -sS -X DELETE -H "$auth" -o /dev/null \
+              -w "  DELETE release -> HTTP %{http_code}\n" "$api/releases/${rel_id}" || true
+            curl -sS -X DELETE -H "$auth" -o /dev/null \
+              -w "  DELETE tag ref -> HTTP %{http_code}\n" "$api/git/refs/tags/${tag}" || true
+          elif [[ "$code" != "404" ]]; then
             echo "::error::GET /releases/tags/${tag} HTTP ${code} :: ${body:0:280}"
             exit 22
           fi
+
+          echo "创建 release ${tag} ..."
+          rbody=$(jq -n --arg ref "${GITHUB_REF_NAME}" \
+            '{tag_name:"lite-latest", target_commitish:$ref, name:"Lite 最新构建", prerelease:true,
+              body:"Lite 分支 CI 自动构建。每次成功构建后自动覆盖更新；变更详情见 Actions 运行记录。"}')
+          rel_out=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" \
+            -d "$rbody" -w $'\n%{http_code}' "$api/releases") || true
+          rl_code="${rel_out##*$'\n'}"; rl_body="${rel_out%$'\n'*}"
+          echo "POST /releases -> HTTP ${rl_code}"
+          if [[ ! "$rl_code" =~ ^2 ]]; then
+            echo "::error::POST /releases HTTP ${rl_code} :: ${rl_body:0:280}"
+            exit 22
+          fi
+          rel_id=$(printf '%s' "$rl_body" | jq -r '.id')
 
           # 上传全部 APK（文件名含中文，URL 编码；失败重试 3 次）
           for f in build/app/outputs/flutter-apk/*MD3音乐-*.apk; do
@@ -404,6 +405,16 @@ jobs:
               echo "  -> HTTP ${ucode} (try ${try})"
               if [[ "$ucode" =~ ^2 ]]; then ok=1; break; fi
               echo "::error::upload ${fname} try${try} HTTP ${ucode} :: ${ubody:0:280}"
+              if [[ "$ucode" == "422" ]]; then
+                # 同名资产残留：定位删除后再重试
+                aid=$(curl -sS -H "$auth" "$api/releases/${rel_id}/assets?per_page=100" \
+                  | jq -r --arg n "$fname" '.[] | select(.name==$n) | .id' | head -1)
+                if [[ -n "$aid" ]]; then
+                  echo "  清理同名资产 #${aid} ..."
+                  curl -sS -X DELETE -H "$auth" -o /dev/null \
+                    -w "  DELETE asset ${aid} -> HTTP %{http_code}\n" "$api/releases/assets/${aid}" || true
+                fi
+              fi
               sleep 10
             done
             [[ -n "$ok" ]] || { echo "::error::上传 ${fname} 三次均失败"; exit 22; }
