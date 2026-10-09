@@ -4131,7 +4131,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       }
       _saveState();
       _updateNotification();
-      if (succeeded) _notifyPlaybackStateToRoom(true);
     } catch (error) {
       if (_isPlaybackRequestCurrent(request) && !_isDisposed) {
         _logPlaybackEvent(
