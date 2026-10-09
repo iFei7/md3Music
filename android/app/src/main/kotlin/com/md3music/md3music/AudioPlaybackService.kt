@@ -1071,7 +1071,7 @@ class AudioPlaybackService : Service() {
             }
             ACTION_PREV, ACTION_PLAY_PAUSE, ACTION_PAUSE, ACTION_NEXT,
             ACTION_TOGGLE_DESKTOP_LYRIC, ACTION_TOGGLE_FAVORITE,
-            ACTION_WIDGET_PLAY_PAUSE, ACTION_WIDGET_NEXT,
+            ACTION_WIDGET_PLAY_PAUSE, ACTION_WIDGET_NEXT -> {
                 handleAction(intent)
                 return START_STICKY
             }

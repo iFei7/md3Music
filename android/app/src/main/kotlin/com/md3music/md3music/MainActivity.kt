@@ -175,9 +175,6 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
             // 个别 ROM 可能不支持，忽略即可
         }
-        // 桌面小部件冷启动拉起携带的动作（如登录卡 openLogin → 进登录页）。
-        // 引擎尚未就绪时 Flutter 侧导航尚不可用，invokeMethod 静默失败即降级为打开 app。
-        dispatchWidgetAction(intent?.getStringExtra("widget_action"))
         // 外部调用（文件管理器「用其他应用打开」等）：冷启动入口
         ExternalMediaBridge.onIntent(this, intent)
     }
@@ -186,11 +183,8 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         // 同步更新 intent：配置变更重建等场景下 getIntent() 也能拿到最新外部调用数据
         setIntent(intent)
-        // singleTop 复用实例时（app 已在前台/后台存活），小部件动作走这里
         // 外部调用（文件管理器「用其他应用打开」等）：热启动入口
         ExternalMediaBridge.onIntent(this, intent)
-    }
-
     }
 
     override fun onResume() {
