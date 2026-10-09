@@ -3066,9 +3066,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 播放单曲。
   ///
-  /// [seekTo] 非零时作为 `setPlaylist(initialPosition:)` 交给平台层，
-  /// 在 prepare 阶段一次性定位。
-  ///
   /// **禁止改回「加载完成后再 `seek()`」**：`just_audio.seek()` 在
   /// `ProcessingState.loading` 时直接 return 静默丢弃；而在线源加载期间
   /// 恰好处在该状态，Media3 在未播放时也不保证自行进入 ready，
@@ -3123,14 +3120,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       final source = _createAudioSource(_currentSong!);
       _playbackProgressGate.begin(
         playbackRequest,
-        baseline: seekTo ?? Duration.zero,
+        baseline: Duration.zero,
       );
       final loaded = await _runAudioSourceLoad(
-        () => _audioService!.setPlaylist(
-          [source],
-          startIndex: 0,
-          initialPosition: seekTo,
-        ),
+        () => _audioService!.setPlaylist([source], startIndex: 0),
         request: playbackRequest,
         song: _currentSong,
         entry: 'play_song',
@@ -3138,10 +3131,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       if (!loaded) return;
       if (!_isPlaybackRequestCurrent(playbackRequest)) return;
       _completionReadyRequest = playbackRequest;
-      if (seekTo != null && seekTo > Duration.zero) {
-        _updatePosition(seekTo);
-      }
-      _armRateCheckGrace(seekTo);
       _logPlaybackEvent(
         'play.command.sent',
         request: playbackRequest,

@@ -232,8 +232,8 @@ class _NowPlayingControls extends StatelessWidget {
                       value: maxMs > 0 ? value : 0.0,
                       max: maxMs > 0 ? maxMs : 1.0,
                       onChanged: maxMs > 0
-                          ? (v) => player
-                              .seek(Duration(milliseconds: v.round()), forceNotify: true)
+                          ? (v) =>
+                                player.seek(Duration(milliseconds: v.round()))
                           : null,
                     ),
                   ),

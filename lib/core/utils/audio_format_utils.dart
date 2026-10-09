@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
+
 /// 音频格式展示工具：源文件编码名、文件头位深解析、Media3 编码常量与格式化。
 ///
 /// 供歌曲信息页等格式展示处共用，保证各处展示一致。

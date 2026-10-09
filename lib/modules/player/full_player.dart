@@ -2493,9 +2493,7 @@ class _FullPlayerState extends State<FullPlayer>
       },
       onSeekEnd: (value) async {
         AppHaptics.tick();
-        // forceNotify：松手是用户显式动作，远端纠偏的抑制窗口不得吞掉通告
-        // （否则听众的「拖动即脱离」会被静默吞掉并被纠偏拉回）
-        await playerProvider.seek(value, forceNotify: true);
+        await playerProvider.seek(value);
         if (_wasPlayingBeforeDrag) {
           playerProvider.resume();
         }

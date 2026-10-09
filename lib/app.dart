@@ -1101,13 +1101,6 @@ class _MainLayoutState extends State<_MainLayout>
     final song = service.buildSong(request, meta);
     debugPrint('[ExtMedia] 播放: ${song.title}');
 
-    // 一起听房主：从文件管理器打开的本机文件无法加入房间歌单，明确拒绝，
-    // 避免推起播放器页却处于「本地在响、成员跟不了」的半同步状态
-    if (_interceptRoomOwnerLocalPlayback(song)) {
-      debugPrint('[ExtMedia] 房主房间内拒绝播放本地文件');
-      return;
-    }
-
     // fire-and-forget：冷启动早期 playSong 的 Future 可能长时间不完成，
     // 若 await 会导致后续 push 播放器页被永久阻塞。
     unawaited(player.playSong(song));
