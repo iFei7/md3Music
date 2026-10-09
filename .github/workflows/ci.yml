@@ -79,40 +79,61 @@ jobs:
         id: analyze
         run: |
           set +e
-          dart analyze --format machine > /tmp/analyze.json 2>/tmp/analyze.err
+          flutter analyze --machine > /tmp/analyze.json 2>/tmp/analyze.err
           code=$?
           set -e
           python3 - <<'PY'
-          import json
-          errs = []
+          import json, re
           try:
-              lines = open('/tmp/analyze.json', encoding='utf-8', errors='replace').read().splitlines()
+              raw = open('/tmp/analyze.json', encoding='utf-8', errors='replace').read()
           except Exception:
-              print('::error::machine 报告不可读，请看原始日志'); raise SystemExit(0)
-          for ln in lines:
-              ln = ln.strip()
-              if not ln.startswith('{'):
-                  continue
+              raw = ''
+          items = []
+          txt = raw.strip()
+          # 形态 1：整体 JSON 数组
+          if txt.startswith('[') or txt.startswith('{'):
               try:
-                  it = json.loads(ln)
+                  doc = json.loads(txt)
+                  items = doc if isinstance(doc, list) else [doc]
               except Exception:
+                  items = []
+          # 形态 2：NDJSON 逐行
+          if not items:
+              for ln in raw.splitlines():
+                  ln = ln.strip()
+                  if ln.startswith('{'):
+                      try:
+                          items.append(json.loads(ln))
+                      except Exception:
+                          pass
+          errs = []
+          for it in items:
+              if not isinstance(it, dict):
                   continue
-              if str(it.get('severity', '')).upper() == 'ERROR':
-                  errs.append(it)
-          n = 0
-          for it in errs:
-              f = str(it.get('file', '?'))
-              pre = '/home/runner/work/md3Music/md3Music/'
-              if f.startswith(pre):
-                  f = f[len(pre):]
-              msg = str(it.get('message', '')).replace('\n', ' ')[:140]
-              print(f"::error file={f},line={it.get('line', 0)}::{msg}")
-              n += 1
-              if n >= 10:
-                  print(f'::error::ERROR 共 {len(errs)} 个，仅展示前 10，其余见日志')
-                  break
-          if n == 0:
-              print('::notice::machine 报告无 ERROR，失败另有原因，请看原始日志')
+              sev = str(it.get('severity', '')).upper()
+              loc = it.get('location', {}) if isinstance(it.get('location'), dict) else {}
+              f = str(it.get('file') or loc.get('file') or '?')
+              line = it.get('line') or loc.get('startLine') or 0
+              msg = str(it.get('message') or it.get('description') or '')
+              if 'ERROR' in sev or 'ERROR' in msg[:20]:
+                  errs.append((f, line, msg))
+          # 形态 3：纯文本 `error • msg • file:line:col`
+          if not errs:
+              for ln in raw.splitlines():
+                  m = re.match(r'\s*error\s+•\s+(.+?)\s+•\s+(.+?):(\d+):(\d+)\s*•', ln)
+                  if m:
+                      errs.append((m.group(2), int(m.group(3)), m.group(1)))
+          if errs:
+              for f, line, msg in errs[:10]:
+                  pre = '/home/runner/work/md3Music/md3Music/'
+                  if f.startswith(pre):
+                      f = f[len(pre):]
+                  print(f"::error file={f},line={line}::{msg[:140]}")
+              if len(errs) > 10:
+                  print(f'::error::ERROR 共 {len(errs)} 个，仅展示前 10')
+          else:
+              head = ' | '.join(raw.splitlines()[:3])[:200]
+              print(f'::notice::无 ERROR 可解析(exit={code})，报告头: {head}')
           PY
           exit $code
 
