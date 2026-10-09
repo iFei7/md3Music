@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 import '../data/models/album.dart';
@@ -74,7 +75,16 @@ class KugouProvider extends ChangeNotifier {
 
   KugouProvider({bool registerDeviceOnStart = true}) {
     _loadLocalSignedDays();
-    if (registerDeviceOnStart) _autoConnect();
+    if (registerDeviceOnStart) _scheduleAutoConnect();
+  }
+
+  /// C4 冷启动优化：把 _autoConnect（registerDevice + 登录态下的用户信息/
+  /// 签到/听歌时长同步）延后到首帧渲染之后触发，避免构造期的网络请求与
+  /// 首帧绘制抢占启动期资源。内部请求顺序不变，签到同步等功能不缺失。
+  void _scheduleAutoConnect() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoConnect();
+    });
   }
 
   Future<void> _loadLocalSignedDays() async {

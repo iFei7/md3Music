@@ -101,9 +101,18 @@ Future<(bool, bool, bool)> runBootstrap() async {
   // 内部自带失败兜底，不会中断启动。
   await DiagnosticLogger.instance.init();
   markStartup('diagnostics_ready');
+  // C2: intl 日期符号初始化（zh_CN）不再阻塞启动串行链路，后移到首帧之后
+  // 执行。首帧渲染路径已验证不使用 DateFormat：全仓 DateFormat 调用仅
+  // sign_in_calendar_page（签到日历页，非首帧）与 diagnostic_exporter
+  // （用户主动导出诊断时触发）两处，后移不影响首帧与后续页面的日期格式化。
   // 在runBootstrap注册，公开与私有入口都可记录真正的首帧时间。
   WidgetsBinding.instance.addPostFrameCallback((_) {
     markStartup('first_frame');
+    unawaited(
+      initializeDateFormatting('zh_CN').then((_) {
+        markStartup('date_format_ready');
+      }),
+    );
   });
 
   // 全局 ErrorWidget 兜底：release 版默认 ErrorWidget 是纯灰块，横竖屏切换时
@@ -116,9 +125,6 @@ Future<(bool, bool, bool)> runBootstrap() async {
     );
     return _FallbackErrorWidget(details: details);
   };
-
-  await initializeDateFormatting('zh_CN');
-  markStartup('date_format_ready');
 
   // P0: 无依赖的初始化并行执行，替代串行 await，缩短 runApp 前的阻塞时间。
   // 同时预取 SharedPreferences（onboarding / 用户协议检查复用）。
@@ -240,16 +246,30 @@ Future<(bool, bool, bool)> runBootstrap() async {
 Future<void> _restoreLyricPushPref() async {
   try {
     final settings = SettingsRepository();
+    // C1 性能优化：各偏好键的读取相互独立，先一次性并发发起全部读取
+    // （SharedPreferences.getInstance 内部有实例缓存，不会重复加载），
+    // 再按原有顺序依次 await 消费，替代原先约 12 次串行 await。
+    // 每个键的回落默认值仍由 SettingsRepository 各 getter 负责，语义不变。
+    final timeOffsetFuture = settings.getLyricTimeOffset();
+    final btLyricEnabledFuture = settings.getBluetoothLyricEnabled();
+    final lockScreenLyricEnabledFuture = settings.getLockScreenLyricEnabled();
+    final flymeAdvanceFuture = settings.getFlymeLyricAdvanceMs();
+    final flymeLyricEnabledFuture = settings.getFlymeStatusBarLyricEnabled();
+    final protocolFuture = settings.getLyricPushProtocol();
+    final translationFuture = settings.getLyricPushTranslation();
+    final romaFuture = settings.getLyricPushRoma();
+    final preferTranslationFuture = settings.getLyricPushPreferTranslation();
+
     // 逐字歌词时间偏移：加载到内存缓存（播放页每帧读取），默认 0
-    await settings.getLyricTimeOffset();
+    await timeOffsetFuture;
 
     // 蓝牙歌词（独立开关）
-    final btLyricEnabled = await settings.getBluetoothLyricEnabled();
+    final btLyricEnabled = await btLyricEnabledFuture;
     await DesktopLyricService.instance.setBluetoothLyricEnabled(btLyricEnabled);
 
     // 锁屏歌词（独立开关）：开启后歌词服务定时器运行以推送整首歌词
     // （样式全部跟随 AM 歌词偏好，与播放页 Zen 沉浸模式一致）
-    final lockScreenLyricEnabled = await settings.getLockScreenLyricEnabled();
+    final lockScreenLyricEnabled = await lockScreenLyricEnabledFuture;
     // ignore: discarded_futures
     DesktopLyricService.instance.setLockScreenLyricEnabled(
       lockScreenLyricEnabled,
@@ -258,18 +278,18 @@ Future<void> _restoreLyricPushPref() async {
     // 魅族 Flyme 状态栏歌词（独立开关）：冷启动/后台唤醒后无需进设置页即可继续推送
     // 顺序有讲究：先灌提前量再开开关。开启会立刻回灌当前行，
     // 若此时提前量还是 0，第一行就按未提前的时间轴显示，要等到下次翻行才对。
-    final flymeAdvance = await settings.getFlymeLyricAdvanceMs();
+    final flymeAdvance = await flymeAdvanceFuture;
     // ignore: discarded_futures
     DesktopLyricService.instance.setFlymeAdvanceMs(flymeAdvance);
-    final flymeLyricEnabled = await settings.getFlymeStatusBarLyricEnabled();
+    final flymeLyricEnabled = await flymeLyricEnabledFuture;
     // ignore: discarded_futures
     DesktopLyricService.instance.setFlymeStatusBarLyricEnabled(flymeLyricEnabled);
 
     // 实时歌词推送协议
-    final protocol = await settings.getLyricPushProtocol();
-    final translation = await settings.getLyricPushTranslation();
-    final roma = await settings.getLyricPushRoma();
-    final preferTranslation = await settings.getLyricPushPreferTranslation();
+    final protocol = await protocolFuture;
+    final translation = await translationFuture;
+    final roma = await romaFuture;
+    final preferTranslation = await preferTranslationFuture;
     // 记录各协议 enabled key（兼容 Kotlin restoreLyricon 读 lyricon_enabled）
     await settings.setLyriconEnabled(protocol == 'lyricon');
     await settings.setSuperLyricEnabled(protocol == 'super_lyric');
