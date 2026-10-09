@@ -128,6 +128,11 @@ class _FullPlayerState extends State<FullPlayer>
   // 桌面歌词状态监听：长按歌词按钮 toggle 后同步 icon
   late final VoidCallback _onDesktopLyricChanged;
   late final Animation<double> _artworkFadeAnimation;
+
+  /// 旧封面淡出动画：C8 优化，值恒等于 `1 - _artworkFadeAnimation.value`
+  /// （与旧 AnimatedBuilder 里手算的 oldOpacity 完全一致），供 FadeTransition
+  /// 直接驱动渲染层透明度，避免动画期间每帧重建整个封面子树。
+  late final Animation<double> _artworkFadeReverse;
   String? _previousArtworkUrl;
 
   /// 当前生效的 tab 结构（含封面 tab / 含评论 tab）。
@@ -579,6 +584,7 @@ class _FullPlayerState extends State<FullPlayer>
       parent: _artworkFadeController,
       curve: Curves.easeInOut,
     );
+    _artworkFadeReverse = ReverseAnimation(_artworkFadeAnimation);
     _artworkFadeController.value = 1.0;
     _zenController = AnimationController(
       duration: const Duration(milliseconds: 400),
@@ -1343,49 +1349,49 @@ class _FullPlayerState extends State<FullPlayer>
   }
 
   /// 封面淡入淡出：旧封面淡出 + 新封面淡入，400ms easeInOut。
+  ///
+  /// C8 优化：旧实现用 AnimatedBuilder 每帧重建整棵封面子树（含
+  /// PlayerArtworkImage / DepthCoverHost 的 widget 层重建），改为
+  /// FadeTransition 直接驱动 RenderAnimatedOpacity——动画期间零 widget
+  /// 重建，只更新渲染层透明度。透明度取值不变（value / 1-value）、
+  /// 层级不变（旧层在下、新层在上）、端点行为不变（0 与 1 时
+  /// RenderAnimatedOpacity 与 RenderOpacity 一样跳过 saveLayer）。
   Widget _buildCrossfadeArtwork(
     String? artworkUrl,
     ColorScheme colorScheme, {
     double iconSize = 48.0,
     String? fallbackFilePath,
   }) {
-    return AnimatedBuilder(
-      animation: _artworkFadeAnimation,
-      builder: (context, _) {
-        final oldOpacity = 1.0 - _artworkFadeAnimation.value;
-        final newOpacity = _artworkFadeAnimation.value;
-        return Stack(
-          children: [
-            if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
-              Positioned.fill(
-                child: Opacity(
-                  opacity: oldOpacity,
-                  child: PlayerArtworkImage(
-                    artworkUri: _previousArtworkUrl,
-                    fallbackFilePath: fallbackFilePath,
-                    fit: BoxFit.cover,
-                    iconSize: iconSize,
-                    backgroundColor: colorScheme.surfaceContainerHighest,
-                    iconColor: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            Positioned.fill(
-              child: Opacity(
-                opacity: newOpacity,
-                child: DepthCoverHost(
-                  artworkUri: artworkUrl,
-                  fallbackFilePath: fallbackFilePath,
-                  fit: BoxFit.cover,
-                  iconSize: iconSize,
-                  backgroundColor: colorScheme.surfaceContainerHighest,
-                  iconColor: colorScheme.onSurfaceVariant,
-                ),
+    return Stack(
+      children: [
+        if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
+          Positioned.fill(
+            child: FadeTransition(
+              opacity: _artworkFadeReverse,
+              child: PlayerArtworkImage(
+                artworkUri: _previousArtworkUrl,
+                fallbackFilePath: fallbackFilePath,
+                fit: BoxFit.cover,
+                iconSize: iconSize,
+                backgroundColor: colorScheme.surfaceContainerHighest,
+                iconColor: colorScheme.onSurfaceVariant,
               ),
             ),
-          ],
-        );
-      },
+          ),
+        Positioned.fill(
+          child: FadeTransition(
+            opacity: _artworkFadeAnimation,
+            child: DepthCoverHost(
+              artworkUri: artworkUrl,
+              fallbackFilePath: fallbackFilePath,
+              fit: BoxFit.cover,
+              iconSize: iconSize,
+              backgroundColor: colorScheme.surfaceContainerHighest,
+              iconColor: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ],
     );
   }
 

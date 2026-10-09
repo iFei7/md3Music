@@ -132,6 +132,11 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   // 封面 + 背景淡入淡出动画
   late final AnimationController _artworkFadeController;
   late final Animation<double> _artworkFadeAnimation;
+
+  /// 旧封面/旧背景淡出动画：C8 优化，值恒等于 `1 - _artworkFadeAnimation.value`
+  /// （与旧 AnimatedBuilder 里手算的 oldOpacity 完全一致），供 FadeTransition
+  /// 直接驱动渲染层透明度，避免动画期间每帧重建整个封面子树。
+  late final Animation<double> _artworkFadeReverse;
   String? _previousArtworkUrl;
 
   // 桌面歌词状态监听：长按歌词按钮 toggle 后同步 icon
@@ -286,6 +291,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
       parent: _artworkFadeController,
       curve: Curves.easeInOut,
     );
+    _artworkFadeReverse = ReverseAnimation(_artworkFadeAnimation);
     _artworkFadeController.value = 1.0;
     _zenController = AnimationController(
       duration: const Duration(milliseconds: 400),
@@ -1075,52 +1081,52 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   }
 
   /// 封面淡入淡出（AM 风格：白色占位）
+  ///
+  /// C8 优化：旧实现用 AnimatedBuilder 每帧重建整棵封面子树（含
+  /// PlayerArtworkImage / DepthCoverHost 的 widget 层重建），改为
+  /// FadeTransition 直接驱动 RenderAnimatedOpacity——动画期间零 widget
+  /// 重建，只更新渲染层透明度。透明度取值不变（value / 1-value）、
+  /// 层级不变（旧层在下、新层在上）、端点行为不变（0 与 1 时
+  /// RenderAnimatedOpacity 与 RenderOpacity 一样跳过 saveLayer）。
   Widget _buildCrossfadeArtwork(
     String? artworkUrl,
     ColorScheme colorScheme, {
     double iconSize = 48.0,
     String? fallbackFilePath,
   }) {
-    return AnimatedBuilder(
-      animation: _artworkFadeAnimation,
-      builder: (context, _) {
-        final oldOpacity = 1.0 - _artworkFadeAnimation.value;
-        final newOpacity = _artworkFadeAnimation.value;
-        return Stack(
-          children: [
-            if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
-              Positioned.fill(
-                child: Opacity(
-                  opacity: oldOpacity,
-                  child: PlayerArtworkImage(
-                    artworkUri: _previousArtworkUrl,
-                    fallbackFilePath: fallbackFilePath,
-                    fit: BoxFit.cover,
-                    iconSize: iconSize,
-                    backgroundColor: Colors.white12,
-                    iconColor: Colors.white54,
-                  ),
-                ),
-              ),
-            Positioned.fill(
-              child: Opacity(
-                opacity: newOpacity,
-                // 3D 深度封面宿主：开关关闭/生成未完成时内部回退为平面封面，
-                // 保留 AM 风格的白底占位与淡入效果；与动态封面互斥由
-                // _buildArtworkWithDynamicCover 的分流保证（有动态封面时不会走到这里）。
-                child: DepthCoverHost(
-                  artworkUri: artworkUrl,
-                  fallbackFilePath: fallbackFilePath,
-                  fit: BoxFit.cover,
-                  iconSize: iconSize,
-                  backgroundColor: Colors.white12,
-                  iconColor: Colors.white54,
-                ),
+    return Stack(
+      children: [
+        if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
+          Positioned.fill(
+            child: FadeTransition(
+              opacity: _artworkFadeReverse,
+              child: PlayerArtworkImage(
+                artworkUri: _previousArtworkUrl,
+                fallbackFilePath: fallbackFilePath,
+                fit: BoxFit.cover,
+                iconSize: iconSize,
+                backgroundColor: Colors.white12,
+                iconColor: Colors.white54,
               ),
             ),
-          ],
-        );
-      },
+          ),
+        Positioned.fill(
+          child: FadeTransition(
+            opacity: _artworkFadeAnimation,
+            // 3D 深度封面宿主：开关关闭/生成未完成时内部回退为平面封面，
+            // 保留 AM 风格的白底占位与淡入效果；与动态封面互斥由
+            // _buildArtworkWithDynamicCover 的分流保证（有动态封面时不会走到这里）。
+            child: DepthCoverHost(
+              artworkUri: artworkUrl,
+              fallbackFilePath: fallbackFilePath,
+              fit: BoxFit.cover,
+              iconSize: iconSize,
+              backgroundColor: Colors.white12,
+              iconColor: Colors.white54,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1162,86 +1168,73 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   /// 模糊背景淡入淡出（无 alpha 渐变；渐变移到 AppleLyricsView 歌词界面边界）。
   /// [sigma] 为用户可调模糊强度（0~30），0 时跳过滤镜直接渲染原图。
   /// 仅在动态流光关闭时被调用（调用点有条件判断）。
+  ///
+  /// C8 优化：同 [_buildCrossfadeArtwork]，AnimatedBuilder 换 FadeTransition，
+  /// 动画期间零 widget 重建；透明度取值（value / 1-value）与层级不变。
   Widget _buildCrossfadeBlurredBackground(
     String? artworkUrl, {
     String? fallbackFilePath,
     required double sigma,
   }) {
-    return AnimatedBuilder(
-      animation: _artworkFadeAnimation,
-      builder: (context, _) {
-        final oldOpacity = 1.0 - _artworkFadeAnimation.value;
-        final newOpacity = _artworkFadeAnimation.value;
-        return Stack(
-          children: [
-            if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
-              Positioned.fill(
-                child: Opacity(
-                  opacity: oldOpacity,
-                  child: RepaintBoundary(
-                    // sigma=0（用户调为不模糊）：跳过滤镜，省一层 GPU 合成
-                    child: sigma <= 0
-                        ? PlayerArtworkImage(
-                            artworkUri: _previousArtworkUrl,
-                            fallbackFilePath: fallbackFilePath,
-                            isFill: true,
-                            fit: BoxFit.cover,
-                            backgroundColor: Colors.black,
-                            iconColor: Colors.white24,
-                          )
-                        : ImageFiltered(
-                            // sigma 随设置变化（0~30）；RepaintBoundary 缓存的
-                            // 已模糊栅格只在 sigma 变更时重算一次，切歌动画
-                            // 仍只做 alpha 混合（保持 2026-09-01 性能优化结构）
-                            imageFilter: ImageFilter.blur(
-                              sigmaX: sigma,
-                              sigmaY: sigma,
-                            ),
-                            child: PlayerArtworkImage(
-                              artworkUri: _previousArtworkUrl,
-                              fallbackFilePath: fallbackFilePath,
-                              isFill: true,
-                              fit: BoxFit.cover,
-                              backgroundColor: Colors.black,
-                              iconColor: Colors.white24,
-                            ),
-                          ),
-                  ),
-                ),
-              ),
-            Positioned.fill(
-              child: Opacity(
-                opacity: newOpacity,
-                child: RepaintBoundary(
-                  child: sigma <= 0
-                      ? PlayerArtworkImage(
-                          artworkUri: artworkUrl,
-                          fallbackFilePath: fallbackFilePath,
-                          isFill: true,
-                          fit: BoxFit.cover,
-                          backgroundColor: Colors.black,
-                          iconColor: Colors.white24,
-                        )
-                      : ImageFiltered(
-                          imageFilter: ImageFilter.blur(
-                            sigmaX: sigma,
-                            sigmaY: sigma,
-                          ),
-                          child: PlayerArtworkImage(
-                            artworkUri: artworkUrl,
-                            fallbackFilePath: fallbackFilePath,
-                            isFill: true,
-                            fit: BoxFit.cover,
-                            backgroundColor: Colors.black,
-                            iconColor: Colors.white24,
-                          ),
-                        ),
-                ),
-              ),
+    final Widget oldImage = sigma <= 0
+        ? PlayerArtworkImage(
+            artworkUri: _previousArtworkUrl,
+            fallbackFilePath: fallbackFilePath,
+            isFill: true,
+            fit: BoxFit.cover,
+            backgroundColor: Colors.black,
+            iconColor: Colors.white24,
+          )
+        : ImageFiltered(
+            // sigma 随设置变化（0~30）；RepaintBoundary 缓存的
+            // 已模糊栅格只在 sigma 变更时重算一次，切歌动画
+            // 仍只做 alpha 混合（保持 2026-09-01 性能优化结构）
+            imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            child: PlayerArtworkImage(
+              artworkUri: _previousArtworkUrl,
+              fallbackFilePath: fallbackFilePath,
+              isFill: true,
+              fit: BoxFit.cover,
+              backgroundColor: Colors.black,
+              iconColor: Colors.white24,
             ),
-          ],
-        );
-      },
+          );
+    final Widget newImage = sigma <= 0
+        ? PlayerArtworkImage(
+            artworkUri: artworkUrl,
+            fallbackFilePath: fallbackFilePath,
+            isFill: true,
+            fit: BoxFit.cover,
+            backgroundColor: Colors.black,
+            iconColor: Colors.white24,
+          )
+        : ImageFiltered(
+            imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            child: PlayerArtworkImage(
+              artworkUri: artworkUrl,
+              fallbackFilePath: fallbackFilePath,
+              isFill: true,
+              fit: BoxFit.cover,
+              backgroundColor: Colors.black,
+              iconColor: Colors.white24,
+            ),
+          );
+    return Stack(
+      children: [
+        if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
+          Positioned.fill(
+            child: FadeTransition(
+              opacity: _artworkFadeReverse,
+              child: RepaintBoundary(child: oldImage),
+            ),
+          ),
+        Positioned.fill(
+          child: FadeTransition(
+            opacity: _artworkFadeAnimation,
+            child: RepaintBoundary(child: newImage),
+          ),
+        ),
+      ],
     );
   }
 

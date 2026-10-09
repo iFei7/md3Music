@@ -832,6 +832,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   // 保存防抖计时器：避免 positionStream 每 200ms 都写磁盘
   Timer? _saveDebounce;
 
+  // C3：音频初始化去重标记与首帧兜底计时器（见 [_scheduleAudioServiceInit]）
+  bool _audioInitStarted = false;
+  Timer? _audioInitFallbackTimer;
+
   PlayerProvider({
     Duration audioSourceLoadTimeout = kAudioSourceLoadDeadline,
     @visibleForTesting Duration? playbackDiagnosticSampleInterval,
@@ -845,7 +849,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
        _failedRecoveryBudget = failedRecoveryBudget ?? PlaybackRecoveryBudget(),
        _isAndroidPlatform = isAndroidForTest ?? Platform.isAndroid {
     WidgetsBinding.instance.addObserver(this);
-    _initAudioService();
+    _scheduleAudioServiceInit();
     // 监听自身变化检测切歌 → 推送 Lyricon（仅 enabled 时实际推送）
     addListener(_handleLyriconSongChange);
     // 同步「是否正在播放在线歌曲」到听歌等级服务（累计本地听歌时长用）
@@ -937,6 +941,36 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {
       // 取不到则留空，Rust 侧按 `dev` 配置与 system_version=9 兜底
     }
+  }
+
+  /// C3 冷启动优化：把 [_initAudioService]（音频引擎加载、约 8 次偏好读取、
+  /// 恢复上次播放）延后到首帧渲染之后触发，避免构造期重活与首帧绘制抢占
+  /// 启动期资源。模式同 [KugouProvider._scheduleAutoConnect]。
+  ///
+  /// 对外语义不变：[audioReady] 的等待者仍能等到完成，只是稍晚；
+  /// `_restoreState()` 恢复上次播放完整保留（只是延后）。
+  ///
+  /// 兜底：并非所有环境都会渲染首帧（flutter_test 的普通 `test()` /
+  /// `tester.runAsync`、极端 headless 唤醒）。挂一个 1 秒真实 Timer，
+  /// 首帧回调先到则去重跳过；首帧不来则照常启动，保证 [audioReady]
+  /// 等待方与 `notifyPlayerReady`（线控唤醒链）不被无限挂起。
+  void _scheduleAudioServiceInit() {
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _startAudioServiceInit(),
+    );
+    _audioInitFallbackTimer = Timer(
+      const Duration(seconds: 1),
+      _startAudioServiceInit,
+    );
+  }
+
+  void _startAudioServiceInit() {
+    if (_audioInitStarted) return;
+    _audioInitStarted = true;
+    _audioInitFallbackTimer?.cancel();
+    _audioInitFallbackTimer = null;
+    if (_isDisposed) return;
+    unawaited(_initAudioService());
   }
 
   Future<void> _initAudioService() async {
@@ -5995,6 +6029,12 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     _speedSubscription?.cancel();
     _sleepTimerTicker?.cancel();
     _sleepTimerTicker = null;
+    // C3：init 已延后到首帧后。若 dispose 早于启动（init 从未运行），
+    // 这里兜底完成 audioReady，保持旧版「无论初始化是否成功都完成」的
+    // 不变量（旧版 init 内部 dispose 抛异常被吞后照样走到 complete）。
+    _audioInitFallbackTimer?.cancel();
+    _audioInitFallbackTimer = null;
+    if (!_audioReadyCompleter.isCompleted) _audioReadyCompleter.complete();
     sleepTimerRemainingNotifier.dispose();
     positionNotifier.dispose();
     super.dispose();
