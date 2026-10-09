@@ -11,6 +11,17 @@ import 'package:flutter/widgets.dart';
 /// immersiveSticky 冲掉、导致状态栏重新显示。参照 kCoverFlowImmersiveActive 模式。
 final ValueNotifier<bool> kPlayerZenImmersiveActive = ValueNotifier<bool>(false);
 
+/// 封面流横屏沉浸相关状态（原定义于已下线的 coverflow 模块，因全屏播放器
+/// 退出时需感知「仍处于封面流沉浸」而保留在此）。
+///
+/// [kCoverFlowImmersive] 为用户请求语义，[kCoverFlowImmersiveActive] 为
+/// 「实际生效」状态；封面流 tab 下线后恒为 false，仅作为播放器侧系统栏
+/// 决策的兼容信号存在。
+final ValueNotifier<bool> kCoverFlowImmersive = ValueNotifier<bool>(false);
+
+/// 封面流页横屏「实际生效」的沉浸状态（封面流 tab 下线后恒为 false）。
+final ValueNotifier<bool> kCoverFlowImmersiveActive = ValueNotifier<bool>(false);
+
 /// 全屏播放器横屏沉浸（非 Zen）「实际生效」状态。
 ///
 /// 横屏下 [applyImmersiveForOrientation] 启用 immersiveSticky 隐藏系统栏；

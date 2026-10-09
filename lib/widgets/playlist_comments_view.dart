@@ -425,7 +425,7 @@ class _PlaylistCommentsViewState extends State<PlaylistCommentsView> {
     }
   }
 
-  /// 未登录时引导登录（与 channel_page 的既有交互保持一致）。
+  /// 未登录时引导登录（与其它列表页的既有交互保持一致）。
   Future<void> _promptLogin() async {
     final go = await showDialog<bool>(
       context: context,

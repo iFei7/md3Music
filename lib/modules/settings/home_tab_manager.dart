@@ -15,8 +15,6 @@ IconData homeTabIcon(String tabId) {
       return Icons.grid_view;
     case 'discover':
       return Icons.explore;
-    case 'coverflow':
-      return Icons.album;
     case 'library':
       return Icons.library_music;
     case 'favorites':
@@ -25,20 +23,10 @@ IconData homeTabIcon(String tabId) {
       return Icons.radio;
     case 'search':
       return Icons.search;
-    case 'charts':
-      return Icons.leaderboard;
-    case 'ip':
-      return Icons.edit_note;
     case 'recognition':
       return Icons.mic;
     case 'audiobook':
       return Icons.auto_stories;
-    case 'scene':
-      return Icons.landscape;
-    case 'channel':
-      return Icons.dynamic_feed;
-    case 'brush':
-      return Icons.swipe;
     case 'listen_together':
       return Icons.groups;
     case 'settings':

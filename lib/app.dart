@@ -34,13 +34,9 @@ import 'main.dart'
 import 'modules/discover/discover_page.dart';
 import 'modules/mcp/mcp_player_control.dart';
 import 'modules/mcp/mcp_service.dart';
-import 'modules/coverflow/coverflow_page.dart';
 import 'utils/landscape_immersive.dart';
-import 'modules/charts/charts_page.dart';
-import 'modules/ip/ip_page.dart';
 import 'modules/user/user_center_page.dart';
 import 'modules/user/favorites_page.dart';
-import 'modules/brush/brush_page.dart';
 import 'modules/listen_together/listen_together_page.dart';
 import 'modules/listen_together/widgets/guest_play_confirm_dialog.dart';
 
@@ -62,8 +58,6 @@ import 'modules/onboarding/user_agreement_page.dart';
 import 'modules/personal_fm/personal_fm_page.dart';
 import 'modules/audiobook/audiobook_page.dart';
 import 'modules/recognition/song_recognition_page.dart';
-import 'modules/scene/scene_page.dart';
-import 'modules/channel/channel_page.dart';
 import 'providers/dlna_provider.dart';
 import 'providers/favorites_provider.dart';
 import 'providers/kugou_provider.dart';
@@ -610,10 +604,6 @@ class _SystemUiUpdaterState extends State<_SystemUiUpdater>
   }
 
   void _updateSystemUi() {
-    // 封面流页横屏实际沉浸中：保留 SystemUiMode.immersiveSticky，
-    // 不覆盖系统栏模式（否则方向变化等 rebuild 会冲掉沉浸设置）。
-    // 用「实际生效」标志：用户请求沉浸但切到其他 tab/竖屏时仍需恢复系统栏样式。
-    if (kCoverFlowImmersiveActive.value) return;
     // 播放器 Zen 沉浸生效中：保留 immersiveSticky，不被主界面 edgeToEdge 覆盖
     // （否则亮屏 resumed 会把状态栏重新显示出来）。
     if (kPlayerZenImmersiveActive.value) return;
@@ -667,9 +657,6 @@ class _MainLayoutState extends State<_MainLayout>
   final GlobalKey<DesktopShellState> _desktopShellKey =
       GlobalKey<DesktopShellState>();
 
-  /// 上一次同步的沉浸状态，避免重复调用 SystemChrome（幂等去重）。
-  bool _immersiveSynced = false;
-
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
   bool _lyriconFailDialogShown = false;
 
@@ -707,9 +694,6 @@ class _MainLayoutState extends State<_MainLayout>
       case 'discover':
         page = const DiscoverPage();
         break;
-      case 'coverflow':
-        page = const CoverFlowPage();
-        break;
       case 'library':
         page = const LibraryPage();
         break;
@@ -723,27 +707,12 @@ class _MainLayoutState extends State<_MainLayout>
         // Tab 模式：SearchPage 自包悬浮宿主，一级形态自动退化交由 MiniPlayer 承载
         page = const SearchPage();
         break;
-      case 'charts':
-        page = const ChartsPage();
-        break;
-      case 'ip':
-        page = const IpPage();
-        break;
       case 'recognition':
         // Tab 模式：SongRecognitionPage 自包悬浮宿主，一级形态自动退化交由 MiniPlayer 承载
         page = const SongRecognitionPage();
         break;
       case 'audiobook':
         page = const AudiobookPage();
-        break;
-      case 'scene':
-        page = const ScenePage();
-        break;
-      case 'channel':
-        page = const ChannelPage();
-        break;
-      case 'brush':
-        page = const BrushPage();
         break;
       case 'listen_together':
         page = const ListenTogetherPage();
@@ -784,15 +753,6 @@ class _MainLayoutState extends State<_MainLayout>
           ),
           label: tab.label,
         );
-      case 'coverflow':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.album_outlined,
-            filledIcon: Icons.album,
-          ),
-          label: tab.label,
-        );
       case 'library':
         return NavigationDestination(
           icon: _AnimatedTabIcon(
@@ -829,24 +789,6 @@ class _MainLayoutState extends State<_MainLayout>
           ),
           label: tab.label,
         );
-      case 'charts':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.leaderboard_outlined,
-            filledIcon: Icons.leaderboard,
-          ),
-          label: tab.label,
-        );
-      case 'ip':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.edit_note_outlined,
-            filledIcon: Icons.edit_note,
-          ),
-          label: tab.label,
-        );
       case 'recognition':
         return NavigationDestination(
           icon: _AnimatedTabIcon(
@@ -862,33 +804,6 @@ class _MainLayoutState extends State<_MainLayout>
             selected: isSelected,
             outlinedIcon: Icons.auto_stories_outlined,
             filledIcon: Icons.auto_stories,
-          ),
-          label: tab.label,
-        );
-      case 'scene':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.landscape_outlined,
-            filledIcon: Icons.landscape,
-          ),
-          label: tab.label,
-        );
-      case 'channel':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.dynamic_feed_outlined,
-            filledIcon: Icons.dynamic_feed,
-          ),
-          label: tab.label,
-        );
-      case 'brush':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.swipe_outlined,
-            filledIcon: Icons.swipe,
           ),
           label: tab.label,
         );
@@ -949,12 +864,6 @@ class _MainLayoutState extends State<_MainLayout>
           selectedIcon: const Icon(Icons.explore),
           label: label,
         );
-      case 'coverflow':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.album_outlined),
-          selectedIcon: const Icon(Icons.album),
-          label: label,
-        );
       case 'library':
         return NavigationRailDestination(
           icon: const Icon(Icons.library_music_outlined),
@@ -979,18 +888,6 @@ class _MainLayoutState extends State<_MainLayout>
           selectedIcon: const Icon(Icons.search),
           label: label,
         );
-      case 'charts':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.leaderboard_outlined),
-          selectedIcon: const Icon(Icons.leaderboard),
-          label: label,
-        );
-      case 'ip':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.edit_note_outlined),
-          selectedIcon: const Icon(Icons.edit_note),
-          label: label,
-        );
       case 'recognition':
         return NavigationRailDestination(
           icon: const Icon(Icons.mic_none_outlined),
@@ -1001,24 +898,6 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationRailDestination(
           icon: const Icon(Icons.auto_stories_outlined),
           selectedIcon: const Icon(Icons.auto_stories),
-          label: label,
-        );
-      case 'scene':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.landscape_outlined),
-          selectedIcon: const Icon(Icons.landscape),
-          label: label,
-        );
-      case 'channel':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.dynamic_feed_outlined),
-          selectedIcon: const Icon(Icons.dynamic_feed),
-          label: label,
-        );
-      case 'brush':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.swipe_outlined),
-          selectedIcon: const Icon(Icons.swipe),
           label: label,
         );
       case 'listen_together':
@@ -1064,13 +943,6 @@ class _MainLayoutState extends State<_MainLayout>
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
-      case 'coverflow':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.album_outlined),
-          selectedIcon: const Icon(Icons.album),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
       case 'library':
         return NavigationDrawerDestination(
           icon: const Icon(Icons.library_music_outlined),
@@ -1099,20 +971,6 @@ class _MainLayoutState extends State<_MainLayout>
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
-      case 'charts':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.leaderboard_outlined),
-          selectedIcon: const Icon(Icons.leaderboard),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'ip':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.edit_note_outlined),
-          selectedIcon: const Icon(Icons.edit_note),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
       case 'recognition':
         return NavigationDrawerDestination(
           icon: const Icon(Icons.mic_none_outlined),
@@ -1124,27 +982,6 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationDrawerDestination(
           icon: const Icon(Icons.auto_stories_outlined),
           selectedIcon: const Icon(Icons.auto_stories),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'scene':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.landscape_outlined),
-          selectedIcon: const Icon(Icons.landscape),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'channel':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.dynamic_feed_outlined),
-          selectedIcon: const Icon(Icons.dynamic_feed),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'brush':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.swipe_outlined),
-          selectedIcon: const Icon(Icons.swipe),
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
@@ -1282,8 +1119,6 @@ class _MainLayoutState extends State<_MainLayout>
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _handleExternalMediaRequest(),
     );
-    // 监听封面流沉浸请求（长按切换 / 返回键恢复），变更时重算沉浸状态
-    kCoverFlowImmersive.addListener(_onCoverFlowImmersiveChanged);
     // 桌面外壳总开关：启动时载入持久化值 + 监听运行时切换（设置页开关）。
     // 载入前默认 false（常规响应式布局），载入/切换后触发整棵子树重建。
     kDesktopModeEnabled.addListener(_onDesktopModeChanged);
@@ -1308,28 +1143,11 @@ class _MainLayoutState extends State<_MainLayout>
     _exitResetTimer?.cancel();
     _exitController.dispose();
     LyriconProviderService.instance.removeListener(_onLyriconStateChanged);
-    kCoverFlowImmersive.removeListener(_onCoverFlowImmersiveChanged);
     kDesktopModeEnabled.removeListener(_onDesktopModeChanged);
     shortcutTabRequest.removeListener(_handleShortcutTabRequest);
     externalMediaRequest.removeListener(_handleExternalMediaRequest);
     WidgetsBinding.instance.removeObserver(this);
-    // 若 App 销毁时仍处于封面流沉浸，恢复系统栏（edgeToEdge，与主界面一致）
-    if (_immersiveSynced) {
-      _immersiveSynced = false;
-      kCoverFlowImmersiveActive.value = false;
-      SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.manual,
-        overlays: SystemUiOverlay.values,
-      );
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    }
     super.dispose();
-  }
-
-  /// 封面流沉浸请求变化（长按 / 返回键）→ 重算实际沉浸状态。
-  void _onCoverFlowImmersiveChanged() {
-    if (!mounted) return;
-    setState(() {});
   }
 
   /// 启动时从持久化载入桌面外壳开关，写入全局 [kDesktopModeEnabled]。
@@ -1481,7 +1299,7 @@ class _MainLayoutState extends State<_MainLayout>
   ///
   /// 二级路由页统一挂悬浮播放器（[SecondaryMiniPlayerHost]）：
   /// - 二级路由（`route.isFirst == false`）→ 宿主渲染悬浮播放栏；
-  /// - 页面若自身已包 [SecondaryMiniPlayerHost]（如 DiscoverPage / ChartsPage），
+  /// - 页面若自身已包 [SecondaryMiniPlayerHost]（如 DiscoverPage），
   ///   内层宿主检测到外层作用域后自动退化透传，不会双份；
   /// - 设置页除外：不挂播放栏，保持纯设置界面。
   ///
@@ -1493,9 +1311,6 @@ class _MainLayoutState extends State<_MainLayout>
     switch (tabId) {
       case 'discover':
         page = const DiscoverPage();
-        break;
-      case 'coverflow':
-        page = const CoverFlowPage();
         break;
       case 'library':
         page = const LibraryPage();
@@ -1509,26 +1324,11 @@ class _MainLayoutState extends State<_MainLayout>
       case 'search':
         page = const SearchPage();
         break;
-      case 'charts':
-        page = const ChartsPage();
-        break;
-      case 'ip':
-        page = const IpPage();
-        break;
       case 'recognition':
         page = const SongRecognitionPage();
         break;
       case 'audiobook':
         page = const AudiobookPage();
-        break;
-      case 'scene':
-        page = const ScenePage();
-        break;
-      case 'channel':
-        page = const ChannelPage();
-        break;
-      case 'brush':
-        page = const BrushPage();
         break;
       case 'listen_together':
         page = const ListenTogetherPage();
@@ -1772,22 +1572,9 @@ class _MainLayoutState extends State<_MainLayout>
         .map(_buildDrawerDestination)
         .toList();
 
-    // 封面流页横屏沉浸：由「当前 tab + 方向 + 用户长按请求」统一判定。
-    // 横屏默认显示 tab 栏，用户长按封面流页面进入沉浸（隐藏 tab 栏），
-    // 沉浸中按返回键恢复。判定与页面生命周期无关，
-    // 保证「在封面流页内竖屏→横屏旋转」也能正确进入/退出沉浸。
-    final safeIndex = _selectedIndex.clamp(0, visibleTabs.length - 1);
-    final currentTab = visibleTabs[safeIndex];
-    final immersive =
-        currentTab.id == 'coverflow' &&
-        MediaQuery.orientationOf(context) == Orientation.landscape &&
-        kCoverFlowImmersive.value;
-    _syncImmersiveMode(immersive);
-
     // 一级页面返回拦截：
     // 1) PopScope 拦截系统返回手势 / 物理返回键，canPop=false → 触发 onPopInvoked
-    // 2) 封面流沉浸中：返回键先恢复 tab 栏（退出沉浸），不弹退出确认
-    // 3) 否则双击返回回到手机桌面：首次返回 Toast 提示，3 秒内再按一次
+    // 2) 双击返回回到手机桌面：首次返回 Toast 提示，3 秒内再按一次
     //    走 moveTaskToBack 挂后台（不杀进程、不停播放器、不停本地 Rust 服务器）
     return PopScope(
       canPop: false,
@@ -1804,11 +1591,7 @@ class _MainLayoutState extends State<_MainLayout>
             (_desktopShellKey.currentState?.maybePop() ?? false)) {
           return;
         }
-        if (immersive) {
-          kCoverFlowImmersive.value = false;
-        } else {
-          _onBackPressedForExit();
-        }
+        _onBackPressedForExit();
       },
       child: AbsorbPointer(
         absorbing: _isExiting,
@@ -1872,45 +1655,19 @@ class _MainLayoutState extends State<_MainLayout>
                   _selectedIndex = index;
                 });
               },
-              hideNavigation: immersive,
-              body: _buildBody(context, visibleTabs, immersive),
-              compactBody: _buildBody(context, visibleTabs, immersive),
-              mediumBody: _buildBody(context, visibleTabs, immersive),
-              expandedBody: _buildBody(context, visibleTabs, immersive),
+              body: _buildBody(context, visibleTabs),
+              compactBody: _buildBody(context, visibleTabs),
+              mediumBody: _buildBody(context, visibleTabs),
+              expandedBody: _buildBody(context, visibleTabs),
             ),
           ),
         ),
     );
   }
 
-  /// 封面流横屏沉浸：同步「实际生效」标志并设置系统栏沉浸模式。
-  /// [immersive] 已由调用方按「tab + 方向 + 用户请求」算好；
-  /// 状态变化时调用，非沉浸时恢复默认系统栏。
-  void _syncImmersiveMode(bool immersive) {
-    if (_immersiveSynced == immersive) return;
-    _immersiveSynced = immersive;
-    kCoverFlowImmersiveActive.value = immersive;
-    // build 阶段不直接调用平台 channel，推迟到帧末执行
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (immersive) {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      } else {
-        // 退出沉浸回到主界面的 edgeToEdge（与 _SystemUiUpdater 一致），
-        // 先 manual 显式 show 一次：部分设备从 immersiveSticky 直接切
-        // edgeToEdge 时系统栏不会自动重新显示。
-        SystemChrome.setEnabledSystemUIMode(
-          SystemUiMode.manual,
-          overlays: SystemUiOverlay.values,
-        );
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      }
-    });
-  }
-
   Widget _buildBody(
     BuildContext context,
     List<TabItem> visibleTabs,
-    bool immersive,
   ) {
     // 切换方向：横屏（侧边导航栏）用上下淡入，竖屏（底部导航栏）用左右滑动
     final isLandscape =
@@ -1924,9 +1681,7 @@ class _MainLayoutState extends State<_MainLayout>
 
     // 主页（一级页面）与二级页面统一由悬浮播放器承载：整段 body 包进宿主后，
     // 开关开启时底部常驻 MiniPlayer 隐藏（下方 builder），避免两套播放器并存。
-    // 沉浸态（封面流全屏浏览）透传 immersive，宿主不渲染悬浮条，保持全屏无遮挡。
     return SecondaryMiniPlayerHost(
-      immersive: immersive,
       child: Column(
       children: [
         // 本地 API 服务器启动失败提示：在线内容全部不可用，但页面本身仍能渲染
@@ -1994,16 +1749,14 @@ class _MainLayoutState extends State<_MainLayout>
             ),
           ),
         ),
-        // 封面流页横屏沉浸：隐藏 MiniPlayer，实现全屏浏览
-        if (!immersive)
-          ValueListenableBuilder<bool>(
-            valueListenable: kSecondaryPlayerEnabled,
-            builder: (context, playerEnabled, _) => playerEnabled
-                // 悬浮播放器接管：主页同样由悬浮条承载（页面主体已被
-                // SecondaryMiniPlayerHost 包裹），隐藏底部常驻条避免两套并存。
-                ? const SizedBox.shrink()
-                : const MiniPlayer(),
-          ),
+        ValueListenableBuilder<bool>(
+          valueListenable: kSecondaryPlayerEnabled,
+          builder: (context, playerEnabled, _) => playerEnabled
+              // 悬浮播放器接管：主页同样由悬浮条承载（页面主体已被
+              // SecondaryMiniPlayerHost 包裹），隐藏底部常驻条避免两套并存。
+              ? const SizedBox.shrink()
+              : const MiniPlayer(),
+        ),
       ],
       ),
     );

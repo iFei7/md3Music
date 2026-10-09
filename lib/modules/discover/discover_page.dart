@@ -653,7 +653,7 @@ class _HomeDiscoverDetailPageState extends State<_HomeDiscoverDetailPage> {
   @override
   void dispose() {
     // 先摘监听再 dispose：controller 在 dispose 之后任何一次 scroll 通知都会
-    // 反过来摸已销毁的 controller（scene_audio_list_page 就漏了这一步）。
+    // 反过来摸已销毁的 controller（同类列表页曾漏了这一步）。
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();

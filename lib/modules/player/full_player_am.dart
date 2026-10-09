@@ -30,7 +30,6 @@ import '../../data/repositories/settings_repository.dart';
 import '../../services/depth_cover_service.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
-import '../coverflow/coverflow_page.dart';
 import '../listen_together/widgets/listen_together_pill.dart';
 import '../settings/equalizer_settings_page.dart';
 import '../sound/sounds_page.dart';

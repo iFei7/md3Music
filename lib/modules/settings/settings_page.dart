@@ -4445,9 +4445,6 @@ IconData _tabIconForId(String tabId) {
       return Icons.grid_view;
     case 'discover':
       return Icons.explore;
-    case 'coverflow':
-      // 与主页 tab 图标保持一致（见 app.dart 的 coverflow case）
-      return Icons.album;
     case 'library':
       return Icons.library_music;
     case 'favorites':
@@ -4456,23 +4453,10 @@ IconData _tabIconForId(String tabId) {
       return Icons.radio;
     case 'search':
       return Icons.search;
-    case 'charts':
-      return Icons.leaderboard;
-    case 'ip':
-      return Icons.edit_note;
     case 'recognition':
       return Icons.mic;
     case 'audiobook':
       return Icons.auto_stories;
-    case 'scene':
-      // 与主页 tab 图标保持一致（见 app.dart 的 scene case）
-      return Icons.landscape;
-    case 'channel':
-      // 与主页 tab 图标保持一致（见 app.dart 的 channel case）
-      return Icons.dynamic_feed;
-    case 'brush':
-      // 与主页 tab 图标保持一致（见 app.dart 的 brush case）
-      return Icons.swipe;
     case 'settings':
       // 与主页 tab 图标保持一致（见 app.dart 的 settings case）
       return Icons.settings;
