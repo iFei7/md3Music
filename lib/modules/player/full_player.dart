@@ -12,6 +12,9 @@ import '../../core/services/lyric_push_service.dart';
 import '../../core/services/equalizer_service.dart';
 import '../../core/services/spectrum_service.dart';
 import '../../core/services/usb_audio_service.dart';
+import '../../core/services/direct_pcm_service.dart';
+import '../../core/services/device_capabilities.dart';
+import '../../core/services/output_mode_coordinator.dart';
 import '../../widgets/depth_cover_host.dart';
 import '../../widgets/marquee_text.dart';
 import '../../core/utils/local_lyric_loader.dart';
@@ -40,6 +43,7 @@ import '../../services/kugou_api/comment_reply_target.dart';
 import 'comment_compose_sheet.dart';
 import 'comments_view.dart';
 import 'player_tab_layout.dart';
+import 'sleep_timer_sheet.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 import '../../widgets/apple_lyrics/apple_lyrics_view.dart';
@@ -1873,15 +1877,23 @@ class _FullPlayerState extends State<FullPlayer>
             const Spacer(),
             // MD3E v2: 顶部栏右侧 FLAC 质量徽章，点击复用 _showQualityDialog
             _buildQualityPill(playerProvider),
-            // 睡眠药丸：只订阅剩余时间独立通道，每秒走字不再触发整页重建
-            ValueListenableBuilder<Duration?>(
-              valueListenable: playerProvider.sleepTimerRemainingNotifier,
-              builder: (context, remaining, _) {
-                if (remaining == null) {
-                  return const SizedBox.shrink();
-                }
-                return _buildSleepTimerPill(playerProvider, remaining);
-              },
+            // 睡眠药丸：外层订阅 provider（模式开关，低频），内层只订阅剩余
+            // 时间通道（每秒走字），可见性判定已下沉到 buildSleepTimerPill
+            ListenableBuilder(
+              listenable: playerProvider,
+              builder: (context, _) => ValueListenableBuilder<Duration?>(
+                valueListenable: playerProvider.sleepTimerRemainingNotifier,
+                builder: (context, remaining, _) => buildSleepTimerPill(
+                  context: context,
+                  remaining: remaining,
+                  mode: playerProvider.sleepTimerMode,
+                  style: SleepTimerPillStyle.standardOf(context),
+                  onTap: () => showSleepTimerSheet(
+                    context: context,
+                    player: playerProvider,
+                  ),
+                ),
+              ),
             ),
             IconButton(
               icon: const Icon(Icons.more_horiz),
@@ -2458,6 +2470,12 @@ class _FullPlayerState extends State<FullPlayer>
   void _showVolumeDialog(PlayerProvider playerProvider) {
     final usbService = UsbAudioService.instance;
     final usbEnabled = usbService.lastStatus['enabled'] == true;
+    // Direct PCM 的 unity 音量档：AudioTrack 的 track volume 被固定为 1.0，
+    // 应用内滑块拖动不会有任何变化（PlayerProvider.setVolume 会拦下并改记 1.0）。
+    // 与其让用户对着一个失灵的滑块困惑，不如明确告知「用系统音量键」并给一个
+    // 一键关闭该档的出口。
+    final unityLocked =
+        !usbEnabled && OutputModeCoordinator.instance.forceUnityVolume;
     showDialog(
       context: context,
       builder: (context) {
@@ -2469,7 +2487,9 @@ class _FullPlayerState extends State<FullPlayer>
             constraints: const BoxConstraints(maxWidth: 280),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-              child: StatefulBuilder(
+              child: unityLocked
+                  ? _buildUnityVolumeNotice(context)
+                  : StatefulBuilder(
                 builder: (context, setState) {
                   final volume = usbEnabled
                       ? usbService.usbVolumePercent / 100
@@ -2548,6 +2568,55 @@ class _FullPlayerState extends State<FullPlayer>
           ),
         );
       },
+    );
+  }
+
+  /// unity 音量档下的音量面板：滑块失效，改为说明 + 一键关闭该档。
+  Widget _buildUnityVolumeNotice(BuildContext context) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Center(
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: cs.primary.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '系统音量控制中',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: cs.primary,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Icon(Icons.volume_up, size: 32, color: cs.primary),
+        const SizedBox(height: 8),
+        Text(
+          'Direct PCM（unity 音量）下应用音量固定为 100%，\n请用系统媒体音量键调节。',
+          textAlign: TextAlign.center,
+          style: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(color: cs.onSurfaceVariant),
+        ),
+        const SizedBox(height: 12),
+        TextButton(
+          onPressed: () async {
+            await DirectPcmService.instance
+                .setFeature(DirectPcmFeature.unityVolume, false);
+            if (context.mounted) Navigator.of(context).pop();
+          },
+          child: const Text('关闭 unity 音量，恢复应用内滑块'),
+        ),
+      ],
     );
   }
 
@@ -2838,7 +2907,10 @@ class _FullPlayerState extends State<FullPlayer>
                             active: player.isSleepTimerActive,
                             onTap: () {
                               Navigator.pop(sheetContext);
-                              _showSleepTimerSheet(rootContext, player);
+                              showSleepTimerSheet(
+                                context: rootContext,
+                                player: player,
+                              );
                             },
                           );
                         },
@@ -3197,148 +3269,6 @@ class _FullPlayerState extends State<FullPlayer>
         );
       },
     );
-  }
-
-  /// MD3E v2 睡眠定时药丸 — 复用 _buildQualityPill 样式。
-  Widget _buildSleepTimerPill(
-    PlayerProvider playerProvider,
-    Duration remaining,
-  ) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    return Material(
-      color: colorScheme.primaryContainer,
-      shape: const StadiumBorder(),
-      child: InkWell(
-        onTap: () => _showSleepTimerSheet(context, playerProvider),
-        customBorder: const StadiumBorder(),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.timer_outlined,
-                size: 14,
-                color: colorScheme.onPrimaryContainer,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                _formatSleepTime(remaining),
-                style: textTheme.labelMedium?.copyWith(
-                  color: colorScheme.onPrimaryContainer,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// MD3E v2 定时关闭选择面板。
-  /// MD3E v2 定时关闭面板：1–90 分钟连续滑杆（无节点）。
-  void _showSleepTimerSheet(BuildContext rootContext, PlayerProvider player) {
-    // 初始值：已有定时时显示剩余分钟数（clamp 到滑杆范围），否则默认 30
-    final initialMinutes = (player.sleepTimerRemaining?.inMinutes ?? 30).clamp(
-      1,
-      90,
-    );
-    showM3EModalBottomSheet(
-      context: rootContext,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (sheetCtx) {
-        // 拖动中的临时值必须声明在 StatefulBuilder 之外：
-        // builder 重跑会重建局部变量，声明在内部会导致拖动值被重置
-        double minutes = initialMinutes.toDouble();
-        return SafeArea(
-          child: StatefulBuilder(
-            builder: (context, setSheetState) {
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '定时关闭',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(rootContext).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${minutes.round()} 分钟',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(rootContext).textTheme.headlineSmall
-                          ?.copyWith(
-                            color: Theme.of(rootContext).colorScheme.primary,
-                            fontWeight: FontWeight.bold,
-                          ),
-                    ),
-                    M3ESlider(
-                      value: minutes,
-                      min: 1,
-                      max: 90,
-                      onChanged: (v) => setSheetState(() => minutes = v),
-                      onChangeEnd: (v) {
-                        final d = Duration(minutes: v.round().clamp(1, 90));
-                        player.setSleepTimer(d);
-                        showToast('将在 ${d.inMinutes} 分钟后自动暂停', long: true);
-                      },
-                    ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          '1 分钟',
-                          style: Theme.of(rootContext).textTheme.labelSmall
-                              ?.copyWith(
-                                color: Theme.of(
-                                  rootContext,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                        ),
-                        Text(
-                          '90 分钟',
-                          style: Theme.of(rootContext).textTheme.labelSmall
-                              ?.copyWith(
-                                color: Theme.of(
-                                  rootContext,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                        ),
-                      ],
-                    ),
-                    ListTile(
-                      leading: const Icon(Icons.cancel_outlined),
-                      title: const Text('关闭定时'),
-                      onTap: () {
-                        player.setSleepTimer(null);
-                        Navigator.pop(sheetCtx);
-                      },
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  /// MD3E v2 睡眠定时剩余时间格式：>=1h 显示 `XhYYm`，否则 `mm:ss`。
-  String _formatSleepTime(Duration d) {
-    if (d.inHours >= 1) {
-      final h = d.inHours;
-      final m = d.inMinutes.remainder(60);
-      return '${h}h${m.toString().padLeft(2, '0')}m';
-    }
-    final m = d.inMinutes;
-    final s = d.inSeconds.remainder(60);
-    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
   /// 弹出 DLNA 投屏二级菜单（设备选择 + 传输控制）。

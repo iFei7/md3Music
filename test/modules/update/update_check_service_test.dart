@@ -19,7 +19,7 @@ class _FakeSource implements ReleaseSource {
 
 ReleaseInfo _release(String tag) => ReleaseInfo.fromTag(
   tagName: tag,
-  htmlUrl: 'https://github.com/zzyoxml/md3Music/releases/tag/$tag',
+  htmlUrl: 'https://github.com/iFei7/md3Music/releases/tag/$tag',
 );
 
 /// 构造被测服务：注入假数据源、假当前版本、捕获提醒文案。

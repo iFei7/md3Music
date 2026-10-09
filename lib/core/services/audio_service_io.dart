@@ -328,6 +328,36 @@ class AudioService {
     await _applyNormalizationGainActive();
   }
 
+  /// 用 AutoMix 实测响度补上缺失的上游响度。
+  ///
+  /// **为什么需要**：真机上酷狗 `/song/url` 不返回响度字段，`_vnLufs` 恒为 null，
+  /// 「音量均衡」拿不到任何数据 → 相邻曲目的原始响度差原样透出，实测可达 13.7 dB
+  /// （用户报的「切歌时音量突然变大」）。AutoMix 分析每首歌时会实测响度，
+  /// 在分析完成时（起播后几秒）回调这里补上。
+  ///
+  /// **是否真的施加补偿由「音量均衡」开关决定**（[_currentNormalizationGainDb] 判
+  /// `_vnEnabled`），本方法只负责提供数据，不改变开关语义。
+  ///
+  /// 上游已提供权威响度时不覆盖；[measuredDbfs] 非法或不合理时静默忽略。
+  Future<void> applyMeasuredLoudness(double? measuredDbfs) async {
+    if (_vnLufs != null) return;
+    final lufs = VolumeNormalizationService.loudnessFromMeasuredDbfs(
+      measuredDbfs,
+    );
+    if (lufs == null) return;
+    _vnLufs = lufs;
+    // 只测了响度、没测真峰值 → 不做峰值钳制（calcGainDb 的 peakDb 传 null）
+    _vnPeakDb = null;
+    // ignore: avoid_print
+    print(
+      '[音量均衡] 采用 AutoMix 实测响度 ${lufs.toStringAsFixed(1)}dBFS '
+      '（上游未提供，参考 ${_vnReferenceLufs.toStringAsFixed(1)}）',
+    );
+    // 淡化中不会落音量（_applyNormalizationGainActive 自带 _crossfading 保护），
+    // 因此不会打断正在跑的交叉淡化斜坡。
+    await _applyNormalizationGainActive();
+  }
+
   /// 计算当前应生效的归一增益（dB）；未开启或无响度时为 0（旁路）。
   double _currentNormalizationGainDb() => _vnEnabled
       ? VolumeNormalizationService.calcGainDb(
@@ -795,6 +825,14 @@ class AudioService {
   int _crossfadePrepareGeneration = 0;
   Future<void> _crossfadePrepareTail = Future<void>.value();
 
+  /// 备用播放器当前的 automix 变速倍率（1.0 = 未变速）。
+  ///
+  /// 淡化结束后**不复位**：对拍成功后下一首整首都保持这个速率，
+  /// 中途复位会造成明显的速度跳变。由上层在手动切歌时调 [resetAutomixRate]。
+  double _preparedAutomixRate = 1.0;
+
+  double get preparedAutomixRate => _preparedAutomixRate;
+
   /// abortCrossfade 里 fire-and-forget 的 retire 链（pause→seek0→恢复音量）。
   /// prepareCrossfade 复用同一播放器前必须先等它收尾：否则迟到的
   /// setVolume(_userVolume) 可能落在 prepare 的 setVolume(0) 之后，
@@ -836,7 +874,9 @@ class AudioService {
     String? artUri,
     double? loudnessLufs,
     double? loudnessPeakDb,
+    double automixRate = 1.0,
   }) async {
+    _preparedAutomixRate = automixRate;
     final generation = ++_crossfadePrepareGeneration;
     final previous = _crossfadePrepareTail;
     final turn = Completer<void>();
@@ -871,7 +911,8 @@ class AudioService {
         return false;
       }
       await standby.setLoopMode(LoopMode.off);
-      await standby.setSpeed(speed);
+      // automix 变速叠加在用户倍速之上；两端都钳在 just_audio 支持的区间内
+      await standby.setSpeed((speed * automixRate).clamp(0.25, 4.0));
       if (generation != _crossfadePrepareGeneration) {
         await _releaseStaleCrossfadePreparation(standby);
         return false;
@@ -925,6 +966,14 @@ class AudioService {
   void discardPreparedCrossfade() {
     _crossfadePrepareGeneration++;
     _preparedPlayer = null;
+  }
+
+  /// 把活动播放器速率复位到用户速度（手动切歌 / 上一首 / 关闭 automix 时调用）。
+  Future<void> resetAutomixRate(double userSpeed) async {
+    _preparedAutomixRate = 1.0;
+    try {
+      await _activePlayer.setSpeed(userSpeed);
+    } catch (_) {}
   }
 
   /// 启动交叉淡化：备用播放器以 0 音量起播 → 新歌等功率渐入、旧歌等功率渐出

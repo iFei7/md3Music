@@ -12,6 +12,16 @@ class SettingsRepository {
   static const String _keyQualityWifi = 'settings_default_quality_wifi';
   static const String _keyQualityMobile = 'settings_default_quality_mobile';
   static const String _keyCacheSize = 'settings_cache_size';
+  // 「启动时自动播放」三件套：总开关 / 播放内容 / 是否连带推起播放页。
+  // 默认总开关关（不改启动行为）、播放内容为「继续上次播放」、推页开
+  // （一旦用户主动开了总开关，意图就是「进 App 就在听」，直接落在播放页
+  //   比停在首页更符合预期）。
+  static const String _keyStartupAutoPlay = 'settings_startup_auto_play';
+  static const String _keyStartupAutoPlaySource =
+      'settings_startup_auto_play_source';
+  static const String _keyStartupAutoPlayOpenPage =
+      'settings_startup_auto_play_open_page';
+  // 早期预留的死键，全仓无任何调用方，勿与上面的启动自动播放混用。
   static const String _keyAutoPlay = 'settings_auto_play';
   static const String _keyShowLyrics = 'settings_show_lyrics';
   static const String _keyAutoReceiveVip = 'settings_auto_receive_vip';
@@ -586,6 +596,21 @@ class SettingsRepository {
     );
   }
 
+  // ===== 自动混音（AutoMix）=====
+  static const String _keyAutomixEnabled = 'settings_automix_enabled';
+
+  /// 自动混音开关。仅在交叉淡化开启时有意义：关闭时按固定时长淡化，
+  /// 开启时按节拍/节奏密度自适应（分析不可用自动回退）。
+  Future<bool> getAutomixEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyAutomixEnabled) ?? false;
+  }
+
+  Future<void> setAutomixEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyAutomixEnabled, value);
+  }
+
   // ===== 音量均衡（响度归一） =====
   static const String _keyVolumeNormalizationEnabled = 'settings_volume_normalization_enabled';
   static const String _keyVolumeNormalizationLufs = 'settings_volume_normalization_lufs';
@@ -992,6 +1017,46 @@ class SettingsRepository {
   Future<void> setRestoreMemoryEnabled(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyRestoreMemory, value);
+  }
+
+  // ===== 启动时自动播放 =====
+  /// 「启动时自动播放」总开关，默认关闭。关闭时启动流程完全不参与播放
+  /// （不读音源、不发任何请求）。取值口径见 [getStartupAutoPlaySource]。
+  Future<bool> getStartupAutoPlayEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyStartupAutoPlay) ?? false;
+  }
+
+  Future<void> setStartupAutoPlayEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyStartupAutoPlay, value);
+  }
+
+  /// 启动时播放的内容，取 StartupAutoPlaySource.value
+  /// （'resume' / 'daily' / 'fmHeart' / 'fmExplore' / 'fmNiche'）。
+  /// 从未设置过时回退到「继续上次播放」——唯一不依赖登录、也不依赖网络的
+  /// 音源，作为默认值不会给新用户带来「突然发一堆网络请求」的意外。
+  /// 解析与越界回落由 StartupAutoPlaySource.fromValue 负责，
+  /// 旧版本遗留的非法值不会让启动流程崩掉。
+  Future<String> getStartupAutoPlaySource() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyStartupAutoPlaySource) ?? 'resume';
+  }
+
+  Future<void> setStartupAutoPlaySource(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyStartupAutoPlaySource, value);
+  }
+
+  /// 起播后是否自动推起完整播放页，默认开启。仅在总开关打开时才有意义。
+  Future<bool> getStartupAutoPlayOpenPage() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyStartupAutoPlayOpenPage) ?? true;
+  }
+
+  Future<void> setStartupAutoPlayOpenPage(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyStartupAutoPlayOpenPage, value);
   }
 
   // ===== 本地音乐评论区 =====

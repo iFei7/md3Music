@@ -2434,6 +2434,37 @@ class KugouApiClient {
     return CommentSendResult.fromJson(json);
   }
 
+  /// 删除自己在歌曲、专辑或歌单评论池中的评论（底层 `commentsv2/delcomment`）。
+  ///
+  /// [cid] 为评论列表返回的评论 id；[specialId] 必须取列表项的 `special_child_id`
+  /// （**不要**用发送评论响应里的 `special_id`）；只传 [mixsongid] 时服务端会先
+  /// 查一次歌曲评论自动反查 special_id，最可靠。删除楼中楼回复时必须传 [tid]
+  /// （所属顶层评论 id）。
+  ///
+  /// 与发送接口同样的硬约束：不自动重试（删除成功不可撤销）。
+  Future<CommentSendResult> deleteComment({
+    required String cid,
+    String? mixsongid,
+    String? specialId,
+    String? tid,
+    String resourceType = 'song',
+    String? code,
+  }) async {
+    final json = await _post(
+      KugouEndpoints.commentMusicDel,
+      queryParameters: compactQueryParams({
+        'cid': cid,
+        'mixsongid': mixsongid,
+        'special_id': specialId,
+        'tid': tid,
+        'resource_type': resourceType,
+        'code': code,
+      }),
+      noCache: true,
+    );
+    return CommentSendResult.fromJson(json);
+  }
+
   // ==================== Playlist ====================
 
   Future<KugouPlaylistCategory?> getPlaylist({
@@ -2811,6 +2842,43 @@ class KugouApiClient {
     } catch (e) {
       return null;
     }
+  }
+
+  // ==================== Home ====================
+
+  /// 首页「刷歌」推荐（/home/discover → POST /homediscoverrec/v1/client/home_discover_rec）。
+  ///
+  /// 这个接口**没有 page/offset 参数**，唯一的翻页依据是 [todayPlayNum]（今日已播
+  /// 歌曲数，服务端拿它排除已推过的歌）。所以「刷到第几」是调用方的责任：把已消费
+  /// 的歌曲总数原样传进来，列表才能一直往下走。
+  ///
+  /// [page] 是给无限滚动预留的探针位（上游文档没有它），为 null 时根本不会出现在
+  /// query 里，因此不传与传 null 完全等价。
+  ///
+  /// [noCache] 的理由与 [getPersonalFm] 相同且更硬：滑动与播放补货每一批的参数都
+  /// 不同，apicache 虽按 URL 缓存、命中率不高，但一旦命中就会把同一批歌原样回放，
+  /// 表现为「滑到底部反复给同一首歌」。留空则按默认 5 分钟 TTL 走。
+  Future<List<KugouSongDetail>?> getHomeDiscover({
+    int pagesize = 4,
+    int todayPlayNum = 0,
+    String recallType = 'song',
+    int? page,
+    bool noCache = false,
+  }) async {
+    final params = <String, dynamic>{
+      'pagesize': pagesize,
+      'today_play_num': todayPlayNum,
+      'recall_type': recallType,
+    };
+    if (page != null) params['page'] = page;
+
+    final json = await _get(
+      KugouEndpoints.homeDiscover,
+      queryParameters: params,
+      noCache: noCache,
+    );
+    if (json == null) return null;
+    return parseHomeDiscoverSongs(json);
   }
 
   // ==================== Scene ====================

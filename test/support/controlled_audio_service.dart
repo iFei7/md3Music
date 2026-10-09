@@ -117,6 +117,17 @@ class ControlledAudioService {
 
   void emitPosition(Duration position) => _positionState.add(position);
 
+  /// 模拟平台自然播完：同步 processingState 后在 playerStateStream 上吐一次
+  /// completed，走 PlayerProvider 真实的 `_handlePlaybackCompleted` 通路。
+  ///
+  /// 睡眠定时「播完本曲后停止」（`SleepTimerMode.endOfTrack`）测试依赖此方法。
+  void emitCompleted() {
+    _player.processingState = just_audio.ProcessingState.completed;
+    _playerState.add(
+      just_audio.PlayerState(_player.playing, just_audio.ProcessingState.completed),
+    );
+  }
+
   void setDiagnosticSnapshot({
     required Duration position,
     required Duration bufferedPosition,

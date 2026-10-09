@@ -117,6 +117,13 @@ android {
         }
     }
 
+    // MD3Music fork: JVM 单元测试里 android.util.Log 等框架桩默认会抛
+    // "Method i in android.util.Log not mocked"。DirectPcmController 等 fork 侧的
+    // 状态类在测试中需要走 setEnabled（内部会打日志），故开启返回默认值。
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
 }
 
 kotlin {

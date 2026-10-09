@@ -65,6 +65,7 @@ class MainActivity : FlutterActivity() {
         private var customPluginsEngine: FlutterEngine? = null
         @Volatile private var equalizerPlugin: EqualizerPlugin? = null
         @Volatile private var usbAudioPlugin: UsbAudioPlugin? = null
+        @Volatile private var directPcmPlugin: DirectPcmPlugin? = null
 
         /** Activity 与 headless 服务共用自定义播放插件，避免缺 handler 和重复USB接收器。 */
         @Synchronized
@@ -74,6 +75,7 @@ class MainActivity : FlutterActivity() {
             runCatching { spectrumPlugin?.cleanup() }
             runCatching { equalizerPlugin?.cleanup() }
             runCatching { usbAudioPlugin?.cleanup() }
+            runCatching { directPcmPlugin?.cleanup() }
             customPluginsEngine = engine
 
             EqualizerPlugin().also {
@@ -87,10 +89,16 @@ class MainActivity : FlutterActivity() {
                 it.register(engine)
                 usbAudioPlugin = it
             }
+            // 系统 Direct PCM 档（走系统 AudioTrack 的bit-perfect 路径，与 USB 独占互斥）
+            DirectPcmPlugin(context).also {
+                it.register(engine)
+                directPcmPlugin = it
+            }
             // Lite：MetadataWriterPlugin 已移除 —— 上游公开仓库从未提交该类源码，
             // 其 MethodChannel 在 Dart 侧也无任何调用点。
             ExternalEditorPlugin(context).register(engine)
             DiagnosticLogPlugin().register(engine)
+            AutomixAnalysisPlugin().register(engine)
         }
 
         @Synchronized
@@ -99,9 +107,11 @@ class MainActivity : FlutterActivity() {
             runCatching { spectrumPlugin?.cleanup() }
             runCatching { equalizerPlugin?.cleanup() }
             runCatching { usbAudioPlugin?.cleanup() }
+            runCatching { directPcmPlugin?.cleanup() }
             spectrumPlugin = null
             equalizerPlugin = null
             usbAudioPlugin = null
+            directPcmPlugin = null
             customPluginsEngine = null
         }
 

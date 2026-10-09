@@ -214,7 +214,7 @@ class _DesktopTwoPaneState extends State<DesktopTwoPane> {
                   onGenerateRoute: (s) => MaterialPageRoute(
                     settings: s,
                     builder: (_) =>
-                        widget.emptyState ?? const _DetailEmptyState(),
+                        widget.emptyState ?? const DetailEmptyState(),
                   ),
                 ),
               ),
@@ -227,23 +227,35 @@ class _DesktopTwoPaneState extends State<DesktopTwoPane> {
 }
 
 /// 详情面板空态占位（未选中任何项时）。
-class _DetailEmptyState extends StatelessWidget {
-  const _DetailEmptyState();
+///
+/// 桌面外壳（[DesktopTwoPane]）与设置页 Pad 双列共用。默认参数保持
+/// 桌面外壳原行为；[icon]/[text] 可定制文案与图标，[color] 覆盖背景色
+/// （null = surface；悬浮于壁纸之上的页面传 [Colors.transparent]）。
+class DetailEmptyState extends StatelessWidget {
+  const DetailEmptyState({
+    super.key,
+    this.icon = Icons.library_music_outlined,
+    this.text = '从左侧选择一项查看详情',
+    this.color,
+  });
+
+  final IconData icon;
+  final String text;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Material(
-      color: cs.surface,
+      color: color ?? cs.surface,
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.library_music_outlined,
-                size: 56, color: cs.onSurfaceVariant),
+            Icon(icon, size: 56, color: cs.onSurfaceVariant),
             const SizedBox(height: 12),
             Text(
-              '从左侧选择一项查看详情',
+              text,
               style: Theme.of(context)
                   .textTheme
                   .bodyLarge

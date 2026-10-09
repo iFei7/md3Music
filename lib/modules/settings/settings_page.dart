@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/services/usb_audio_service.dart';
 
+import '../../core/layout/adaptive_navigator.dart';
 import '../../core/layout/page_title_alignment.dart';
 import '../../core/layout/ui_density.dart';
 import '../../core/services/audio_service_io.dart';
@@ -29,6 +30,7 @@ import '../../core/services/lyricon_provider_service.dart';
 import '../../core/services/media_notification_service.dart';
 import '../../core/services/media_store_service.dart';
 import '../../core/services/spectrum_service.dart';
+import '../../core/services/startup_auto_play.dart';
 import '../../core/services/wakelock_service.dart';
 import '../../core/services/diagnostic_exporter.dart';
 import '../../core/layout/responsive_layout.dart';
@@ -54,6 +56,8 @@ import '../player/mini_player.dart';
 import '../sound/sounds_page.dart';
 import 'equalizer_settings_page.dart';
 import 'settings_group_heading.dart';
+import 'settings_navigation.dart';
+import 'settings_two_pane.dart';
 import 'settings_search_index.g.dart';
 
 /// CI compile-time version injection via --dart-define=APP_VERSION=X
@@ -126,6 +130,12 @@ class _SettingsPageState extends State<SettingsPage>
   bool _showQualityDowngradeToast = false;
   // 记忆播放状态开关（默认开启）：冷启动恢复上次播放的歌曲与进度
   bool _restoreMemoryEnabled = true;
+  // 启动时自动播放（默认关闭）。后两项仅在它打开时才有意义，故一并收在这里。
+  // 音源下拉直接用 StartupAutoPlaySource.values，保证与启动流程的解析口径
+  // （fromValue）永远一致，不会出现「设置页能选、启动时解析不认」的漂移。
+  bool _startupAutoPlayEnabled = false;
+  String _startupAutoPlaySource = 'resume';
+  bool _startupAutoPlayOpenPage = true;
   // 设备 Android SDK 版本（SuperLyricApi 3.4 要求 API 26+，低于此禁用该协议选项）
   int? _androidSdkVersion;
 
@@ -151,6 +161,8 @@ class _SettingsPageState extends State<SettingsPage>
   // 交叉淡化（自动切歌时上一首渐出与下一首渐入叠加）
   bool _crossfadeEnabled = false;
   int _crossfadeSeconds = SettingsRepository.kCrossfadeDefaultSeconds;
+  // 自动混音（AutoMix）：交叉淡化开启时按节拍对齐过渡点，由播放器侧实现消费
+  bool _automixEnabled = false;
   // 音量均衡（响度归一）
   bool _volumeNormalizationEnabled = false;
   double _volumeNormalizationLufs =
@@ -350,6 +362,7 @@ class _SettingsPageState extends State<SettingsPage>
     final pauseFadeEnabled = await _settingsRepository.getPauseFadeEnabled();
     final crossfadeEnabled = await _settingsRepository.getCrossfadeEnabled();
     final crossfadeSeconds = await _settingsRepository.getCrossfadeSeconds();
+    final automixEnabled = await _settingsRepository.getAutomixEnabled();
     final volumeNormalizationEnabled = await _settingsRepository
         .getVolumeNormalizationEnabled();
     final volumeNormalizationLufs = await _settingsRepository
@@ -382,6 +395,12 @@ class _SettingsPageState extends State<SettingsPage>
         .getShowQualityDowngradeToast();
     final restoreMemoryEnabled = await _settingsRepository
         .getRestoreMemoryEnabled();
+    final startupAutoPlayEnabled = await _settingsRepository
+        .getStartupAutoPlayEnabled();
+    final startupAutoPlaySource = await _settingsRepository
+        .getStartupAutoPlaySource();
+    final startupAutoPlayOpenPage = await _settingsRepository
+        .getStartupAutoPlayOpenPage();
     final closeLocalMusicComments = await _settingsRepository
         .getCloseLocalMusicComments();
     final updateReminderEnabled = await _settingsRepository
@@ -435,6 +454,7 @@ class _SettingsPageState extends State<SettingsPage>
       _pauseFadeEnabled = pauseFadeEnabled;
       _crossfadeEnabled = crossfadeEnabled;
       _crossfadeSeconds = crossfadeSeconds;
+      _automixEnabled = automixEnabled;
       _volumeNormalizationEnabled = volumeNormalizationEnabled;
       _volumeNormalizationLufs = volumeNormalizationLufs;
       _keepScreenOn = keepScreenOn;
@@ -444,6 +464,9 @@ class _SettingsPageState extends State<SettingsPage>
       _landscapeImmersiveEnabled = landscapeImmersiveEnabled;
       _showQualityDowngradeToast = showQualityDowngradeToast;
       _restoreMemoryEnabled = restoreMemoryEnabled;
+      _startupAutoPlayEnabled = startupAutoPlayEnabled;
+      _startupAutoPlaySource = startupAutoPlaySource;
+      _startupAutoPlayOpenPage = startupAutoPlayOpenPage;
       _closeLocalMusicComments = closeLocalMusicComments;
       // 启动时把音量均衡设置同步给播放器（当前曲目若已加载会自动重算）
       AudioService().setVolumeNormalization(
@@ -540,143 +563,326 @@ class _SettingsPageState extends State<SettingsPage>
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    // 是否处于二级页面（分类详情）
-    final inSubpage = _activeSection != null;
+    final level = _level;
+    final category = _categoryNamed(_activeSection);
 
     return PopScope(
-      // 二级页面时拦截系统返回键：先回到分类总览，而非直接退出设置页
-      canPop: !inSubpage,
+      // 非总览页时拦截系统返回键：逐级回退（三级→二级→总览），而非直接退出设置页
+      canPop: level == SettingsLevel.overview,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        _closeSection();
+        _onBackInvoked();
       },
       child: Scaffold(
         appBar: AppBar(
-          leading: inSubpage
-              ? IconButton(
+          leading: level == SettingsLevel.overview
+              ? null
+              : IconButton(
                   icon: const Icon(Icons.arrow_back),
-                  onPressed: _closeSection,
-                )
-              : null,
-          title: Text(inSubpage ? _activeSection! : '设置'),
-          // 统一对齐规则：设置页内部的分类详情本身即二级页面，一律居中；
+                  onPressed: level == SettingsLevel.subpage
+                      ? _closeSubpage
+                      : _closeSection,
+                ),
+          title: _buildAppBarTitle(level, category),
+          // 统一对齐规则：设置页内部的一/二/三级页面一律居中；
           // 总览页则按「是否为底部导航栏可直达的一级页面」判定
-          centerTitle: inSubpage || centerPageTitle(context, tabId: 'settings'),
+          centerTitle:
+              level != SettingsLevel.overview ||
+              centerPageTitle(context, tabId: 'settings'),
         ),
-        // 页面切换过渡：先淡出旧页 → 切换内容 → 再淡入新页（严格串行）。
-        // 淡入方向按页面层级区分：进入二级页自右侧推进、返回总览自左侧退回。
+        // 页面切换过渡：先淡出旧层 → 切换内容 → 再淡入新层（严格串行）。
+        // 淡入方向按层级方向区分：下钻自右侧推进、返回自左侧退回。
         //
         // 大屏「重组而非拉伸」：设置项是单栏内容，宽屏下约束到
         // [AppLayout.maxContentWidth] 并居中，多余宽度留白，避免整行 ListTile
         // 被无脑拉长（手机 <840dp 不触发，等同全宽，无回归）。
-        body: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: AppLayout.maxContentWidth,
-            ),
-            child: FadeTransition(
-              opacity: _sectionTransition,
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: Offset(inSubpage ? 0.03 : -0.03, 0),
-                  end: Offset.zero,
-                ).animate(_sectionTransition),
-                child: inSubpage
-                    ? ListView(
-                        children: [
-                          ListTileTheme(
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.lg,
-                            ),
-                            minVerticalPadding: AppSpacing.sm,
-                            iconColor: colorScheme.onSurfaceVariant,
-                            child: _buildActiveSectionContent(colorScheme),
-                          ),
-                          const Gap(AppSpacing.xxl),
-                        ],
-                      )
-                    : ListView(
-                        children: [
-                          _buildSearchField(colorScheme),
-                          if (_searchQuery.trim().isNotEmpty)
-                            ..._buildSearchResults(colorScheme)
-                          else
-                            ..._buildCategoryEntries(colorScheme),
-                          const Gap(AppSpacing.xxl),
-                        ],
+        body: _useTwoPane
+            ? _buildTwoPaneBody(colorScheme, level, category)
+            : _buildSinglePaneBody(colorScheme, level, category),
+      ),
+    );
+  }
+
+  /// 是否使用 Pad 双列布局（build 内求值一次，两个 body 方法共用）。
+  bool get _useTwoPane => settingsUseTwoPaneLayout(
+    padLayout: isPadLayout(context),
+    width: MediaQuery.sizeOf(context).width,
+    desktopLayout: isDesktopLayout(context),
+  );
+
+  /// 层级切换过渡包裹：淡出旧层 → 切内容 → 淡入新层（方向 _navForward）。
+  Widget _transitioned(Widget child) {
+    return FadeTransition(
+      opacity: _sectionTransition,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: Offset(_navForward ? 0.03 : -0.03, 0),
+          end: Offset.zero,
+        ).animate(_sectionTransition),
+        child: child,
+      ),
+    );
+  }
+
+  /// 单列 body（手机 / 窄屏 / 桌面外壳）：与改造前完全一致。
+  Widget _buildSinglePaneBody(
+    ColorScheme colorScheme,
+    SettingsLevel level,
+    SettingsCategory? category,
+  ) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: AppLayout.maxContentWidth,
+        ),
+        child: _transitioned(
+          level == SettingsLevel.overview
+              ? ListView(
+                  children: [
+                    _buildSearchField(colorScheme),
+                    if (_searchQuery.trim().isNotEmpty)
+                      ..._buildSearchResults(colorScheme)
+                    else
+                      ..._buildCategoryEntries(colorScheme),
+                    const Gap(AppSpacing.xxl),
+                  ],
+                )
+              : ListView(
+                  children: [
+                    ListTileTheme(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.lg,
                       ),
-              ),
-            ),
-          ),
+                      minVerticalPadding: AppSpacing.sm,
+                      iconColor: colorScheme.onSurfaceVariant,
+                      child: _buildSectionContent(
+                        level: level,
+                        category: category,
+                        colorScheme: colorScheme,
+                      ),
+                    ),
+                    const Gap(AppSpacing.xxl),
+                  ],
+                ),
         ),
       ),
     );
   }
 
-  /// 当前激活的二级页面标题；null 表示分类总览页
+  /// Pad 双列 body：左列分类/搜索列表常驻，右列显示当前选中层内容。
+  /// 总览态右列复用 DetailEmptyState（transparent：不遮挡壁纸背景）；
+  /// 过渡动画只作用于右列（左列静态）。
+  Widget _buildTwoPaneBody(
+    ColorScheme colorScheme,
+    SettingsLevel level,
+    SettingsCategory? category,
+  ) {
+    return SettingsTwoPaneBody(
+      master: ListView(
+        children: [
+          _buildSearchField(colorScheme),
+          if (_searchQuery.trim().isNotEmpty)
+            ..._buildSearchResults(colorScheme)
+          else
+            ..._buildCategoryEntries(colorScheme),
+          const Gap(AppSpacing.xxl),
+        ],
+      ),
+      detail: _transitioned(
+        level == SettingsLevel.overview
+            ? const DetailEmptyState(
+                icon: Icons.tune,
+                text: '从左侧选择分类进行配置',
+                color: Colors.transparent,
+              )
+            : ListView(
+                children: [
+                  ListTileTheme(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.lg,
+                    ),
+                    minVerticalPadding: AppSpacing.sm,
+                    iconColor: colorScheme.onSurfaceVariant,
+                    child: _buildSectionContent(
+                      level: level,
+                      category: category,
+                      colorScheme: colorScheme,
+                    ),
+                  ),
+                  const Gap(AppSpacing.xxl),
+                ],
+              ),
+      ),
+    );
+  }
+
+  /// 当前激活的二级分类标题；null 表示分类总览页
   String? _activeSection;
+
+  /// 当前激活的三级子页标题；null 表示停留在二级页
+  String? _activeSubpage;
+
+  /// 本次层级切换的过渡方向：true = 下钻（新页自右侧推进），false = 返回
+  bool _navForward = true;
 
   /// 页面切换过渡控制器（fade 0→1，见 initState）
   late AnimationController _sectionTransition;
 
-  /// 进入分类二级页面：先快速淡出总览，切换内容后再淡入（严格串行）
-  void _openSection(String title) {
-    if (_sectionTransition.isAnimating || _activeSection == title) return;
-    // 已在二级页面（理论上不会发生，防御性处理）：直接切换内容
-    if (_activeSection != null) {
-      setState(() => _activeSection = title);
-      return;
+  /// 当前所在层级
+  SettingsLevel get _level => resolveSettingsLevel(
+    category: _activeSection,
+    subpage: _activeSubpage,
+  );
+
+  /// 按标题取分类；未命中返回 null（状态与模型不同步时降级为空内容）
+  SettingsCategory? _categoryNamed(String? title) {
+    if (title == null) return null;
+    for (final category in _categories) {
+      if (category.title == title) return category;
     }
+    return null;
+  }
+
+  /// 设置页内层级切换：先快速淡出当前层，替换内容后再淡入（严格串行）。
+  /// [forward] 决定淡入时的滑动方向：下钻自右侧推进、返回自左侧退回。
+  void _navigateTo({
+    required String? category,
+    required String? subpage,
+    required bool forward,
+  }) {
+    if (_sectionTransition.isAnimating) return;
+    if (_activeSection == category && _activeSubpage == subpage) return;
+    _navForward = forward;
     // 淡出更快（90ms），淡入稍长（160ms）带层次，整体跟手
     _sectionTransition.duration = const Duration(milliseconds: 90);
     _sectionTransition.reverse().whenComplete(() {
       if (!mounted) return;
-      setState(() => _activeSection = title);
+      setState(() {
+        _activeSection = category;
+        _activeSubpage = subpage;
+      });
       _sectionTransition.duration = const Duration(milliseconds: 160);
       _sectionTransition.forward();
     });
   }
 
-  /// 返回分类总览：先快速淡出二级页，切换回总览后再淡入（严格串行）
-  void _closeSection() {
-    if (_sectionTransition.isAnimating || _activeSection == null) return;
-    _sectionTransition.duration = const Duration(milliseconds: 90);
-    _sectionTransition.reverse().whenComplete(() {
-      if (!mounted) return;
-      setState(() => _activeSection = null);
-      _sectionTransition.duration = const Duration(milliseconds: 160);
-      _sectionTransition.forward();
-    });
+  /// 进入分类二级页面
+  void _openSection(String title) =>
+      _navigateTo(category: title, subpage: null, forward: true);
+
+  /// 进入三级子页（保留当前分类）
+  void _openSubpage(String title) =>
+      _navigateTo(category: _activeSection, subpage: title, forward: true);
+
+  /// 三级子页返回二级页
+  void _closeSubpage() =>
+      _navigateTo(category: _activeSection, subpage: null, forward: false);
+
+  /// 返回分类总览
+  void _closeSection() =>
+      _navigateTo(category: null, subpage: null, forward: false);
+
+  /// 系统返回键：按层级逐级回退（三级→二级→总览）；总览页交还系统处理
+  void _onBackInvoked() {
+    final target = settingsBackTarget(
+      category: _activeSection,
+      subpage: _activeSubpage,
+    );
+    if (target == null) return;
+    _navigateTo(
+      category: target.category,
+      subpage: target.subpage,
+      forward: false,
+    );
   }
 
-  /// 分类条目：图标 + 标题 + 二级页面内容构建器
-  List<(String, IconData, Widget Function(ColorScheme))> get _categories => [
-    ('外观', Icons.palette_outlined, _buildAppearanceSection),
-    ('播放页样式', Icons.music_note_outlined, _buildPlayerStyleSection),
-    ('歌词', Icons.lyrics_outlined, _buildLyricSection),
-    ('播放', Icons.play_circle_outline, _buildPlaybackSection),
-    (
-      'USB 独占',
-      Icons.usb,
-      (colorScheme) => UsbExclusiveSection(
+  /// 分类条目：图标 + 标题 + 副标题 + 内容构建器。
+  ///
+  /// Lite 说明：上游按「播放页样式」等分类下钻三级子页，但那些子页绑定的是上游
+  /// 自己的 section 构建器（含车机模式 / 锁屏歌词 / MV 弹幕等 lite 已下线功能），
+  /// 因此这里只登记二级 body，不造三级入口——导航层级模型与双列布局已就位，
+  /// 后续真要下钻时给 SettingsCategory 补 subpages 即可，无需再改导航层。
+  List<SettingsCategory> get _categories => [
+    SettingsCategory(
+      title: '外观',
+      icon: Icons.palette_outlined,
+      description: '主题、字体与界面背景',
+      body: _buildAppearanceSection,
+    ),
+    SettingsCategory(
+      title: '播放页样式',
+      icon: Icons.music_note_outlined,
+      description: '播放页风格与视觉效果',
+      body: _buildPlayerStyleSection,
+    ),
+    SettingsCategory(
+      title: '歌词',
+      icon: Icons.lyrics_outlined,
+      description: '歌词推送与设备显示',
+      body: _buildLyricSection,
+    ),
+    SettingsCategory(
+      title: '播放',
+      icon: Icons.play_circle_outline,
+      description: '音质、音效与播放行为',
+      body: _buildPlaybackSection,
+    ),
+    SettingsCategory(
+      title: 'USB 独占',
+      icon: Icons.usb,
+      description: '独占输出与设备状态',
+      body: (colorScheme) => UsbExclusiveSection(
         onAutoPause: () => context.read<PlayerProvider>().pause(),
       ),
     ),
-    ('桌面快捷方式', Icons.bolt_outlined, _buildDesktopShortcutSection),
-    ('缓存与数据', Icons.storage_outlined, _buildCacheSection),
-    ('关于', Icons.info_outline, _buildAboutSection),
+    SettingsCategory(
+      title: '桌面快捷方式',
+      icon: Icons.bolt_outlined,
+      description: '应用图标长按快捷入口',
+      body: _buildDesktopShortcutSection,
+    ),
+    SettingsCategory(
+      title: '缓存与数据',
+      icon: Icons.storage_outlined,
+      description: '本地服务与数据维护',
+      body: _buildCacheSection,
+    ),
+    SettingsCategory(
+      title: '关于',
+      icon: Icons.info_outline,
+      description: '版本、帮助与许可',
+      body: _buildAboutSection,
+    ),
     // 可选扩展：私有构建注入的额外分类（默认无）
-    ...?SettingsPage.extraCategories,
+    ...?SettingsPage.extraCategories?.map(settingsCategoryFromLegacy),
   ];
 
-  /// 二级页面内容：根据 _activeSection 匹配分类构建器
-  Widget _buildActiveSectionContent(ColorScheme colorScheme) {
-    for (final (title, _, builder) in _categories) {
-      if (title == _activeSection) {
-        return builder(colorScheme);
-      }
+  /// 二级/三级页面内容。
+  /// 三级：直接渲染子页构建器；二级：leading → 三级入口列表 → body。
+  Widget _buildSectionContent({
+    required SettingsLevel level,
+    required SettingsCategory? category,
+    required ColorScheme colorScheme,
+  }) {
+    if (category == null) return const SizedBox.shrink();
+    if (level == SettingsLevel.subpage) {
+      final subpage = category.subpageNamed(_activeSubpage);
+      if (subpage != null) return subpage.builder(colorScheme);
     }
-    return const SizedBox.shrink();
+    final leading = category.leading;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (leading != null) leading(colorScheme),
+        for (var i = 0; i < category.subpages.length; i++)
+          _buildSubpageEntry(
+            category.subpages[i],
+            colorScheme,
+            first: leading == null && i == 0,
+          ),
+        if (category.body != null) category.body!(colorScheme),
+      ],
+    );
   }
 
   /// 分类总览条目列表
@@ -684,38 +890,62 @@ class _SettingsPageState extends State<SettingsPage>
     final categories = _categories;
     return [
       _buildGroupLabel('界面与显示', colorScheme, first: true),
-      for (final (title, icon, _) in categories.take(3))
-        _buildCategoryEntry(title, icon, colorScheme),
+      for (final c in categories.take(3)) _buildCategoryEntry(c, colorScheme),
       _buildGroupLabel('播放与音频', colorScheme),
-      for (final (title, icon, _) in categories.skip(3).take(2))
-        _buildCategoryEntry(title, icon, colorScheme),
+      for (final c in categories.skip(3).take(2))
+        _buildCategoryEntry(c, colorScheme),
       _buildGroupLabel('应用与管理', colorScheme),
-      for (final (title, icon, _) in categories.skip(5).take(5))
-        _buildCategoryEntry(title, icon, colorScheme),
+      for (final c in categories.skip(5).take(5))
+        _buildCategoryEntry(c, colorScheme),
       if (categories.length > 10) ...[
         _buildGroupLabel('更多设置', colorScheme),
-        for (final (title, icon, _) in categories.skip(10))
-          _buildCategoryEntry(title, icon, colorScheme),
+        for (final c in categories.skip(10))
+          _buildCategoryEntry(c, colorScheme),
       ],
     ];
   }
 
+  /// 分类条目（一级 → 二级）
   Widget _buildCategoryEntry(
-    String title,
-    IconData icon,
+    SettingsCategory category,
     ColorScheme colorScheme,
   ) {
-    const descriptions = {
-      '外观': '主题、字体与界面背景',
-      '播放页样式': '播放页风格与视觉效果',
-      '歌词': '歌词推送与设备显示',
-      '播放': '音质、音效与播放行为',
-      'USB 独占': '独占输出与设备状态',
-      '桌面快捷方式': '应用图标长按快捷入口',
-      '缓存与数据': '本地服务与数据维护',
-      '关于': '版本、帮助与许可',
-    };
-    final description = descriptions[title];
+    return _buildNavEntryTile(
+      icon: category.icon,
+      title: category.title,
+      subtitle: category.description.isEmpty ? null : category.description,
+      colorScheme: colorScheme,
+      onTap: () => _openSection(category.title),
+    );
+  }
+
+  /// 三级子页入口条目（二级 → 三级）
+  Widget _buildSubpageEntry(
+    SettingsSubpage subpage,
+    ColorScheme colorScheme, {
+    required bool first,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(top: first ? AppSpacing.sm : 0),
+      child: _buildNavEntryTile(
+        icon: subpage.icon,
+        title: subpage.title,
+        subtitle: subpage.description,
+        colorScheme: colorScheme,
+        onTap: () => _openSubpage(subpage.title),
+      ),
+    );
+  }
+
+  /// 导航条目共用外观：图标 + 标题 + 副标题 + 右侧箭头（分类/子页入口一致）。
+  /// MD3：触控目标由 ListTile 保证 ≥48dp；间距走 AppSpacing（4dp 网格）。
+  Widget _buildNavEntryTile({
+    required IconData icon,
+    required String title,
+    required String? subtitle,
+    required ColorScheme colorScheme,
+    required VoidCallback onTap,
+  }) {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       minVerticalPadding: AppSpacing.md,
@@ -726,10 +956,10 @@ class _SettingsPageState extends State<SettingsPage>
           context,
         ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
       ),
-      subtitle: description == null
+      subtitle: subtitle == null
           ? null
           : Text(
-              description,
+              subtitle,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -739,7 +969,39 @@ class _SettingsPageState extends State<SettingsPage>
         size: 20,
         color: colorScheme.onSurfaceVariant,
       ),
-      onTap: () => _openSection(title),
+      onTap: onTap,
+    );
+  }
+
+  /// AppBar 标题：总览固定「设置」；二级为分类名；三级为「分类名 + 子页名」双行。
+  /// 三级用 MD3 顶栏「标题 + 副标题」形态：上方小字保留分类上下文。
+  Widget _buildAppBarTitle(SettingsLevel level, SettingsCategory? category) {
+    if (level == SettingsLevel.overview) return const Text('设置');
+    final title = category?.title ?? _activeSection ?? '';
+    final subpage = category?.subpageNamed(_activeSubpage);
+    if (level != SettingsLevel.subpage || subpage == null) {
+      return Text(title, maxLines: 1, overflow: TextOverflow.ellipsis);
+    }
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        Text(
+          subpage.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.titleMedium,
+        ),
+      ],
     );
   }
 
@@ -2345,6 +2607,70 @@ class _SettingsPageState extends State<SettingsPage>
             context.read<PlayerProvider>().setRestoreMemoryEnabled(value);
           },
         ),
+        // search: 自动播放 启动 开机 冷启动 一进来 就播
+        SwitchListTile(
+          title: const Text('启动时自动播放'),
+          subtitle: const Text('打开应用后自动开始播放音乐；默认关闭'),
+          value: _startupAutoPlayEnabled,
+          onChanged: (value) {
+            HapticFeedback.lightImpact();
+            setState(() => _startupAutoPlayEnabled = value);
+            _settingsRepository.setStartupAutoPlayEnabled(value);
+          },
+        ),
+        // 以下两项是上面那个开关的从属项：关着时它们没有意义，直接隐藏
+        if (_startupAutoPlayEnabled) ...[
+          // search: 播放内容 音源 每日推荐 私人FM 红心 探索 小众 继续上次 续播 电台
+          ListTile(
+            title: const Text('播放内容'),
+            subtitle: M3EDropdownMenu<String>(
+              items: [
+                for (final s in StartupAutoPlaySource.values)
+                  M3EDropdownItem(
+                    label: s.label,
+                    value: s.value,
+                    selected: _startupAutoPlaySource == s.value,
+                    // 「继续上次播放」靠记忆播放状态才有记录可续，关着它
+                    // 选了也只会静默不动 —— 置灰并说明原因，别让用户白等
+                    disabled: s.value == 'resume' && !_restoreMemoryEnabled,
+                  ),
+              ],
+              singleSelect: true,
+              // 单选下关闭 chip 动画，当前值才会渲染为可省略的纯文本
+              showChipAnimation: false,
+              fieldStyle: const M3EDropdownFieldStyle(
+                hintText: '选择启动时播放的内容',
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+              onSelectionChanged: (selected) {
+                // 单选下再次点击已选中项会被取消选中：强制重建以恢复原值
+                if (selected.isEmpty) {
+                  setState(() {});
+                  return;
+                }
+                final value = selected.first.value;
+                if (value == _startupAutoPlaySource) return;
+                HapticFeedback.lightImpact();
+                setState(() => _startupAutoPlaySource = value);
+                _settingsRepository.setStartupAutoPlaySource(value);
+              },
+            ),
+            trailing: _startupAutoPlaySource == 'resume' && !_restoreMemoryEnabled
+                ? _statusText('需开启记忆播放状态')
+                : null,
+          ),
+          // search: 自动打开 播放页 全屏 推起 进播放页 启动
+          SwitchListTile(
+            title: const Text('自动打开播放页'),
+            subtitle: const Text('开始播放后自动进入完整播放页'),
+            value: _startupAutoPlayOpenPage,
+            onChanged: (value) {
+              HapticFeedback.lightImpact();
+              setState(() => _startupAutoPlayOpenPage = value);
+              _settingsRepository.setStartupAutoPlayOpenPage(value);
+            },
+          ),
+        ],
         // search: 淡入淡出 渐变 音量
         SwitchListTile(
           title: const Text('暂停淡入淡出'),
@@ -2399,6 +2725,25 @@ class _SettingsPageState extends State<SettingsPage>
               },
             ),
             trailing: _statusText('$_crossfadeSeconds 秒'),
+          ),
+        // search: 自动混音 AutoMix 无缝过渡 对拍 节拍 变速 混音 DJ
+        if (_crossfadeEnabled)
+          SwitchListTile(
+            title: const Text('自动混音（AutoMix）'),
+            subtitle: const Text(
+              '按节拍对齐过渡点、按节奏自适应时长，BPM 接近时自动对拍',
+            ),
+            value: _automixEnabled,
+            onChanged: (value) {
+              HapticFeedback.lightImpact();
+              setState(() {
+                _automixEnabled = value;
+              });
+              _settingsRepository.setAutomixEnabled(value);
+              // ignore: use_build_context_synchronously
+              // refreshAutomixSettings() 在 PlayerProvider 中提供
+              context.read<PlayerProvider>().refreshAutomixSettings();
+            },
           ),
         // 「失去音频焦点时」是下面这个开关的从属策略：忽略焦点关闭时才有意义
         // search: 音频焦点 忽略焦点 同时播放 共存 不被打断 焦点

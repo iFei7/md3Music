@@ -12,6 +12,7 @@ import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
+import '../../widgets/m3e_sort_sheet.dart';
 import '../../widgets/song_list_item.dart';
 import '../player/secondary_mini_player.dart';
 
@@ -89,6 +90,14 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
       _invalidateDisplaySongs();
     });
     _fetchArtistSongs(sort: newSort);
+  }
+
+  /// 当前排序项（供 M3E 排序托盘高亮）：字段排序时返回 'title'/'duration'，
+  /// 否则返回接口排序 'hot'/'new'。
+  String get _currentSortOption {
+    if (_sortBy == _SortBy.title) return 'title';
+    if (_sortBy == _SortBy.duration) return 'duration';
+    return _artistSongSort;
   }
 
   // 定位正在播放歌曲
@@ -497,18 +506,24 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                             tooltip: '定位正在播放',
                           ),
                         if (_songs.isNotEmpty)
-                          PopupMenuButton<String>(
-                            icon: const Icon(Icons.sort),
+                          M3ESortButton<String>(
                             tooltip: '排序',
-                            onSelected: (value) {
-                              if (value == 'hot') {
-                                _switchArtistSongSort('hot');
-                              } else if (value == 'new') {
-                                _switchArtistSongSort('new');
+                            current: _currentSortOption,
+                            options: const [
+                              (value: 'hot', label: '按热度排行'),
+                              (value: 'new', label: '按发布时间'),
+                              (value: 'title', label: '按歌曲名称'),
+                              (value: 'duration', label: '按时长'),
+                            ],
+                            // 不用 repeated 改分支：'hot'/'new' 的「再次点当前项」
+                            // 由 _switchArtistSongSort 内部自行判定并翻转方向
+                            onPicked: (value, repeated) {
+                              if (value == 'hot' || value == 'new') {
+                                _switchArtistSongSort(value);
                               } else {
                                 final sortBy = value == 'title' ? _SortBy.title : _SortBy.duration;
                                 setState(() {
-                                  if (_sortBy == sortBy) {
+                                  if (repeated) {
                                     _sortAscending = !_sortAscending;
                                   } else {
                                     _sortBy = sortBy;
@@ -518,60 +533,6 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                                 });
                               }
                             },
-                            itemBuilder: (context) => [
-                              CheckedPopupMenuItem<String>(
-                                value: 'hot',
-                                checked: _sortBy == _SortBy.time && _artistSongSort == 'hot',
-                                child: Row(
-                                  children: [
-                                    const Text('按热度排行'),
-                                    if (_sortBy == _SortBy.time && _artistSongSort == 'hot') ...[
-                                      const Spacer(),
-                                      Icon(_sortAscending ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              CheckedPopupMenuItem<String>(
-                                value: 'new',
-                                checked: _sortBy == _SortBy.time && _artistSongSort == 'new',
-                                child: Row(
-                                  children: [
-                                    const Text('按发布时间'),
-                                    if (_sortBy == _SortBy.time && _artistSongSort == 'new') ...[
-                                      const Spacer(),
-                                      Icon(_sortAscending ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              CheckedPopupMenuItem<String>(
-                                value: 'title',
-                                checked: _sortBy == _SortBy.title,
-                                child: Row(
-                                  children: [
-                                    const Text('按歌曲名称'),
-                                    if (_sortBy == _SortBy.title) ...[
-                                      const Spacer(),
-                                      Icon(_sortAscending ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              CheckedPopupMenuItem<String>(
-                                value: 'duration',
-                                checked: _sortBy == _SortBy.duration,
-                                child: Row(
-                                  children: [
-                                    const Text('按时长'),
-                                    if (_sortBy == _SortBy.duration) ...[
-                                      const Spacer(),
-                                      Icon(_sortAscending ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ],
                           ),
                       ],
                       // 背景图模式：顶栏恒透明——flexibleSpace 是普通 Stack

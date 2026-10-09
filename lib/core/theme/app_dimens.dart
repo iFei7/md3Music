@@ -86,6 +86,13 @@ class AppLayout {
 
   /// 网格每列的目标宽度（配合 [gridColumnsForWidth]）。
   static const double gridTargetExtent = 200;
+
+  /// 双列（列表-详情）左列固定宽度。M3 list-detail master pane 推荐 280–300dp。
+  static const double twoPaneMasterWidth = 300;
+
+  /// 双列右列内容的最大宽度：超过就居中留白，与 [maxContentWidth] 同一
+  /// 「重组而非拉伸」原则（约等于 MD3 body pane 在双列下的舒适上限）。
+  static const double twoPaneDetailMaxWidth = 720;
 }
 
 /// 等距方形间隔组件，替代裸 `SizedBox(height: x)` / `SizedBox(width: x)`。

@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../core/utils/app_haptics.dart';
 import '../data/models/song.dart';
 import '../providers/player_provider.dart';
+import 'm3e_sort_sheet.dart';
 import 'player_artwork_image.dart';
 import 'playing_spectrum_indicator.dart';
 
@@ -163,10 +164,14 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
     });
   }
 
-  /// 排序菜单选中某项：同项再点切换升降序，换项则回到升序
-  void _onSortSelected(PlaylistSortBy value, PlayerProvider playerProvider) {
+  /// 排序菜单选中某项：同项再点切换升降序（repeated），换项则回到升序
+  void _onSortSelected(
+    PlaylistSortBy value,
+    PlayerProvider playerProvider, {
+    required bool repeated,
+  }) {
     setState(() {
-      if (_sortBy == value) {
+      if (repeated) {
         _sortAscending = !_sortAscending;
       } else {
         _sortBy = value;
@@ -333,52 +338,36 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
     );
   }
 
-  /// 排序菜单：播放顺序 / 标题 / 时长，当前项右侧显示升降箭头。
-  /// 用 TooltipVisibility 关掉 PopupMenuButton 的默认「显示菜单」气泡：
-  /// 播放器详情页统一不弹按钮说明，长按只走长按动作。
+  /// 排序按钮：播放顺序 / 标题 / 时长，点一下 M3E 下拉面板就近展开；
+  /// 再次点当前项翻转升/降序（与其它页面同一套交互）。
+  ///
+  /// 用 TooltipVisibility 关掉按钮说明气泡：播放器详情页统一不弹按钮说明。
+  /// IconTheme / IgnorePointer 保留原 PopupMenuButton 的两点语义：
+  /// 图标取色（常态 colors.action、队列为空置灰）与队列为空时不可点。
   Widget _buildSortMenu(
     PlayerProvider playerProvider,
     bool enabled,
     _PanelColors colors,
   ) {
-    return TooltipVisibility(
-      visible: false,
-      child: PopupMenuButton<PlaylistSortBy>(
-        enabled: enabled,
-        icon: Icon(
-          Icons.swap_vert,
-          color: enabled ? colors.action : colors.disabled,
+    return IconTheme(
+      data: IconThemeData(color: enabled ? colors.action : colors.disabled),
+      child: IgnorePointer(
+        ignoring: !enabled,
+        child: TooltipVisibility(
+          visible: false,
+          child: M3ESortButton<PlaylistSortBy>(
+            tooltip: '排序',
+            icon: Icons.swap_vert,
+            current: _sortBy,
+            options: const [
+              (value: PlaylistSortBy.queue, label: '播放顺序'),
+              (value: PlaylistSortBy.title, label: '标题'),
+              (value: PlaylistSortBy.duration, label: '时长'),
+            ],
+            onPicked: (value, repeated) =>
+                _onSortSelected(value, playerProvider, repeated: repeated),
+          ),
         ),
-        onSelected: (value) => _onSortSelected(value, playerProvider),
-        itemBuilder: (context) => [
-          _sortMenuItem(PlaylistSortBy.queue, '播放顺序'),
-          _sortMenuItem(PlaylistSortBy.title, '标题'),
-          _sortMenuItem(PlaylistSortBy.duration, '时长'),
-        ],
-      ),
-    );
-  }
-
-  PopupMenuItem<PlaylistSortBy> _sortMenuItem(
-    PlaylistSortBy value,
-    String label,
-  ) {
-    final checked = _sortBy == value;
-    return CheckedPopupMenuItem<PlaylistSortBy>(
-      value: value,
-      checked: checked,
-      child: Row(
-        children: [
-          Text(label),
-          // 「播放顺序」就是队列当前顺序，没有升降之分，因此不显示箭头
-          if (checked && value != PlaylistSortBy.queue) ...[
-            const SizedBox(width: 4),
-            Icon(
-              _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
-              size: 16,
-            ),
-          ],
-        ],
       ),
     );
   }

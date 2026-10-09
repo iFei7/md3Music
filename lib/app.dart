@@ -13,6 +13,7 @@ import 'core/layout/ui_density.dart';
 import 'core/services/external_media_intent_service.dart';
 import 'core/services/fm_widget_sync.dart';
 import 'core/services/lyricon_provider_service.dart';
+import 'core/services/startup_auto_play.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/motion_constants.dart';
 import 'core/utils/artwork_color_extractor.dart';
@@ -914,6 +915,24 @@ class _MainLayoutState extends State<_MainLayout>
     );
     // 未登录时尝试播放联网歌曲,弹出登录提示
     context.read<PlayerProvider>().onLoginRequired = _showLoginRequiredDialog;
+    // 冷启动自动播放：首帧后尝试按设置起播（默认关闭，关闭时对播放零参与）。
+    // 等audioReady（PlayerProvider 的时序不变量保证此时 _restoreState 已跑完），
+    // 「继续上次播放」才拿得到恢复态与播放进度。
+    // 导航决策留在这一层：服务只负责起播，不认识 Navigator。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(() async {
+        final playerProvider = context.read<PlayerProvider>();
+        final result = await StartupAutoPlay.maybeAutoPlay(
+          kugou: context.read<KugouProvider>(),
+          player: playerProvider,
+        );
+        // 必须等「真的起播了」再推 —— 联网源解析播放地址要 1~3s，
+        // 提前推会先闪一个空播放页。
+        if (!mounted || !result.started || !result.openPlayerPage) return;
+        openFullPlayer(context);
+      }());
+    });
     // 监听应用生命周期：detached（进程被系统销毁前的最后窗口）时尝试关停本地 API 服务器
     WidgetsBinding.instance.addObserver(this);
     // 监听 shortcut 入口的 tab 切换请求（来自 main.dart 的 handleShortcut）

@@ -188,6 +188,13 @@ class AudioService {
     await _player.setVolume(volume.clamp(0.0, 1.0));
   }
 
+  // —— 响度归一：Web 无实现（依赖 Android 侧 LoudnessEnhancer 与
+  // NormalizationGainAudioSink），保持与 io 版同样的接口，上层无需分平台判断。
+  Future<void> setVolumeNormalization({bool? enabled, double? referenceLufs}) async {}
+
+  /// AutoMix 实测响度补给（io 版用它填补上游缺失的响度）；Web 无响度通路。
+  Future<void> applyMeasuredLoudness(double? measuredDbfs) async {}
+
   // —— 交叉淡化：Web 不支持（需要第二个播放器与 Media3 层的会话共享），
   // 保持与 io 版同样的接口，上层无需分平台判断。
   bool get isCrossfading => false;
@@ -203,6 +210,7 @@ class AudioService {
     String? artUri,
     double? loudnessLufs,
     double? loudnessPeakDb,
+    double automixRate = 1.0,
   }) async => false;
 
   void discardPreparedCrossfade() {}

@@ -333,7 +333,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # 自动创建 Release 并上传 APK（仅 push 到 main/master 时）
+      # 自动创建 Release 并上传 APK（仅 push 到 main 时）
+      # master 是上游镜像分支（跟踪 upstream/rust-local-force），推它会产出
+      # 200MB+ 的上游全量包 ci-* release：既污染 lite release 序列，又会被
+      # App 内更新检查误当最新版（ci-<sha> 无法被 parseReleaseVersion 解析）。
+      # 上游用 main 作默认分支，本仓库用 master 作镜像，故此处显式排除。
       - name: Create CI Release
         if: github.event_name == 'push' && github.ref_name == 'main'
         uses: softprops/action-gh-release@v2
@@ -362,7 +366,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # lite 分支：构建成功后按 sha 独立发布 Release（tag=ci-<sha>，与 main 同模式）。
+      # lite 分支：构建成功后按 sha 独立发布 Release。
+      # tag 形如 v5.8.1-lite-a081970：带版本号供 App 内自动更新检查比较，
+      # sha 后缀保证每次 push 独立 tag。
       # 放弃固定 tag 覆盖方案：GitHub 对刚删除 release 的资产名有异步 GC 延迟，
       # 重传必 422 already_exists；独立 tag 名字永不重复，零清理逻辑。
       - name: Create lite Release (per-commit)
@@ -375,8 +381,11 @@ jobs:
           set -euo pipefail
           api="https://api.github.com/repos/${REPO}"
           auth="Authorization: Bearer ${GITHUB_TOKEN}"
-          tag="lite-${SHA_SHORT::7}"
           ver="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1)"
+          # tag 形如 v5.8.1-lite-a081970：版本号供客户端比较，sha 后缀保证
+          # 每次 push 独立 tag（GitHub 资产名 GC 延迟会让固定 tag 覆盖方案 422）。
+          # 客户端 parseReleaseVersion 会截断 -lite-<sha> 取到 5.8.1。
+          tag="v${ver}-lite-${SHA_SHORT::7}"
           stamp="$(date -u +%Y%m%d%H%M%S)"
 
           rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg stamp "$stamp" \
@@ -400,7 +409,8 @@ jobs:
 
           # 自愈清理：删除资产名乱码（GitHub 剥非 ASCII 前缀 MD3.-）的历史 lite release
           bad=$(curl -sS -H "$auth" "$api/releases?per_page=50" | jq -r '
-            .[] | select(.tag_name | startswith("lite-"))
+            .[] | select((.tag_name | startswith("lite-"))
+                          or (.tag_name | test("^v[0-9].*-lite-")))
                | select(any(.assets[]; .name | startswith("MD3.")))
                | "\(.id) \(.tag_name)"' || true)
           while IFS= read -r line && [[ -n "$line" ]]; do

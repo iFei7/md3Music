@@ -1022,7 +1022,12 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                                     new DefaultAudioSink.DefaultAudioProcessorChain(
                                             new ViperMasterProcessor()))
                             .build();
-                    return UsbAudioSinkController.wrap(defaultSink, ctx);
+                    // MD3Music fork: 系统 Direct PCM 档的拦截层。必须放在
+                    // UsbAudioSinkController.wrap 之内（即更靠近 delegate），因为
+                    // DirectPcmSink.configure 记录的格式应是 delegate 实际收到的格式；
+                    // 且 DirectPcmController 需要 AudioManager 才能探测原生输出率。
+                    DirectPcmController.attachContext(ctx);
+                    return new DirectPcmSink(UsbAudioSinkController.wrap(defaultSink, ctx));
                 }
 
                 /** 供扩展渲染器（libflac，P0-5）复用同一 USB 拦截 sink 构建逻辑。 */

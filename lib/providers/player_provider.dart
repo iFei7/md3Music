@@ -8,12 +8,16 @@ import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/widgets.dart';
 import 'package:just_audio/just_audio.dart' as just_audio;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/services/audio_service.dart';
 import '../core/services/audio_service_io.dart'
     hide AudioService, createAudioSource;
+import '../core/services/automix/automix_analysis_store.dart';
+import '../core/services/automix/automix_analyzer.dart';
+import '../core/services/automix/automix_planner.dart';
 import '../core/services/audio_source_load_deadline.dart';
 import '../core/services/lyric_push_service.dart';
 import '../core/services/diagnostic_logger.dart';
@@ -26,6 +30,8 @@ import '../core/services/media_notification_service.dart';
 import '../core/services/wakelock_service.dart';
 import '../core/services/media_store_service.dart';
 import '../core/services/usb_audio_service.dart';
+import '../core/services/direct_pcm_service.dart';
+import '../core/services/output_mode_coordinator.dart';
 import '../data/models/song.dart';
 import '../modules/player/comments_view.dart';
 import '../core/utils/app_toast.dart';
@@ -79,6 +85,20 @@ class _PlayerProviderDisposed implements Exception {
 /// 队列排序维度（播放列表面板的排序菜单）。
 /// [queue] = 保持当前播放顺序，即不排序。
 enum PlaylistSortBy { queue, title, duration }
+
+/// 睡眠定时模式（与倒计时互斥，同一时刻只保留一种）。
+enum SleepTimerMode {
+  /// 未启用。
+  off,
+
+  /// 倒计时：到点自动暂停。
+  countdown,
+
+  /// 「定时结束后播完当前歌曲」的到点等待态：定时已到点但**不打断**当前
+  /// 播放，等正在播的这首自然播完（下一个正常 completed）时再暂停
+  /// （见 _handlePlaybackCompleted）。
+  endOfTrack,
+}
 
 enum AudioQuality {
   standard('128', '标准音质'),
@@ -373,6 +393,11 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   // App 被杀后失效（无后台服务），符合"不持久化"决策。
   DateTime? _sleepTimerEndTime;
   Timer? _sleepTimerTicker;
+  /// 睡眠定时单一真相源：倒计时进行中 / 已到点等待播完本曲 / 未启用。
+  /// [_sleepTimerEndTime] 只在 countdown 模式下有值。
+  SleepTimerMode _sleepTimerMode = SleepTimerMode.off;
+  /// 「定时结束后播完当前歌曲」的勾选偏好。到点后仍保留，供下次定时沿用。
+  bool _stopAfterTimerEnds = false;
 
   // —— 在线歌曲异常结束重试限制 ——
   // 当在线歌曲播放不足 80% 就触发 completed 时（URL 过期 / 流中断），
@@ -454,6 +479,24 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   Duration _crossfadeDuration = const Duration(
     seconds: SettingsRepository.kCrossfadeDefaultSeconds,
   );
+
+  // —— 自动混音（AutoMix）——
+  bool _automixEnabled = false;
+
+  /// 分析结果缓存（内存 + JSON 持久化）。
+  AutomixAnalyzer? _automixAnalyzer;
+
+  /// 当前过渡的规划结果；null = 还没规划或已回退。
+  AutomixPlan? _automixPlan;
+
+  /// 当前规划对应的歌曲 id，换歌即失效。
+  String? _automixPlanSongId;
+
+  /// 只对**当前这首歌**生效的规划：换过歌就当没有，避免拿上一首的拍点去卡这一首。
+  AutomixPlan? get _activePlan =>
+      (_automixPlan != null && _automixPlanSongId == _currentSong?.id)
+          ? _automixPlan
+          : null;
 
   /// 正在解析/预加载下一首（避免同一时间重入）。
   bool _crossfadePreparing = false;
@@ -710,7 +753,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   AudioQuality get audioQuality => _audioQuality;
   String get audioQualityLabel => _audioQuality.label;
 
-  /// 睡眠定时剩余时间（null = 未启用）。
+  /// 睡眠定时剩余时间（null = 未启用倒计时）。
+  ///
+  /// 仅 [SleepTimerMode.countdown] 下有值；[SleepTimerMode.endOfTrack] 是
+  /// 「等待当前曲播完」的到点态，没有倒计时可言，恒为 null。
   Duration? get sleepTimerRemaining {
     final end = _sleepTimerEndTime;
     if (end == null) return null;
@@ -718,14 +764,26 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     return left.isNegative ? Duration.zero : left;
   }
 
+  /// 当前睡眠定时模式；[SleepTimerMode.off] 表示未启用。
+  SleepTimerMode get sleepTimerMode => _sleepTimerMode;
+
   /// 睡眠定时剩余时间通道：每秒只更新本 notifier（走字），
   /// 消费方用 ValueListenableBuilder 订阅，不再依赖每秒全量 notifyListeners。
   /// 仅在定时器开/关与到点暂停等低频事件上才 notifyListeners。
   final ValueNotifier<Duration?> sleepTimerRemainingNotifier =
       ValueNotifier<Duration?>(null);
 
-  /// 是否启用了睡眠定时。
-  bool get isSleepTimerActive => _sleepTimerEndTime != null;
+  /// 「定时结束后播完当前歌曲」的勾选态（面板选项行）。
+  ///
+  /// true 时定时到点不打断播放，进入 [SleepTimerMode.endOfTrack] 等待态，
+  /// 等当前正在播放的这首自然播完再暂停；到点后本偏好保留，供下次定时沿用。
+  bool get stopAfterTimerEnds => _stopAfterTimerEnds;
+
+  /// 是否启用了睡眠定时（倒计时 **或** 已进入到点等待态）。
+  ///
+  /// 以 [_sleepTimerMode] 为单一真相源：endOfTrack 模式下 [_sleepTimerEndTime]
+  /// 为 null 但仍是「已启用」。
+  bool get isSleepTimerActive => _sleepTimerMode != SleepTimerMode.off;
 
   /// 当前歌曲的实际音质标签。
   /// 本地歌曲优先使用 song.quality 推断的标签；
@@ -764,6 +822,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 播放器错误订阅（进诊断日志，App 生命周期级）。
   StreamSubscription<dynamic>? _playerErrorSubscription;
   StreamSubscription<double>? _speedSubscription;
+
+  /// 输出两层开关（USB 独占 / 系统 Direct PCM）变化监听。
+  VoidCallback? _outputModeListener;
 
   dynamic _audioService;
   bool _audioInitialized = false;
@@ -1113,6 +1174,30 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       // disconnect 杀死，只有重建 AudioTrack（复刻"暂停→重播"）才能重新出声。
       UsbAudioService.instance.onExclusiveDisabled =
           _handleUsbExclusiveDisabled;
+      // 直写开启失败（含拔插广播触发的自动恢复失败 —— 那种情况原生没有
+      // MethodChannel result，只能靠 onExclusiveFailed 事件）→ 关闭外层总开关，
+      // 整体回到系统默认输出。
+      UsbAudioService.instance.onExclusiveFailed = (String code, String message) {
+        OutputModeCoordinator.instance.onExclusiveFailed(code, message);
+      };
+      // 输出两层开关（USB 独占 / 系统 Direct PCM）+ 效果链旁路。注册重建回调：
+      // float 强制 / performanceMode / 缓冲都在 DefaultAudioSink.configure 生效，
+      // 切档后必须重建 AudioTrack，复刻 USB 独占的 pause→play 机制。
+      OutputModeCoordinator.instance
+        ..volumeApplier = (double v) async {
+          _volume = v.clamp(0.0, 1.0);
+          await _audioService?.setVolume(_volume);
+        }
+        ..rebuildRequester = _rebuildOutputForModeChange
+        // 进入 Direct PCM 的 unity 档时主动压到 1.0（setVolume 只在用户拖动时才走到）
+        ..unityVolumeApplier = _applyUnityVolumeForDirectPcm;
+      await DirectPcmService.instance.init();
+      _ensureNotDisposed();
+      await OutputModeCoordinator.instance.init();
+      _ensureNotDisposed();
+      // 独占失败 / 拔线自动关闭：消费一次提示并告知 UI。
+      _outputModeListener = _onOutputModeChanged;
+      OutputModeCoordinator.instance.addListener(_outputModeListener!);
       await _loadDefaultQuality();
       _ensureNotDisposed();
       await _syncIgnoreAudioFocus();
@@ -1500,6 +1585,63 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       );
     } catch (_) {
       // 静默：恢复失败时用户手动暂停/重播仍可恢复
+    }
+  }
+
+  /// 进入「系统 Direct PCM + unity 音量」档时把应用音量压到 1.0。
+  ///
+  /// bit-perfect 要求 track volume 恒为 1.0（否则 fast mixer 施加增益）。
+  /// 用户原本的音量先记在协调器里，退出该档时由 [_onOutputModeChanged] 还原。
+  Future<void> _applyUnityVolumeForDirectPcm() async {
+    try {
+      if (!OutputModeCoordinator.instance.forceUnityVolume) return;
+      final current = _volume;
+      if (current >= 0.999) return;
+      OutputModeCoordinator.instance.rememberUserVolume(current);
+      _volume = 1.0;
+      await _audioService?.setVolume(1.0);
+      notifyListeners();
+      // ignore: avoid_print
+      print('[PlayerProvider] Direct PCM unity 音量：$current -> 1.0');
+    } catch (_) {
+      // 静默：压音量失败不影响播放
+    }
+  }
+
+  /// 输出模式切换后重配输出：复刻[pause → play]（只有 Media3 重建 AudioTrack
+  /// 才会重跑 `DefaultAudioSink.configure`，新的 float / performanceMode / 缓冲
+  /// 才会生效）。
+  Future<void> _rebuildOutputForModeChange() async {
+    try {
+      final player = _audioService;
+      if (player == null || !_audioInitialized) return;
+      if (!isPlaying) return;
+      // ignore: avoid_dynamic_calls
+      await player.pause();
+      await Future.delayed(const Duration(milliseconds: 120));
+      // ignore: avoid_dynamic_calls
+      await player.playCommand();
+      // ignore: avoid_print
+      print('[PlayerProvider] output mode changed — reconfigure via pause/play');
+    } catch (_) {
+      // 静默：重建失败时用户手动暂停/重播仍会重配
+    }
+  }
+
+  /// 输出模式切换/回退通知：消费回退提示、恢复 unity 档位前的音量。
+  void _onOutputModeChanged() {
+    // ignore: avoid_print
+    print('[PlayerProvider] _onOutputModeChanged');
+    final notice = OutputModeCoordinator.instance.consumeFallbackNotice();
+    if (notice != null) {
+      showToast(notice);
+    }
+    // 退出 Direct PCM 的 unity 档后，把用户原来的音量意图还回去。
+    if (!OutputModeCoordinator.instance.forceUnityVolume) {
+      final saved = OutputModeCoordinator.instance.takeSavedVolume();
+      if (saved != null) {
+        OutputModeCoordinator.instance.volumeApplier?.call(saved);
+      }
     }
   }
 
@@ -2130,6 +2272,20 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
+      // 「定时结束后播完当前歌曲」：到点已进入endOfTrack 等待态。
+      // 语义 = 定时到点那一刻正在播的这首自然播完（下一个正常 completed）
+      // 即暂停，不看队列位置——单曲循环 / 私人 FM 同样只播完当前首就停。
+      // 异常结束（URL 过期 / 试听片段）不是「播完」，交给下方重试链路。
+      // 位置放在一起听接管之后：房间切歌语义优先（房主在一起听中的
+      // 自动切歌不受影响）。
+      if (_sleepTimerMode == SleepTimerMode.endOfTrack &&
+          !completedAbnormally) {
+        _sleepTimerMode = SleepTimerMode.off;
+        notifyListeners();
+        unawaited(pause());
+        return;
+      }
+
       if (_loopMode == AppLoopMode.one) {
         // 单曲循环：检测在线歌曲是否异常结束（URL 过期 / 流中断），
         // 避免无限重播损坏的链接
@@ -2663,6 +2819,15 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         // ignore: avoid_print
         print('[Crossfade] 设置已加载 enabled=$enabled seconds=$seconds');
       }
+      final automix = await settings.getAutomixEnabled();
+      _automixEnabled = automix;
+      // AutoMix：设置（含每首歌开头的补读）刷新后立刻预热「当前曲 + 下一曲」的分析。
+      // 放在这里而不是 _maybeCrossfade 的设置重读分支里：那条分支是 fire-and-forget
+      // 调本方法，此刻读到的 _automixEnabled 还是旧值，首播那次会漏掉预热。
+      if (_automixEnabled) {
+        // ignore: discarded_futures
+        _ensureAutomixAnalysis();
+      }
     } catch (e) {
       // ignore: avoid_print
       print('[Crossfade] 读取设置失败: $e');
@@ -2671,6 +2836,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 设置页修改 crossfade 设置后调用，刷新字段缓存。
   Future<void> refreshCrossfadeSettings() => _loadCrossfadeSettings();
+
+  /// 设置页改动后刷新（与 [refreshCrossfadeSettings] 同通路）。
+  Future<void> refreshAutomixSettings() => _loadCrossfadeSettings();
 
   /// 上次已按当前歌曲刷新过设置缓存的歌曲 id。
   ///
@@ -2704,6 +2872,108 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     try {
       _audioService?.discardPreparedCrossfade();
     } catch (_) {}
+    _automixPlan = null;
+    _automixPlanSongId = null;
+  }
+
+  /// 保证「当前曲 + 下一曲」的分析就位。
+  ///
+  /// 只做 fire-and-forget：分析慢/失败不影响播放，规划时按 fallback 处理。
+  /// 逐句打日志：分析要联网解码 25s 音频，失败时是**静默回退**，
+  /// 不打日志就无法区分「没触发 / 解码失败 / 分析结果不可用」（铁律 7）。
+  ///
+  /// ⚠️ 队列里「下一首」的播放地址是**懒解析**的（轮到它播放时才会解析），
+  /// 因此这里必须先替它把地址解析出来 —— 否则下一首永远分析不出来，
+  /// AutoMix 会永远降级为 fallback（真机实测：`plan fallback ... in=-`）。
+  Future<void> _ensureAutomixAnalysis() async {
+    if (!_automixEnabled) return;
+    final analyzer = await _automixAnalyzerFor();
+    final current = _currentSong;
+    if (current == null) return;
+    final nextIndex = _nextIndexForCrossfade();
+    final next = nextIndex == null ? null : _playlist[nextIndex];
+
+    final currentUrl = await _resolveAutomixUrl(current);
+    final nextUrl = next == null ? null : await _resolveAutomixUrl(next);
+    // 解析期间用户可能关掉了开关
+    if (!_automixEnabled) return;
+    // ignore: avoid_print
+    print('[Automix] 预热分析 current=${current.id}'
+        '(${currentUrl == null ? "无地址" : "就绪"}) '
+        'next=${next?.id ?? '-'}'
+        '(${next == null ? "-" : nextUrl == null ? "无地址" : "就绪"})');
+
+    if (currentUrl != null) {
+      // ignore: discarded_futures
+      _analyzeAndApplyLoudness(analyzer, current, currentUrl);
+    }
+    if (next != null && nextUrl != null) {
+      // ignore: discarded_futures
+      analyzer.analyze(key: buildAutomixKey(songId: next.id), url: nextUrl);
+    }
+  }
+
+  /// 分析当前曲，并把它实测出的响度补给「音量均衡」。
+  ///
+  /// 真机上酷狗 `/song/url` 不返回响度字段 → 现有「音量均衡」拿不到数据 →
+  /// 相邻曲目的原始响度差原样透出（实测最大 13.7 dB，用户报的「切歌时音量
+  /// 突然变大」）。AutoMix 分析会实测响度，正好补这个缺口。
+  ///
+  /// 三重守卫，缺一都会造成音量错乱：
+  /// 1. 分析是异步的（几秒），回来时必须确认**还在播这首歌**，否则会把
+  ///    上一首的响度套到新曲上；
+  /// 2. 上游已提供权威响度时不覆盖（`song.loudnessLufs` 非空即上游有值）；
+  /// 3. 是否真的施加补偿仍由「音量均衡」开关决定（在 AudioService侧判）。
+  Future<void> _analyzeAndApplyLoudness(
+    AutomixAnalyzer analyzer,
+    Song song,
+    String url,
+  ) async {
+    final analysis = await analyzer.analyze(
+      key: buildAutomixKey(songId: song.id),
+      url: url,
+    );
+    if (analysis == null) return;
+    if (_currentSong?.id != song.id) return;
+    if (song.loudnessLufs != null) return;
+    await _audioService?.applyMeasuredLoudness(analysis.loudnessDbfs);
+  }
+
+  /// 取一首歌的播放地址；队列里尚未解析过的歌会在此处解析一次。
+  ///
+  /// 只在 automix 需要时调用（会引入一次 `/song/url` 请求，异步且不阻塞播放），
+  /// 失败返回 null —— 该曲这一轮不参与对拍，规划时走 fallback。
+  Future<String?> _resolveAutomixUrl(Song song) async {
+    final local = song.localPath;
+    if (local != null && local.isNotEmpty) return local;
+    final online = song.url;
+    if (online != null && online.isNotEmpty) return online;
+    if (!song.isOnline) return null;
+    try {
+      final result = await KugouApiClient().getSongUrlWithFallback(
+        song.id,
+        quality: _audioQuality.value,
+        albumId: song.albumId,
+        albumAudioId: song.albumAudioId,
+      );
+      if (result == null || result.url.isEmpty) return null;
+      return result.url;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<AutomixAnalyzer> _automixAnalyzerFor() async {
+    final existing = _automixAnalyzer;
+    if (existing != null) return existing;
+    final dir = await getApplicationDocumentsDirectory();
+    final analyzer = AutomixAnalyzer(
+      store: AutomixAnalysisStore(
+        directory: Directory('${dir.path}${Platform.pathSeparator}automix'),
+      ),
+    );
+    _automixAnalyzer = analyzer;
+    return analyzer;
   }
 
   /// crossfade 的所有前置条件。返回阻塞原因（null = 允许）。
@@ -2716,6 +2986,12 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (!_isPlaying) return '未在播放';
     if (_isResolvingUrl) return '正在解析播放链接';
     if (_handlingCompletion) return '正在处理播放结束';
+    // 「定时结束后播完当前歌曲」等待态：当前曲必须自然发出 completed 才能
+    // 触发停止；若此刻做叠化，completed 会被淡化流程吞掉并直接切到下一首，
+    // 等待态将错过「当前曲播完」边界、多播一整首。
+    if (_sleepTimerMode == SleepTimerMode.endOfTrack) {
+      return '等待播完当前歌曲后停止';
+    }
     // 一起听会话中不做叠化：连播由房间会话接管（completed→switch_song），
     // 双播放器叠化会吞掉 completed 事件、干扰切歌上报
     if (onRoomSessionActive?.call() ?? false) return '一起听会话中';
@@ -2744,6 +3020,11 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     // 结果是音频错乱而非叠加。独占开启期间直接跳过。
     if (UsbAudioService.instance.lastStatus['enabled'] == true) {
       return 'USB 独占输出已开启';
+    }
+    // 系统 Direct PCM：同一条AudioSink 出口，unity 音量档下两个播放器音量
+    // 语义冲突（辅播放器无法各自 unity），叠加同样会错乱。
+    if (OutputModeCoordinator.instance.isDirectPcmActive) {
+      return '系统 Direct PCM 已开启';
     }
     return null;
   }
@@ -2810,6 +3091,11 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         // ignore: discarded_futures
         _prepareCrossfade();
       case CrossfadePhase.start:
+        // AutoMix：吸附到拍点后再起淡。
+        final plan = _activePlan;
+        if (plan != null && position < plan.fadeStartPosition) {
+          return; // 还没到拍点，等下一 tick
+        }
         // ignore: discarded_futures
         _startCrossfade();
     }
@@ -2829,6 +3115,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (_crossfadePreparing || _crossfadePreparedIndex != null) return;
     final nextIndex = _nextIndexForCrossfade();
     if (nextIndex == null) return;
+    // AutoMix：先把过渡规划算出来 —— prepare 时就要用它的变速倍率。
+    if (_automixEnabled) {
+      await _planAutomixFor(nextIndex);
+    }
     final fromSongId = _currentSong?.id;
     final fromIndex = _currentIndex;
     final queueRevision = _queueRevision;
@@ -2902,6 +3192,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         title: song.displayName,
         artist: song.artist,
         artUri: song.isOnline ? song.artworkUri : null,
+        // 用户本身在用倍速时不叠加变速（避免叠出意外速率）
+        automixRate: _speed == 1.0 ? (_activePlan?.incomingRate ?? 1.0) : 1.0,
       );
       if (ok != true) {
         // ignore: avoid_print
@@ -2938,6 +3230,37 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         playlist: _playlist,
       );
 
+  /// 为「当前曲 → nextIndex」这一次过渡生成规划并缓存到 [_automixPlan]。
+  ///
+  /// **只读缓存、不做任何网络或解码**。分析一律由 [_ensureAutomixAnalysis]
+  /// 在起播时（距曲尾还有几分钟）跑完并落盘，这里只取结果：
+  /// prepare 的时间窗只有几秒，一旦在此发起解码，淡化必然来不及起。
+  /// 拿不到就返回 null 传给 `planAutomix`，它会降级为 fallback。
+  Future<void> _planAutomixFor(int nextIndex) async {
+    final current = _currentSong;
+    if (current == null || nextIndex < 0 || nextIndex >= _playlist.length) return;
+    final next = _playlist[nextIndex];
+    final analyzer = await _automixAnalyzerFor();
+    final out = await analyzer.cached(buildAutomixKey(songId: current.id));
+    final incoming = await analyzer.cached(buildAutomixKey(songId: next.id));
+    final plan = planAutomix(
+      outgoing: out,
+      incoming: incoming,
+      position: _position,
+      duration: _duration,
+      userFade: _crossfadeDuration,
+    );
+    _automixPlan = plan;
+    _automixPlanSongId = current.id;
+    // ignore: avoid_print
+    print('[Automix] plan ${plan.strategy.name} '
+        'out=${out?.bpm.toStringAsFixed(1) ?? '-'} '
+        'in=${incoming?.bpm.toStringAsFixed(1) ?? '-'} '
+        'fade=${plan.fadeDuration.inSeconds}s '
+        'start=${plan.fadeStartPosition.inSeconds}s '
+        'rate=${plan.incomingRate.toStringAsFixed(3)}');
+  }
+
   /// 启动淡化并把"当前歌曲"账目切到新歌。
   ///
   /// [AudioService.startCrossfade] 内部先把新播放器切为活动播放器再开始斜坡，
@@ -2970,7 +3293,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       // 「当前歌曲」的账目推迟到交叉点（淡化中点）再切：一开始就切会让
       // 界面/歌词/通知栏写着下一首，而这几秒听到的主体还是正在淡出的上一首。
       final fade = _audioService?.startCrossfade(
-        duration: _crossfadeDuration,
+        duration: _activePlan?.fadeDuration ?? _crossfadeDuration,
         targetVolume: _volume,
         onCrossover: () {
           if (runGeneration != _crossfadeRunGeneration ||
@@ -4678,6 +5001,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> next({bool autoPlay = true}) async {
     if (_playlist.isEmpty) return;
+    await _audioService?.resetAutomixRate(_speed);
+    _automixPlan = null;
+    _automixPlanSongId = null;
     // 一起听路由：听众拦截（进度由房主控制），房主切到房间歌单相邻曲目并上报
     final guestBlocked = onRoomGuestSkipBlocked;
     if (guestBlocked != null && guestBlocked()) return;
@@ -4769,6 +5095,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> previous({bool autoPlay = true}) async {
     if (_playlist.isEmpty) return;
+    await _audioService?.resetAutomixRate(_speed);
+    _automixPlan = null;
+    _automixPlanSongId = null;
     // 一起听路由：听众拦截（进度由房主控制），房主切到房间歌单相邻曲目并上报
     final guestBlocked = onRoomGuestSkipBlocked;
     if (guestBlocked != null && guestBlocked()) return;
@@ -4823,6 +5152,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> playSongAt(int index) async {
     if (index < 0 || index >= _playlist.length) return;
+    await _audioService?.resetAutomixRate(_speed);
+    _automixPlan = null;
+    _automixPlanSongId = null;
     final playbackRequest = _issuePlaybackRequest();
     _logPlaybackEvent(
       'action.select_queue_item',
@@ -5384,7 +5716,18 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> setVolume(double volume) async {
-    _volume = volume.clamp(0.0, 1.0);
+    final target = volume.clamp(0.0, 1.0);
+    // Direct PCM 的 unity 音量档：AudioTrack 的 track volume 必须为 1.0，
+    // 否则 AudioFlinger 会对样本施加增益、bit-perfect 判定必然不通过。
+    // 用户意图先记下（退出该档时恢复），实际按 1.0 下发。
+    if (OutputModeCoordinator.instance.forceUnityVolume) {
+      OutputModeCoordinator.instance.rememberUserVolume(target);
+      _volume = 1.0;
+      await _audioService?.setVolume(1.0);
+      notifyListeners();
+      return;
+    }
+    _volume = target;
     await _audioService?.setVolume(_volume);
     // 持久化应用内音量（重启保留）
     try {
@@ -5416,7 +5759,12 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   void setSleepTimer(Duration? duration) {
     _sleepTimerTicker?.cancel();
     _sleepTimerTicker = null;
+    // mode 表达倒计时进行中；到点后的 endOfTrack 等待态由 ticker 分支设置。
+    // 「关闭定时」(null) 连同到点等待态与勾选偏好一起清掉。
+    _sleepTimerMode =
+        duration == null ? SleepTimerMode.off : SleepTimerMode.countdown;
     if (duration == null) {
+      _stopAfterTimerEnds = false;
       _sleepTimerEndTime = null;
       // notifier 更新延迟到帧后，脱离本地调用所处的路由切换同步帧，
       // 避免与 ModalScope 等 InheritedElement 的 deactivate 竞态（_dependents 断言）
@@ -5431,13 +5779,19 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       if (end == null) return;
       final left = end.difference(DateTime.now());
       if (left <= Duration.zero) {
-        // 到点：暂停 + 清理
+        // 到点：勾选了「播完当前歌曲」则不打断，进入等待态；否则照旧暂停
         _sleepTimerTicker?.cancel();
         _sleepTimerTicker = null;
         _sleepTimerEndTime = null;
         _scheduleSleepNotifier(null);
-        _audioService?.pause();
-        notifyListeners();
+        if (_stopAfterTimerEnds) {
+          _sleepTimerMode = SleepTimerMode.endOfTrack;
+          notifyListeners();
+        } else {
+          _sleepTimerMode = SleepTimerMode.off;
+          _audioService?.pause();
+          notifyListeners();
+        }
       } else {
         // 每秒只刷新独立通道的剩余时间，不触发全量 notifyListeners
         // （避免所有 watch<PlayerProvider> 的整页/列表项随秒重建）。
@@ -5446,6 +5800,20 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         _scheduleSleepNotifier(left);
       }
     });
+    notifyListeners();
+  }
+
+  /// 设置 / 取消「定时结束后播完当前歌曲」偏好。
+  ///
+  /// 启用后：下一个到点的定时不再立即暂停，而是进入
+  /// [SleepTimerMode.endOfTrack] 等待态，等定时到点那一刻正在播放的这首
+  /// 自然播完再暂停。取消时同时撤销已到点的等待态（回到无定时状态，
+  /// 但不打断播放）。
+  void setStopAfterCurrentTrack(bool enabled) {
+    _stopAfterTimerEnds = enabled;
+    if (!enabled && _sleepTimerMode == SleepTimerMode.endOfTrack) {
+      _sleepTimerMode = SleepTimerMode.off;
+    }
     notifyListeners();
   }
 
@@ -6068,6 +6436,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     LyriconProviderService.instance.removeListener(
       _handleLyriconEnabledChanged,
     );
+    if (_outputModeListener != null) {
+      OutputModeCoordinator.instance.removeListener(_outputModeListener!);
+      _outputModeListener = null;
+    }
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _playingSubscription?.cancel();

@@ -15,6 +15,7 @@ import '../../providers/theme_provider.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/keyboard_expand_sheet.dart';
+import '../../widgets/m3e_sort_sheet.dart';
 import '../../widgets/playlist_comments_view.dart';
 import '../../widgets/song_list_item.dart';
 import '../player/secondary_mini_player.dart';
@@ -484,11 +485,18 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                                   tooltip: '定位正在播放',
                                 ),
                               if (_songs.isNotEmpty)
-                                PopupMenuButton<_SortBy>(
-                                  icon: const Icon(Icons.sort),
-                                  onSelected: (value) {
+                                M3ESortButton<_SortBy>(
+                                  tooltip: '排序',
+                                  current: _sortBy,
+                                  options: const [
+                                    (value: _SortBy.time, label: '添加时间'),
+                                    (value: _SortBy.title, label: '歌曲名称'),
+                                    (value: _SortBy.duration, label: '时长'),
+                                  ],
+                                  onPicked: (value, repeated) {
                                     setState(() {
-                                      if (_sortBy == value) {
+                                      if (repeated) {
+                                        // 再次点当前项 → 翻转升/降序
                                         _sortAscending = !_sortAscending;
                                       } else {
                                         _sortBy = value;
@@ -497,47 +505,6 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                                       _invalidateDisplaySongs();
                                     });
                                   },
-                                  itemBuilder: (context) => [
-                                    CheckedPopupMenuItem<_SortBy>(
-                                      value: _SortBy.time,
-                                      checked: _sortBy == _SortBy.time,
-                                      child: Row(
-                                        children: [
-                                          const Text('添加时间'),
-                                          if (_sortBy == _SortBy.time) ...[
-                                            const Spacer(),
-                                            Icon(_sortAscending ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
-                                    CheckedPopupMenuItem<_SortBy>(
-                                      value: _SortBy.title,
-                                      checked: _sortBy == _SortBy.title,
-                                      child: Row(
-                                        children: [
-                                          const Text('歌曲名称'),
-                                          if (_sortBy == _SortBy.title) ...[
-                                            const Spacer(),
-                                            Icon(_sortAscending ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
-                                    CheckedPopupMenuItem<_SortBy>(
-                                      value: _SortBy.duration,
-                                      checked: _sortBy == _SortBy.duration,
-                                      child: Row(
-                                        children: [
-                                          const Text('时长'),
-                                          if (_sortBy == _SortBy.duration) ...[
-                                            const Spacer(),
-                                            Icon(_sortAscending ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
-                                  ],
                                 ),
                             ],
                             title: Opacity(

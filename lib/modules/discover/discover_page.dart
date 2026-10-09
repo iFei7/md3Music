@@ -13,12 +13,13 @@ import '../../providers/player_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/scroll_aware_app_bar.dart';
 import '../../widgets/song_list_item.dart';
+import 'home_discover_refill.dart';
 import '../personal_fm/personal_fm_section.dart';
 import '../player/secondary_mini_player.dart';
 import '../search/search_page.dart';
 
-/// 顶栏图标按钮（搜索 / 识曲）的尺寸：36 而不是 MD3 默认的 48，让两个图标之间
-/// 由 24dp 收到 12dp；纵向仍保留 40dp 触达高度。
+/// 顶栏图标按钮（搜索）的尺寸：36 而不是 MD3 默认的 48；
+/// 纵向仍保留 40dp 触达高度。
 const double _kActionButtonWidth = 36.0;
 const double _kActionButtonHeight = 40.0;
 
@@ -39,10 +40,15 @@ class _DiscoverPageState extends State<DiscoverPage> {
   // （见 [PersonalFmSection]），卡片恒定展示、无折叠把手；因此只剩每日推荐可折叠。
   static const String _kCollapsedDaily = 'discover_collapsed_daily';
 
+  // 刷歌推荐区块的折叠状态，键名与每日推荐同一套约定（前缀 + 分区），
+  // 这样两块共用 [_toggleCollapse] 的「prefs 存的是否折叠」语义。
+  static const String _kCollapsedHomeDiscover = 'discover_collapsed_home_discover';
+
   bool _isLoading = true;
   String? _error;
 
   bool _isDailyExpanded = true;
+  bool _isHomeDiscoverExpanded = true;
 
   /// 顶栏渐变 ScrollController：与 ScrollAwareAppBar 共享，监听滚动 offset
   final ScrollController _scrollController = ScrollController();
@@ -68,6 +74,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
     if (!mounted) return;
     setState(() {
       _isDailyExpanded = !(prefs.getBool(_kCollapsedDaily) ?? false);
+      _isHomeDiscoverExpanded = !(prefs.getBool(_kCollapsedHomeDiscover) ?? false);
     });
   }
 
@@ -125,11 +132,13 @@ class _DiscoverPageState extends State<DiscoverPage> {
   }
 
   /// 是否有任一发现分区数据就绪（渐进加载用）：任一就绪即退出整页转圈。
-  /// 发现页只剩每日推荐 + 私人 FM 两块。
+  /// 刷歌推荐（首页 /home/discover）也算一块：它进页面就能拿到首屏 4 首，
+  /// 没有它的话只有每日推荐慢半拍时整个刷歌区会先空着。
   bool get _hasAnySectionData {
     final kugou = context.read<KugouProvider>();
     return kugou.recommendSongs.isNotEmpty ||
-        kugou.personalFmSongs.isNotEmpty;
+        kugou.personalFmSongs.isNotEmpty ||
+        kugou.homeDiscoverSongs.isNotEmpty;
   }
 
   Future<void> _loadAllData() async {
@@ -161,6 +170,12 @@ class _DiscoverPageState extends State<DiscoverPage> {
         // 也会盖上新鲜时间戳（上一次请求成功但返回了空），不绕开 5 分钟 TTL 的话
         // 卡片会空着却「新鲜」，下拉也补不回来。
         if (needsPersonalFm) kugou.getPersonalFm(forceRefresh: true),
+        // 刷歌推荐下拉只 forceRefresh、**不重置游标**：forceRefresh 在
+        // getHomeDiscover 里的含义仅仅是绕过 5 分钟 TTL，游标（已消费条数）和
+        // seen（已消费 hash，持久化在 HomeDiscoverProgressStore）都原样保留。
+        // 刷歌的意义就是"每次点开/下拉都是没听过的"，重置游标等于把刚刷过的那
+        // 几首原样端回来，用户会反复看见同一批歌，那还不如不放这个入口。
+        kugou.getHomeDiscover(forceRefresh: hasExistingData),
       ];
       for (final f in reqs) {
         unawaited(f.then((_) {
@@ -229,6 +244,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
                 slivers: [
                   _buildPersonalFmSection(),
                   _buildDailySection(colorScheme),
+                  _buildHomeDiscoverSection(colorScheme),
                   const SliverToBoxAdapter(child: SizedBox(height: 80)),
                 ],
               ),
@@ -405,6 +421,89 @@ class _DiscoverPageState extends State<DiscoverPage> {
       },
     );
   }
+
+  /// 刷歌推荐：竖排前四首，形态与 [_buildDailySection] 完全一致。
+  ///
+  /// 刻意复用 [SongListItem] 而不是再造一张卡：这一块和每日推荐在视觉上是同一类
+  /// 内容（"挑几首听"），用户不该在同一个页面看到两种行样式；而复用顺带拿到
+  /// 「正在播」高亮与收藏按钮，别的都得重写一遍。
+  ///
+  /// 只渲染前 4 首：这是"刷"的第一屏，越少越像一屏；更多的一批在右侧 `›` 的
+  /// 详情页里靠上滑继续（[KugouProvider.fetchMoreHomeDiscover]）。
+  Widget _buildHomeDiscoverSection(ColorScheme cs) {
+    return Selector<KugouProvider, List<KugouSongDetail>>(
+      selector: (_, kugou) => kugou.homeDiscoverSongs,
+      builder: (context, details, _) {
+        if (details.isEmpty) return const SliverToBoxAdapter(child: SizedBox());
+        final all = details.map((e) => e.toSong()).toList();
+        final top = all.take(4).toList();
+        return SliverToBoxAdapter(
+          child: _CollapsibleSection(
+            title: '刷歌推荐',
+            isExpanded: _isHomeDiscoverExpanded,
+            onToggle: () => _toggleCollapse(
+              prefKey: _kCollapsedHomeDiscover,
+              currentlyExpanded: _isHomeDiscoverExpanded,
+              apply: (v) => _isHomeDiscoverExpanded = v,
+            ),
+            trailing: IconButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const _HomeDiscoverDetailPage(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.chevron_right),
+            ),
+            child: Padding(
+              // SongListItem 自带 horizontal 10 的内边距，补 6 凑成
+              // 与其他区块一致的 16dp 页边距。
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Column(
+                children: [
+                  for (var i = 0; i < top.length; i++)
+                    SongListItem(
+                      song: top[i],
+                      showDuration: false,
+                      // 与每日推荐一致：右侧仅收藏按钮，时长对"刷"没有参考价值。
+                      trailingActions: SongTrailingActions.favoriteOnly,
+                      // 走统一的 _play，卡片上点歌同样要装填补货器
+                      onTap: () => _play(i),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 点一首歌就起播，并把 [HomeDiscoverRefill] 装上，让这条队列在播完之后还能接着刷。
+  ///
+  /// 顺序和"必须补一批"都是踩出来的：
+  /// 1. **先起播再 arm**。补货器是靠识别"当前播放队列是不是刷歌来的"来决定
+  ///    留不留场的，而队列是在 [PlayerProvider.playOnlinePlaylist] 里落地的。
+  ///    顺序反了的话 arm 那一刻 currentSong 还是上一首，它会把这当成别人的队列
+  ///    直接退场，之后这条队列永远不会被补货。
+  /// 2. **必须立刻 append 一批**。PlayerProvider 一次只把当前这一首灌进
+  ///    audio_service，队列末尾没有任何预加载；不补的话播到队尾就停，"刷歌"
+  ///    退化成"听四首就完事"。
+  /// 3. **播放源取 provider 的权威列表快照**（homeDiscoverSongsAsSongs），不在本地
+  ///    存副本：副本会和补货器追加进 provider 的新歌脱节，队列里就没有后来的歌。
+  Future<void> _play(int index) async {
+    final kugou = context.read<KugouProvider>();
+    final player = context.read<PlayerProvider>();
+    final songs = kugou.homeDiscoverSongsAsSongs;
+    if (index < 0 || index >= songs.length) return;
+    await player.playOnlinePlaylist(songs, index);
+    // 装填补货器：同一条队列已在补货会复用现有实例
+    final refill = HomeDiscoverRefill.arm(kugou, player);
+    if (refill == null) return;
+    // 立即补一批
+    await refill.append();
+  }
 }
 
 class _DailyRecommendDetailPage extends StatefulWidget {
@@ -492,6 +591,251 @@ class _DailyRecommendDetailPageState extends State<_DailyRecommendDetailPage> {
                 );
               },
             ),
+      ),
+    );
+  }
+}
+
+/// 刷歌推荐详情页：完整的一批 + 上滑增量 + 起播补货。
+///
+/// 骨架照 [_DailyRecommendDetailPage]（Scaffold + AppBar + SecondaryMiniPlayerHost
+/// + 「播放全部」+ ListView.builder），差别只有两处：
+/// - 列表会随滚动变长：底部哨兵行到距底 200px 就翻一批
+///   （[KugouProvider.fetchMoreHomeDiscover]），翻到取不动为止；
+/// - 点任意一首都会把 [HomeDiscoverRefill] 装上，播完自动接下一批。
+class _HomeDiscoverDetailPage extends StatefulWidget {
+  const _HomeDiscoverDetailPage();
+
+  @override
+  State<_HomeDiscoverDetailPage> createState() =>
+      _HomeDiscoverDetailPageState();
+}
+
+class _HomeDiscoverDetailPageState extends State<_HomeDiscoverDetailPage> {
+  /// 一批的条数，对齐 [KugouProvider.homeDiscoverBatchSize]。
+  /// 传小了的代价是 provider 判定"这一趟没凑够 minCount"就再多试几轮请求，
+  /// 白白多发几次网络。
+  static const int _pageSize = 30;
+
+  bool _isLoading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // 与 provider 里的 5 分钟 TTL 对齐：冷启动时首页可能刚取过首屏 4 首，
+      // 这里不该再要一次。
+      await context.read<KugouProvider>().getHomeDiscover();
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      await _fillUntilScrollable();
+    });
+  }
+
+  @override
+  void dispose() {
+    // 先摘监听再 dispose：controller 在 dispose 之后任何一次 scroll 通知都会
+    // 反过来摸已销毁的 controller（scene_audio_list_page 就漏了这一步）。
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// 距底 200px 触发翻页：等真正到底再翻会先看到一屏空白（footer 才刚出现）。
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      _loadMore();
+    }
+  }
+
+  /// 列表装不满一屏时主动补批，直到它真的能滚。
+  ///
+  /// 这是"只有 4 首时怎么上拉都没反应"的根因：[_onScroll] 挂在 ScrollController
+  /// 上，只有**真的发生滚动**才会回调。首屏只有 4 首（`pagesize` 的文档默认值），
+  /// 远矮于一屏，`maxScrollExtent` 为 0 —— 根本滚不动，于是回调不触发，
+  /// [_loadMore] 永远不被调用。条件本身（`0 >= 0 - 200`）是成立的，只是没人
+  /// 去算它。这也是"播放补货正常、滑动失灵"的原因：补货由
+  /// [HomeDiscoverRefill] 监听 PlayerProvider 驱动，与滚动毫无关系。
+  ///
+  /// 所以不能把"取下一批"只挂在滚动上——首屏那一段没有任何滚动事件可听。
+  static const int _maxAutoFillRounds = 4;
+
+  /// 防止 [_loadMoreBatch] 末尾再调本方法时递归：[_fillUntilScrollable] 内部
+  /// 会调 [_loadMore]，后者又回调进来，没有这道闸就会变成无限自我调用。
+  bool _autoFilling = false;
+
+  Future<void> _fillUntilScrollable() async {
+    if (_autoFilling) return;
+    _autoFilling = true;
+    try {
+      for (var round = 0; round < _maxAutoFillRounds; round++) {
+        if (!mounted || !_hasMore) return;
+        // 等新条目布局完再量，否则量到的还是补货前的 maxScrollExtent。
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
+        // maxScrollExtent > 0 表示已经能滚了，交给用户上拉即可。
+        if (_scrollController.hasClients &&
+            _scrollController.position.maxScrollExtent > 0) {
+          return;
+        }
+        await _loadMore();
+      }
+    } finally {
+      _autoFilling = false;
+    }
+  }
+
+  /// 上拉翻一批。复位放在 finally：翻页失败（网络/上游返回 null）时若不复位，
+  /// 指示器会一直转、之后再怎么滚都不会加载，等于把整页的增量永久卡死。
+  /// 翻转 [_loadingMore] 必须走 setState：footer 的转圈分支渲染依赖列表重建，
+  /// 只改字段不重建的话指示器从出现到消失都不会画出来。
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      await _loadMoreBatch();
+    } finally {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  Future<void> _loadMoreBatch() async {
+    final kugou = context.read<KugouProvider>();
+    final fresh = await kugou.fetchMoreHomeDiscover(minCount: _pageSize);
+    if (!mounted) return;
+    // 列表本身由 provider 追加（fetchMoreHomeDiscover 内部已经并进
+    // homeDiscoverSongs 并 notifyListeners），这里只判"还有没有"。
+    setState(() {
+      _hasMore = fresh.isNotEmpty;
+    });
+    // 补完一批后再确认一次能否滚动：大屏/折叠屏展开态下，一屏装得下 30 首，
+    // 光靠首屏那次自动补货还是滚不动。
+    await _fillUntilScrollable();
+  }
+
+  /// 点歌起播 + 装填补货器。
+  ///
+  /// 三点顺序的原因与 [_DiscoverPageState._play] 完全一致（那是同一套起播逻辑的
+  /// 卡片版本，这里只重复结论）：
+  /// 1. **先 [PlayerProvider.playOnlinePlaylist] 再 arm**：队列要先落地，补货器才
+  ///    认得出这条队列是刷歌来的；反了的话 arm 那一刻 currentSong 还是上一首，会被
+  ///    当成「别人的队列」直接退场。
+  /// 2. **必须立即 append 一批**：PlayerProvider 一次只把一首歌灌进 audio_service，
+  ///    队尾没有预加载；不补就是播到头就停。
+  /// 3. **不在本 State 存 List&lt;Song&gt; 副本**：本页展示的是
+  ///    [KugouProvider.homeDiscoverSongs]（Selector 监听），补货器往里追加后本页
+  ///    会自然变长。存一份副本的话，副本既不会变长，也会和补货器判断队列归属时
+  ///    依据的 provider 列表对不上。
+  Future<void> _play(int index) async {
+    final kugou = context.read<KugouProvider>();
+    final player = context.read<PlayerProvider>();
+    final songs = kugou.homeDiscoverSongsAsSongs;
+    if (index < 0 || index >= songs.length) return;
+    await player.playOnlinePlaylist(songs, index);
+    // 装填补货器：同一条队列已在补货会复用现有实例
+    final refill = HomeDiscoverRefill.arm(kugou, player);
+    if (refill == null) return;
+    // 立即补一批
+    await refill.append();
+  }
+
+  /// 列表尾部哨兵行：加载中转圈 / 还有更多时提示上滑 / 取完了说一声。
+  /// 三态都留着是因为"还在转"和"到底了"不写清楚的话，用户会以为页面卡住。
+  Widget _buildListFooter(BuildContext context) {
+    if (_loadingMore) {
+      // 与下拉刷新同款：M3EPullToRefreshIndicator 默认用的 M3EContainedLoadingIndicator，
+      // 48×48 药丸容器 + shapes 动画，视觉与发现页/刷刷页的下拉刷新一致。
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: M3EContainedLoadingIndicator(
+            width: 48,
+            height: 48,
+          ),
+        ),
+      );
+    }
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Center(
+        child: Text(
+          _hasMore ? '继续上滑加载更多' : '没有更多了',
+          style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('刷歌推荐')),
+      body: SecondaryMiniPlayerHost(
+        child: _isLoading
+            ? const Center(child: M3ELoadingIndicator())
+            : Selector<KugouProvider, List<KugouSongDetail>>(
+                selector: (_, kugou) => kugou.homeDiscoverSongs,
+                builder: (context, details, _) {
+                  final songs = details.map((e) => e.toSong()).toList();
+                  if (songs.isEmpty) return const Center(child: Text('暂无数据'));
+                  return Column(
+                    children: [
+                      // 播放全部：与每日推荐详情页同形态（FilledButton.icon +
+                      // play_arrow），点它也走 _play(0)，同样会装上补货器。
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpacing.lg,
+                          AppSpacing.lg,
+                          AppSpacing.lg,
+                          AppSpacing.sm,
+                        ),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: () => _play(0),
+                            icon: const Icon(Icons.play_arrow),
+                            label: const Text('播放全部'),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: ListView.builder(
+                          controller: _scrollController,
+                          padding: EdgeInsets.fromLTRB(
+                            AppSpacing.lg,
+                            AppSpacing.sm,
+                            AppSpacing.lg,
+                            AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
+                          ),
+                          // +1 是底部哨兵行，兼作翻页指示与"没有更多"的落点。
+                          itemCount: songs.length + 1,
+                          itemBuilder: (context, index) {
+                            if (index == songs.length) {
+                              return _buildListFooter(context);
+                            }
+                            return SongListItem(
+                              song: songs[index],
+                              // 与卡片一致：右侧仅收藏按钮。
+                              trailingActions: SongTrailingActions.favoriteOnly,
+                              onTap: () => _play(index),
+                              onMoreTap: () {},
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
       ),
     );
   }

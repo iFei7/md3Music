@@ -7,6 +7,7 @@ import '../data/models/artist.dart';
 import '../data/models/kugou_account.dart';
 import '../data/models/playlist.dart';
 import '../data/models/song.dart';
+import '../data/repositories/home_discover_progress_store.dart';
 import '../data/repositories/settings_repository.dart';
 import '../core/services/listening_grade_service.dart';
 import '../services/kugou_api/kugou_api_client.dart';
@@ -124,6 +125,25 @@ class KugouProvider extends ChangeNotifier {
   List<String> _hotSearchKeywords = [];
   KugouRankList? _rankList;
   List<KugouSongDetail> _recommendSongs = [];
+
+  // ==================== 首页刷歌推荐（/home/discover） ====================
+  //
+  // 上游没有 page/offset，"刷到第几"只能由这里数出来，所以刷歌的权威态是这一组
+  // 三个字段，而不是 UI 拿到的那个 List：
+  //   _homeDiscoverCursor 已消费歌曲总数 → 下次请求的 today_play_num
+  //   _homeDiscoverSeen    已消费过的 hash → 服务端去重之外的客户端兜底
+  //   _homeDiscoverSongs   展示与播放用的完整列表（首屏 4 首 + 后续批次 + 补货）
+  //
+  // 三者必须一起推进：只推 cursor 不记 seen，服务端若不认 today_play_num 就会
+  // 把同一批歌无限重放；只记 seen 不推 cursor，则会卡在同一个召回窗口里出不来。
+  List<KugouSongDetail> _homeDiscoverSongs = [];
+  int _homeDiscoverCursor = 0;
+  final Set<String> _homeDiscoverSeen = <String>{};
+  bool _homeDiscoverProgressLoaded = false;
+  bool _homeDiscoverLoadingMore = false;
+  static const HomeDiscoverProgressStore _homeDiscoverStore =
+      HomeDiscoverProgressStore();
+
   KugouPlaylist? _playlistDetail;
   KugouArtistDetail? _artistDetail;
   KugouAlbumDetail? _albumDetail;
@@ -245,6 +265,7 @@ class KugouProvider extends ChangeNotifier {
   bool get isDiscoverDataFresh =>
       _isDataFresh('rankList') &&
       _isDataFresh('recommendDaily') &&
+      _isDataFresh('homeDiscover') &&
       _isDataFresh('playlist') &&
       _isDataFresh('yuekuBanner') &&
       _isDataFresh('sceneMusic') &&
@@ -394,6 +415,162 @@ class KugouProvider extends ChangeNotifier {
       _playlistSongs?.songs.map((e) => e.toSong()).toList() ?? [];
   List<Song> get personalFmAsSongs =>
       _personalFmSongs.map((e) => e.toSong()).toList();
+  // ==================== 首页刷歌推荐 ====================
+
+  List<KugouSongDetail> get homeDiscoverSongs => _homeDiscoverSongs;
+  bool get homeDiscoverLoadingMore => _homeDiscoverLoadingMore;
+  List<Song> get homeDiscoverSongsAsSongs =>
+      _homeDiscoverSongs.map((e) => e.toSong()).toList();
+
+  /// 首屏刷歌的条数。刻意用文档默认的 4：它对应酷狗首页一次滑动一屏的量，
+  /// 发现页卡片也只渲染这么多。
+  static const int homeDiscoverFirstPageSize = 4;
+
+  /// 滑动/补货每批的条数。
+  static const int homeDiscoverBatchSize = 30;
+
+  /// 一次取批次时最多试几轮。整批都推过（seen 全命中）时把游标往前推再试，
+  /// 服务端召回窗口重叠、或 `today_play_num` 不被认时靠这个兜住。
+  static const int homeDiscoverMaxAttempts = 3;
+
+  Future<void> _ensureHomeDiscoverProgress() async {
+    if (_homeDiscoverProgressLoaded) return;
+    _homeDiscoverProgressLoaded = true;
+    final progress = await _homeDiscoverStore.load();
+    _homeDiscoverCursor = progress.cursor;
+    _homeDiscoverSeen
+      ..clear()
+      ..addAll(progress.seen);
+  }
+
+  /// 断点落盘。写失败只是丢一次断点（下次从头刷），不向上抛——调用方多半正挂在
+  /// 播放链路上，不该为一个可丢的缓存失败。
+  void _persistHomeDiscoverProgress() {
+    unawaited(
+      _homeDiscoverStore.save(
+        HomeDiscoverProgress(
+          cursor: _homeDiscoverCursor,
+          seen: Set<String>.of(_homeDiscoverSeen),
+        ),
+      ),
+    );
+  }
+
+  /// 把一批新歌并进刷歌列表：推进游标、记 seen、按 hash 去重。
+  ///
+  /// 返回真正新增的条数——调用方据此判断"还有没有更多"以及要不要再要一批。
+  ///
+  /// 刻意**重新赋值** [_homeDiscoverSongs] 而不是原地 `add`：刷歌的详情页用
+  /// `Selector<KugouProvider, List<KugouSongDetail>>` 订阅这份列表，而 `Selector`
+  /// 拿新旧值做 `==` 比较——同一个 List 实例原地改内容，引用没变、比较结果永远
+  /// 相等，于是新批次进了数据却永远画不出来（滑到底部什么也不发生）。换成新
+  /// 实例既能让 `Selector` 正常重建，也顺带让「这批是新内容」这件事在 widget
+  /// 树里是显式可见的。
+  int _ingestHomeDiscoverSongs(List<KugouSongDetail> incoming) {
+    if (incoming.isEmpty) return 0;
+    final merged = <KugouSongDetail>[];
+    for (final song in incoming) {
+      if (song.hash.isEmpty) continue;
+      if (!_homeDiscoverSeen.add(song.hash)) continue;
+      merged.add(song);
+    }
+    if (merged.isEmpty) return 0;
+    _homeDiscoverSongs = <KugouSongDetail>[
+      ..._homeDiscoverSongs,
+      ...merged,
+    ];
+    // 游标按"并进去多少"推进，而不是按"服务端推了多少"：seen 拦掉的重复项
+    // 并没有真正被消费，拿它们去填 today_play_num 会让游标跑得比实际快，
+    // 越刷越深、最后连服务端也取不到东西。
+    _homeDiscoverCursor += merged.length;
+    _persistHomeDiscoverProgress();
+    return merged.length;
+  }
+
+  /// 首屏刷歌（发现页卡片 + 详情页首次进入）。
+  ///
+  /// [forceRefresh] 只绕过 5 分钟 TTL，**不重置游标与 seen**：重置等于让用户
+  /// 反复看见刚刷过的那几首，"刷"就没有意义了。要换一批就继续往下拉。
+  Future<void> getHomeDiscover({bool forceRefresh = false}) async {
+    if (!forceRefresh && _isDataFresh('homeDiscover')) return;
+    _beginLoading();
+    _error = null;
+    try {
+      await _ensureHomeDiscoverProgress();
+      final result = await _apiClient.getHomeDiscover(
+        pagesize: homeDiscoverFirstPageSize,
+        todayPlayNum: _homeDiscoverCursor,
+      );
+      if (result == null) {
+        _error = '获取刷歌推荐失败';
+        return;
+      }
+      // 整批都推过时不清空列表：宁可这一轮卡片为空、留给用户下拉重试，也不要
+      // 用空列表盖掉已经拿到的歌（歌单页 _fetchSongs 是同一个道理）。
+      if (result.isEmpty) return;
+      _ingestHomeDiscoverSongs(result);
+      _dataTimestamps['homeDiscover'] = DateTime.now();
+    } catch (e) {
+      _error = e.toString();
+    }
+    _endLoading();
+  }
+
+  /// 追加一批刷歌推荐，返回**真正新并进 [_homeDiscoverSongs] 的那些**。
+  ///
+  /// 列表是被这个方法就地追加的，调用方不需要（也不应该）再往里塞一遍——返回值
+  /// 是给"要不要接着要下一批""还有没有更多"这类判断用的，不是给调用方复用的。
+  /// 这一点与 [fetchMorePersonalFm] 正好相反：那个**不**动 [personalFmSongs]，
+  /// 必须靠 [appendFmSongs] 另写一次。之所以能反过来，是因为刷歌的游标与去重
+  /// 全在本方法内部完成——游标必须跟"真正消费掉多少"同步推进，而消费这件事
+  /// 只有这里做得到；拆到调用方做，游标就无从与列表保持一致。
+  ///
+  /// [minCount] 是"这一趟至少要凑到多少首才算成功"。空批或整批都听过时把游标
+  /// 往前推一格再试，最多 [maxAttempts] 轮；全试完仍不足则返回已凑到的部分
+  /// （可能为空，空表示确实取不动了，调用方据此显示"没有更多了"）。
+  Future<List<KugouSongDetail>> fetchMoreHomeDiscover({
+    int minCount = homeDiscoverBatchSize,
+    int maxAttempts = homeDiscoverMaxAttempts,
+  }) async {
+    if (_homeDiscoverLoadingMore) return const [];
+    _homeDiscoverLoadingMore = true;
+    // 声明在 try 之外：finally 里要靠它决定要不要通知订阅者。
+    final fresh = <KugouSongDetail>[];
+    try {
+      await _ensureHomeDiscoverProgress();
+      for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        if (attempt > 0) {
+          // 上一轮整批被 seen 拦掉了，说明还停在同一个召回窗口里。
+          // 游标只在这里（拿不到新歌时）单独推一格：这里推的是"服务端已经给过
+          // 我们的条数"，与 _ingestHomeDiscoverSongs 推的"真正消费掉的条数"
+          // 是两笔账，混在一起会让游标失控。
+          _homeDiscoverCursor += homeDiscoverBatchSize;
+          _persistHomeDiscoverProgress();
+        }
+        final result = await _apiClient.getHomeDiscover(
+          pagesize: homeDiscoverBatchSize,
+          todayPlayNum: _homeDiscoverCursor,
+          noCache: true,
+        );
+        if (result == null || result.isEmpty) continue;
+        final added = _ingestHomeDiscoverSongs(result);
+        if (added > 0) {
+          fresh.addAll(
+            _homeDiscoverSongs.skip(_homeDiscoverSongs.length - added),
+          );
+          if (fresh.length >= minCount) break;
+        }
+      }
+      return fresh;
+    } finally {
+      _homeDiscoverLoadingMore = false;
+      // 必须自己通知：本方法不走 [_beginLoading]/[_endLoading] 计数器（它是滑动
+      // 与补货的增量路径，不该把整页的 loading 指示器点亮），所以不能指望那对
+      // 边沿通知顺带把新批次推给 UI。不通知的话详情页会一直停在 _hasMore 翻转
+      // 之后的旧列表上——数据到了、画面没动。
+      if (fresh.isNotEmpty) notifyListeners();
+    }
+  }
 
   /// 发现页数据是否已加载过（用于避免每次进入都请求）
   bool _hasLoadedDiscoverData = false;
@@ -411,6 +588,9 @@ class KugouProvider extends ChangeNotifier {
   void clearMemoryCache() {
     _rankList = null;
     _recommendSongs = [];
+    // 刷歌只清展示列表：游标与 seen 是"刷到哪了"的权威态，保存在
+    // HomeDiscoverProgressStore 里，一并清掉会让下拉刷新把刚刷过的歌重新端上来。
+    _homeDiscoverSongs = [];
     _yuekuBanner = null;
     _themeMusicData = null;
     _sceneData = null;
@@ -1330,6 +1510,10 @@ class KugouProvider extends ChangeNotifier {
     // 头像缓存按账号隔离：账号变化时清空
     _clearAvatarCacheIfUserChanged(userid);
 
+    // 刷歌断点同样按账号隔离（游标 = 这个账号今天刷到哪了）
+    _resetHomeDiscoverProgress();
+
+
     // 重载新账号的签到日历
     _localSignedDays.clear();
     await _loadLocalSignedDays();
@@ -1374,6 +1558,8 @@ class KugouProvider extends ChangeNotifier {
       _userHistoryData = null;
       _everydayHistory = null;
       _localSignedDays.clear();
+      _resetHomeDiscoverProgress();
+
 
       final remaining = _apiClient.sortedAccounts;
       if (remaining.isNotEmpty) {
@@ -1404,6 +1590,20 @@ class KugouProvider extends ChangeNotifier {
     await removeAccount(uid);
   }
 
+
+  /// 丢掉刷歌的断点与已消费集合。
+  ///
+  /// 断点与账号绑定：游标是"这个账号今天刷到哪了"，带着它换账号会让新账号从
+  /// 旧账号的位置继续刷，等于替新账号凭空消费掉一批推荐位。`logout` 与
+  /// `switchAccount` 都会走到这里，所以顺带把 [_homeDiscoverProgressLoaded]
+  /// 一起复位——不复位的话 [HomeDiscoverProgressStore] 的进程内缓存已经被
+  /// 上一账号填满，下一次 `load()` 根本不会回读。
+  void _resetHomeDiscoverProgress() {
+    _homeDiscoverCursor = 0;
+    _homeDiscoverSeen.clear();
+    _homeDiscoverProgressLoaded = false;
+    unawaited(_homeDiscoverStore.clear());
+  }
   void _clearAvatarCache() {
     try {
       // emptyCache 返回 Future，异步错误需用 catchError 捕获，
