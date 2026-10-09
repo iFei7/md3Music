@@ -82,12 +82,18 @@ jobs:
           flutter analyze --machine --no-fatal-warnings --no-fatal-infos > /tmp/analyze.json 2>/tmp/analyze.err
           code=$?
           set -e
+          export ANALYZE_EXIT=$code
           python3 - <<'PY'
-          import json, re
+          import json, re, os, sys
+          code = int(os.environ.get('ANALYZE_EXIT', '0') or 0)
           try:
               raw = open('/tmp/analyze.json', encoding='utf-8', errors='replace').read()
           except Exception:
               raw = ''
+          try:
+              err_txt = open('/tmp/analyze.err', encoding='utf-8', errors='replace').read()[-800:]
+          except Exception:
+              err_txt = ''
           items = []
           txt = raw.strip()
           # 形态 1：整体 JSON 数组
@@ -107,6 +113,7 @@ jobs:
                       except Exception:
                           pass
           errs = []
+          warns = []
           for it in items:
               if not isinstance(it, dict):
                   continue
@@ -117,33 +124,39 @@ jobs:
               msg = str(it.get('message') or it.get('description') or '')
               if 'ERROR' in sev or 'ERROR' in msg[:20]:
                   errs.append((f, line, msg))
+              elif 'WARNING' in sev:
+                  warns.append((f, line, msg))
           # 形态 3：纯文本 `error • msg • file:line:col`
-          if not errs:
+          if not errs and not items:
               for ln in raw.splitlines():
                   m = re.match(r'\s*error\s+•\s+(.+?)\s+•\s+(.+?):(\d+):(\d+)\s*•', ln)
                   if m:
                       errs.append((m.group(2), int(m.group(3)), m.group(1)))
+          pre = '/home/runner/work/md3Music/md3Music/'
+          def strip(f):
+              return f[len(pre):] if f.startswith(pre) else f
           if errs:
               for f, line, msg in errs[:10]:
-                  pre = '/home/runner/work/md3Music/md3Music/'
-                  if f.startswith(pre):
-                      f = f[len(pre):]
-                  print(f"::error file={f},line={line}::{msg[:140]}")
+                  print(f"::error file={strip(f)},line={line}::{msg[:140]}")
               if len(errs) > 10:
                   print(f'::error::ERROR 共 {len(errs)} 个，仅展示前 10')
+              print(f'::error::analyze 门禁：ERROR {len(errs)} 个')
+              sys.exit(1)
+          # 无 ERROR：warning/info 不拦构建（与「error 必须为 0」口径一致）
+          for f, line, msg in warns[:10]:
+              print(f"::warning file={strip(f)},line={line}::{msg[:140]}")
+          if warns:
+              print(f'::notice::无 ERROR；WARNING 共 {len(warns)} 个（不拦构建，后续清理）')
           else:
-              head = ' | '.join(raw.splitlines()[:3])[:200]
-              warns = [it for it in items if isinstance(it, dict) and str(it.get('severity','')).upper() == 'WARNING']
-              print(f'::notice::无 ERROR(exit={code})；WARNING {len(warns)} 个（不拦构建，后续清理）')
-              for it in warns[:10]:
-                  loc = it.get('location', {}) if isinstance(it.get('location'), dict) else {}
-                  f = str(it.get('file') or loc.get('file') or '?')
-                  ln = it.get('line') or loc.get('startLine') or 0
-                  msg = str(it.get('message') or '')[:140]
-                  print(f"::warning file={f},line={ln}::{msg}")
-              print(f'::notice::报告头: {head}')
+              print(f'::notice::无 ERROR、无 WARNING')
+          # 兜底：无解析结果但退出码非 0 → 可能是分析服务器崩溃，仍判失败
+          if code != 0 and not items:
+              print(f'::error::analyze 退出码 {code} 但未解析到任何诊断（疑似分析服务器异常）')
+              if err_txt:
+                  print(f'::error::stderr 尾部: {err_txt[-400:]}')
+              sys.exit(1)
+          sys.exit(0)
           PY
-          exit $code
 
       # 下载 release keystore（可选，不存在时用 debug keystore 兜底）
       - name: Download release keystore
