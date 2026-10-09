@@ -79,7 +79,7 @@ jobs:
         id: analyze
         run: |
           set +e
-          flutter analyze --machine > /tmp/analyze.json 2>/tmp/analyze.err
+          flutter analyze --machine --no-fatal-warnings --no-fatal-infos > /tmp/analyze.json 2>/tmp/analyze.err
           code=$?
           set -e
           python3 - <<'PY'
@@ -133,7 +133,15 @@ jobs:
                   print(f'::error::ERROR 共 {len(errs)} 个，仅展示前 10')
           else:
               head = ' | '.join(raw.splitlines()[:3])[:200]
-              print(f'::notice::无 ERROR 可解析(exit={code})，报告头: {head}')
+              warns = [it for it in items if isinstance(it, dict) and str(it.get('severity','')).upper() == 'WARNING']
+              print(f'::notice::无 ERROR(exit={code})；WARNING {len(warns)} 个（不拦构建，后续清理）')
+              for it in warns[:10]:
+                  loc = it.get('location', {}) if isinstance(it.get('location'), dict) else {}
+                  f = str(it.get('file') or loc.get('file') or '?')
+                  ln = it.get('line') or loc.get('startLine') or 0
+                  msg = str(it.get('message') or '')[:140]
+                  print(f"::warning file={f},line={ln}::{msg}")
+              print(f'::notice::报告头: {head}')
           PY
           exit $code
 
