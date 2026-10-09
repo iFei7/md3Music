@@ -76,7 +76,38 @@ jobs:
         run: flutter pub get
 
       - name: Flutter analyze
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        id: analyze
+        run: |
+          set +e
+          flutter analyze --machine > /tmp/analyze.json
+          code=$?
+          set -e
+          python3 - <<'PY'
+          import json
+          try:
+              d = json.load(open('/tmp/analyze.json', encoding='utf-8'))
+          except Exception:
+              print('::error::analyze machine 报告不可读，请看原始日志'); raise SystemExit(0)
+          n = 0
+          for it in d:
+              if it.get('type') != 'Diagnostic' or it.get('severity') != 'ERROR':
+                  continue
+              loc = it.get('location', {})
+              f = loc.get('file', '?')
+              # 绝对路径转仓内相对路径
+              for pre in ('/home/runner/work/md3Music/md3Music/',):
+                  if f.startswith(pre):
+                      f = f[len(pre):]
+              msg = it.get('message', '').replace('\n', ' ')[:120]
+              print(f"::error file={f},line={loc.get('startLine', 0)}::{msg}")
+              n += 1
+              if n >= 10:
+                  print('::error::ERROR 数量超过 10，其余见原始日志')
+                  break
+          if n == 0:
+              print('::notice::machine 报告无 ERROR，失败可能来自其他原因，请看原始日志')
+          PY
+          exit $code
 
       # 下载 release keystore（可选，不存在时用 debug keystore 兜底）
       - name: Download release keystore
