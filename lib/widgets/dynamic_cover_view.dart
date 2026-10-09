@@ -15,7 +15,7 @@ import '../providers/player_provider.dart';
 ///   未就绪 / 无动态封面 / 开关或网络不满足 / 任何失败 → 返回 `SizedBox.shrink()`，
 ///   父级渲染与交互（长按 Zen、下拉收起）完全不受影响。
 /// - **静音 + 不抢音频焦点**：`setVolume(0)` + `VideoPlayerOptions(mixWithOthers: true)`，
-///   绝不打断 just_audio 的音乐播放（USB 独占路径同样不受影响）。
+///   绝不打断 just_audio 的音乐播放。
 /// - **字节来源二选一**：
 ///   - 私有构建：命中本地缓存 → `VideoPlayerController.file`（零网络）；
 ///     未命中 → `networkUrl`（回环代理，边下边播）并通知私有层后台落盘。

@@ -4,19 +4,15 @@ import 'dart:io';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/services/usb_audio_service.dart';
 import '../../core/utils/audio_format_utils.dart';
 import '../../core/utils/audio_scanner.dart' show audioExtensions;
 import '../../data/models/song.dart';
 import '../../providers/player_provider.dart';
 import '../../widgets/player_artwork_image.dart';
-import '../../widgets/usb_exclusive_section.dart';
 
-/// 歌曲信息页：展示当前播放歌曲的音频格式（采样频率/位深/码率/声道）与
-/// USB 独占输出开关（与设置页使用同一 [UsbExclusiveSection]，信息保持一致）。
+/// 歌曲信息页：展示当前播放歌曲的音频格式（采样频率/位深/码率/声道）。
 ///
-/// 频率/位深/码率/声道取自 ExoPlayer 实际解码输出格式（原生 UsbAudioSinkController
-/// 在 configure() 时捕获，无论是否开启独占都会更新）。
+/// 频率/位深/码率/声道取自 ExoPlayer TrackGroup（歌曲原始属性）与音频文件头解析。
 class SongInfoPage extends StatefulWidget {
   const SongInfoPage({super.key});
 
@@ -25,8 +21,6 @@ class SongInfoPage extends StatefulWidget {
 }
 
 class _SongInfoPageState extends State<SongInfoPage> {
-  Map<String, dynamic> _status = const {};
-
   /// 当前曲目的源格式（TrackGroup，含歌曲原始采样率/码率/声道），null=尚未获取。
   Map<String, dynamic>? _sourceFormat;
 
@@ -42,12 +36,6 @@ class _SongInfoPageState extends State<SongInfoPage> {
   @override
   void initState() {
     super.initState();
-    _status = UsbAudioService.instance.lastStatus;
-    UsbAudioService.instance.statusStream.listen((s) {
-      if (mounted) setState(() => _status = s);
-    });
-    // 兜底 c：页面可见时主动查一次（覆盖原生事件未推送的边界场景）
-    UsbAudioService.instance.refresh();
     // 每秒刷新一次文件大小
     _fileSizeTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _refreshFileSize();
@@ -142,7 +130,7 @@ class _SongInfoPageState extends State<SongInfoPage> {
   }
 
   /// 解析音频文件头（FLAC STREAMINFO / WAV fmt chunk）获取原始位深。
-  /// 实现统一收敛到 [AudioFormatUtils]，与 USB 独占格式链共用同一逻辑。
+  /// 实现统一收敛到 [AudioFormatUtils]。
   Future<int?> _parseHeaderBitDepth(String? url, String? localPath) =>
       AudioFormatUtils.parseAudioBitDepth(url, localPath);
 
@@ -169,11 +157,6 @@ class _SongInfoPageState extends State<SongInfoPage> {
           const SizedBox(height: 8),
           _buildSectionHeader('音频格式'),
           _buildFormatCard(colorScheme),
-          const SizedBox(height: 8),
-          _buildSectionHeader('USB 独占'),
-          UsbExclusiveSection(
-            onAutoPause: () => context.read<PlayerProvider>().pause(),
-          ),
           const SizedBox(height: 32),
         ],
       ),
@@ -261,24 +244,12 @@ class _SongInfoPageState extends State<SongInfoPage> {
     // 位深权威来源：音频文件头解析（FLAC/WAV 原始位深）
     final srcBits = _headerBitDepth ?? 0;
 
-    // 回退：解码输出格式（未拿到源格式时）
-    final decRate = (_status['lastSampleRate'] as num?)?.toInt() ?? 0;
-    final decCh = (_status['lastChannelCount'] as num?)?.toInt() ?? 0;
-    final decEnc = (_status['lastEncoding'] as num?)?.toInt() ?? 2;
+    final hasData = hasSrc;
+    final rate = srcRate;
+    final ch = srcCh;
 
-    final hasData = hasSrc || decRate > 0;
-    final rate = srcRate > 0 ? srcRate : decRate;
-    final ch = srcCh > 0 ? srcCh : decCh;
-
-    // 位深优先级：源 bitsPerSample > 源 pcmEncoding > 解码输出
-    final bits = srcBits > 0
-        ? srcBits
-        : (srcPcmEnc > 0 ? _encodingBits(srcPcmEnc) : _encodingBits(decEnc));
-
-    // USB 实际输出位深（独占开启时有效）
-    final dacBits = (_status['dacBitDepth'] as num?)?.toInt() ?? 0;
-    // 独占开启时音频直写 DAC，解码输出格式无意义 → 隐藏"解码输出"行
-    final exclusiveEnabled = (_status['enabled'] as bool?) ?? false;
+    // 位深优先级：源 bitsPerSample > 源 pcmEncoding
+    final bits = srcBits > 0 ? srcBits : _encodingBits(srcPcmEnc);
 
     // 文件大小：每秒刷新（网络=已下载字节，本地=文件大小）
     final fileSize = _fileSizeBytes;
@@ -293,16 +264,6 @@ class _SongInfoPageState extends State<SongInfoPage> {
         children: [
           _buildFormatRow('采样频率', hasData ? _formatRate(rate) : '—'),
           _buildFormatRow('位深', hasData ? '$bits-bit' : '—'),
-          if (!exclusiveEnabled)
-            _buildFormatRow(
-              '解码输出',
-              hasData
-                  ? (decRate > 0
-                      ? '${_formatRate(decRate)} · ${_encodingBits(decEnc)}-bit'
-                      : '${_encodingBits(decEnc)}-bit')
-                  : '—',
-            ),
-          if (dacBits > 0) _buildFormatRow('USB 输出', '$dacBits-bit(USB输出)'),
           if (fileSize != null) _buildFormatRow('文件大小', _formatFileSize(fileSize)),
           _buildFormatRow('声道', hasData ? _formatChannels(ch) : '—'),
           if (!hasData)
@@ -341,7 +302,7 @@ class _SongInfoPageState extends State<SongInfoPage> {
     );
   }
 
-  /// 采样率/位深格式化与 Media3 编码映射统一走 [AudioFormatUtils]（与 USB 格式链一致）。
+  /// 采样率/位深格式化与 Media3 编码映射统一走 [AudioFormatUtils]。
   String _formatRate(int rate) => AudioFormatUtils.formatRate(rate);
 
   String _formatFileSize(int bytes) {

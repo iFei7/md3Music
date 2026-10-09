@@ -13,10 +13,6 @@ import '../../core/services/dynamic_cover_service.dart';
 import '../../core/services/equalizer_service.dart';
 import '../../core/services/media_notification_service.dart';
 import '../../core/services/spectrum_service.dart';
-import '../../core/services/usb_audio_service.dart';
-import '../../core/services/direct_pcm_service.dart';
-import '../../core/services/device_capabilities.dart';
-import '../../core/services/output_mode_coordinator.dart';
 import '../../widgets/depth_cover_host.dart';
 import '../../widgets/marquee_text.dart';
 import '../../core/utils/local_lyric_loader.dart';
@@ -2768,16 +2764,7 @@ class _FullPlayerState extends State<FullPlayer>
   }
 
   // MD3E v2: 音量调节改为右上角长按音质徽章呼出。
-  // 独占开启时控制 USB 独立音量（与设置页同步），否则控制应用音量；带模式标识。
   void _showVolumeDialog(PlayerProvider playerProvider) {
-    final usbService = UsbAudioService.instance;
-    final usbEnabled = usbService.lastStatus['enabled'] == true;
-    // Direct PCM 的 unity 音量档：AudioTrack 的 track volume 被固定为 1.0，
-    // 应用内滑块拖动不会有任何变化（PlayerProvider.setVolume 会拦下并改记 1.0）。
-    // 与其让用户对着一个失灵的滑块困惑，不如明确告知「用系统音量键」并给一个
-    // 一键关闭该档的出口。
-    final unityLocked =
-        !usbEnabled && OutputModeCoordinator.instance.forceUnityVolume;
     showDialog(
       context: context,
       builder: (context) {
@@ -2789,13 +2776,9 @@ class _FullPlayerState extends State<FullPlayer>
             constraints: const BoxConstraints(maxWidth: 280),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-              child: unityLocked
-                  ? _buildUnityVolumeNotice(context)
-                  : StatefulBuilder(
+              child: StatefulBuilder(
                       builder: (context, setState) {
-                  final volume = usbEnabled
-                      ? usbService.usbVolumePercent / 100
-                      : playerProvider.volume;
+                  final volume = playerProvider.volume;
                   final percent = (volume * 100).round();
                   final icon = volume <= 0
                       ? Icons.volume_off
@@ -2806,26 +2789,22 @@ class _FullPlayerState extends State<FullPlayer>
                   return Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // 模式标识：独占状态 / 普通状态
+                      // 模式标识：普通状态
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color:
-                              (usbEnabled ? Colors.green : colorScheme.primary)
-                                  .withValues(alpha: 0.12),
+                          color: colorScheme.primary.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
-                          usbEnabled ? 'USB 独占音量' : '应用音量',
+                          '应用音量',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: usbEnabled
-                                ? Colors.green
-                                : colorScheme.primary,
+                            color: colorScheme.primary,
                           ),
                         ),
                       ),
@@ -2842,12 +2821,7 @@ class _FullPlayerState extends State<FullPlayer>
                           hapticConfig: M3EHapticConfig.discrete(),
                         ),
                         onChanged: (value) {
-                          if (usbEnabled) {
-                            // 独占：与设置页「USB 音量」同步
-                            usbService.setUsbVolume(value * 100);
-                          } else {
-                            playerProvider.setVolume(value);
-                          }
+                          playerProvider.setVolume(value);
                           setState(() {});
                         },
                       ),
@@ -2857,7 +2831,7 @@ class _FullPlayerState extends State<FullPlayer>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        usbEnabled ? '与设置页「USB 音量」同步' : '普通播放音量（重启后保留）',
+                        '普通播放音量（重启后保留）',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
@@ -2870,55 +2844,6 @@ class _FullPlayerState extends State<FullPlayer>
           ),
         );
       },
-    );
-  }
-
-  /// unity 音量档下的音量面板：滑块失效，改为说明 + 一键关闭该档。
-  Widget _buildUnityVolumeNotice(BuildContext context) {
-    final ColorScheme cs = Theme.of(context).colorScheme;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Center(
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: cs.primary.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              '系统音量控制中',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: cs.primary,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Icon(Icons.volume_up, size: 32, color: cs.primary),
-        const SizedBox(height: 8),
-        Text(
-          'Direct PCM（unity 音量）下应用音量固定为 100%，\n请用系统媒体音量键调节。',
-          textAlign: TextAlign.center,
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: cs.onSurfaceVariant),
-        ),
-        const SizedBox(height: 12),
-        TextButton(
-          onPressed: () async {
-            await DirectPcmService.instance
-                .setFeature(DirectPcmFeature.unityVolume, false);
-            if (context.mounted) Navigator.of(context).pop();
-          },
-          child: const Text('关闭 unity 音量，恢复应用内滑块'),
-        ),
-      ],
     );
   }
 
@@ -3137,7 +3062,7 @@ class _FullPlayerState extends State<FullPlayer>
                     showAddToPlaylistDialog(rootContext, song);
                   },
                 ),
-                // 歌曲信息：频率/位深/码率/声道 + USB 独占开关（原顶栏按钮收纳到菜单）
+                // 歌曲信息：频率/位深/码率/声道（原顶栏按钮收纳到菜单）
                 ListTile(
                   leading: const Icon(Icons.info_outline),
                   title: const Text('歌曲信息'),

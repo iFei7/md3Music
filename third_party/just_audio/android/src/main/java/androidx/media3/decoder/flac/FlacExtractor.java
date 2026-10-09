@@ -152,7 +152,7 @@ public final class FlacExtractor implements Extractor {
       }
       int outputSize = outputByteBuffer.limit();
       if (outputSize == 0) {
-        // [UsbDiag] 2026-09-14（32bit FLAC 定位）：metadata 已解析成功（格式已向渲染器发出），
+        // 2026-09-14 诊断（32bit FLAC 定位）：metadata 已解析成功（格式已向渲染器发出），
         // 但**第一个音频帧就到了 end-of-input** ⇒ 零样本 + 无声，且 native 层的 ALOGE 被
         // `readBuffer` 的 `state == END_OF_STREAM` 条件抑制，表现为「静默 EOS、无任何错误」。
         // 这里把判别信息一次性打出来：
@@ -161,7 +161,7 @@ public final class FlacExtractor implements Extractor {
         //   decoderState = ABORTED/其它 → libFLAC 解码失败（如 1.3.2 对 32bps 的支持限制）。
         if (!firstSampleEmitted) {
           Log.w(
-              "UsbDiag",
+              "FlacExtractor",
               "FlacExtractor: EOS before first sample (decoderState="
                   + decoderJni.getStateString()
                   + ", inputPos="

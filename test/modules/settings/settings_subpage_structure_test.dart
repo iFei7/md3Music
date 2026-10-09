@@ -188,7 +188,6 @@ void main() {
 
   test('未下钻分类的设置项全部留在二级页', () {
     for (final category in const [
-      'USB 独占',
       'AI 代理',
       '缓存与数据',
       '关于',

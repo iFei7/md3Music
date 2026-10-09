@@ -394,14 +394,14 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   private long lastRenderProbeMs;
   private long lastFeedProbeMs;
   private long lastDrainProbeMs;
-  /** [UsbDiag] P0-5 v3：flushCodec churn 计数、一次性堆栈标记与构建标记。 */
+  /** [Diag] P0-5 v3：flushCodec churn 计数、一次性堆栈标记与构建标记。 */
   private long diagFlushWindowStartMs;
   private int diagFlushCount;
   private boolean diagFlushStackDumped;
   private boolean diagFlushProbeAlive;
-  /** [UsbDiag] P0-5：InsufficientCapacity 定量探针限频。 */
+  /** [Diag] P0-5：InsufficientCapacity 定量探针限频。 */
   private long lastInsuffProbeMs;
-  /** [UsbDiag] P0-5：每个 codec 实例只打一次实测输入缓冲容量。 */
+  /** [Diag] P0-5：每个 codec 实例只打一次实测输入缓冲容量。 */
   private boolean diagInputCapLogged;
   private boolean bypassSampleBufferPending;
   private boolean bypassDrainAndReinitialize;
@@ -855,7 +855,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
 
   @Override
   public void render(long positionUs, long elapsedRealtimeUs) throws ExoPlaybackException {
-    // [UsbDiag] P0-4 观测：render 入口状态快照（限频 1s）。回答两个问题：
+    // [Diag] P0-4 观测：render 入口状态快照（限频 1s）。回答两个问题：
     // ① 停喂窗口内渲染循环是否仍在被调用；② 走哪条分支——尤其 inputFormat==null 的
     // 早退分支（既不喂 sink 也不报错，正是「handleBuffer 不出现」的可疑形态）。
     long probeNowMs = getClock().elapsedRealtime();
@@ -980,12 +980,12 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
 
   /** Flushes the codec. */
   private void flushCodec() {
-    // [UsbDiag] P0-5 观测 v3：flushCodec 自身的高频调用点定位（一次性堆栈）+ 构建标记。
+    // [Diag] P0-5 观测 v3：flushCodec 自身的高频调用点定位（一次性堆栈）+ 构建标记。
     // v2 的 disableRenderer 堆栈未触发 → churn 不走 onDisabled，故把探针下移到本方法，
     // 覆盖全部四个调用点：onPositionReset / onDisabled / InsufficientCapacity / processEndOfStream。
     if (!diagFlushProbeAlive) {
       diagFlushProbeAlive = true;
-      Log.i(TAG, "UsbDiag flushProbe v3 alive");
+      Log.i(TAG, "flushProbe v3 alive");
     }
     long diagFlushNow = getClock().elapsedRealtime();
     if (diagFlushNow - diagFlushWindowStartMs > 1000L) {
@@ -1009,7 +1009,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   }
 
   /**
-   * [UsbDiag] P0-5 v4：样本超限（InsufficientCapacity）时是否 flush codec。
+   * [Diag] P0-5 v4：样本超限（InsufficientCapacity）时是否 flush codec。
    * 默认 true（视频语义：必须回到关键帧）；音频子类应返回 false——
    * 音频帧自解码，flush 会让 codec 进入过渡态（dequeueInputBufferIndex 恒 -1）、
    * 渲染循环空转，实测在连续超限帧时退化成 ~100Hz churn（数秒静默）。
@@ -1258,7 +1258,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
 
   private void initCodec(MediaCodecInfo codecInfo, @Nullable MediaCrypto crypto) throws Exception {
     Format inputFormat = checkNotNull(this.inputFormat);
-    // [UsbDiag] P0-4 观测：codec 初始化（含格式），与 release/reinitialize 组成生命周期链
+    // [Diag] P0-4 观测：codec 初始化（含格式），与 release/reinitialize 组成生命周期链
     // P0-5：重置一次性的输入缓冲容量打点（每个 codec 实例记一次实测容量）
     diagInputCapLogged = false;
     Log.i(TAG, "codec: init " + codecInfo.name + " sr=" + inputFormat.sampleRate
@@ -1361,7 +1361,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   }
 
   /**
-   * [UsbDiag] P0-4 观测：投喂（feedInputBuffer）原因探针，限频 1s。
+   * [Diag] P0-4 观测：投喂（feedInputBuffer）原因探针，限频 1s。
    * 用于在「render 在跑、codec 在、却没有 handleBuffer」时定性：是源没数据
    * （RESULT_NOTHING_READ → 上游 loader/period），还是解码器输入缓冲耗尽，还是
    * drainState/inputEnded 早退。
@@ -1399,7 +1399,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       }
       buffer.data = codec.getInputBuffer(inputIndex);
       buffer.clear();
-      // [UsbDiag] P0-5：每个 codec 实例只打一次实测输入缓冲容量 —— 用于确认
+      // [Diag] P0-5：每个 codec 实例只打一次实测输入缓冲容量 —— 用于确认
       // KEY_MAX_INPUT_SIZE 下限修复是否真的让缓冲变大（配合 feed: InsufficientCapacity 定量）。
       if (!diagInputCapLogged) {
         diagInputCapLogged = true;
@@ -1449,7 +1449,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     try {
       result = readSource(formatHolder, buffer, /* readFlags= */ 0);
     } catch (InsufficientCapacityException e) {
-      // [UsbDiag] P0-5 定量探针（限频 1s）：样本需求 vs codec 输入缓冲容量
+      // [Diag] P0-5 定量探针（限频 1s）：样本需求 vs codec 输入缓冲容量
       long insuffNowMs = getClock().elapsedRealtime();
       if (insuffNowMs - lastInsuffProbeMs >= 1000L) {
         lastInsuffProbeMs = insuffNowMs;
@@ -1460,7 +1460,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
             + " mime=" + (codecInputFormat != null ? codecInputFormat.sampleMimeType : "null")
             + " codec=" + (codecInfo != null ? codecInfo.name : "null"));
       }
-      // [UsbDiag] P0-5 v4：flush 改为可由子类否决（音频=否决）。
+      // [Diag] P0-5 v4：flush 改为可由子类否决（音频=否决）。
       // media3 原逻辑「丢样本 + flushCodec() 让渲染从关键帧重来」是视频语义；
       // 音频帧自解码（FLAC 帧间独立），flush 既不必要还会造成额外破坏：
       // codec 进入过渡态（dequeueInputBufferIndex=-1）→ 渲染循环空转 →
@@ -1581,7 +1581,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     }
 
     onQueueInputBuffer(buffer);
-    // [UsbDiag] P0-4 观测：投喂心跳（限频 1s）。与上面的失败原因共用限频 ——
+    // [Diag] P0-4 观测：投喂心跳（限频 1s）。与上面的失败原因共用限频 ——
     // 停喂窗口内若既无 heartbeat 也无失败原因，说明渲染循环根本没走到 feed。
     feedProbe("queued pts=" + buffer.timeUs + " bytes=" + checkNotNull(buffer.data).limit());
     int flags = getCodecBufferFlags(buffer);
@@ -2114,7 +2114,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
             && (inputStreamEnded || codecDrainState == DRAIN_STATE_WAIT_END_OF_STREAM)) {
           processEndOfStream();
         }
-        // [UsbDiag] P0-4 观测：解码器无输出（TRY_AGAIN_LATER）限频 1s
+        // [Diag] P0-4 观测：解码器无输出（TRY_AGAIN_LATER）限频 1s
         long drainNow = getClock().elapsedRealtime();
         if (drainNow - lastDrainProbeMs >= 1000L) {
           lastDrainProbeMs = drainNow;
@@ -2434,7 +2434,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
   }
 
   private void reinitializeCodec() throws ExoPlaybackException {
-    // [UsbDiag] P0-4 观测：codec 重建（重建后若长时间 no-input-buffer 即疑似 codec 卡死）
+    // [Diag] P0-4 观测：codec 重建（重建后若长时间 no-input-buffer 即疑似 codec 卡死）
     Log.i(TAG, "codec: reinitialize");
     releaseCodec();
     maybeInitCodecOrBypass();

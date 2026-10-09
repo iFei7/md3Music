@@ -15,8 +15,8 @@ import java.nio.FloatBuffer;
  *
  * <p>在 AudioSink 出口对 PCM 逐样本乘以一个「逐轨固定线性增益」。增益可 &gt;1（放大，
  * ExoPlayer 的 AudioTrack 只能衰减），用于把安静歌放大到参考响度；也可 &lt;1 压低响亮歌。
- * 正常输出与 USB 独占输出两条路径统一生效（本装饰器包在 UsbAudioSinkController.wrap 之外，
- * 其 handleBuffer 先缩放，再把已增益的 PCM 交给下层，USB 捕获到的即为此缩放后的数据）。
+ * 本装饰器包在频谱 PCM 捕获层（SpectrumPcmTap）之外，其 handleBuffer 先缩放，再把
+ * 已增益的 PCM 交给下层，频谱捕获到的即为此缩放后的数据。
  *
  * <p>工程要点：
  * <ul>

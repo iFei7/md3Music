@@ -17,7 +17,7 @@ import java.util.Arrays;
  *
  * <p>线程约定：所有 DSP 状态只在音频线程变更（queueInput/getOutput/flush）；
  * 控制参数由 {@link ViperMasterProcessor} 以 volatile 挂起字段投递、queueInput 头部消费。
- * 关闭态 {@link #process} 逐样本原样透传——USB 独占输出的 bit-perfect 承诺。
+ * 关闭态 {@link #process} 逐样本原样透传（保证 DSP 关闭时不改动音频数据）。
  */
 public final class ViperMasterChain {
 

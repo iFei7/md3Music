@@ -15,7 +15,6 @@ import '../../core/services/dynamic_cover_service.dart';
 import '../../core/services/equalizer_service.dart';
 import '../../core/services/media_notification_service.dart';
 import '../../core/services/spectrum_service.dart';
-import '../../core/services/usb_audio_service.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../main.dart';
@@ -3109,9 +3108,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   }
 
   void _showVolumeDialog(PlayerProvider playerProvider) {
-    // 独占开启时控制 USB 独立音量（与设置页同步），否则控制应用音量；带模式标识
-    final usbService = UsbAudioService.instance;
-    final usbEnabled = usbService.lastStatus['enabled'] == true;
     showDialog(
       context: context,
       builder: (context) {
@@ -3125,9 +3121,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
               child: StatefulBuilder(
                 builder: (context, setState) {
-                  final volume = usbEnabled
-                      ? usbService.usbVolumePercent / 100
-                      : playerProvider.volume;
+                  final volume = playerProvider.volume;
                   final percent = (volume * 100).round();
                   final icon = volume <= 0
                       ? Icons.volume_off
@@ -3138,26 +3132,22 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                   return Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // 模式标识：独占状态 / 普通状态
+                      // 模式标识：普通状态
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color:
-                              (usbEnabled ? Colors.green : colorScheme.primary)
-                                  .withValues(alpha: 0.12),
+                          color: colorScheme.primary.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
-                          usbEnabled ? 'USB 独占音量' : '应用音量',
+                          '应用音量',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: usbEnabled
-                                ? Colors.green
-                                : colorScheme.primary,
+                            color: colorScheme.primary,
                           ),
                         ),
                       ),
@@ -3174,12 +3164,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                           hapticConfig: M3EHapticConfig.discrete(),
                         ),
                         onChanged: (value) {
-                          if (usbEnabled) {
-                            // 独占：与设置页「USB 音量」同步
-                            usbService.setUsbVolume(value * 100);
-                          } else {
-                            playerProvider.setVolume(value);
-                          }
+                          playerProvider.setVolume(value);
                           setState(() {});
                         },
                       ),
@@ -3189,7 +3174,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        usbEnabled ? '与设置页「USB 音量」同步' : '普通播放音量（重启后保留）',
+                        '普通播放音量（重启后保留）',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
@@ -3410,7 +3395,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                     showAddToPlaylistDialog(rootContext, song);
                   },
                 ),
-                // 歌曲信息：频率/位深/码率/声道 + USB 独占开关（原顶栏按钮收纳到菜单）
+                // 歌曲信息：频率/位深/码率/声道（原顶栏按钮收纳到菜单）
                 ListTile(
                   leading: const Icon(Icons.info_outline),
                   title: const Text('歌曲信息'),

@@ -16,7 +16,6 @@ import 'package:video_player/video_player.dart';
 import '../../core/services/wakelock_service.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/services/pip_service.dart';
-import '../../core/services/usb_audio_service.dart';
 import '../../data/models/mv_models.dart';
 import '../../data/models/song.dart';
 import '../../data/repositories/settings_repository.dart';
@@ -148,8 +147,6 @@ class _MvPlayerPageState extends State<MvPlayerPage> {
       setState(() => _autoPipEnabled = enabled);
       _syncPipActive();
     });
-    // USB 独占开启时 MV 无系统音频：若开启「播放 MV 时自动关闭独占」则进入即关闭
-    _maybeAutoDisableUsbExclusive();
     // 读取弹幕开关与透明度：默认关闭 / 1.0（与官方 App 一致）
     SettingsRepository().getMvDanmakuEnabled().then((enabled) {
       if (!mounted) return;
@@ -160,19 +157,6 @@ class _MvPlayerPageState extends State<MvPlayerPage> {
       setState(() => _danmakuOpacity = opacity);
     });
     _loadMv();
-  }
-
-  /// 进入 MV 播放时自动关闭 USB 独占（绕过 AudioFlinger，MV 无声），并 Toast 提示。
-  Future<void> _maybeAutoDisableUsbExclusive() async {
-    try {
-      if (!await UsbAudioService.instance.getAutoDisableForMv()) return;
-      if (!await UsbAudioService.instance.isEnabled()) return;
-      await UsbAudioService.instance.disableExclusive();
-      if (!mounted) return;
-      showToast('已自动关闭 USB 独占输出，恢复系统音频');
-    } catch (_) {
-      // 关闭失败不阻塞 MV 播放
-    }
   }
 
   @override

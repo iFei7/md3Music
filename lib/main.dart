@@ -18,7 +18,6 @@ import 'core/services/lyricon_provider_service.dart';
 import 'core/services/listening_grade_service.dart';
 import 'core/services/listen_report_service.dart';
 import 'core/services/media_notification_service.dart';
-import 'core/services/usb_audio_service.dart';
 import 'core/services/wakelock_service.dart';
 import 'data/repositories/settings_repository.dart';
 import 'providers/theme_provider.dart';
@@ -157,10 +156,6 @@ Future<(bool, bool, bool)> runBootstrap() async {
   // 注册 Lyricon 反向回调（连接状态变更 → UI 刷新）
   // initialize 内部仅 setMethodCallHandler，同步完成，无需 await
   LyriconProviderService.instance.initialize();
-  // 启动 USB 独占输出状态轮询（设置页/歌曲信息页共用实时状态）
-  if (!kIsWeb && Platform.isAndroid) {
-    UsbAudioService.instance.init();
-  }
 
   // 启动听歌等级：本地听歌时长累计 + 自动上报（内部按平台/登录态自行处理）
   ListeningGradeService.instance.init();

@@ -99,7 +99,7 @@ void main() {
     test('seek 不增加时长，只重置起表基准', () {
       tracker.start(songId: 's1', mixsongid: 'm1');
       elapse(5000);
-      tracker.onSeek(); // 拖动（USB 独占下可能耗时数百 ms）
+      tracker.onSeek(); // 拖动（可能耗时数百 ms）
       elapse(300);
       tracker.onSeek();
       elapse(2000);

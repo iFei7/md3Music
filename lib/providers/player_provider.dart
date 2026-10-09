@@ -30,9 +30,6 @@ import '../core/services/playback_duration_tracker.dart';
 import '../core/services/media_notification_service.dart';
 import '../core/services/wakelock_service.dart';
 import '../core/services/media_store_service.dart';
-import '../core/services/usb_audio_service.dart';
-import '../core/services/direct_pcm_service.dart';
-import '../core/services/output_mode_coordinator.dart';
 import '../data/models/song.dart';
 import '../modules/player/comments_view.dart';
 import '../modules/player/mv_player_page.dart';
@@ -804,9 +801,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription<dynamic>? _playerErrorSubscription;
   StreamSubscription<double>? _speedSubscription;
 
-  /// 输出两层开关（USB 独占 / 系统 Direct PCM）变化监听。
-  VoidCallback? _outputModeListener;
-
   dynamic _audioService;
   bool _audioInitialized = false;
 
@@ -978,34 +972,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       await _audioService.init();
       _ensureNotDisposed();
       _initStreams();
-      // USB 独占关闭后自动恢复 delegate 输出：旧 usb HAL 输出流被独占 force
-      // disconnect 杀死，只有重建 AudioTrack（复刻"暂停→重播"）才能重新出声。
-      UsbAudioService.instance.onExclusiveDisabled =
-          _handleUsbExclusiveDisabled;
-      // 直写开启失败（含拔插广播触发的自动恢复失败 —— 那种情况原生没有
-      // MethodChannel result，只能靠 onExclusiveFailed 事件）→ 关闭外层总开关，
-      // 整体回到系统默认输出。
-      UsbAudioService.instance.onExclusiveFailed = (String code, String message) {
-        OutputModeCoordinator.instance.onExclusiveFailed(code, message);
-      };
-      // 输出两层开关（USB 独占 / 系统 Direct PCM）+ 效果链旁路。注册重建回调：
-      // float 强制 / performanceMode / 缓冲都在 DefaultAudioSink.configure 生效，
-      // 切档后必须重建 AudioTrack，复刻 USB 独占的 pause→play 机制。
-      OutputModeCoordinator.instance
-        ..volumeApplier = (double v) async {
-          _volume = v.clamp(0.0, 1.0);
-          await _audioService?.setVolume(_volume);
-        }
-        ..rebuildRequester = _rebuildOutputForModeChange
-        // 进入 Direct PCM 的 unity 档时主动压到 1.0（setVolume 只在用户拖动时才走到）
-        ..unityVolumeApplier = _applyUnityVolumeForDirectPcm;
-      await DirectPcmService.instance.init();
-      _ensureNotDisposed();
-      await OutputModeCoordinator.instance.init();
-      _ensureNotDisposed();
-      // 独占失败 / 拔线自动关闭：消费一次提示并告知 UI。
-      _outputModeListener = _onOutputModeChanged;
-      OutputModeCoordinator.instance.addListener(_outputModeListener!);
       await _loadDefaultQuality();
       _ensureNotDisposed();
       await _syncIgnoreAudioFocus();
@@ -1369,90 +1335,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     return AudioServiceLoader.load();
   }
 
-  /// USB 独占关闭后自动恢复 delegate 输出（复刻用户"暂停→重播"）。
-  ///
-  /// 根因：开启独占时 force disconnect 杀死了 usb HAL 的旧输出流，关闭独占后
-  /// delegate AudioTrack 仍连在失效流上 → 数据照走但 DAC 无声；setPreferredDevice /
-  /// pause / play 都不重建该流，只有 Media3 重建 AudioTrack（configure）才能让
-  /// usb HAL 重新创建输出流。故收到 enabled→false 后，等 usb HAL 接管 DAC
-  /// （closeDevice 交还内核需时间），再执行一次 pause→play 触发重建。
-  Future<void> _handleUsbExclusiveDisabled() async {
-    try {
-      await Future.delayed(const Duration(milliseconds: 600));
-      final player = _audioService;
-      if (player == null || !_audioInitialized) return;
-      if (!isPlaying) return;
-      // ignore: avoid_dynamic_calls
-      await player.pause();
-      await Future.delayed(const Duration(milliseconds: 120));
-      // ignore: avoid_dynamic_calls
-      await player.playCommand();
-      // ignore: avoid_print
-      print(
-        '[PlayerProvider] USB exclusive disabled — delegate re-route via pause/play',
-      );
-    } catch (_) {
-      // 静默：恢复失败时用户手动暂停/重播仍可恢复
-    }
-  }
-
-  /// 进入「系统 Direct PCM + unity 音量」档时把应用音量压到 1.0。
-  ///
-  /// bit-perfect 要求 track volume 恒为 1.0（否则 fast mixer 施加增益）。
-  /// 用户原本的音量先记在协调器里，退出该档时由 [_onOutputModeChanged] 还原。
-  Future<void> _applyUnityVolumeForDirectPcm() async {
-    try {
-      if (!OutputModeCoordinator.instance.forceUnityVolume) return;
-      final current = _volume;
-      if (current >= 0.999) return;
-      OutputModeCoordinator.instance.rememberUserVolume(current);
-      _volume = 1.0;
-      await _audioService?.setVolume(1.0);
-      notifyListeners();
-      // ignore: avoid_print
-      print('[PlayerProvider] Direct PCM unity 音量：$current -> 1.0');
-    } catch (_) {
-      // 静默：压音量失败不影响播放
-    }
-  }
-
-  /// 输出模式切换后重配输出：复刻 [pause → play]（只有 Media3 重建 AudioTrack
-  /// 才会重跑 `DefaultAudioSink.configure`，新的 float / performanceMode / 缓冲
-  /// 才会生效）。
-  Future<void> _rebuildOutputForModeChange() async {
-    try {
-      final player = _audioService;
-      if (player == null || !_audioInitialized) return;
-      if (!isPlaying) return;
-      // ignore: avoid_dynamic_calls
-      await player.pause();
-      await Future.delayed(const Duration(milliseconds: 120));
-      // ignore: avoid_dynamic_calls
-      await player.playCommand();
-      // ignore: avoid_print
-      print('[PlayerProvider] output mode changed — reconfigure via pause/play');
-    } catch (_) {
-      // 静默：重建失败时用户手动暂停/重播仍会重配
-    }
-  }
-
-  /// 输出模式切换/回退通知：消费回退提示、恢复 unity 档位前的音量。
-  void _onOutputModeChanged() {
-    // ignore: avoid_print
-    print('[PlayerProvider] _onOutputModeChanged');
-    final notice = OutputModeCoordinator.instance.consumeFallbackNotice();
-    if (notice != null) {
-      showToast(notice);
-    }
-    // 退出 Direct PCM 的 unity 档后，把用户原来的音量意图还回去。
-    if (!OutputModeCoordinator.instance.forceUnityVolume) {
-      final saved = OutputModeCoordinator.instance.takeSavedVolume();
-      if (saved != null) {
-        OutputModeCoordinator.instance.volumeApplier?.call(saved);
-      }
-    }
-  }
-
   /// 冷启动恢复上次播放状态：加载歌曲、播放列表、恢复位置。
   Future<void> _restoreState() async {
     if (_stateRestored) return;
@@ -1784,7 +1666,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           final interrupted = e.code == interruptedPlayerLoadErrorCode;
           final tag = interrupted ? ' (良性：加载被切歌打断)' : '';
           debugPrint(
-            '[UsbDiag] player error: code=${e.code} message="${e.message}"$tag',
+            '[PlayerDiag] player error: code=${e.code} message="${e.message}"$tag',
           );
           final request = _diagnosticPlaybackRequest;
           final isCurrentRequest =
@@ -2795,20 +2677,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (nextIndex != null) {
       final currentSong = _currentSong;
       final nextSong = _playlist[nextIndex];
-      if (currentSong != null && _isSameAlbum(currentSong, nextSong)) {
+          if (currentSong != null && _isSameAlbum(currentSong, nextSong)) {
         return '同专辑（同 disk 歌曲不叠加）';
       }
-    }
-    // USB 独占输出：所有 AudioSink 共用一条 USB 流（见 UsbAudioSinkController
-    // 的 static activeStream），两个播放器会交替写入同一条流而不是混音，
-    // 结果是音频错乱而非叠加。独占开启期间直接跳过。
-    if (UsbAudioService.instance.lastStatus['enabled'] == true) {
-      return 'USB 独占输出已开启';
-    }
-    // 系统 Direct PCM：同一条 AudioSink 出口，unity 音量档下两个播放器音量
-    // 语义冲突（辅播放器无法各自 unity），叠加同样会错乱。
-    if (OutputModeCoordinator.instance.isDirectPcmActive) {
-      return '系统 Direct PCM 已开启';
     }
     return null;
   }
@@ -5392,16 +5263,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> setVolume(double volume) async {
     final target = volume.clamp(0.0, 1.0);
-    // Direct PCM 的 unity 音量档：AudioTrack 的 track volume 必须为 1.0，
-    // 否则 AudioFlinger 会对样本施加增益、bit-perfect 判定必然不通过。
-    // 用户意图先记下（退出该档时恢复），实际按 1.0 下发。
-    if (OutputModeCoordinator.instance.forceUnityVolume) {
-      OutputModeCoordinator.instance.rememberUserVolume(target);
-      _volume = 1.0;
-      await _audioService?.setVolume(1.0);
-      notifyListeners();
-      return;
-    }
     _volume = target;
     await _audioService?.setVolume(_volume);
     // 持久化应用内音量（重启保留）
@@ -6125,10 +5986,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     LyriconProviderService.instance.removeListener(
       _handleLyriconEnabledChanged,
     );
-    if (_outputModeListener != null) {
-      OutputModeCoordinator.instance.removeListener(_outputModeListener!);
-      _outputModeListener = null;
-    }
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _playingSubscription?.cancel();

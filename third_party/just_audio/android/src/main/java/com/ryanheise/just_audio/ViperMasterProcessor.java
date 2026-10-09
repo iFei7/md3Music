@@ -17,7 +17,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * <p>控制面与 NormalizationGainAudioSink 同一模式：弱引用静态实例表 + volatile 挂起字段，
  * app 侧 ViperDspPlugin 调 setGlobal* 广播到所有播放器实例（主/辅播放器 crossfade 双链
  * 同吃音效），实际状态在音频线程 queueInput 头部消费，避免跨线程直改 DSP 状态。
- * 关闭时逐字节透传，保证 USB 独占输出 bit-perfect。
+ * 关闭时逐字节透传，保证 DSP 关闭时不改动音频数据。
  */
 public final class ViperMasterProcessor extends BaseAudioProcessor {
 

@@ -11,7 +11,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../../core/services/usb_audio_service.dart';
 
 import '../../core/layout/page_title_alignment.dart';
 import '../../core/layout/ui_density.dart';
@@ -50,7 +49,6 @@ import '../../utils/landscape_immersive.dart';
 import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'lyric_animation_settings_page.dart';
 import '../../widgets/seed_color_picker.dart';
-import '../../widgets/usb_exclusive_section.dart';
 import '../player/mini_player.dart';
 import '../player/car_mode_layout.dart';
 import '../player/car_mode_panel.dart';
@@ -138,9 +136,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _lyricPushTranslation = true;
   bool _lyricPushRoma = false;
   bool _lyricPushPreferTranslation = true;
-  // 32bit 播放支持开关（默认关闭）。开启后无损(24/32bit)走高解析 float 输出；
-  // 部分设备 float 播放可能变速/变调，若不适应可在设置里关闭。
-  bool _enable32bitOutput = false;
   // 长按封面进入/退出 Zen 模式开关（默认开启）
   bool _zenCoverLongPress = true;
   // 专辑动态封面开关（主开关默认开启；移动网络子开关默认关闭）
@@ -303,7 +298,6 @@ class _SettingsPageState extends State<SettingsPage>
     _loadLyricPushSettings();
     _loadAndroidSdkVersion();
     _loadFlymeStatusBarLyric();
-    _initEnable32bit();
     LyriconProviderService.instance.addListener(_onLyriconStateChanged);
     // 桌面歌词状态变化（设置页开关 / 播放器长按 / 通知栏按钮）→ 刷新 UI
     DesktopLyricService.instance.addListener(_onDesktopLyricChanged);
@@ -1024,7 +1018,7 @@ class _SettingsPageState extends State<SettingsPage>
         SettingsSubpage(
           title: '音质与输出',
           icon: Icons.high_quality_outlined,
-          description: '网络音质、VIP 领取与 32bit 输出',
+          description: '网络音质与 VIP 领取',
           builder: _buildAudioQualitySubpage,
         ),
         SettingsSubpage(
@@ -1052,14 +1046,6 @@ class _SettingsPageState extends State<SettingsPage>
           builder: _buildListInteractionSubpage,
         ),
       ],
-    ),
-    SettingsCategory(
-      title: 'USB 独占',
-      icon: Icons.usb,
-      description: '独占输出与设备状态',
-      body: (colorScheme) => UsbExclusiveSection(
-        onAutoPause: () => context.read<PlayerProvider>().pause(),
-      ),
     ),
     SettingsCategory(
       title: '主页管理',
@@ -3163,7 +3149,7 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
-  /// 「音质与输出」三级子页：网络音质（WiFi / 移动）+ VIP 领取 + 32bit + 降级提示。
+  /// 「音质与输出」三级子页：网络音质（WiFi / 移动）+ VIP 领取 + 降级提示。
   Widget _buildAudioQualitySubpage(ColorScheme colorScheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3218,14 +3204,6 @@ class _SettingsPageState extends State<SettingsPage>
             });
             _settingsRepository.setAutoReceiveVip(value);
           },
-        ),
-        // search: 32bit 无损 高解析 音质 float
-        SwitchListTile(
-          title: const Text('32bit 播放支持'),
-          // 只保留可能出问题的风险提醒，实现细节说明删除
-          subtitle: const Text('部分设备开启后可能出现变调/变速'),
-          value: _enable32bitOutput,
-          onChanged: (value) => _setEnable32bitOutput(value),
         ),
         // search: 音质 降级 提示 toast vip 网络限制
         SwitchListTile(
@@ -3803,19 +3781,6 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   /// 本地持久化音频管理 section 未包含在公开版本中。
-
-  /// 恢复 32bit 播放开关并同步到字段（从 UsbAudioService 缓存读取，已持久化+下发原生）。
-  Future<void> _initEnable32bit() async {
-    await UsbAudioService.instance.initEnable32bit();
-    if (!mounted) return;
-    setState(() => _enable32bitOutput = UsbAudioService.instance.enable32bit);
-  }
-
-  Future<void> _setEnable32bitOutput(bool value) async {
-    HapticFeedback.lightImpact();
-    setState(() => _enable32bitOutput = value);
-    await UsbAudioService.instance.setEnable32bit(value);
-  }
 
   /// 询问是否重启本地 API 服务器，确认后重启并更新端口展示。
   Future<void> _confirmRestartServer() async {
