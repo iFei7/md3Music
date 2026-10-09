@@ -3,12 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:md3music/widgets/player_seek_bar.dart';
 
-/// 只读进度条（一起听听众端）。
+/// 只读进度条（禁用态）。
 ///
-/// 成员拖动进度会被远端纠偏立刻拉回（见 `ListenTogetherProvider.followingAsGuest`
-/// 与 `RoomSession.guestResyncAfterSeek`），所以成员态下进度条必须退化成只读
-/// 指示器：不响应点按/拖动、不下发 seek、也不进入拖动流程（`onSeekStart` 会
-/// `pauseForSeek()`，被漏出去会无端暂停播放）。
+/// `enabled` 为 false 时进度条必须退化成只读指示器：不响应点按/拖动、
+/// 不下发 seek、也不进入拖动流程（`onSeekStart` 会 `pauseForSeek()`，
+/// 被漏出去会无端暂停播放）。
 ///
 /// 这里钉的是**手势闸门本身**，防止将来调整动画时把闸门绕过去。
 Widget _host({

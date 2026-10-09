@@ -30,7 +30,6 @@ import '../../data/repositories/settings_repository.dart';
 import '../../services/depth_cover_service.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
-import '../listen_together/widgets/listen_together_pill.dart';
 import '../settings/equalizer_settings_page.dart';
 import '../sound/sounds_page.dart';
 import 'mv_player_page.dart';
@@ -39,7 +38,6 @@ import 'song_info_page.dart';
 import 'am_transport_controls.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/kugou_provider.dart';
-import '../../providers/listen_together_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
@@ -2411,8 +2409,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                 onPressed: _collapseByButton,
               ),
             const Spacer(),
-            // 一起听胶囊：在房间中时显示人数（1/5），点击进入/返回房间页
-            ListenTogetherPill(amStyle: true),
             // AM v2: 顶部栏右侧 FLAC 质量徽章，点击复用 _showQualityDialog，
             // 长按呼出 _showVolumeDialog（与 MD 风格统一）
             _buildQualityPill(playerProvider),
@@ -2715,8 +2711,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     ColorScheme colorScheme,
   ) {
     final song = playerProvider.currentSong;
-    // 一起听听众端：进度条可拖动，拖动即进入脱离态（本地自由播放），
-    // 恢复跟随走房间页中央按钮 / 广场横幅（见 RoomSession.detachBySeek）。
     return PlayerSeekBar(
       position: position,
       duration: duration,

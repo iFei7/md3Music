@@ -1932,32 +1932,6 @@ class KugouSongRanking {
     );
   }
 }
-
-class KugouFmInfo {
-  final String id;
-  final String name;
-  final String? coverUrl;
-  final String? desc;
-
-  const KugouFmInfo({
-    required this.id,
-    required this.name,
-    this.coverUrl,
-    this.desc,
-  });
-
-  factory KugouFmInfo.fromJson(Map<String, dynamic> json) {
-    return KugouFmInfo(
-      id: _str(json['id'] ?? json['fm_id'] ?? ''),
-      name: _str(json['name'] ?? json['fm_name'] ?? ''),
-      coverUrl: _resolveArtworkUri(
-        json['img'] ?? json['imgurl'] ?? json['cover'],
-      ),
-      desc: _strNull(json['desc'] ?? json['description']),
-    );
-  }
-}
-
 class KugouSceneInfo {
   final String id;
   final String name;

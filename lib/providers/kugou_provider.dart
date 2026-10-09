@@ -176,7 +176,6 @@ class KugouProvider extends ChangeNotifier {
   static const int _lyricCacheLimit = 16;
   KugouCommentList? _comments;
   KugouPlaylistSongs? _playlistSongs;
-  List<KugouSongDetail> _personalFmSongs = [];
   KugouPlaylistCategory? _playlistCategory;
   List<KugouPlaylistBrief> _playlistList = [];
   bool _isLoading = false;
@@ -213,8 +212,6 @@ class KugouProvider extends ChangeNotifier {
   List<KugouSongDetail> _aiRecommendSongs = [];
   Map<String, dynamic>? _youthData;
   Map<String, dynamic>? _longAudioData;
-  Map<String, dynamic>? _fmRecommendData;
-  List<KugouFmInfo> _fmClassList = [];
   List<KugouThemeInfo> _themePlaylistData = [];
   List<KugouSheetInfo> _sheetExploreList = [];
   List<KugouYouthChannel> _youthChannels = [];
@@ -270,19 +267,6 @@ class KugouProvider extends ChangeNotifier {
     if (ts == null) return false;
     return DateTime.now().difference(ts) < _freshTtl;
   }
-
-  /// 发现页所有关键数据是否都处于新鲜期内
-  bool get isDiscoverDataFresh =>
-      _isDataFresh('rankList') &&
-      _isDataFresh('recommendDaily') &&
-      _isDataFresh('homeDiscover') &&
-      _isDataFresh('playlist') &&
-      _isDataFresh('yuekuBanner') &&
-      _isDataFresh('sceneMusic') &&
-      _isDataFresh('themeMusic') &&
-      _isDataFresh('themePlaylist') &&
-      _isDataFresh('ipHome') &&
-      _isDataFresh('personalFm');
 
   // ==================== Search result caching ====================
   final Map<String, _SearchCacheEntry> _searchCache = {};
@@ -359,7 +343,6 @@ class KugouProvider extends ChangeNotifier {
 
   KugouCommentList? get comments => _comments;
   KugouPlaylistSongs? get playlistSongs => _playlistSongs;
-  List<KugouSongDetail> get personalFmSongs => _personalFmSongs;
   KugouPlaylistCategory? get playlistCategory => _playlistCategory;
   List<KugouPlaylistBrief> get playlistList => _playlistList;
   bool get isLoading => _isLoading;
@@ -395,8 +378,6 @@ class KugouProvider extends ChangeNotifier {
   List<KugouSongDetail> get aiRecommendSongs => _aiRecommendSongs;
   Map<String, dynamic>? get youthData => _youthData;
   Map<String, dynamic>? get longAudioData => _longAudioData;
-  Map<String, dynamic>? get fmRecommendData => _fmRecommendData;
-  List<KugouFmInfo> get fmClassList => _fmClassList;
   List<KugouThemeInfo> get themePlaylistData => _themePlaylistData;
   List<KugouSheetInfo> get sheetExploreList => _sheetExploreList;
   List<KugouYouthChannel> get youthChannels => _youthChannels;
@@ -423,8 +404,6 @@ class KugouProvider extends ChangeNotifier {
   Playlist? get playlistDetailAsPlaylist => _playlistDetail?.toPlaylist();
   List<Song> get playlistSongsAsSongs =>
       _playlistSongs?.songs.map((e) => e.toSong()).toList() ?? [];
-  List<Song> get personalFmAsSongs =>
-      _personalFmSongs.map((e) => e.toSong()).toList();
 
   // ==================== 首页刷歌推荐 ====================
 
@@ -531,8 +510,6 @@ class KugouProvider extends ChangeNotifier {
   ///
   /// 列表是被这个方法就地追加的，调用方不需要（也不应该）再往里塞一遍——返回值
   /// 是给"要不要接着要下一批""还有没有更多"这类判断用的，不是给调用方复用的。
-  /// 这一点与 [fetchMorePersonalFm] 正好相反：那个**不**动 [personalFmSongs]，
-  /// 必须靠 [appendFmSongs] 另写一次。之所以能反过来，是因为刷歌的游标与去重
   /// 全在本方法内部完成——游标必须跟"真正消费掉多少"同步推进，而消费这件事
   /// 只有这里做得到；拆到调用方做，游标就无从与列表保持一致。
   ///
@@ -608,7 +585,6 @@ class KugouProvider extends ChangeNotifier {
     _themePlaylistData = [];
     _ipHomeData = null;
     _ipZoneData = null;
-    _personalFmSongs = [];
     _hasLoadedDiscoverData = false;
     _dataTimestamps.clear();
     _searchCache.clear();
@@ -1150,124 +1126,8 @@ class KugouProvider extends ChangeNotifier {
     _endLoading();
   }
 
-  Future<void> getPersonalFm({
-    String? mode,
-    int? songPoolId,
-    String? hash,
-    String? songId,
-    String? action,
-    bool forceRefresh = false,
-  }) async {
-    final isInteractive = mode != null || action != null || hash != null;
-    if (!isInteractive && !forceRefresh && _isDataFresh('personalFm')) return;
-    _beginLoading();
-    _error = null;
-    try {
-      final result = await _apiClient.getPersonalFm(
-        mode: mode,
-        songPoolId: songPoolId,
-        hash: hash,
-        songId: songId,
-        action: action,
-      );
-      if (result != null) {
-        _personalFmSongs = result;
-        // 补全 albumName：红心 radio 接口不返回 album_name，但返回了 album_id，
-        // 用 album_id 调 getAlbumDetail 批量补全
-        await _fillPersonalFmAlbumNames();
-        if (!isInteractive) {
-          _dataTimestamps['personalFm'] = DateTime.now();
-        }
-      } else {
-        _error = '获取猜你喜欢失败';
-      }
-    } catch (e) {
-      _error = e.toString();
-    }
-    _endLoading();
-  }
-
-  /// 补全 PersonalFm 歌曲缺失的 albumName。
-  /// 红心 radio 接口只返回 album_id 不返回 album_name，
-  /// 需要用 album_id 调 getAlbumDetail 获取专辑名后回填。
-  Future<void> _fillPersonalFmAlbumNames() async {
-    // 收集需要补全的去重 albumId（albumName 为空 且 albumId 非空）
-    final albumIdsToFetch = <String>{};
-    for (final song in _personalFmSongs) {
-      if (song.albumName == null &&
-          song.albumId != null &&
-          song.albumId!.isNotEmpty) {
-        albumIdsToFetch.add(song.albumId!);
-      }
-    }
-    if (albumIdsToFetch.isEmpty) return;
-
-    // 并发获取专辑信息（限制并发数避免请求过多）
-    final albumNameCache = <String, String>{};
-    final futures = albumIdsToFetch.map((albumId) async {
-      try {
-        final detail = await _apiClient.getAlbumDetail(albumId);
-        if (detail != null && detail.name.isNotEmpty) {
-          albumNameCache[albumId] = detail.name;
-        }
-      } catch (_) {
-        // 获取失败不影响其他歌曲
-      }
-    });
-    await Future.wait(futures);
-
-    if (albumNameCache.isEmpty) return;
-
-    // 回填 albumName
-    _personalFmSongs = _personalFmSongs.map((song) {
-      if (song.albumName == null &&
-          song.albumId != null &&
-          albumNameCache.containsKey(song.albumId)) {
-        return song.copyWith(albumName: albumNameCache[song.albumId]);
-      }
-      return song;
-    }).toList();
-  }
-
-  void moveToFirst(KugouSongDetail song) {
-    final index = _personalFmSongs.indexWhere((s) => s.hash == song.hash);
-    if (index > 0) {
-      final found = _personalFmSongs.removeAt(index);
-      _personalFmSongs.insert(0, found);
-      notifyListeners();
-    }
-  }
-
-  void appendFmSongs(List<KugouSongDetail> songs) {
-    for (final song in songs) {
-      if (!_personalFmSongs.any((s) => s.hash == song.hash)) {
-        _personalFmSongs.add(song);
-      }
-    }
-    notifyListeners();
-  }
-
   /// 拉一批用于续播的私人 FM 歌曲，只把结果交给调用方。
   ///
-  /// 与 [getPersonalFm] 的区别是它**不替换** [personalFmSongs]：续播是往队列尾巴
-  /// 上接，整体替换会把正在播的那首挤出列表，之后就再也认不出那条队列是电台的。
-  /// 走 noCache 是必须的，理由见 [KugouApiClient.getPersonalFm]。
-  Future<List<KugouSongDetail>?> fetchMorePersonalFm({
-    required String mode,
-    required int songPoolId,
-    String? hash,
-    String? songId,
-  }) {
-    return _apiClient.getPersonalFm(
-      mode: mode,
-      songPoolId: songPoolId,
-      hash: hash,
-      songId: songId,
-      action: 'play',
-      noCache: true,
-    );
-  }
-
   Future<void> getPlaylist({
     String? categoryId,
     int page = 1,
@@ -2307,32 +2167,6 @@ class KugouProvider extends ChangeNotifier {
       if (r != null) {
         _ipZoneData = r;
         _dataTimestamps['ipZone'] = DateTime.now();
-        notifyListeners();
-      }
-    } catch (_) {}
-  }
-
-  // ==================== FM (电台) ====================
-
-  Future<void> getFmRecommend() async {
-    try {
-      final r = await _apiClient.getFmRecommend();
-      if (r != null) {
-        _fmRecommendData = r;
-        notifyListeners();
-      }
-    } catch (_) {}
-  }
-
-  Future<void> getFmClass() async {
-    try {
-      final r = await _apiClient.getFmClass();
-      if (r != null) {
-        final data = r['data'] as Map<String, dynamic>? ?? r;
-        final list = data['list'] ?? data['info'] ?? [];
-        _fmClassList = (list as List)
-            .map((e) => KugouFmInfo.fromJson(e as Map<String, dynamic>))
-            .toList();
         notifyListeners();
       }
     } catch (_) {}

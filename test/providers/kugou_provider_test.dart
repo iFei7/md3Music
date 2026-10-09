@@ -90,7 +90,6 @@ void main() {
       expect(provider.searchResults, isNull);
       expect(provider.hotSearchKeywords, isEmpty);
       expect(provider.recommendSongs, isEmpty);
-      expect(provider.personalFmSongs, isEmpty);
       expect(provider.rankSongs, isEmpty);
       expect(provider.currentPlaylistSongs, isEmpty);
     });

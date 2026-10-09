@@ -5,9 +5,8 @@ import 'package:md3music/providers/player_provider.dart';
 
 /// Lyricon 推送去重签名。
 ///
-/// 回归背景：一起听跟随端起播时只有 hash 身份，`RoomSong.toSong()` 把空标题
-/// 兜底成「未知歌曲」先推给 Lyricon；真实元数据由后台富化补齐后经
-/// `updateCurrentSongMetadata` 回写，而该回写**刻意保持 id 不变**。
+/// 回归背景：播放中的歌曲元数据可能由后台富化补齐后就地回写
+/// （Song 对象替换但**刻意保持 id 不变**）。
 /// 若去重只看 id，这次回写会被判为「无变化」拦掉，Lyricon 整首歌停在占位标题。
 ///
 /// 因此这里的核心不变量是：**id 相同但元数据变化，签名必须不同**。

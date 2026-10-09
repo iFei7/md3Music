@@ -54,7 +54,7 @@ void main() {
       await tester.runAsync(() async {
         player = PlayerProvider();
         await player.audioReady.timeout(const Duration(seconds: 10));
-        await player.resume(notifyRoom: false);
+        await player.resume();
       });
       await tester.pumpWidget(_feedbackHost(player));
 
@@ -70,7 +70,7 @@ void main() {
 
       await tester.runAsync(() async {
         await player.pause();
-        await player.resume(notifyRoom: false);
+        await player.resume();
       });
       await tester.pump();
       expect(find.text('播放命令已发出，等待音频进度'), findsNothing);

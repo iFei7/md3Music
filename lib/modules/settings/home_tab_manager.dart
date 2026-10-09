@@ -19,16 +19,12 @@ IconData homeTabIcon(String tabId) {
       return Icons.library_music;
     case 'favorites':
       return Icons.favorite;
-    case 'fm':
-      return Icons.radio;
     case 'search':
       return Icons.search;
     case 'recognition':
       return Icons.mic;
     case 'audiobook':
       return Icons.auto_stories;
-    case 'listen_together':
-      return Icons.groups;
     case 'settings':
       return Icons.settings;
     case 'user':

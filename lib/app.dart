@@ -11,7 +11,6 @@ import 'core/layout/desktop_shell.dart';
 import 'core/layout/responsive_layout.dart';
 import 'core/layout/ui_density.dart';
 import 'core/services/external_media_intent_service.dart';
-import 'core/services/fm_widget_sync.dart';
 import 'core/services/lyricon_provider_service.dart';
 import 'core/services/startup_auto_play.dart';
 import 'core/theme/app_theme.dart';
@@ -21,10 +20,8 @@ import 'core/utils/app_toast.dart';
 import 'core/widgets/app_background.dart';
 import 'core/widgets/safe_insets_guard.dart';
 import 'data/models/playlist.dart';
-import 'data/models/song.dart';
 import 'data/repositories/settings_repository.dart';
 import 'services/kugou_api/kugou_api_client.dart';
-import 'services/kugou_api/listen_together_models.dart';
 import 'main.dart'
     show
         appNavigatorKey,
@@ -32,13 +29,9 @@ import 'main.dart'
         pendingShortcutType,
         shortcutTabRequest;
 import 'modules/discover/discover_page.dart';
-import 'modules/mcp/mcp_player_control.dart';
-import 'modules/mcp/mcp_service.dart';
 import 'utils/landscape_immersive.dart';
 import 'modules/user/user_center_page.dart';
 import 'modules/user/favorites_page.dart';
-import 'modules/listen_together/listen_together_page.dart';
-import 'modules/listen_together/widgets/guest_play_confirm_dialog.dart';
 
 import 'modules/player/full_player.dart';
 import 'modules/player/full_player_route.dart';
@@ -55,7 +48,6 @@ import 'modules/login/login_page.dart';
 import 'widgets/app_animation.dart';
 import 'modules/onboarding/onboarding_page.dart';
 import 'modules/onboarding/user_agreement_page.dart';
-import 'modules/personal_fm/personal_fm_page.dart';
 import 'modules/audiobook/audiobook_page.dart';
 import 'modules/recognition/song_recognition_page.dart';
 import 'providers/dlna_provider.dart';
@@ -73,7 +65,6 @@ import 'providers/tab_config_provider.dart';
 import 'providers/theme_provider.dart';
 import 'providers/comment_display_provider.dart';
 import 'providers/car_mode_provider.dart';
-import 'providers/listen_together_provider.dart';
 import 'services/kugou_server.dart';
 import 'widgets/dlna_casting_overlay.dart';
 import 'core/widgets/local_server_down_banner.dart';
@@ -164,19 +155,6 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => DeviceProvider()),
         ChangeNotifierProvider(create: (_) => GridColumnsProvider()),
         ChangeNotifierProvider(create: (_) => PlayerProvider()),
-        // AI 代理接口（MCP）：默认关闭。非惰性创建——需要在每次冷启动时读取
-        // 持久化设置决定是否恢复监听，否则用户开启后必须先进一次设置页才会起服务。
-        // 默认关闭时构造只做一次 SharedPreferences 读取即返回，零网络副作用。
-        ChangeNotifierProxyProvider<PlayerProvider, McpService>(
-          lazy: false,
-          create: (context) => McpService(
-            playerControl: PlayerProviderBackedControl(
-              context.read<PlayerProvider>(),
-            ),
-          ),
-          update: (context, player, previous) => previous ??
-              McpService(playerControl: PlayerProviderBackedControl(player)),
-        ),
         ChangeNotifierProvider(create: (_) => LibraryProvider()),
         ChangeNotifierProvider(create: (_) => KugouProvider()),
         ChangeNotifierProvider(create: (_) => FavoritesProvider()),
@@ -193,8 +171,6 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => CommentDisplayProvider()),
         // 车机模式（常驻播放器面板的开关 / 宽度 / 停靠位置）
         ChangeNotifierProvider(create: (_) => CarModeProvider()),
-        // 一起听（众乐房）：广场列表 + 房间会话（心跳/轮询/播放同步）
-        ChangeNotifierProvider(create: (_) => ListenTogetherProvider()),
         // 可选扩展：私有构建注入的额外 Provider（默认无）
         ...?extraProviders,
       ],
@@ -257,21 +233,11 @@ class _AppViewState extends State<_AppView> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupCoverColorBridge();
       _setupBackgroundColorBridge();
-      _setupFmWidgetSync();
       // 外部调用（文件管理器「用其他应用打开」）：注册原生推送回调，
       // 并主动拉取一次冷启动期间原生侧积压的待处理音频
       // ignore: discarded_futures
       ExternalMediaIntentService.instance.start();
     });
-  }
-
-  /// 建立私人FM桌面小部件桥接：监听三个 provider 推送快照，并接上原生按钮回调。
-  void _setupFmWidgetSync() {
-    FmWidgetSync.instance.attach(
-      kugou: context.read<KugouProvider>(),
-      player: context.read<PlayerProvider>(),
-      favorites: context.read<FavoritesProvider>(),
-    );
   }
 
   /// 根据 ShortcutConfigProvider 当前配置，整体替换 Android 桌面快捷方式列表。
@@ -435,7 +401,6 @@ class _AppViewState extends State<_AppView> {
         // 发现页右上角头像点击跳转入口（push 独立路由，与底部 tab 中的实例并存无冲突）
         '/user': (_) => const UserCenterPage(),
         '/player': (_) => const FullPlayer(),
-        '/personal_fm': (_) => const PersonalFmPage(),
       },
       onGenerateRoute: (settings) {
         if (settings.name == '/onboarding') {
@@ -660,8 +625,6 @@ class _MainLayoutState extends State<_MainLayout>
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
   bool _lyriconFailDialogShown = false;
 
-  /// 一起听听众起播确认窗展示中标记：连点/多入口并发时只允许一个确认窗。
-  bool _roomGuestPlayDialogOpen = false;
 
   /// 二次返回退出：首次返回后置位，3 秒内再次返回触发真正退出。
   bool _exitPressed = false;
@@ -700,9 +663,6 @@ class _MainLayoutState extends State<_MainLayout>
       case 'favorites':
         page = const FavoritesPage();
         break;
-      case 'fm':
-        page = const PersonalFmPage();
-        break;
       case 'search':
         // Tab 模式：SearchPage 自包悬浮宿主，一级形态自动退化交由 MiniPlayer 承载
         page = const SearchPage();
@@ -713,9 +673,6 @@ class _MainLayoutState extends State<_MainLayout>
         break;
       case 'audiobook':
         page = const AudiobookPage();
-        break;
-      case 'listen_together':
-        page = const ListenTogetherPage();
         break;
       case 'settings':
         page = const SettingsPage();
@@ -771,15 +728,6 @@ class _MainLayoutState extends State<_MainLayout>
           ),
           label: tab.label,
         );
-      case 'fm':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.radio_outlined,
-            filledIcon: Icons.radio,
-          ),
-          label: tab.label,
-        );
       case 'search':
         return NavigationDestination(
           icon: _AnimatedTabIcon(
@@ -804,15 +752,6 @@ class _MainLayoutState extends State<_MainLayout>
             selected: isSelected,
             outlinedIcon: Icons.auto_stories_outlined,
             filledIcon: Icons.auto_stories,
-          ),
-          label: tab.label,
-        );
-      case 'listen_together':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.groups_outlined,
-            filledIcon: Icons.groups,
           ),
           label: tab.label,
         );
@@ -876,12 +815,6 @@ class _MainLayoutState extends State<_MainLayout>
           selectedIcon: const Icon(Icons.favorite),
           label: label,
         );
-      case 'fm':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.radio_outlined),
-          selectedIcon: const Icon(Icons.radio),
-          label: label,
-        );
       case 'search':
         return NavigationRailDestination(
           icon: const Icon(Icons.search_outlined),
@@ -898,12 +831,6 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationRailDestination(
           icon: const Icon(Icons.auto_stories_outlined),
           selectedIcon: const Icon(Icons.auto_stories),
-          label: label,
-        );
-      case 'listen_together':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.groups_outlined),
-          selectedIcon: const Icon(Icons.groups),
           label: label,
         );
       case 'settings':
@@ -957,13 +884,6 @@ class _MainLayoutState extends State<_MainLayout>
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
-      case 'fm':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.radio_outlined),
-          selectedIcon: const Icon(Icons.radio),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
       case 'search':
         return NavigationDrawerDestination(
           icon: const Icon(Icons.search_outlined),
@@ -982,13 +902,6 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationDrawerDestination(
           icon: const Icon(Icons.auto_stories_outlined),
           selectedIcon: const Icon(Icons.auto_stories),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'listen_together':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.groups_outlined),
-          selectedIcon: const Icon(Icons.groups),
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
@@ -1036,67 +949,12 @@ class _MainLayoutState extends State<_MainLayout>
     );
     // 未登录时尝试播放联网歌曲,弹出登录提示
     context.read<PlayerProvider>().onLoginRequired = _showLoginRequiredDialog;
-    // 一起听房主播放守卫：房间歌单外的曲目（本地音乐等）不允许本地起播
-    context.read<PlayerProvider>().onRoomOwnerInterceptPlayback =
-        _interceptRoomOwnerLocalPlayback;
-    // 一起听房主播放态通告：播放器自身的暂停/恢复按钮也同步到房间
-    context.read<PlayerProvider>().onPlaybackStateChangedByUser =
-        _forwardPlaybackStateToRoom;
-    // 一起听进度通告：对房主是上报（player_operation action=2），对成员是复同步
-    context.read<PlayerProvider>().onSeekedByUser = _forwardSeekToRoom;
-    // 一起听听众：房间内点播其他歌曲前的确认窗。
-    // 同步判定（要不要弹）+ 异步确认（弹什么、怎么处理）分两个钩子：
-    // 不需要弹的调用不能因此多出一次 await（见 PlayerProvider._roomGuestPlayGate）。
-    context.read<PlayerProvider>().shouldConfirmRoomGuestPlay =
-        _shouldConfirmRoomGuestPlay;
-    context.read<PlayerProvider>().onRoomGuestPlayConfirm =
-        _confirmRoomGuestPlay;
-    // 一起听：自然播完与上一首/下一首的房间路由（听众暂停等待，房主切歌上报）
-    final ltProvider = context.read<ListenTogetherProvider>();
-    final playerProvider = context.read<PlayerProvider>();
-    playerProvider.onRoomGuestCompletionPause = () {
-      final s = ltProvider.session;
-      return s != null && !s.isOwner && !s.playbackDetached;
-    };
-    playerProvider.onRoomOwnerCompletionSwitch = () {
-      final s = ltProvider.session;
-      if (s == null || !s.isOwner || s.playbackDetached) return false;
-      final song = playerProvider.currentSong;
-      return song == null ? false : s.ownerHandleSongCompleted(song);
-    };
-    playerProvider.onRoomOwnerSkip = ({required bool forward}) {
-      final s = ltProvider.session;
-      if (s == null || !s.isOwner || s.playbackDetached) return false;
-      return s.ownerSkip(forward: forward);
-    };
-    playerProvider.onRoomGuestSkipBlocked = () {
-      final s = ltProvider.session;
-      if (s == null || s.isOwner || s.playbackDetached) return false;
-      showToast('一起听中由房主控制播放');
-      return true;
-    };
-    playerProvider.onRoomSessionActive = () {
-      final s = ltProvider.session;
-      return s != null && !s.playbackDetached;
-    };
-    playerProvider.onRoomPlayModeChanged = (mode) {
-      ltProvider.session?.ownerSetPlayMode(mode);
-    };
-    // 冷启动一起听会话恢复：进程被杀后服务端会话仍在进行（其他成员还能看到
-    // 自己），按服务端会话重建 RoomSession，让播放器胶囊不进页也立即回到
-    // 会话态。首帧后执行（等 Provider 挂载），恢复失败静默跳过。
-    // 启动自动播放串在它**之后**：一起听恢复末尾可能自己 resume()/playSong()
-    // （见 ListenTogetherProvider 的恢复路径），并发会互相顶掉播放目标。
-    // 默认关闭（见 SettingsRepository.getStartupAutoPlayEnabled），关着时
-    // 这里对播放零参与。
+    // 启动自动播放：默认关闭（见 SettingsRepository.getStartupAutoPlayEnabled），
+    // 关着时这里对播放零参与。首帧后执行（等 Provider 挂载）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(() async {
-        await ltProvider.restoreCurrentSessionIfAny(
-          player: playerProvider,
-          account: context.read<KugouProvider>(),
-        );
-        if (!mounted) return;
+        final playerProvider = context.read<PlayerProvider>();
         final result = await StartupAutoPlay.maybeAutoPlay(
           kugou: context.read<KugouProvider>(),
           player: playerProvider,
@@ -1318,9 +1176,6 @@ class _MainLayoutState extends State<_MainLayout>
       case 'favorites':
         page = const FavoritesPage();
         break;
-      case 'fm':
-        page = const PersonalFmPage();
-        break;
       case 'search':
         page = const SearchPage();
         break;
@@ -1329,9 +1184,6 @@ class _MainLayoutState extends State<_MainLayout>
         break;
       case 'audiobook':
         page = const AudiobookPage();
-        break;
-      case 'listen_together':
-        page = const ListenTogetherPage();
         break;
       case 'settings':
         page = const SettingsPage();
@@ -1389,139 +1241,6 @@ class _MainLayoutState extends State<_MainLayout>
       ),
     );
     _lyriconFailDialogShown = false;
-  }
-
-  /// 一起听听众：起播前是否需要弹确认窗（同步判定）。
-  ///
-  /// 判定口径见 `shouldPromptGuestPlay`：不在房间/房主/房间自己的跟随装载/
-  /// 本地文件一律 false。**保持同步**——它运行在播放器起播链路的最前面。
-  bool _shouldConfirmRoomGuestPlay(Song song) {
-    final session = context.read<ListenTogetherProvider>().session;
-    if (session == null) return false;
-    return shouldPromptGuestPlay(
-      inRoom: !session.closed,
-      isOwner: session.isOwner,
-      isTakeoverTarget: session.isRoomTakeoverTarget(song),
-      canOrder: canOrderSongIntoRoom(song),
-    );
-  }
-
-  /// 一起听听众：起播确认窗。返回 true 表示允许继续起播。
-  ///
-  /// - 脱离房间播放 → 置脱离标记（幂等）后放行，由调用方正常起播；
-  /// - 申请点歌 → 发起点歌请求，并**放弃本次本地播放**（房间继续播原曲）；
-  /// - 取消 → 放弃本次本地播放，房间与播放器现状不变。
-  ///
-  /// 用全局 [appNavigatorKey] 取 context，任何页面都能弹（与词幕失败弹窗同款）。
-  Future<bool> _confirmRoomGuestPlay(Song song) async {
-    final session = context.read<ListenTogetherProvider>().session;
-    // 同步判定到弹窗之间房间可能已解散/已换会话：这里再兜一次
-    if (session == null || session.closed || session.isOwner) return true;
-    if (_roomGuestPlayDialogOpen) return true;
-    final ctx = appNavigatorKey.currentContext;
-    if (ctx == null) return true;
-    _roomGuestPlayDialogOpen = true;
-    final GuestPlayChoice choice;
-    try {
-      choice = await showGuestPlayConfirmDialog(
-        context: ctx,
-        song: song,
-        roomName: session.roomName,
-        alreadyDetached: session.playbackDetached,
-      );
-    } finally {
-      _roomGuestPlayDialogOpen = false;
-    }
-    switch (choice) {
-      case GuestPlayChoice.detachAndPlay:
-        // 幂等：已脱离时重复置位无副作用
-        session.detachIfPlayingOutside(song);
-        return true;
-      case GuestPlayChoice.orderSong:
-        try {
-          await session.orderSong(RoomSong.fromSong(song));
-        } catch (_) {
-          // orderSong 内部已 toast「点歌失败」并 rethrow；此处吞掉避免未捕获异常
-        }
-        return false;
-      case GuestPlayChoice.dismissed:
-        return false;
-    }
-  }
-
-  /// 一起听房主播放守卫：返回 true 表示已拦截，调用方不得起播。
-  ///
-  /// 房主在房间里是播放权威，每次起播都会上报服务端让成员跟随；房间歌单外
-  /// 的曲目（本地文件没有可上报的上游 hash）若照播，只有房主本地在响，
-  /// 成员会跟着拿到无法解析的曲目。这里统一拦截并给出可操作的提示。
-  ///
-  /// 房主在房间歌单里点播同曲时顺带转发为切歌（成员跟随），并同时拦下
-  /// 调用方自身的播放，避免房间会话与调用方把同一首播放两遍。
-  bool _interceptRoomOwnerLocalPlayback(Song song) {
-    final session = context.read<ListenTogetherProvider>().session;
-    // 听众在房间外点播其他音乐 → 进入脱离态（不拦截播放，只停止房间接管）
-    if (session != null && !session.isOwner) {
-      session.detachIfPlayingOutside(song);
-      return false;
-    }
-    if (session == null || !session.isOwner) return false;
-    // 房间会话自己的接管起播（ownerSwitchSong→_playRoomSong→playSong）也会
-    // 进入守卫：歌单内必命中 handledByRoom，若再路由回 ownerPlaySong→
-    // ownerSwitchSong 会无限递归（切歌→守卫→切歌→…）且外层 playSong 永远
-    // 被拦下 → 永不起播。接管窗口内直接放行，上报由房间会话自己完成。
-    if (session.isRoomTakeoverPlaybackActive) return false;
-    switch (session.ownerPlaySong(song)) {
-      case OwnerPlayRejection.handledByRoom:
-        // 已由房间会话切歌并上报，调用方必须停手
-        return true;
-      case OwnerPlayRejection.noRoom:
-        // 会话已失效：放行普通播放
-        return false;
-      case OwnerPlayRejection.notInRoom:
-        showToast('房间里只能播放房间歌单中的在线歌曲，请先在「歌单」中点歌或切歌', long: true);
-        return true;
-    }
-  }
-
-  /// 一起听：把本地播放态变化转报房间。
-  ///
-  /// 房主的播放态变化上报服务端让成员跟随；听众的暂停/恢复则置上/清除
-  /// 本机暂停豁免标记。房间自身的远端纠偏已被
-  /// [PlayerProvider.suppressPlaybackNotify] 挡在门外，
-  /// 所以这里收到的都是真实的用户操作。
-  void _forwardPlaybackStateToRoom(bool playing) {
-    final session = context.read<ListenTogetherProvider>().session;
-    if (session == null) return;
-    // 听众：播放器任意入口（迷你/全屏播放器、耳机、通知栏）的暂停/恢复都是
-    // 「本机暂停意图」——暂停置豁免标记（轮询不再自动拉回播放），恢复清除标记
-    // 并立即强制同步追上房间进度。远端纠偏引发的播放态变化已被
-    // PlayerProvider.suppressPlaybackNotify 挡住，不会走到这里，无回声风险。
-    if (!session.isOwner) {
-      if (playing) {
-        unawaited(session.guestResume());
-      } else {
-        session.guestPause();
-      }
-      return;
-    }
-    session.ownerSetPlaying(playing);
-  }
-
-  /// 一起听：把用户拖动进度转交给房间。
-  ///
-  /// 房主上报 action=2 让成员跟随；听众拖动 = 显式偏离房间进度 → 进入
-  /// 脱离态（本地从拖动位置自由播放，远端不再接管），恢复跟随走房间页
-  /// 中央按钮 / 广场横幅的 resumeRoomPlayback。
-  void _forwardSeekToRoom(int positionMs) {
-    final session = context.read<ListenTogetherProvider>().session;
-    debugPrint('[ListenTogether] 用户 seek 通告: ${positionMs}ms '
-        'session=${session == null ? "null" : (session.isOwner ? "房主" : (session.playbackDetached ? "已脱离" : "跟随中"))}');
-    if (session == null) return;
-    if (session.isOwner) {
-      session.ownerSeek(positionMs);
-    } else {
-      session.detachBySeek();
-    }
   }
 
   void _showLoginRequiredDialog() {

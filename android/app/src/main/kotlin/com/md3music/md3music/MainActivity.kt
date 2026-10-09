@@ -204,24 +204,10 @@ class MainActivity : FlutterActivity() {
         // 同步更新 intent：配置变更重建等场景下 getIntent() 也能拿到最新外部调用数据
         setIntent(intent)
         // singleTop 复用实例时（app 已在前台/后台存活），小部件动作走这里
-        dispatchWidgetAction(intent.getStringExtra("widget_action"))
         // 外部调用（文件管理器「用其他应用打开」等）：热启动入口
         ExternalMediaBridge.onIntent(this, intent)
     }
 
-    /// 把小部件拉起 app 携带的 widget_action 转发给 Flutter。
-    /// 目前仅处理 FM 登录卡的 openLogin（现有 music widget 的 action 仍不处理）。
-    private fun dispatchWidgetAction(action: String?) {
-        if (action != "openLogin") return
-        val engine = FlutterEngineCache.getInstance().get("md3music_engine") ?: return
-        try {
-            MethodChannel(
-                engine.dartExecutor.binaryMessenger,
-                FLOATING_CHANNEL
-            ).invokeMethod("widgetFmOpenLogin", null)
-        } catch (_: Exception) {
-            // 引擎刚创建/未跑 Dart 时转发失败：降级为仅打开 app
-        }
     }
 
     override fun onResume() {

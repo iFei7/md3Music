@@ -2783,67 +2783,6 @@ class KugouApiClient {
     return await _get(KugouEndpoints.ipZoneHome, queryParameters: {'id': id});
   }
 
-  // ==================== FM (Radio) ====================
-
-  Future<Map<String, dynamic>?> getFmRecommend() async {
-    return await _get(KugouEndpoints.fmRecommend);
-  }
-
-  Future<Map<String, dynamic>?> getFmClass() async {
-    return await _get(KugouEndpoints.fmClass);
-  }
-
-  Future<Map<String, dynamic>?> getFmImage() async {
-    return await _get(KugouEndpoints.fmImage);
-  }
-
-  Future<Map<String, dynamic>?> getFmSongs(String fmId) async {
-    return await _get(KugouEndpoints.fmSongs, queryParameters: {'id': fmId});
-  }
-
-  // ==================== Personal FM ====================
-
-  /// [noCache] 供「同一游标要下一批」的续播场景使用：本地服务端的 apicache 按
-  /// URL 缓存，而 [_onRequest] 只在 noCache 时才加 bypass 头和 t= 戳（登录态在
-  /// L183 设的那份 bypass 头会被 L207-209 的 else 分支删掉），否则同参数请求
-  /// 会被原样回放，续播拿到的永远是同一批歌。
-  Future<List<KugouSongDetail>?> getPersonalFm({
-    String? mode,
-    int? songPoolId,
-    String? hash,
-    String? songId,
-    String? action,
-    bool noCache = false,
-  }) async {
-    final params = <String, dynamic>{};
-    if (mode != null) params['mode'] = mode;
-    if (songPoolId != null) params['song_pool_id'] = songPoolId.toString();
-    if (hash != null) params['hash'] = hash;
-    if (songId != null) params['songid'] = songId;
-    if (action != null) params['action'] = action;
-
-    final json = await _get(
-      KugouEndpoints.personalFm,
-      queryParameters: params,
-      noCache: noCache,
-    );
-    if (json == null) return null;
-    try {
-      final data = json['data'] as Map<String, dynamic>? ?? json;
-      final list =
-          data['song_list'] ??
-          data['songs'] ??
-          data['list'] ??
-          data['info'] ??
-          [];
-      return (list as List<dynamic>)
-          .map((e) => KugouSongDetail.fromJson(e as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      return null;
-    }
-  }
-
   // ==================== Home ====================
 
   /// 首页「刷歌」推荐（/home/discover → POST /homediscoverrec/v1/client/home_discover_rec）。
@@ -2855,7 +2794,7 @@ class KugouApiClient {
   /// [page] 是给无限滚动预留的探针位（上游文档没有它），为 null 时根本不会出现在
   /// query 里，因此不传与传 null 完全等价。
   ///
-  /// [noCache] 的理由与 [getPersonalFm] 相同且更硬：滑动与播放补货每一批的参数都
+  /// [noCache] 的理由更硬：滑动与播放补货每一批的参数都
   /// 不同，apicache 虽按 URL 缓存、命中率不高，但一旦命中就会把同一批歌原样回放，
   /// 表现为「滑到底部反复给同一首歌」。留空则按默认 5 分钟 TTL 走。
   Future<List<KugouSongDetail>?> getHomeDiscover({

@@ -56,7 +56,6 @@ import 'playback_recovery_budget.dart';
 import 'position_rewind_gate.dart';
 import 'playback_stall_policy.dart';
 import 'playlist_prefetch_ticket.dart';
-import 'song_metadata_change.dart';
 import '../services/kugou_api/kugou_api_client.dart';
 import '../services/kugou_api/kugou_models.dart';
 
@@ -442,7 +441,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// （`_updatePosition(seekTo)`：起播对齐、续播恢复），在线源来不及定位时它是
   /// 「请求的目标」而不是「真实所在」。CDN 限速看门狗只能基于真实位置判断，
   /// 否则会把一次尚未落地的对齐 seek 误判成 CDN 限速并重建音源
-  /// （实测把一起听成员进房起播拖成 23 秒且整场同步卡死）。
+  /// （实测把起播拖成 23 秒）。
   Duration _lastPlatformPosition = Duration.zero;
 
   /// 起播定位后的速率检测宽限期。
@@ -615,25 +614,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   bool _isPlaybackRequestCurrent(int request) =>
       _playbackRequestGate.isCurrent(request);
 
-  /// 一起听听众的起播确认闸门。
-  ///
-  /// 返回 `null` 表示**本次无需确认**（未注册钩子、非听众、房间自己的跟随装载、
-  /// 本地文件等）——调用方直接放行且**不产生任何 await**；返回 Future 时需 await，
-  /// `false` 表示用户取消或已改走点歌，必须停手。
-  ///
-  /// 返回可空 Future 而非「已完成的 true」是刻意的：`await` 任何 Future 都会让出
-  /// 一个 microtask，房间跟随装载这条热路径不该为此多一次调度。
-  ///
-  /// **所有插桩点必须在 `_issuePlaybackRequest()` 之前调用它**：用户取消时不能
-  /// 顺带作废上一个尚在途的播放请求。
-  Future<bool>? _roomGuestPlayGate(Song song) {
-    final should = shouldConfirmRoomGuestPlay;
-    if (should == null || !should(song)) return null;
-    final confirm = onRoomGuestPlayConfirm;
-    if (confirm == null) return null;
-    return confirm(song);
-  }
-
   /// 仅测试用：直接访问闸门，验证装载期间的回退采样被抑制、seek 落地后放行。
   @visibleForTesting
   PositionRewindGate get positionRewindGateForTest => _positionRewindGate;
@@ -692,24 +672,19 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 平台上报的最近位置（**不含本地乐观写入**，只由 positionStream 更新）。
   ///
-  /// 一起听这类「拿本地位置与远端快照做比较」的逻辑必须用它：[_position] 会被
+  /// 「拿本地位置与外部基准做比较」的逻辑必须用它：[_position] 会被
   /// `_updatePosition(seekTo)` 乐观写成请求的目标位置，在线源没真正定位时
-  /// 比较结果是假的——表现为「明明从 0 起播，纠偏却认为已对齐」。
+  /// 比较结果是假的——表现为「明明从 0 起播，比较却认为已对齐」。
   Duration get platformPosition => _lastPlatformPosition;
 
   /// 平台真实播放态（just_audio 的 `playing` 标志）。
   ///
   /// [_isPlaying] 是乐观缓存：平台事件迟到/丢失、平台自恢复事件都会让它与
-  /// 实际脱节（见 [pause]/[resume] 注释）。一起听的播放态判定与 CDN 看门狗
-  /// 同口径改用本值——拿缓存判定会把「房间在播、本机其实已停」误判成
-  /// 「双方都在播」，本轮只做进度纠偏而不起播，听众永久停在暂停。
+  /// 实际脱节（见 [pause]/[resume] 注释）。CDN 看门狗用本值做播放态判定——
+  /// 拿缓存判定会把「平台已停、缓存还在播」误判成双方都在播。
   /// 音频服务未就绪时回落缓存值。
   bool get platformIsPlaying => _audioService?.player.playing ?? _isPlaying;
 
-  /// 当前播放模式对应众乐房 play_mode 口径：1=顺序 2=单曲循环 3=随机。
-  /// 随机播放视作「列表循环 + 打乱顺序」（见 cyclePlayMode 注释）。
-  int get roomPlayModeValue =>
-      _shuffleEnabled ? 3 : (_loopMode == AppLoopMode.one ? 2 : 1);
   Duration? get duration => _duration;
   List<Song> get playlist => _playlist;
   int get currentIndex => _currentIndex;
@@ -843,179 +818,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> Function()? onPlaylistEnd;
   // 未登录时尝试播放需联网歌曲,通知 UI 弹窗
   void Function()? onLoginRequired;
-
-  /// 「一起听」房主播放守卫：由私有装配层注入（公开构建不注册）。
-  ///
-  /// 房主在房间里是播放权威且每次起播都会上报服务端，本地起播绕不过去——
-  /// 房间歌单外的曲目（典型为本地音乐）若照播，服务端会收到一个不存在的
-  /// hash，成员会跟着拿到无法解析的曲目。故所有 UI 播放入口统一在此拦截：
-  /// 返回 true 表示调用方不要继续播放（由守卫负责给出提示）。
-  ///
-  /// 必须是同步回调：检查发生在起播前，异步等待会让首帧就先播了本地文件。
-  ///
-  /// 只覆盖 UI 主动播放；自动续播（next/previous/播放结束）不经过它，
-  /// 否则会与房间自身的远端纠偏互相打架。
-  bool Function(Song song)? onRoomOwnerInterceptPlayback;
-
-  /// 「一起听」房主播放态通告：本地暂停/恢复后转报服务端让成员跟随。
-  ///
-  /// 播放器自身的暂停/恢复按钮没有房间概念（迷你播放器、全屏播放器、
-  /// 桌面歌词、耳机按键等都会走 [pause]/[resume]），若不在这里统一通告，
-  /// 房主用播放器按钮暂停时房间与成员端不会同步。
-  ///
-  /// [playing] 为 true 表示已恢复播放。**只在用户主动操作时触发**：
-  /// 房间自身的远端纠偏（`_applyRemotePlayback`）在内部置位
-  /// [_suppressPlaybackNotify]，避免回声造成上报风暴。
-  void Function(bool playing)? onPlaybackStateChangedByUser;
-
-  /// 用户拖动进度后的位置通告（毫秒）。
-  ///
-  /// 与 [onPlaybackStateChangedByUser] 同源：**只在用户主动 seek 时触发**。
-  /// 一起听房主据此上报 `player_operation(action=2)` 让成员跟随进度；成员据此
-  /// 立刻复同步回房间位置。
-  ///
-  /// 内部复位式 seek（单曲循环重播、上一首绕回）必须走 [_seekInternally]，
-  /// 否则房主会把 `progress=0` 上报给房间，成员被拉到开头。
-  void Function(int positionMs)? onSeekedByUser;
-
-  // —— 一起听会话委托（由私有装配层注入，公开构建不注册）——
-
-  /// 听众在房间内自然播完：只暂停本机等待房主切歌（对齐 EchoMusic
-  /// autoNextSuppressed）。返回 true 表示已接管，completed 分支不再连播。
-  /// 实现方应走公开 pause()，让 onPlaybackStateChangedByUser 置上本机暂停豁免。
-  bool Function()? onRoomGuestCompletionPause;
-
-  /// 房主在房间内自然播完：由房间会话切到房间歌单下一首并按 is_auto 上报。
-  /// 返回 true 表示已接管。单曲循环模式下装配层返回 false（保留本地重播语义）。
-  bool Function()? onRoomOwnerCompletionSwitch;
-
-  /// 房主手动上一首/下一首：路由到房间歌单相邻曲目并上报 switch_song。
-  /// 返回 true 表示已接管，本地队列不动作。
-  bool Function({required bool forward})? onRoomOwnerSkip;
-
-  /// 听众手动上一首/下一首：直接拦截（返回 true），由装配层提示「由房主控制」。
-  bool Function()? onRoomGuestSkipBlocked;
-
-  /// 一起听会话是否正在接管播放器（用于禁用交叉淡化：叠化会吞掉 completed
-  /// 事件、干扰切歌上报；对齐 EchoMusic remote-session 队列禁 gapless）。
-  bool Function()? onRoomSessionActive;
-
-  /// 房主播放模式变化：同步到房间（player_operation action=1）。
-  /// 入参为众乐房 play_mode 口径：1=顺序 2=单曲循环 3=随机。
-  void Function(int playMode)? onRoomPlayModeChanged;
-
-  // —— 一起听听众起播确认（由私有装配层注入，公开构建不注册）——
-
-  /// 听众起播前是否需要弹「脱离房间播放 / 申请点歌」确认窗（同步判定）。
-  ///
-  /// **必须是同步回调**：真正的弹窗是异步的（见 [onRoomGuestPlayConfirm]），
-  /// 但「要不要弹」必须先同步判定——不需要弹的调用（不在房间、房主、房间自己的
-  /// 跟随装载、本地文件）绝不能因此多出一个 `await`/microtask 让位点，
-  /// 否则房间跟随装载与本地文件起播都会被平白推迟一帧。
-  bool Function(Song song)? shouldConfirmRoomGuestPlay;
-
-  /// 听众起播确认窗（异步）。返回 true 表示允许继续起播；false 表示用户取消或
-  /// 已改走「申请点歌」，调用方必须停手。
-  ///
-  /// **只在 [shouldConfirmRoomGuestPlay] 返回 true 时才被调用**。
-  Future<bool> Function(Song song)? onRoomGuestPlayConfirm;
-
-  /// 内部纠偏期间抑制 [onPlaybackStateChangedByUser]（防止回声上报）。
-  bool _suppressPlaybackNotify = false;
-
-  /// 在房间远端纠偏的执行窗口内抑制「用户操作类」通告
-  /// （[onPlaybackStateChangedByUser] 与 [onSeekedByUser]）。
-  /// 供 [ListenTogetherProvider] 在施加远端暂停/恢复/seek 时包裹调用。
-  Future<T> suppressPlaybackNotify<T>(Future<T> Function() action) async {
-    final previous = _suppressPlaybackNotify;
-    _suppressPlaybackNotify = true;
-    try {
-      return await action();
-    } finally {
-      _suppressPlaybackNotify = previous;
-    }
-  }
-
-  /// 仅在用户主动暂停（非纠偏）时通告房间。
-  ///
-  /// **不再检查抑制窗口**：房间纠偏的 pause/resume 已改走 notifyRoom:false
-  /// 内部通道，抑制窗口现在只服务于 seek 通告（[_notifySeekToRoom]）。
-  /// 若这里仍检查抑制，纠偏 seek（在线源可达数秒）在途时用户真实的暂停/
-  /// 恢复通告会被吞掉——豁免登记不上，轮询把用户拉回播放，无限拉锯（实测）。
-  void _notifyPlaybackStateToRoom(bool playing) {
-    onPlaybackStateChangedByUser?.call(playing);
-  }
-
-  /// 仅在用户主动 seek 时通告房间（远端纠偏被 [suppressPlaybackNotify] 抑制；
-  /// [force] 供进度条松手等用户显式动作绕过抑制窗口，见 [seek]）。
-  void _notifySeekToRoom(int positionMs, {bool force = false}) {
-    if (_suppressPlaybackNotify && !force) return;
-    onSeekedByUser?.call(positionMs);
-  }
-
-  /// 内部复位式 seek（从头重播 / 绕回）：抑制房间通告后转发给 [seek]。
-  ///
-  /// 同步置位再转发是安全的：通告发生在 [seek] 的同步前缀（平台 await 之前），
-  /// 因此 finally 复位不会漏掉通告窗口。
-  Future<void> _seekInternally(Duration position) async {
-    final previous = _suppressPlaybackNotify;
-    _suppressPlaybackNotify = true;
-    try {
-      await seek(position);
-    } finally {
-      _suppressPlaybackNotify = previous;
-    }
-  }
-
-  // —— 入房前播放快照（一起听退房恢复用）——
-
-  /// 当前播放快照：队列 + 原始队列 + 索引 + 位置 + 播放态。
-  /// 队列元素直接持有 Song 实例引用（退房恢复时 Song 元数据已随富化更新也无碍）。
-  ({
-    List<Song> playlist,
-    List<Song> originalPlaylist,
-    int index,
-    Duration position,
-    bool playing,
-  })?
-  capturePlaybackSnapshot() {
-    final song = _currentSong;
-    if (song == null || _playlist.isEmpty) return null;
-    return (
-      playlist: List<Song>.from(_playlist),
-      originalPlaylist: List<Song>.from(_originalPlaylist),
-      index: _currentIndex,
-      position: _position,
-      playing: _isPlaying,
-    );
-  }
-
-  /// 恢复入房前快照：整表回写并从记录位置继续（仅一起听退房路径调用）。
-  Future<void> restorePlaybackSnapshot({
-    required List<Song> playlist,
-    required List<Song> originalPlaylist,
-    required int index,
-    required Duration position,
-    required bool playing,
-  }) async {
-    if (playlist.isEmpty) return;
-    final playbackRequest = _issuePlaybackRequest();
-    _playlist = List<Song>.from(playlist);
-    _originalPlaylist = List<Song>.from(originalPlaylist);
-    _currentIndex = index.clamp(0, _playlist.length - 1);
-    _currentSong = _playlist[_currentIndex];
-    _updatePosition(position);
-    _updateNotification();
-    _savePlaylistIfChanged();
-    notifyListeners();
-    final result = await _resolveAndPlayCurrentSong(
-      play: playing,
-      seekTo: position > Duration.zero ? position : null,
-      playbackRequest: playbackRequest,
-    );
-    if (!result.succeeded) _resolveError = _resolveErrorText(_currentSong);
-    notifyListeners();
-  }
 
   // —— Lyricon 钩子字段 ——
   // 记录上次推送给 Lyricon 的「id + 元数据」签名，用于在 notifyListeners 回调中
@@ -1723,7 +1525,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       }
       // 冷启动恢复完成即下发一次媒体通知元数据（含封面）。此前首次下发要等
       // playingStream/切歌事件，封面加载完全依赖当时的临时网络下载，在线封面
-      // 偶发下载失败就空到下一次事件。与 restorePlaybackSnapshot 同式：恢复
+      // 偶发下载失败就空到下一次事件。与冷启动恢复同式：恢复
       // 完成立即推送标题/歌手/封面（在线歌走 _pushNotificationWithCachedArtwork
       // 的本地缓存 file:// 覆盖路径），原生侧提前把封面载入磁盘缓存/媒体会话，
       // 用户点播放触发 playingStream 再次推送时命中缓存秒显。
@@ -1874,9 +1676,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         // **必须用平台上报位置 [_lastPlatformPosition]，不能用 [_position]**：
         // [_position] 会被本地乐观写成「请求的目标位置」（起播对齐、续播恢复的
         // `_updatePosition(seekTo)`），在线源尚未真正定位时它就是个假值。
-        // 实测：一起听成员进房请求 seek 到 287s、平台实际从 0 起播，
-        // 看门狗拿这个假值判定「速率异常 → CDN 限速」→ 刷新 URL 重设音源，
-        // 把起播拖成 23 秒，期间房间同步的互斥锁一直被占（成员冻结且不再纠偏）。
+        // 实测：起播请求 seek 到 287s、平台实际从 0 起播，看门狗拿这个假值
+        // 判定「速率异常 → CDN 限速」→ 刷新 URL 重设音源，把起播拖成 23 秒。
         final watchdogPos = _lastPlatformPosition;
         final platformPlaying = _audioService?.player.playing ?? _isPlaying;
         if (platformPlaying &&
@@ -2260,30 +2061,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         );
       }
 
-      // 一起听接管自然播完（异常结束不接管，继续走下方重试链路）：
-      // 听众只暂停本机等房主切歌；房主自动切房间歌单下一首（is_auto 上报，
-      // 对齐 EchoMusic ended→trackchange→switch_song(is_auto) 链路）。
-      // 单曲循环保留本地重播语义（重播无切歌边沿，与 EM 一致不上报）。
-      if (!completedAbnormally) {
-        final guestPause = onRoomGuestCompletionPause;
-        if (guestPause != null && guestPause()) {
-          // 必须走公开 pause()：其末尾的 onPlaybackStateChangedByUser 会置上
-          // 听众本机暂停豁免标记，后续轮询不会把本机自动拉回播放。
-          unawaited(pause());
-          return;
-        }
-        if (_loopMode != AppLoopMode.one) {
-          final ownerSwitch = onRoomOwnerCompletionSwitch;
-          if (ownerSwitch != null && ownerSwitch()) return;
-        }
-      }
-
       // 「定时结束后播完当前歌曲」：到点已进入 endOfTrack 等待态。
       // 语义 = 定时到点那一刻正在播的这首自然播完（下一个正常 completed）
-      // 即暂停，不看队列位置——单曲循环 / 私人 FM 同样只播完当前首就停。
+      // 即暂停，不看队列位置——单曲循环同样只播完当前首就停。
       // 异常结束（URL 过期 / 试听片段）不是「播完」，交给下方重试链路。
-      // 位置放在一起听接管之后：房间切歌语义优先（房主在一起听中的
-      // 自动切歌不受影响）。
       if (_sleepTimerMode == SleepTimerMode.endOfTrack &&
           !completedAbnormally) {
         _sleepTimerMode = SleepTimerMode.off;
@@ -2335,7 +2116,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           _abnormalEndRetries = 0;
           _retryingSongId = null;
           final replayRequest = _issuePlaybackRequest();
-          await _seekInternally(Duration.zero);
+          await seek(Duration.zero);
           if (!_isPlaybackRequestCurrent(replayRequest)) return;
           await _audioService?.playCommand();
           if (!_isPlaybackRequestCurrent(replayRequest)) return;
@@ -2998,9 +2779,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (_sleepTimerMode == SleepTimerMode.endOfTrack) {
       return '等待播完当前歌曲后停止';
     }
-    // 一起听会话中不做叠化：连播由房间会话接管（completed→switch_song），
-    // 双播放器叠化会吞掉 completed 事件、干扰切歌上报
-    if (onRoomSessionActive?.call() ?? false) return '一起听会话中';
     if (_crossfadeStarting) return '淡化启动中';
     if (_currentIndex < 0) return '无当前歌曲';
     if (_playlist.length < 2) return '播放列表不足 2 首';
@@ -3381,42 +3159,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  /// 无缝更新当前播放歌曲的元数据（标题/歌手/封面）。
-  /// 用于一起听听众端元数据富化后的回写：只替换 Song 对象并刷新媒体通知，
-  /// 不触碰音频源、不打断播放。id 不匹配时静默忽略。
-  void updateCurrentSongMetadata(Song song) {
-    final cur = _currentSong;
-    if (cur == null || cur.id != song.id) return;
-    // 元数据是否实质变化：决定要不要补推歌词渠道、以及要不要顺带修正历史。
-    // 判据抽到 [hasMetadataChanged]（含 duration，见那里的注释说明为什么）。
-    if (!hasMetadataChanged(cur, song)) return;
-    _currentSong = song;
-    for (var i = 0; i < _playlist.length; i++) {
-      if (_playlist[i].id == song.id) _playlist[i] = song;
-    }
-    for (var i = 0; i < _originalPlaylist.length; i++) {
-      if (_originalPlaylist[i].id == song.id) _originalPlaylist[i] = song;
-    }
-    _updateNotification();
-    // 歌词渠道补推：这些渠道都按 song.id 去重（lyricInfo 更是每首只推一次），
-    // 而回写保持 id 不变 → 不显式通知就会永久停在「未知歌曲」占位标题。
-    // Lyricon 例外：它由 _handleLyriconSongChange 的元数据签名自动触发重推。
-    unawaited(DesktopLyricService.instance.notifySongMetadataChanged());
-    notifyListeners();
-  }
-
-  /// 元数据晚到时就地修正历史记录（不新增、不重排、不加计数）。
-  ///
-  /// 一起听跟随端的起播瞬间只有 hash 身份，`_recordHistory` 落库的是一条
-  /// 「未知歌曲」；富化回写当前歌后调用本方法把那条历史刷成真实元数据。
-  void refreshHistoryEntry(Song song) {
-    unawaited(HistoryRepository().replaceHistoryEntry(song));
-  }
-
   /// 播放单曲。
   ///
   /// [seekTo] 非零时作为 `setPlaylist(initialPosition:)` 交给平台层，
-  /// 在 prepare 阶段一次性定位（一起听跟随起播用）。
+  /// 在 prepare 阶段一次性定位。
   ///
   /// **禁止改回「加载完成后再 `seek()`」**：`just_audio.seek()` 在
   /// `ProcessingState.loading` 时直接 return 静默丢弃；而在线源加载期间
@@ -3424,11 +3170,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 因此无论「立即 seek」还是「轮询等 ready 再 seek」都会偶发失效
   /// （表现为「进房从 0 开始播，手动暂停再播放才跟上」）。只有
   /// `initialPosition` 是无竞态的。
-  Future<void> playSong(Song song, {Duration? seekTo}) async {
-    // 一起听听众：房间内点播其他歌曲时先弹确认窗。取消/点歌 → 直接返回，
-    // 连播放请求代次都不占用；脱离/直接播放 → 置脱离标记后继续走原起播链路。
-    final guestGate = _roomGuestPlayGate(song);
-    if (guestGate != null && !await guestGate) return;
+  Future<void> playSong(Song song) async {
     final playbackRequest = _issuePlaybackRequest();
     _logPlaybackEvent(
       'action.requested',
@@ -3439,18 +3181,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     );
     _resetAbnormalRetry();
     if (song.isOnline && song.url == null) {
-      await playOnlineSong(
-        song,
-        playbackRequest: playbackRequest,
-        seekTo: seekTo,
-        // 本方法已弹过确认窗，不得二次弹
-        skipRoomGuestGate: true,
-      );
+      await playOnlineSong(song, playbackRequest: playbackRequest);
       return;
     }
-
-    // 一起听房主：本地曲目不在房间歌单内，交由守卫拦截并提示
-    if (onRoomOwnerInterceptPlayback?.call(song) ?? false) return;
 
     _queueRevision++;
     _prefetchedUrlQuality.clear();
@@ -3539,28 +3272,17 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// [skipRoomGuestGate] 为 true 表示调用方（[playSong]）已做过一起听听众的
-  /// 起播确认，本方法不得重复弹窗。
   Future<void> playOnlineSong(
     Song song, {
     int? playbackRequest,
     Duration? seekTo,
-    bool skipRoomGuestGate = false,
   }) async {
-    // 一起听听众：确认窗必须在 `_issuePlaybackRequest()` 之前——用户取消时
-    // 不能顺带作废上一个尚在途的播放请求
-    if (!skipRoomGuestGate) {
-      final guestGate = _roomGuestPlayGate(song);
-      if (guestGate != null && !await guestGate) return;
-    }
     final request = playbackRequest ?? _issuePlaybackRequest();
     final apiClient = KugouApiClient();
     if (!apiClient.isLoggedIn) {
       onLoginRequired?.call();
       return;
     }
-    // 一起听房主：房间歌单外的曲目交由守卫拦截（本地队列播放不走此入口）
-    if (onRoomOwnerInterceptPlayback?.call(song) ?? false) return;
     _resetAbnormalRetry();
 
     // 可选扩展：播放前解析本地已持久化的音频（默认关闭，由私有构建注入）
@@ -3708,15 +3430,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> playPlaylist(List<Song> songs, int startIndex) async {
     if (songs.isEmpty) return;
-    // 一起听听众：房间内点播其他歌曲的确认窗（列表起播按点击曲目判定）
-    final guestGate = _roomGuestPlayGate(songs[startIndex]);
-    if (guestGate != null && !await guestGate) return;
     final playbackRequest = _issuePlaybackRequest();
     _resetAbnormalRetry();
-
-    // 一起听房主：列表首曲不在房间歌单内（典型为本地音乐列表）时整表拦截，
-    // 避免只拦下第一首、续播时又静默播出未上报的曲目
-    if (onRoomOwnerInterceptPlayback?.call(songs[startIndex]) ?? false) return;
 
     _loadPlaylist(songs, startIndex);
     _currentSong = _playlist[_currentIndex];
@@ -3806,14 +3521,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> playOnlinePlaylist(List<Song> songs, int startIndex) async {
     if (songs.isEmpty) return;
-    // 一起听听众：房间内点播其他歌曲的确认窗（列表起播按点击曲目判定）
-    final guestGate = _roomGuestPlayGate(songs[startIndex]);
-    if (guestGate != null && !await guestGate) return;
     final playbackRequest = _issuePlaybackRequest();
     _resetAbnormalRetry();
-
-    // 一起听房主：房间歌单外的曲目整表拦截（见 onRoomOwnerInterceptPlayback）
-    if (onRoomOwnerInterceptPlayback?.call(songs[startIndex]) ?? false) return;
 
     // 可选扩展：播放前解析本地已持久化的音频（默认关闭）
     String? cachedPath;
@@ -4027,9 +3736,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 失败再回退到 /song/url，适配用户上传到云盘的音乐。
   Future<void> playCloudPlaylist(List<Song> songs, int startIndex) async {
     if (songs.isEmpty) return;
-    // 一起听听众：云盘列表同样是「列表点击」入口
-    final guestGate = _roomGuestPlayGate(songs[startIndex]);
-    if (guestGate != null && !await guestGate) return;
     if (!KugouApiClient().isLoggedIn) {
       onLoginRequired?.call();
       return;
@@ -4337,7 +4043,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   bool _seekSessionWasPlaying = false;
   Future<void> _seekPauseFuture = Future<void>.value();
 
-  Future<void> pause({bool notifyRoom = true}) async {
+  Future<void> pause() async {
     _logPlaybackEvent(
       'action.pause',
       request: _diagnosticPlaybackRequest,
@@ -4346,8 +4052,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     );
     // 乐观同步本地播放态：_isPlaying 只靠 playingStream 更新时，平台事件
     // 偶发迟到/丢失会让 Dart 侧状态与实际脱节（实测「音乐在响但 isPlaying
-    // 停留 false」→ 一起听 decideSync 永远判不中漂移纠偏分支）。用户意图
-    // 优先，后续平台事件到达时再以真实值覆盖。
+    // 停留 false」会让依赖播放态的看门狗误判）。用户意图优先，
+    // 后续平台事件到达时再以真实值覆盖。
     _isPlaying = false;
     notifyListeners();
     // 乐观推送通知/小部件：playingStream 平台事件偶发迟到/丢失（见上注释），
@@ -4424,12 +4130,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
     _saveState();
-    // 用户主动暂停：通告房间（房主上报、成员标记本机暂停）。
-    // notifyRoom=false 供房间纠偏内部通道使用（纠偏不是用户意图，且不能
-    // 依赖抑制窗口——它会吞掉纠偏在途时用户真实的暂停/恢复通告）。
-    if (notifyRoom) {
-      _notifyPlaybackStateToRoom(false);
-    }
   }
 
   Future<void> _restoreLatestPlaybackAfterStalePause() async {
@@ -4460,9 +4160,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// 拖动进度条时直接暂停（无淡入淡出），避免拖动期间音量渐变影响体验。
-  ///
-  /// 不触发 [onPlaybackStateChangedByUser]：这是拖动过程中的临时静音，
-  /// 不是用户的播放态意图，上报会让房间与成员端抖动。
   Future<void> pauseForSeek() {
     _invalidatePlaybackRequest(
       source: _PlaybackRequestCancellationSource.seekGesturePause,
@@ -4487,14 +4184,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// 应用拖动位置；只有期间没有新的播放/暂停意图时，才恢复拖动前的播放。
-  Future<void> completeSeekSession(
-    int session,
-    Duration position, {
-    bool forceNotify = false,
-  }) async {
+  Future<void> completeSeekSession(int session, Duration position) async {
     await _seekPauseFuture;
     if (session != _seekSessionGeneration) return;
-    await seek(position, forceNotify: forceNotify);
+    await seek(position);
     if (session != _seekSessionGeneration ||
         _seekSessionIntentGeneration != _seekPlaybackIntentGeneration ||
         !_seekSessionWasPlaying) {
@@ -4567,7 +4260,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<void> resume({bool notifyRoom = true}) async {
+  Future<void> resume() async {
     final needsReload = _playbackNotReady || _isResolvingUrl;
     final progressBaseline = _lastPlatformPosition;
     final playbackRequest = _issuePlaybackRequest();
@@ -4579,7 +4272,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       outcome: 'user_intent',
     );
     // 乐观同步本地播放态（同 pause() 处注释）：play() 已下发即视为播放中，
-    // 不等平台事件。否则一起听恢复跟随的漂移纠偏分支永远判不中。
+    // 不等平台事件。
     _isPlaying = true;
     notifyListeners();
     // 乐观推送通知/小部件（同 pause() 处注释）：平台事件迟到/丢失时，
@@ -4599,9 +4292,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         _updateNotification();
       }
       _saveState();
-      if (notifyRoom && result.succeeded) {
-        _notifyPlaybackStateToRoom(true);
-      }
       return;
     }
     // 交叉淡化进行中：不跑淡入循环，直接 play（已在播时是 no-op）。
@@ -4617,9 +4307,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       if (!_isPlaybackRequestCurrent(playbackRequest)) return;
       _completionReadyRequest = playbackRequest;
       _saveState();
-      if (notifyRoom) {
-        _notifyPlaybackStateToRoom(true);
-      }
       return;
     }
     final fadeEnabled = await SettingsRepository().getPauseFadeEnabled();
@@ -4640,10 +4327,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       var superseded = false;
       for (int i = 1; i <= steps; i++) {
         await Future.delayed(const Duration(milliseconds: stepMs));
-        // 被更新的 fade / 暂停抢占：停止淡入，但**不能连房间通告一起吞掉**。
-        // pause() 无论淡出是否被抢占都会走到末尾的上报，resume() 原先直接
-        // return，房主的「恢复播放」在淡入被抢占时对房间不可见 → 听众永远停在
-        // 暂停（上报不对称；见 RoomSession._reconcileOwnerPlaybackState）。
+        // 被更新的 fade / 暂停抢占：停止淡入（音量恢复语义保持不变）。
         if (token != _fadeToken ||
             !_isPlaybackRequestCurrent(playbackRequest) ||
             _isDisposed) {
@@ -4665,13 +4349,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
     if (!_isPlaybackRequestCurrent(playbackRequest) || _isDisposed) return;
     _saveState();
-    // 用户主动恢复播放：通告房间
-    if (notifyRoom) {
-      _notifyPlaybackStateToRoom(true);
-    }
   }
 
-  Future<void> seek(Duration position, {bool forceNotify = false}) async {
+  Future<void> seek(Duration position) async {
     // 拖动进度条：中止淡化（AudioService.seek 内部也会中止，这里同步清掉
     // 预加载状态，避免拖回中段后仍按旧的"即将播完"判定起播下一首）
     _resetCrossfadePrepared();
@@ -4685,13 +4365,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       _updatePosition(position);
       notifyListeners();
     }
-    // 用户主动拖动进度：立即通告房间。必须在平台 await **之前**同步触发——
-    // 房间侧的抑制窗口（suppressPlaybackNotify）只覆盖 awaited 调用期间，
-    // 放在 await 之后会逃出窗口，被当成用户操作上报（房主回声 / 成员自激）。
-    // [forceNotify]：进度条松手是用户的显式动作，即使此刻恰有远端纠偏在途
-    // （抑制窗口开启）也必须让一起听层感知——否则听众的「拖动即脱离」会被
-    // 静默吞掉并被纠偏拉回（实测复现）。
-    _notifySeekToRoom(position.inMilliseconds, force: forceNotify);
     await _audioService?.seek(position);
     _saveState();
     // 同步进度到 Lyricon（仅 enabled 时推送，避免无意义 IPC；
@@ -5025,11 +4698,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     await _audioService?.resetAutomixRate(_speed);
     _automixPlan = null;
     _automixPlanSongId = null;
-    // 一起听路由：听众拦截（进度由房主控制），房主切到房间歌单相邻曲目并上报
-    final guestBlocked = onRoomGuestSkipBlocked;
-    if (guestBlocked != null && guestBlocked()) return;
-    final ownerSkip = onRoomOwnerSkip;
-    if (ownerSkip != null && ownerSkip(forward: true)) return;
     final playbackRequest = _issuePlaybackRequest();
     _logPlaybackEvent(
       'action.next',
@@ -5063,7 +4731,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         return;
       }
       if (_playlist.length == 1) {
-        await _seekInternally(Duration.zero);
+        await seek(Duration.zero);
         if (autoPlay) await _audioService?.playCommand();
         return;
       }
@@ -5119,11 +4787,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     await _audioService?.resetAutomixRate(_speed);
     _automixPlan = null;
     _automixPlanSongId = null;
-    // 一起听路由：听众拦截（进度由房主控制），房主切到房间歌单相邻曲目并上报
-    final guestBlocked = onRoomGuestSkipBlocked;
-    if (guestBlocked != null && guestBlocked()) return;
-    final ownerSkip = onRoomOwnerSkip;
-    if (ownerSkip != null && ownerSkip(forward: false)) return;
     final playbackRequest = _issuePlaybackRequest();
     _logPlaybackEvent(
       'action.previous',
@@ -5144,7 +4807,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       prevIndex = prevIndex > 0 ? prevIndex - 1 : _playlist.length - 1;
       if (prevIndex == startIndex) {
         if (_loopMode == AppLoopMode.all) break;
-        await _seekInternally(Duration.zero);
+        await seek(Duration.zero);
         return;
       }
 
@@ -5184,9 +4847,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       outcome: 'play',
     );
     _resetAbnormalRetry();
-
-    // 一起听房主：房间歌单外的曲目交由守卫拦截（上一曲/下一曲等自动续播不经此入口）
-    if (onRoomOwnerInterceptPlayback?.call(_playlist[index]) ?? false) return;
 
     // 可选扩展：播放源停止回调（默认关闭）
     if (_currentSong != null && _currentSong!.isOnline) {
@@ -5693,9 +5353,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (_audioService != null) {
       await _audioService.setLoopMode(just_audio.LoopMode.off);
     }
-    // 一起听房主：播放模式变化同步房间（cyclePlayMode 的链式调用会产生
-    // 连续多次上报，服务端 last-write-wins，可接受）
-    onRoomPlayModeChanged?.call(roomPlayModeValue);
     _saveState();
     notifyListeners();
   }
@@ -5729,9 +5386,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         if (_currentIndex < 0) _currentIndex = 0;
       }
     }
-    // 一起听房主：播放模式变化同步房间（cyclePlayMode 的链式调用会产生
-    // 连续多次上报，服务端 last-write-wins，可接受）
-    onRoomPlayModeChanged?.call(roomPlayModeValue);
     _savePlaylistIfChanged();
     notifyListeners();
   }
@@ -6265,10 +5919,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   void _handleLyriconSongChange() {
     if (!LyriconProviderService.instance.enabled) return;
     final song = _currentSong;
-    // 去重键必须包含元数据，不能只用 id：
-    // 一起听跟随端起播只有 hash，标题先被推成「未知歌曲」；随后富化回写
-    // （updateCurrentSongMetadata，**id 不变**）若仅比 id 就会被拦掉，
-    // Lyricon 永久停在占位标题。加入 title/artist/cover 后，元数据一变即重推；
+    // 去重键必须包含元数据，不能只用 id：播放中的歌曲元数据可能由后台富化
+    // 补齐后就地回写（**id 不变**），若仅比 id 就会被拦掉，Lyricon 永久停在
+    // 占位标题。加入 title/artist/cover 后，元数据一变即重推；
     // 同时 position tick 场景三者均不变，原有防抖语义不受影响。
     final sig = buildLyriconSongSignature(song);
     // 签名相同（含都为 null）则不处理，避免高频 tick 触发重复推送
@@ -6351,8 +6004,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
               // 本地歌曲传空 hash + "歌名 艺术家" 关键词搜索；搜索词与播放器页面 full_player 保持一致，
               // 确保 Lyricon 推送与播放器页面命中同一版本歌词。
               final lyricHash = song.isOnline ? song.id : '';
-              // 用 isUnknownArtist 而非比较单一字面量：一起听跟随端的占位值是
-              // 「未知歌手」、本地侧是「未知艺术家」，只比一个会漏判，
+              // 用 isUnknownArtist 而非比较单一字面量：在线与本地侧的占位值
+              // 不同（「未知歌手」/「未知艺术家」），只比一个会漏判，
               // 导致把「未知歌曲 未知歌手」当检索词去搜。
               final searchName = !isUnknownArtist(song.artist)
                   ? '${song.title} ${song.artist}'
@@ -6557,10 +6210,9 @@ bool shouldHintQueueEnd({
 
 /// 构造 Lyricon 推送的去重签名（`null` 表示无当前歌）。
 ///
-/// **为什么签名必须含元数据而不只是 id**：一起听跟随端起播时只有 hash 身份，
-/// `RoomSong.toSong()` 把空标题兜底成「未知歌曲」先推给了 Lyricon；真实元数据
-/// 由后台富化补齐后经 `updateCurrentSongMetadata` 回写，而该回写**刻意保持 id
-/// 不变**（避免打断播放）。若去重只看 id，这次回写会被判为「无变化」直接拦掉，
+/// **为什么签名必须含元数据而不只是 id**：播放中的歌曲元数据可能由后台富化
+/// 补齐后就地回写，而该回写**刻意保持 id 不变**（避免打断播放）。
+/// 若去重只看 id，这次回写会被判为「无变化」直接拦掉，
 /// Lyricon 就会整首歌停在占位标题。
 ///
 /// 用 `\u0000` 作分隔符：它是不会出现在正常歌曲元数据里的控制字符，

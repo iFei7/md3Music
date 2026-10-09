@@ -44,11 +44,9 @@ const List<TabItem> kDefaultTabs = [
 
 /// 可选 Tab（默认隐藏，需在设置页手动开启）。
 const List<TabItem> kOptionalTabs = [
-  TabItem(id: 'fm', label: '私人FM'), // 原默认（私人FM），现改为可选
   TabItem(id: 'search', label: '搜索'),
   TabItem(id: 'recognition', label: '听歌识曲'),
   TabItem(id: 'audiobook', label: '听书'),
-  TabItem(id: 'listen_together', label: '一起听'),
   TabItem(id: 'settings', label: '设置'),
 ];
 

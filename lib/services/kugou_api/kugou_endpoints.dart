@@ -122,13 +122,8 @@ class KugouEndpoints {
   static const String ipZoneHome = '/ip/zone/home';
 
   // FM (Radio)
-  static const String fmRecommend = '/fm/recommend';
-  static const String fmClass = '/fm/class';
-  static const String fmImage = '/fm/image';
-  static const String fmSongs = '/fm/songs';
 
   // Personal FM
-  static const String personalFm = '/personal/fm';
 
   // Scene
   static const String sceneLists = '/scene/lists';

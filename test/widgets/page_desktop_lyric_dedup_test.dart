@@ -14,7 +14,6 @@ import 'package:md3music/providers/comment_display_provider.dart';
 import 'package:md3music/providers/device_provider.dart';
 import 'package:md3music/providers/favorites_provider.dart';
 import 'package:md3music/providers/kugou_provider.dart';
-import 'package:md3music/providers/listen_together_provider.dart';
 import 'package:md3music/providers/local_favorites_provider.dart';
 import 'package:md3music/providers/player_provider.dart';
 import 'package:md3music/providers/theme_provider.dart';
@@ -136,7 +135,6 @@ void main() {
             ),
             ChangeNotifierProvider(create: (_) => LocalFavoritesProvider()),
             ChangeNotifierProvider(create: (_) => CommentDisplayProvider()),
-            ChangeNotifierProvider(create: (_) => ListenTogetherProvider()),
           ],
           child: MaterialApp(
             navigatorKey: appNavigatorKey,

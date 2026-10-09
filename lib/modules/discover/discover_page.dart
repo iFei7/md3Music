@@ -14,7 +14,6 @@ import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/scroll_aware_app_bar.dart';
 import '../../widgets/song_list_item.dart';
 import 'home_discover_refill.dart';
-import '../personal_fm/personal_fm_section.dart';
 import '../player/secondary_mini_player.dart';
 import '../recognition/song_recognition_page.dart';
 import '../search/search_page.dart';
@@ -39,9 +38,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
   // 每日推荐区块的折叠状态（true=折叠）。SharedPreferences 存"是否折叠"。
   //
-  // 发现页现在只保留私人 FM + 每日推荐两块（主题歌单/场景音乐/热门歌单/排行榜/
-  // 新碟上架已迁移到搜索空白态，见 MusicExploreSections）。私人 FM 没有标题行
-  // （见 [PersonalFmSection]），卡片恒定展示、无折叠把手；因此只剩每日推荐可折叠。
+  // 发现页现在只剩每日推荐一块带折叠把手的分区（主题歌单/场景音乐/热门歌单/
+  // 排行榜/新碟上架已迁移到搜索空白态，见 MusicExploreSections）。
   static const String _kCollapsedDaily = 'discover_collapsed_daily';
 
   // 刷歌推荐区块的折叠状态，键名与每日推荐同一套约定（前缀 + 分区），
@@ -117,9 +115,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
       await _loadAllData();
       if (!mounted) return;
 
-      // 检查是否真的加载到了数据（发现页只剩每日推荐 + 私人 FM）
-      if (kugou.recommendSongs.isNotEmpty ||
-          kugou.personalFmSongs.isNotEmpty) {
+      // 检查是否真的加载到了数据（发现页只剩每日推荐）
+      if (kugou.recommendSongs.isNotEmpty) {
         break; // 有数据了，退出重试
       }
 
@@ -141,7 +138,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
   bool get _hasAnySectionData {
     final kugou = context.read<KugouProvider>();
     return kugou.recommendSongs.isNotEmpty ||
-        kugou.personalFmSongs.isNotEmpty ||
         kugou.homeDiscoverSongs.isNotEmpty;
   }
 
@@ -149,14 +145,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
     if (!mounted) return; // 页面已销毁则放弃，避免访问 context 触发 null check 崩溃
     final kugou = context.read<KugouProvider>();
     final hasExistingData = kugou.hasLoadedDiscoverData;
-    // 私人 FM 不跟着刷新走。它背后是流式接口（`action=play`，「给我下一批」），
-    // 每次请求返回的都是不同的一批歌，而发现页的 FM 卡片直接渲染列表第一首。
-    // 跟着下拉刷新就会静默换掉卡上显示的、甚至正在播的那首歌：卡片与播放器
-    // 脱钩（按钮翻回 ▶、收藏指向别的歌），而且刷新不传档位参数，服务端回落到
-    // normal/0，用户停在「探索」「小众」时内容还会被换成「红心」档的。
-    // 所以只在手上一首都没有时补一次，之后换歌只由用户自己触发
-    // （切档位 / 完整 FM 页）。
-    final needsPersonalFm = kugou.personalFmSongs.isEmpty;
     // 已有数据时直接展示，后台静默刷新
     if (!hasExistingData) {
       setState(() {
@@ -166,14 +154,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
     }
     try {
       // 渐进加载：请求并行发起，每个分区完成后立即刷新一次。
-      // 发现页只保留每日推荐 + 私人 FM 两块；主题歌单/场景音乐/热门歌单/
-      // 排行榜/新碟上架已迁到搜索空白态（MusicExploreSections 按需拉取）。
+      // 主题歌单/场景音乐/热门歌单/排行榜/新碟上架已迁到搜索空白态
+      // （MusicExploreSections 按需拉取）。
       final reqs = <Future<void>>[
         kugou.getRecommendDaily(forceRefresh: hasExistingData),
-        // 这里 forceRefresh 恒为 true 不是笔误：列表为空才会走到这一句，而空列表
-        // 也会盖上新鲜时间戳（上一次请求成功但返回了空），不绕开 5 分钟 TTL 的话
-        // 卡片会空着却「新鲜」，下拉也补不回来。
-        if (needsPersonalFm) kugou.getPersonalFm(forceRefresh: true),
         // 刷歌推荐下拉只 forceRefresh、**不重置游标**：forceRefresh 在
         // getHomeDiscover 里的含义仅仅是绕过 5 分钟 TTL，游标（已消费条数）和
         // seen（已消费 hash，持久化在 HomeDiscoverProgressStore）都原样保留。
@@ -192,8 +176,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
       await Future.wait(reqs);
 
       // 只有确实加载到数据时才标记为已加载
-      final hasAnyData =
-          kugou.recommendSongs.isNotEmpty || kugou.personalFmSongs.isNotEmpty;
+      final hasAnyData = kugou.recommendSongs.isNotEmpty;
       if (!mounted) return;
       if (hasAnyData) {
         kugou.markDiscoverLoaded();
@@ -255,7 +238,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
             : CustomScrollView(
                 controller: _scrollController,
                 slivers: [
-                  _buildPersonalFmSection(),
                   _buildDailySection(colorScheme),
                   _buildHomeDiscoverSection(colorScheme),
                   const SliverToBoxAdapter(child: SizedBox(height: 80)),
@@ -369,10 +351,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
         ],
       ),
     );
-  }
-
-  Widget _buildPersonalFmSection() {
-    return const SliverToBoxAdapter(child: PersonalFmSection());
   }
 
   /// 每日推荐：竖排前四首。

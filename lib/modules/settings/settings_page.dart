@@ -62,7 +62,6 @@ import 'settings_navigation.dart';
 import 'settings_two_pane.dart';
 import '../../core/layout/adaptive_navigator.dart' show DetailEmptyState;
 import 'home_tab_manager.dart';
-import 'mcp_agent_section.dart';
 import 'settings_search_index.g.dart';
 
 /// CI compile-time version injection via --dart-define=APP_VERSION=X
@@ -1073,12 +1072,6 @@ class _SettingsPageState extends State<SettingsPage>
       icon: Icons.bolt_outlined,
       description: '应用图标长按快捷入口',
       body: _buildDesktopShortcutSection,
-    ),
-    SettingsCategory(
-      title: 'AI 代理',
-      icon: Icons.smart_toy_outlined,
-      description: 'MCP 接口、访问令牌与只读模式',
-      body: _buildAiAgentSection,
     ),
     SettingsCategory(
       title: '缓存与数据',
@@ -3419,7 +3412,7 @@ class _SettingsPageState extends State<SettingsPage>
         ),
         // 以下两项是上面那个开关的从属项：关着时它们没有意义，直接隐藏
         if (_startupAutoPlayEnabled) ...[
-          // search: 播放内容 音源 每日推荐 私人FM 红心 探索 小众 继续上次 续播 电台
+          // search: 播放内容 音源 每日推荐 继续上次 续播
           ListTile(
             title: const Text('播放内容'),
             subtitle: M3EDropdownMenu<String>(
@@ -3807,13 +3800,6 @@ class _SettingsPageState extends State<SettingsPage>
   Widget _buildDesktopShortcutSection(ColorScheme colorScheme) {
     // search-item: 桌面快捷方式 | 快捷方式 快捷 长按
     return const _DesktopShortcutPanel();
-  }
-
-  /// AI 代理接口（MCP）section：外部 AI 客户端经 MCP 调用播放器的全部设置。
-  /// 独立一栏而非并入「缓存与数据」：能力面与风险面都独立，需要单独可见/可控。
-  Widget _buildAiAgentSection(ColorScheme colorScheme) {
-    // search-item: AI 代理接口 | AI 代理 mcp 大模型 智能体 claude 调用
-    return const McpAgentSection();
   }
 
   /// 本地持久化音频管理 section 未包含在公开版本中。

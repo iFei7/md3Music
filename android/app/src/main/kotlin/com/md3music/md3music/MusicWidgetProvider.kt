@@ -20,7 +20,7 @@ import android.widget.RemoteViews
  *
  * 样式对齐 app 内 MiniPlayer 与 MD3E：专辑封面圆角、播放按钮 primary 圆形
  * 填充、下一首次级圆形按钮、MD3 胶囊进度条。颜色由 Flutter 侧推送的当前
- * ColorScheme 提供（color_* extras，与 PersonalFmWidgetProvider 同一套协议），
+ * ColorScheme 提供（color_* extras），
  * app 从未推送过时用 Material 3 基准紫兜底。封面位图经 Canvas 裁圆角。
  * 兼容性约束同私人FM小部件：不用负 margin、不用裸 <View>。
  */
@@ -44,7 +44,7 @@ class MusicWidgetProvider : AppWidgetProvider() {
         /// 消除「后台线程烤入过期播放态后到覆盖」的竞态（暂停后图标回退）
         const val EXTRA_HAS_TEXT = "widget_has_text"
 
-        // 动态取色 extras（与 PersonalFmWidgetProvider 同一套 color_ 前缀协议）
+        // 动态取色 extras（color_ 前缀协议）
         private const val COLOR_PREFIX = "color_"
         private val COLOR_KEYS = arrayOf(
             "panelBg", "primary", "onPrimary", "surfaceHigh",
