@@ -1007,16 +1007,22 @@ class _SettingsPageState extends State<SettingsPage>
 
   /// 按查询词过滤搜索索引（label + aliases 包含匹配）。
   /// 索引见 settings_search_index.g.dart（Lite：随设置页改动手工维护）。
-  List<({String label, String category, String aliases})> _searchResults(
-    String query,
-  ) {
+  List<({String label, String category, String subpage, String aliases})>
+  _searchResults(String query) {
     final q = query.trim().toLowerCase();
     if (q.isEmpty) return const [];
-    // 合并私有构建注入的额外索引条目（默认无）
-    final entries = [
-      ...kSettingsSearchIndex,
-      ...?SettingsPage.extraSearchIndexEntries,
-    ];
+    // 合并私有构建注入的额外索引条目（默认无）：老三元组没有三级页，补空串
+    final entries =
+        <({String label, String category, String subpage, String aliases})>[
+          ...kSettingsSearchIndex,
+          for (final e in SettingsPage.extraSearchIndexEntries ?? const [])
+            (
+              label: e.label,
+              category: e.category,
+              subpage: '',
+              aliases: e.aliases,
+            ),
+        ];
     return entries
         .where((e) => '${e.label} ${e.aliases}'.toLowerCase().contains(q))
         .toList();
@@ -1082,16 +1088,27 @@ class _SettingsPageState extends State<SettingsPage>
         ListTile(
           leading: const Icon(Icons.search, size: 20),
           title: Text(r.label),
-          subtitle: Text('${r.category} ›'),
+          subtitle: Text(
+            r.subpage.isEmpty ? '${r.category} ›' : '${r.category} › ${r.subpage}',
+          ),
           trailing: const Icon(Icons.chevron_right, size: 20),
-          onTap: () {
-            // 清空搜索后进入对应分类
-            _searchController.clear();
-            setState(() => _searchQuery = '');
-            _openSection(r.category);
-          },
+          onTap: () => _openSearchResult(r),
         ),
     ];
+  }
+
+  /// 点击搜索结果：清空搜索并直达对应层级。
+  /// 条目带三级页归属时直接落到三级子页，否则落到二级页。
+  void _openSearchResult(
+    ({String label, String category, String subpage, String aliases}) entry,
+  ) {
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+    _navigateTo(
+      category: entry.category,
+      subpage: entry.subpage.isEmpty ? null : entry.subpage,
+      forward: true,
+    );
   }
 
   /// 分组标题统一承担定位与分隔作用；不使用多张独立卡片。
