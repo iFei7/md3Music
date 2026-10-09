@@ -85,7 +85,7 @@ class LyricNotFoundCache {
   void clear() => _entries.clear();
 }
 
-/// 歌词外显推送按结果类型退避；不确定失败短退避，确认无词沿用负缓存 TTL。
+/// 桌面歌词按结果类型退避；不确定失败短退避，确认无词沿用负缓存 TTL。
 class LyricRetryPolicy {
   static Duration delayFor(LyricLookupStatus status, int failureCount) {
     if (status == LyricLookupStatus.notFound) {

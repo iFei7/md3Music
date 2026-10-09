@@ -8,8 +8,10 @@ import 'package:quick_actions/quick_actions.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
-import 'core/services/lyric_push_service.dart';
+import 'core/layout/responsive_layout.dart';
+import 'core/services/desktop_lyric_service.dart';
 import 'core/services/diagnostic_logger.dart';
+import 'modules/recognition/floating_recognition_service.dart';
 import 'core/services/equalizer_service.dart';
 import 'core/services/viper_master_service.dart';
 import 'core/services/lyricon_provider_service.dart';
@@ -19,11 +21,13 @@ import 'core/services/media_notification_service.dart';
 import 'core/services/usb_audio_service.dart';
 import 'core/services/wakelock_service.dart';
 import 'data/repositories/settings_repository.dart';
+import 'providers/theme_provider.dart';
 import 'modules/update/update_check_service.dart';
 import 'modules/onboarding/user_agreement_page.dart';
 import 'services/kugou_server.dart';
 import 'utils/landscape_immersive.dart';
 import 'widgets/apple_lyrics/layout/lyric_preferences.dart';
+import 'widgets/md3_lyric_preferences.dart';
 
 /// 顶级 Navigator 的 GlobalKey，预留供后续扩展使用。
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
@@ -47,12 +51,17 @@ Future<void> main() async {
 }
 
 Future<void> _main() async {
-  final (needsOnboarding, needsUserAgreement) = await runBootstrap();
+  final (
+    needsOnboarding,
+    needsUserAgreement,
+    initialUseBackgroundImage,
+  ) = await runBootstrap();
 
   runApp(
     MyApp(
       showOnboarding: needsOnboarding,
       showUserAgreement: needsUserAgreement,
+      initialUseBackgroundImage: initialUseBackgroundImage,
     ),
   );
 
@@ -70,10 +79,10 @@ Future<void> _main() async {
 }
 
 /// 启动引导：并行初始化无依赖服务、恢复偏好、预取 SharedPreferences。
-/// 返回 `(needsOnboarding, needsUserAgreement)`。
+/// 返回 onboarding / 用户协议状态，以及首帧使用的背景图开关值。
 /// 公开入口（main）与私有入口（lib/private/main_private）复用同一流程，
 /// 私有入口在此基础上安装扩展钩子后 runApp。
-Future<(bool, bool)> runBootstrap() async {
+Future<(bool, bool, bool)> runBootstrap() async {
   WidgetsFlutterBinding.ensureInitialized();
   final startupClock = Stopwatch()..start();
   void markStartup(String phase) {
@@ -83,6 +92,9 @@ Future<(bool, bool)> runBootstrap() async {
     // 启动阶段日志便于设备采样时区分 Dart bootstrap 与原生窗口首显；
     // 仅包含阶段名和耗时，不输出偏好值、端口或请求信息。
     debugPrint(message);
+    if (phase == 'first_frame') {
+      debugPrint('[StartupFrame] elapsed_ms=$elapsedMs');
+    }
   }
 
   // 诊断日志尽早初始化（滚动文件 + 全局错误钩子），保证启动期异常也被记录。
@@ -114,13 +126,15 @@ Future<(bool, bool)> runBootstrap() async {
   await Future.wait([
     // 加载歌词字号/行间距偏好（从 SharedPreferences）
     LyricPreferences.instance.load(),
+    // 加载 MD3 风格播放页的独立歌词偏好（与 Apple Music 风格完全分离）
+    Md3LyricPreferences.instance.load(),
     // 恢复屏幕常亮开关状态，供 PlayerProvider/MV 页播放时读取
     WakelockService.instance.init().catchError((_) {}),
     // 初始化均衡器服务（恢复偏好设置，监听播放状态自动绑定）
     EqualizerService.instance.init().catchError((_) {}),
     // 初始化蝰蛇母带服务（恢复开关与 10 段增益并推送原生处理链）
     ViperMasterService.instance.init().catchError((_) {}),
-    // 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric 二选一）：
+    // 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric/LyricInfo 三选一）：
     // 让歌词服务定时器在需要时启动、启用选中协议。
     // 原生端 AudioPlaybackService.onCreate 会自行从 SharedPreferences 恢复开关。
     _restoreLyricPushPref(),
@@ -129,9 +143,11 @@ Future<(bool, bool)> runBootstrap() async {
   ]);
   markStartup('local_preferences_ready');
 
-  // 注册通知栏回调（播放控制按钮 → LyricPushService）
+  // 注册通知栏/悬浮窗回调（悬浮窗内按钮 → DesktopLyricService；通知栏桌面歌词按钮 → toggle）
   MediaNotificationService.initCallbacks();
-  LyricPushService.instance.registerNativeCallbacks();
+  DesktopLyricService.instance.registerNativeCallbacks();
+  // 注册悬浮窗识曲原生回调（PCM 段回传 / MediaProjection 授权结果 / 悬浮窗按钮动作）
+  FloatingRecognitionService.instance.registerNativeCallbacks();
   // 注册 Lyricon 反向回调（连接状态变更 → UI 刷新）
   // initialize 内部仅 setMethodCallHandler，同步完成，无需 await
   LyriconProviderService.instance.initialize();
@@ -191,9 +207,16 @@ Future<(bool, bool)> runBootstrap() async {
 
   // 检测是否需要显示首次启动引导页（仅新安装/未完成教程时弹出）
   bool needsOnboarding = false;
+  var initialUseBackgroundImage = true;
   try {
     final prefs = await prefsFuture;
     needsOnboarding = !(prefs.getBool('onboarding_completed') ?? false);
+    initialUseBackgroundImage =
+        prefs.getBool(ThemeProvider.backgroundImageEnabledPreferenceKey) ??
+            true;
+    kSecondaryPlayerEnabled.value =
+        prefs.getBool(SettingsRepository.secondaryPlayerEnabledPreferenceKey) ??
+            false;
   } catch (_) {}
   markStartup('onboarding_state_ready');
 
@@ -209,10 +232,10 @@ Future<(bool, bool)> runBootstrap() async {
   );
 
   markStartup('bootstrap_ready');
-  return (needsOnboarding, needsUserAgreement);
+  return (needsOnboarding, needsUserAgreement, initialUseBackgroundImage);
 }
 
-/// 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric 二选一 + 关闭）。
+/// 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric/LyricInfo 三选一 + 关闭）。
 /// 从 SettingsRepository 读取协议与共用偏好，启用选中协议、禁用其他，并同步偏好。
 Future<void> _restoreLyricPushPref() async {
   try {
@@ -222,7 +245,25 @@ Future<void> _restoreLyricPushPref() async {
 
     // 蓝牙歌词（独立开关）
     final btLyricEnabled = await settings.getBluetoothLyricEnabled();
-    await LyricPushService.instance.setBluetoothLyricEnabled(btLyricEnabled);
+    await DesktopLyricService.instance.setBluetoothLyricEnabled(btLyricEnabled);
+
+    // 锁屏歌词（独立开关）：开启后歌词服务定时器运行以推送整首歌词
+    // （样式全部跟随 AM 歌词偏好，与播放页 Zen 沉浸模式一致）
+    final lockScreenLyricEnabled = await settings.getLockScreenLyricEnabled();
+    // ignore: discarded_futures
+    DesktopLyricService.instance.setLockScreenLyricEnabled(
+      lockScreenLyricEnabled,
+    );
+
+    // 魅族 Flyme 状态栏歌词（独立开关）：冷启动/后台唤醒后无需进设置页即可继续推送
+    // 顺序有讲究：先灌提前量再开开关。开启会立刻回灌当前行，
+    // 若此时提前量还是 0，第一行就按未提前的时间轴显示，要等到下次翻行才对。
+    final flymeAdvance = await settings.getFlymeLyricAdvanceMs();
+    // ignore: discarded_futures
+    DesktopLyricService.instance.setFlymeAdvanceMs(flymeAdvance);
+    final flymeLyricEnabled = await settings.getFlymeStatusBarLyricEnabled();
+    // ignore: discarded_futures
+    DesktopLyricService.instance.setFlymeStatusBarLyricEnabled(flymeLyricEnabled);
 
     // 实时歌词推送协议
     final protocol = await settings.getLyricPushProtocol();
@@ -232,9 +273,10 @@ Future<void> _restoreLyricPushPref() async {
     // 记录各协议 enabled key（兼容 Kotlin restoreLyricon 读 lyricon_enabled）
     await settings.setLyriconEnabled(protocol == 'lyricon');
     await settings.setSuperLyricEnabled(protocol == 'super_lyric');
+    await settings.setLyricInfoEnabled(protocol == 'lyric_info');
     // 应用共用偏好
     // ignore: discarded_futures
-    LyricPushService.instance.setLyricPushPreferences(
+    DesktopLyricService.instance.setLyricPushPreferences(
       translation: translation,
       roma: roma,
       preferTranslation: preferTranslation,
@@ -242,14 +284,29 @@ Future<void> _restoreLyricPushPref() async {
     // 启用选中协议
     if (protocol == 'lyricon') {
       try {
-        await LyriconProviderService.instance.setDisplayTranslation(translation);
+        await LyriconProviderService.instance.setDisplayTranslation(
+          translation,
+        );
         await LyriconProviderService.instance.setDisplayRoma(roma);
         await LyriconProviderService.instance.setEnabled(true);
       } catch (_) {}
     } else if (protocol == 'super_lyric') {
       // ignore: discarded_futures
-      LyricPushService.instance.setSuperLyricEnabled(true);
+      DesktopLyricService.instance.setSuperLyricEnabled(true);
+    } else if (protocol == 'lyric_info') {
+      // 先恢复 ColorOS Bridge 兼容模式，再启用推送（避免首推旧格式）
+      final colorOs = await settings.getLyricInfoColorOs();
+      // ignore: discarded_futures
+      DesktopLyricService.instance.setLyricInfoColorOs(colorOs);
+      // ignore: discarded_futures
+      await DesktopLyricService.instance.setLyricInfoEnabled(true);
     }
+    // MD3Music fork: lyricInfo 推送无条件启用（Vivo 车载歌词依赖此链路：extras LYRICS_WHOLE
+    // + 原子随身听 lrc_change）。协议开关只控制 lyricon/super_lyric 等展示通道；
+    // 此前受开关控制 + 覆盖安装残留旧设置（lyric_push_protocol='none'）导致链路关闭，
+    // 原子随身听缺 8/16 能力位（无歌词无进度条）、车机无歌词。
+    // ignore: discarded_futures
+    DesktopLyricService.instance.setLyricInfoEnabled(true);
   } catch (_) {}
 }
 
@@ -257,8 +314,8 @@ Future<void> _restoreLyricPushPref() async {
 /// 必须在 runApp 前完成：播放器 didChangeDependencies 首次应用系统栏时同步读取该变量。
 Future<void> _restoreLandscapeImmersivePref() async {
   try {
-    kLandscapeImmersiveEnabled =
-        await SettingsRepository().getLandscapeImmersiveEnabled();
+    kLandscapeImmersiveEnabled = await SettingsRepository()
+        .getLandscapeImmersiveEnabled();
   } catch (_) {}
 }
 
@@ -266,7 +323,7 @@ Future<void> _restoreLandscapeImmersivePref() async {
 /// 通过全局 [appNavigatorKey] 获取 NavigatorState，避免依赖具体 BuildContext。
 ///
 /// 快捷方式类型统一为 `action_open_<tabId>`（与现有
-/// action_open_favorites/search 兼容）。这里只把 tab id 交给
+/// action_open_favorites/recognition/search 兼容）。这里只把 tab id 交给
 /// _MainLayout，由它按当前 tab 配置解析：可见 → 切主 tab；隐藏 → 二级页打开。
 void handleShortcut(String shortcutType) {
   final nav = appNavigatorKey.currentState;

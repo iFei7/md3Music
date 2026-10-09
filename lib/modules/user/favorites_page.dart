@@ -419,7 +419,7 @@ class _FavoritesPageState extends State<FavoritesPage>
   }
 
   /// 分组拖拽排序回调：更新内存顺序并立即持久化。
-  /// [newIndex] 已由 onReorderItem 换算为移除后的插入位置，无需再修正。
+  /// [newIndex] 已由拖拽回调换算为移除后的插入位置，无需再修正。
   void _reorderGroup(int group, int oldIndex, int newIndex) {
     // getter 返回的是已排序的新列表副本，可直接原地调整
     final list = group == 1 ? _createdPlaylists : _collectedPlaylists;
@@ -1292,7 +1292,7 @@ class _FavoritesPageState extends State<FavoritesPage>
   Widget _buildPlaylistTile(KugouPlaylistBrief playlist, int index) {
     final colorScheme = Theme.of(context).colorScheme;
     final isSelected = _selectedIndices.contains(index);
-    // 排序模式下禁用点击跳转与长按管理，长按留给 ReorderableListView 拖拽
+    // 排序模式下禁用点击跳转与长按管理，长按留给 M3E 列表的整行拖拽
     final reordering = _isCreated(playlist)
         ? _reorderingGroup == 1
         : _reorderingGroup == 2;
@@ -1718,13 +1718,13 @@ class _GroupSection extends StatefulWidget {
   final List<KugouPlaylistBrief> playlists;
   final Widget Function(KugouPlaylistBrief) onBuildTile;
 
-  /// 是否处于自由排序模式：分组主体切换为可拖拽的 ReorderableListView。
+  /// 是否处于自由排序模式：分组主体切换为可拖拽的 M3E 列表。
   final bool reordering;
 
   /// 拖拽调整顺序回调（reordering 为 true 时必填）。
   final void Function(int oldIndex, int newIndex)? onReorder;
 
-  /// 歌单的稳定 key（reordering 为 true 时必填，供 ReorderableListView 去重）。
+  /// 歌单的稳定 key（reordering 为 true 时必填，供拖拽列表去重）。
   final String Function(KugouPlaylistBrief)? keyFor;
 
   /// 标题行最右侧的附加控件（如「我创建的歌单」的新建按钮）。
@@ -1847,18 +1847,35 @@ class _GroupSectionState extends State<_GroupSection>
             alignment: Alignment.topCenter,
             child: widget.reordering
                 // 排序模式：嵌套在外层 ListView 内，自适应高度且禁止自滚动；
-                // 长按列表项触发拖拽（buildDefaultDragHandles 默认行为）
-                ? ReorderableListView(
+                // 整行长按（M3E 200ms 延迟拖拽）触发重排
+                ? M3EReorderableDismissibleList(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    onReorderItem: widget.onReorder!,
-                    children: [
-                      for (final playlist in widget.playlists)
-                        KeyedSubtree(
-                          key: ValueKey(widget.keyFor!(playlist)),
-                          child: widget.onBuildTile(playlist),
-                        ),
-                    ],
+                    itemCount: widget.playlists.length,
+                    // key 由 M3E 内部套用（KeyedSubtree），保证重排后行状态稳定
+                    keyBuilder: (index) =>
+                        ValueKey(widget.keyFor!(widget.playlists[index])),
+                    // M3E 的 newIndex 是「移除前」的插入位（等同标准
+                    // ReorderableListView.onReorder，源码在 to > from 时补 +1）；
+                    // 而 widget.onReorder（_reorderGroup）沿用旧 material_ui
+                    // onReorderItem 的「移除后」语义（直接用 newIndex 做 insert），
+                    // 故此处补回框架原先自动做的 -1，保证手动顺序的写回逐字不变。
+                    onReorder: (oldIndex, newIndex) => widget.onReorder!(
+                      oldIndex,
+                      newIndex > oldIndex ? newIndex - 1 : newIndex,
+                    ),
+                    // 置零 M3E 卡片自身的背景/圆角/间距/内边距：行内是自带样式的自绘行；
+                    // 同时用 direction: none 关掉滑动（本列表只有拖拽排序，没有删除）
+                    style: const M3EDismissibleCardStyle(
+                      outerRadius: 0,
+                      innerRadius: 0,
+                      gap: 0,
+                      padding: EdgeInsets.zero,
+                      color: Colors.transparent,
+                      direction: DismissDirection.none,
+                    ),
+                    itemBuilder: (context, index) =>
+                        widget.onBuildTile(widget.playlists[index]),
                   )
                 : Column(
                     children: widget.playlists.map((playlist) {

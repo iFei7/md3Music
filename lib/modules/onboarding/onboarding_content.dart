@@ -12,6 +12,9 @@ class OnboardingPageData {
   final String description;
   final List<String> highlights;
 
+  /// 是否为播放器风格选择页（交互式特殊页面）。
+  final bool isPlayerStylePicker;
+
   /// 是否为播放页隐藏操作页（交互式特殊页面）。
   final bool isHiddenOpsPage;
 
@@ -23,12 +26,13 @@ class OnboardingPageData {
     required this.title,
     required this.description,
     this.highlights = const [],
+    this.isPlayerStylePicker = false,
     this.isHiddenOpsPage = false,
     this.isColorPicker = false,
   });
 }
 
-/// 引导内容静态配置。
+/// 8 页引导内容静态配置。
 const List<OnboardingPageData> onboardingPages = [
   OnboardingPageData(
     icon: Icons.explore,
@@ -40,7 +44,7 @@ const List<OnboardingPageData> onboardingPages = [
     icon: Icons.play_circle_fill,
     title: '播放与歌词',
     description: '点击任意歌曲弹出迷你播放条，点击展开全屏播放器，享受逐字歌词体验。',
-    highlights: ['全屏播放器', '逐字歌词', '锁屏歌词'],
+    highlights: ['全屏播放器', '逐字歌词', '桌面歌词'],
   ),
   OnboardingPageData(
     icon: Icons.touch_app,
@@ -66,6 +70,12 @@ const List<OnboardingPageData> onboardingPages = [
     description: '8 种主题色、动态取色、OLED 纯黑模式，打造属于你的视觉风格。',
     highlights: ['Material 3 主题', '动态色', 'OLED 纯黑'],
     isColorPicker: true,
+  ),
+  OnboardingPageData(
+    icon: Icons.style,
+    title: '选择播放器风格',
+    description: '挑选你喜欢的播放器界面，随时可在设置中切换。',
+    isPlayerStylePicker: true,
   ),
   OnboardingPageData(
     icon: Icons.rocket_launch,

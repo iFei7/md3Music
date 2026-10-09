@@ -180,16 +180,12 @@ void main() {
       await tester.pumpWidget(host(player));
       await tester.pumpAndSettle();
 
+      // 点排序触发器（图标即 M3ESortButton 的字段），面板在 Overlay 中就展开
       await tester.tap(find.byIcon(Icons.swap_vert));
       await tester.pumpAndSettle();
-      // 直接点菜单项本身，避免命中弹层里同名文字的其它位置
-      await tester.tap(
-        find.byWidgetPredicate(
-          (w) =>
-              w is CheckedPopupMenuItem<PlaylistSortBy> &&
-              w.value == PlaylistSortBy.title,
-        ),
-      );
+      // 面板条目与旧菜单逐字相同，且界面别处没有同名文字，直接按文本点
+      await tester.ensureVisible(find.text('标题'));
+      await tester.tap(find.text('标题'));
       await tester.pumpAndSettle();
 
       expect(player.playlist.map((s) => s.title).toList(), [

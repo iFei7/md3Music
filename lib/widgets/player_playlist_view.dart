@@ -29,10 +29,18 @@ class PlayerPlaylistView extends StatefulWidget {
   /// false 用主题莫奈色（为 MD3 风格 tab/浅色背景设计）。
   final bool useAmColors;
 
+  /// 「在播放列表 tab 上从右往左滑」时回调，由播放器页面切到下一个 tab
+  /// （手机竖屏是封面页；宽屏/平板没有封面 tab 时是歌词页）。
+  ///
+  /// 面板本身不知道 tab 结构，所以只上报手势、具体切到哪一页由宿主决定。
+  /// 为空时不启用该判定（独立使用本面板时无副作用）。
+  final VoidCallback? onSwipeToNextTab;
+
   const PlayerPlaylistView({
     super.key,
     this.useDisplayName = true,
     this.useAmColors = true,
+    this.onSwipeToNextTab,
   });
 
   @override
@@ -91,6 +99,28 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
   PlaylistSortBy _sortBy = PlaylistSortBy.queue;
   bool _sortAscending = true;
 
+  // ── 「从右往左滑 → 下一个 tab」的判定参数 ──
+  //
+  // 阈值与 Flutter 的 kTouchSlop（18）同量级放大：横向位移要够大才算滑页，
+  // 纵向位移的上限保证列表滚动 / 长按拖拽重排不会被误判成滑页。
+  /// 触发滑页所需的横向位移（逻辑像素，向右为负）
+  static const double _kSwipeToNextThreshold = 64.0;
+
+  /// 横向位移必须达到纵向位移的这个倍数，才算「横向滑动」
+  static const double _kSwipeToNextAxisRatio = 1.6;
+
+  /// 纵向位移上限：超过即放弃本次判定（把纵向手势让给列表）
+  static const double _kSwipeToNextMaxCrossAxis = 48.0;
+
+  /// 正在跟踪的指针 id（多指按下时置空，避免与双指手势冲突）
+  int? _swipePointer;
+
+  /// 本次跟踪的起点（全局坐标）
+  Offset _swipeOrigin = Offset.zero;
+
+  /// 本次指针序列是否已经触发过滑页 / 已放弃（同一序列只判定一次）
+  bool _swipeConsumed = false;
+
   @override
   void initState() {
     super.initState();
@@ -104,6 +134,45 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _handleSwipePointerDown(PointerDownEvent event) {
+    if (_swipePointer != null) {
+      // 多指按下（缩放等）：放弃本次判定
+      _swipePointer = null;
+      _swipeConsumed = true;
+      return;
+    }
+    _swipePointer = event.pointer;
+    _swipeOrigin = event.position;
+    _swipeConsumed = false;
+  }
+
+  void _handleSwipePointerMove(PointerMoveEvent event) {
+    if (_swipeConsumed || event.pointer != _swipePointer) return;
+    if (widget.onSwipeToNextTab == null) return;
+
+    final offset = event.position - _swipeOrigin;
+    // 「先纵向后横向」一律放弃：一旦纵向位移超限就判定为列表滚动 / 长按拖拽重排，
+    // 后续即使再横向移动也不切页，避免与重排抢同一段手势。
+    if (offset.dy.abs() > _kSwipeToNextMaxCrossAxis) {
+      _swipeConsumed = true;
+      return;
+    }
+    // 只认「从右往左」（dx 为负）；「从左往右」留给列表的滑动删除
+    // （style.direction = startToEnd），这里绝不触发切页
+    if (offset.dx > -_kSwipeToNextThreshold) return;
+    // 必须是明显的横向滑动，排除斜向拖拽
+    if (offset.dx.abs() < offset.dy.abs() * _kSwipeToNextAxisRatio) return;
+
+    _swipeConsumed = true;
+    widget.onSwipeToNextTab!();
+  }
+
+  void _handleSwipePointerEnd(PointerEvent event) {
+    if (event.pointer != _swipePointer) return;
+    _swipePointer = null;
+    _swipeConsumed = false;
   }
 
   /// 滚动到当前播放的歌曲并居中显示
@@ -245,13 +314,29 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
             if (mounted && _editMode) _exitEditMode();
           });
         }
-        return Column(
-          children: [
-            _editMode
-                ? _buildEditHeader(playerProvider, playlist, colors)
-                : _buildNormalHeader(playerProvider, playlist, colors),
-            Expanded(child: _buildList(playerProvider, playlist, data, colors)),
-          ],
+        // 用不参与手势竞技场的 Listener（原始指针事件）自行判定「从右往左滑切页」：
+        // 队列每行的卡片都注册了 onHorizontalDrag*（m3e_core
+        // m3e_dismissible_card_controller.dart 的 _buildActiveCard），它在
+        // `direction != none` 时**无论滑动方向**都会抢下水平拖拽竞技场，外层
+        // TabBarView 的水平滑动因此永远收不到事件 —— 所以不能用外层
+        // GestureDetector / 也不能指望 TabBarView 自己翻页。
+        // style.direction 只在卡片内部钳制位移（没有传给识别器做方向过滤），
+        // 因此「从左往右＝滑动删除」这段手势保持原样，左滑切页单独在这里判定。
+        return Listener(
+          onPointerDown: _handleSwipePointerDown,
+          onPointerMove: _handleSwipePointerMove,
+          onPointerUp: _handleSwipePointerEnd,
+          onPointerCancel: _handleSwipePointerEnd,
+          child: Column(
+            children: [
+              _editMode
+                  ? _buildEditHeader(playerProvider, playlist, colors)
+                  : _buildNormalHeader(playerProvider, playlist, colors),
+              Expanded(
+                child: _buildList(playerProvider, playlist, data, colors),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -376,7 +461,8 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
   /// 拖拽把手只在编辑模式出现（buildDefaultDragHandles=false）。
   ///
   /// 用 m3e_core 的 [M3EReorderableDismissibleList] 取代 ReorderableListView：
-  /// 保留长按拖拽重排，并按编辑模式开关新增「水平滑动删除」。
+  /// 保留长按拖拽重排与「从左向右」滑动删除（反向不响应，避免误触）；
+  /// 编辑模式下不接受滑动删除，批量删除走编辑模式「全选 → 删除」。
   Widget _buildList(
     PlayerProvider playerProvider,
     List<Song> playlist,
@@ -415,22 +501,28 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
           gap: 0,
           padding: EdgeInsets.zero,
           color: Colors.transparent,
+          // 只允许「从左向右」滑动删除：反向（从右向左）不响应，避免误触。
+          // startToEnd = 从左向右；endToStart = 从右向左；none = 完全禁用。
+          // 注意不能靠「不传 onDismiss」来禁用——上游是
+          // `onDismissCallback?.call(...) ?? true`，不传回调等于默认放行。
+          direction: DismissDirection.startToEnd,
         ),
         // 浮层：原 proxyDecorator 只做半透明、不加底色与阴影，这里等价处理
         dragElevation: 0,
         dragPlaceholderColor: Colors.transparent,
+        onDismiss: (index, direction) async {
+          // 编辑模式（多选）下不接受滑动删除：返回 false 让 M3E 回弹，
+          // 避免与「点整行切换勾选」的手势语义冲突
+          if (_editMode) return false;
+          // 删除当前播放歌曲的索引校正由 removeFromPlaylist 内部负责
+          await playerProvider.removeFromPlaylist(index);
+          return true;
+        },
         onReorder: (oldIndex, newIndex) {
           // M3E 的 newIndex 语义与 ReorderableListView 完全一致（均以「移除前」
           // 的插入位传参，源码里 to > from 时补 +1），因此直接沿用原调用，
           // 由 reorderPlaylist 内部继续做 `if (oldIndex < newIndex) newIndex -= 1`
           playerProvider.reorderPlaylist(oldIndex, newIndex);
-        },
-        onDismiss: (index, direction) async {
-          // 编辑模式（多选）下禁用滑动删除：返回 false 让 M3E 回弹、不删除
-          if (_editMode) return false;
-          // 删除当前播放歌曲的索引校正由 removeFromPlaylist 内部负责
-          await playerProvider.removeFromPlaylist(index);
-          return true;
         },
         itemBuilder: (context, index) => _buildItem(
           index: index,

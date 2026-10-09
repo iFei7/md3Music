@@ -22,15 +22,17 @@ class DesktopShortcutItem {
 /// 候选桌面快捷方式：复用主页 Tab 功能页。
 /// 排除 launchpad（导航中枢，非功能页）、user（个人中心）、
 /// settings（配置页，已可从「我的」进入）。
-/// 默认启用项（favorites/search）排在前面，保持旧行为。
-///
-/// Lite：已随模块下线移除 recognition / coverflow / ip / audiobook /
-/// scene / channel / brush 等候选。
+/// 默认启用项（favorites/recognition/search）排在前面，保持旧行为。
 const List<DesktopShortcutItem> kDesktopShortcutCandidates = [
   DesktopShortcutItem(
     id: 'favorites',
     label: '我的收藏',
     iconResource: 'ic_shortcut_favorite',
+  ),
+  DesktopShortcutItem(
+    id: 'recognition',
+    label: '听歌识曲',
+    iconResource: 'ic_shortcut_mic',
   ),
   DesktopShortcutItem(
     id: 'search',
@@ -53,14 +55,44 @@ const List<DesktopShortcutItem> kDesktopShortcutCandidates = [
     iconResource: 'ic_shortcut_fm',
   ),
   DesktopShortcutItem(
+    id: 'coverflow',
+    label: '封面流',
+    iconResource: 'ic_shortcut_coverflow',
+  ),
+  DesktopShortcutItem(
     id: 'charts',
     label: '排行榜',
     iconResource: 'ic_shortcut_charts',
   ),
+  DesktopShortcutItem(
+    id: 'ip',
+    label: '编辑精选',
+    iconResource: 'ic_shortcut_ip',
+  ),
+  DesktopShortcutItem(
+    id: 'audiobook',
+    label: '听书',
+    iconResource: 'ic_shortcut_audiobook',
+  ),
+  DesktopShortcutItem(
+    id: 'scene',
+    label: '场景音乐',
+    iconResource: 'ic_shortcut_scene',
+  ),
+  DesktopShortcutItem(
+    id: 'channel',
+    label: '频道',
+    iconResource: 'ic_shortcut_channel',
+  ),
+  DesktopShortcutItem(
+    id: 'brush',
+    label: '刷刷',
+    iconResource: 'ic_shortcut_brush',
+  ),
 ];
 
 /// 默认启用的快捷方式 id（与旧版写死的 3 个一致）。
-const Set<String> _kDefaultVisibleIds = {'favorites', 'search'};
+const Set<String> _kDefaultVisibleIds = {'favorites', 'recognition', 'search'};
 
 /// 管理桌面快捷方式的显示/隐藏和排序。
 ///
@@ -72,7 +104,7 @@ class ShortcutConfigProvider extends ChangeNotifier {
   /// 所有候选的完整排序（含关闭项），用于设置页展示。
   List<DesktopShortcutItem> _allShortcuts = List.from(kDesktopShortcutCandidates);
 
-  /// 关闭（隐藏）的快捷方式 id 集合。默认只启用 favorites/search。
+  /// 关闭（隐藏）的快捷方式 id 集合。默认只启用 favorites/recognition/search。
   Set<String> _hiddenIds = _defaultHiddenIds();
 
   /// 当前生效（启用且有序）的快捷方式列表。

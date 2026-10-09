@@ -6,14 +6,17 @@ import 'package:md3music/widgets/apple_lyrics/layout/lyric_preferences.dart';
 
 /// 歌词动画调节子页面。
 ///
-/// 集中调节歌词的逐行动画参数，全部为**无极**滑块（无档位小圆点）：
+/// 集中调节 AM 歌词的逐行动画参数与歌词效果强度，全部为**无极**滑块（无档位小圆点）：
 /// - 当前行细节：已播字上浮高度
 /// - 歌词非当前行缩放
 /// - 歌词当前行位置（滚动锚位）
+/// - 级联错峰上限 / 步长 / 衰减
+/// - 级联错峰起点开关（从当前行开始 / 从视口顶部开始）
+/// - 歌词效果：歌词模糊强度（需开启歌词高斯模糊）、辉光触发阈值
 ///
 /// AppBar 的重置按钮可**二次确认后**把本页全部参数恢复默认——
-/// 注意只重置本页 3 个参数，绝不调用 [LyricPreferences.reset]
-/// （那会把字号/行距/字重等不在本页的设置一并清掉）。
+/// 注意只重置本页 9 个参数，绝不调用 [LyricPreferences.reset]
+/// （那会把字号/行距/动态颜色等不在本页的设置一并清掉）。
 ///
 /// 监听 [LyricPreferences] 实时刷新；拖动中只刷新标签（onChanged），
 /// 松手写入偏好（onChangeEnd），避免拖动过程反复触发歌词组件重渲染。
@@ -74,6 +77,81 @@ class LyricAnimationSettingsPage extends StatelessWidget {
                 label: '${prefs.liftHeightPx.toStringAsFixed(1)} px',
                 onChanged: (v) => prefs.setLiftHeightPx(v),
               ),
+              const Divider(height: 24),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text('切行错峰（下方行滞后跟随）',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+              _buildSliderTile<double>(
+                prefs: prefs,
+                title: '错峰上限',
+                subtitle: '越靠下的行最多"粘"这么久才回位',
+                value: prefs.cascadeMaxDelayMs,
+                min: LyricPreferences.minCascadeMaxDelayMs,
+                max: LyricPreferences.maxCascadeMaxDelayMs,
+                label:
+                    '${prefs.cascadeMaxDelayMs.round()} ms',
+                onChanged: (v) => prefs.setCascadeMaxDelayMs(v),
+              ),
+              _buildSliderTile<double>(
+                prefs: prefs,
+                title: '错峰步长',
+                subtitle: '相邻行的错峰时间间隔',
+                value: prefs.cascadeBaseStepMs,
+                min: LyricPreferences.minCascadeBaseStepMs,
+                max: LyricPreferences.maxCascadeBaseStepMs,
+                label: '${prefs.cascadeBaseStepMs.round()} ms',
+                onChanged: (v) => prefs.setCascadeBaseStepMs(v),
+              ),
+              _buildSliderTile<double>(
+                prefs: prefs,
+                title: '错峰衰减',
+                subtitle: '每越过一行步长 × 1/x（越大衰减越快）',
+                value: prefs.cascadeDecayX,
+                min: LyricPreferences.minCascadeDecayX,
+                max: LyricPreferences.maxCascadeDecayX,
+                label: '1/${prefs.cascadeDecayX.toStringAsFixed(2)}',
+                onChanged: (v) => prefs.setCascadeDecayX(v),
+              ),
+              SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                title: const Text('错峰从当前行上方开始'),
+                subtitle: const Text(
+                    '开启：当前行的上一行领头回位，以下各行依次跟随；'
+                    '关闭：从视口顶部开始错峰'),
+                value: prefs.staggerFromCurrentLine,
+                onChanged: (v) => prefs.setStaggerFromCurrentLine(v),
+              ),
+              const Divider(height: 24),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text('歌词效果',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+              // 歌词模糊强度：仅高斯模糊开启时显示（开关在播放页样式页，
+              // AnimatedBuilder 监听 prefs，开关变化后进本页即自动显隐）
+              if (prefs.useGaussianBlur)
+                _buildSliderTile<double>(
+                  prefs: prefs,
+                  title: '歌词模糊强度',
+                  subtitle: '非当前行高斯模糊强度倍数（需开启歌词高斯模糊）',
+                  value: prefs.blurIntensity,
+                  min: LyricPreferences.minBlurIntensity,
+                  max: LyricPreferences.maxBlurIntensity,
+                  label: prefs.blurIntensity.toStringAsFixed(1),
+                  onChanged: (v) => prefs.setBlurIntensity(v),
+                ),
+              _buildSliderTile<double>(
+                prefs: prefs,
+                title: '辉光触发阈值',
+                subtitle: '触发阈值 = 歌词字长中位数 × 该系数（越小越易触发）',
+                value: prefs.glowThresholdFactor,
+                min: LyricPreferences.minGlowThresholdFactor,
+                max: LyricPreferences.maxGlowThresholdFactor,
+                label: prefs.glowThresholdFactor.toStringAsFixed(1),
+                onChanged: (v) => prefs.setGlowThresholdFactor(v),
+              ),
             ],
           );
         },
@@ -83,8 +161,8 @@ class LyricAnimationSettingsPage extends StatelessWidget {
 
   /// 二次确认后把本页全部参数恢复默认。
   ///
-  /// **只重置本页 3 个参数**，绝不调用 [LyricPreferences.reset]
-  /// （那会把字号/行距/字重等不在本页的设置一并清掉）。
+  /// **只重置本页 9 个参数**，绝不调用 [LyricPreferences.reset]
+  /// （那会把字号/行距/动态颜色等不在本页的设置一并清掉）。
   Future<void> _confirmResetAll(
     BuildContext context,
     LyricPreferences prefs,
@@ -95,7 +173,8 @@ class LyricAnimationSettingsPage extends StatelessWidget {
         return AlertDialog(
           title: const Text('恢复本页默认值'),
           content: const Text(
-            '将把本页全部参数（非当前行缩放、当前行位置、已播字上浮高度）'
+            '将把本页全部参数（非当前行缩放、当前行位置、已播字上浮高度、'
+            '错峰上限/步长/衰减、错峰起点开关、歌词模糊强度、辉光触发阈值）'
             '恢复为默认值，确定继续吗？',
           ),
           actions: <Widget>[
@@ -117,6 +196,13 @@ class LyricAnimationSettingsPage extends StatelessWidget {
     await prefs.setInactiveScale(LyricPreferences.defaultInactiveScale);
     await prefs.setAlignPosition(LyricPreferences.defaultAlignPosition);
     await prefs.setLiftHeightPx(LyricPreferences.defaultLiftHeightPx);
+    await prefs.setCascadeMaxDelayMs(LyricPreferences.defaultCascadeMaxDelayMs);
+    await prefs.setCascadeBaseStepMs(LyricPreferences.defaultCascadeBaseStepMs);
+    await prefs.setCascadeDecayX(LyricPreferences.defaultCascadeDecayX);
+    await prefs
+        .setStaggerFromCurrentLine(LyricPreferences.defaultStaggerFromCurrentLine);
+    await prefs.setBlurIntensity(LyricPreferences.defaultBlurIntensity);
+    await prefs.setGlowThresholdFactor(LyricPreferences.defaultGlowThresholdFactor);
     showToast('已恢复本页全部默认值');
   }
 

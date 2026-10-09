@@ -8,8 +8,10 @@ import 'package:provider/provider.dart';
 
 import '../../core/layout/responsive_layout.dart';
 import '../../core/services/audio_service.dart';
-import '../../core/services/lyric_push_service.dart';
+import '../../core/services/desktop_lyric_service.dart';
+import '../../core/services/dynamic_cover_service.dart';
 import '../../core/services/equalizer_service.dart';
+import '../../core/services/media_notification_service.dart';
 import '../../core/services/spectrum_service.dart';
 import '../../core/services/usb_audio_service.dart';
 import '../../core/services/direct_pcm_service.dart';
@@ -27,12 +29,17 @@ import '../../data/models/song.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
+import '../coverflow/coverflow_page.dart';
+import '../listen_together/widgets/listen_together_pill.dart';
 import '../settings/equalizer_settings_page.dart';
 import '../sound/sounds_page.dart';
 import 'artist_photo_background.dart';
+import 'mv_player_page.dart';
+import 'sleep_timer_sheet.dart';
 import 'song_info_page.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/kugou_provider.dart';
+import '../../providers/listen_together_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
@@ -42,17 +49,17 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/comment_reply_target.dart';
 import 'comment_compose_sheet.dart';
 import 'comments_view.dart';
+import 'lyrics_view.dart';
 import 'player_tab_layout.dart';
-import 'sleep_timer_sheet.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
-import '../../widgets/apple_lyrics/apple_lyrics_view.dart';
-import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
-import '../../widgets/apple_lyrics/layout/lyric_preferences_panel.dart';
 import '../../utils/landscape_immersive.dart';
+import '../../widgets/md3_lyric_preferences.dart';
+import '../../widgets/md3_lyric_preferences_panel.dart';
 import '../../widgets/ai_recommend_sheet.dart';
 import '../../widgets/md3e_transport_row.dart';
 import '../../widgets/menu_action_cell.dart';
+import '../../widgets/dynamic_cover_view.dart';
 import '../../widgets/player_artwork_image.dart';
 import '../../widgets/player_seek_bar.dart';
 import '../../widgets/player_tab_strip.dart';
@@ -60,6 +67,7 @@ import '../../widgets/player_playlist_view.dart';
 import '../../widgets/playback_status_feedback.dart';
 import '../../widgets/spectrum_artwork.dart';
 import '../../widgets/spectrum_background.dart';
+import 'car_mode_exit.dart';
 import 'dlna_cast_sheet.dart';
 import 'full_player_route.dart';
 
@@ -80,7 +88,20 @@ class FullPlayer extends StatefulWidget {
   static void Function(BuildContext context, dynamic song)?
   coverLongPressCallback;
 
-  const FullPlayer({super.key});
+  /// 车机模式常驻面板：由 CarModePanel 以普通 widget 形式嵌在侧边面板里渲染，
+  /// 不是路由、也不可收起。此模式下：
+  ///   * 不显示「收起」按钮、不响应任何收起手势，返回键也不收起；
+  ///   * 不接管系统栏（面板只是屏幕的一部分，不是全屏页）；
+  ///   * 禁止 Zen 模式与横屏沉浸（两者都会劫持全局系统栏，而面板常驻不会
+  ///     dispose，没有兜底清理点）；
+  ///   * 面板内的整页跳转改推根 Navigator（否则页面会顶掉面板内容）；
+  ///   * tab 结构恒按窄屏判定（保留封面 tab）。
+  ///
+  /// 默认 false：既有 `const FullPlayer()` 调用点（player_drag_overlay.dart、
+  /// full_player_route.dart）行为完全不变。
+  final bool dockMode;
+
+  const FullPlayer({super.key, this.dockMode = false});
 
   @override
   State<FullPlayer> createState() => _FullPlayerState();
@@ -89,6 +110,7 @@ class FullPlayer extends StatefulWidget {
 class _FullPlayerState extends State<FullPlayer>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   late TabController _tabController;
+  String _lyrics = '';
   List<LyricLine> _lyricMetadata = const [];
   bool _hasTranslation = false;
   bool _hasRoma = false;
@@ -110,6 +132,8 @@ class _FullPlayerState extends State<FullPlayer>
   // 封面淡入淡出动画
   late final AnimationController _artworkFadeController;
 
+  // 桌面歌词状态监听：长按歌词按钮 toggle 后同步 icon
+  late final VoidCallback _onDesktopLyricChanged;
   late final Animation<double> _artworkFadeAnimation;
   String? _previousArtworkUrl;
 
@@ -163,7 +187,16 @@ class _FullPlayerState extends State<FullPlayer>
   bool _zenMode = false;
   // 长按封面进入 Zen 模式开关（设置→播放，默认开启；关闭后禁用长按）
   bool _zenLongPressEnabled = true;
+  // 专辑动态封面开关（设置页「播放页样式」与播放页「界面设置」共用；默认开启）
+  bool _dynamicCoverEnabled = true;
 
+  /// 播放页「界面设置」里「当前歌曲动态封面」的展示值（null = 检测中）
+  ///
+  /// 刻意**不在 dispose() 里销毁**：二级菜单挂在根 Navigator 上，可能比本 State
+  /// 活得更久（如车机模式切换导致播放器被销毁时菜单仍开着），销毁后菜单关闭时
+  /// `removeListener` 会命中「used after being disposed」断言。不销毁则菜单关闭后
+  /// notifier 与监听者一起变成垃圾被回收。
+  final ValueNotifier<String?> _dyCoverStatus = ValueNotifier<String?>(null);
   late final AnimationController _zenController;
   late final Animation<double> _zenAnimation;
 
@@ -209,6 +242,11 @@ class _FullPlayerState extends State<FullPlayer>
   double _spectrumCurveOpacity = 1.0;
 
   void _collapseByButton() {
+    // 车机模式：面板常驻，任何入口都不得收起。
+    // 这里必须早返回：面板内的 ModalRoute 是 CarModePanel 自带的
+    // MaterialPageRoute（不是 DraggablePlayerRoute），会走到下面的 else 分支
+    // `Navigator.of(context).maybePop()` 把面板那一页 pop 掉 → 面板永久空白。
+    if (widget.dockMode) return;
     final route = ModalRoute.of(context);
     if (route is DraggablePlayerRoute) {
       _isDismissing = true;
@@ -224,8 +262,23 @@ class _FullPlayerState extends State<FullPlayer>
   }
 
   /// 面板内「整页跳转」的目标 Navigator。
+  ///
+  /// 车机模式下必须走根 Navigator：面板自带一层 Navigator，按原逻辑
+  /// `Navigator.of(context)` 会把专辑页 / 歌手页 / MV 等 pushed 到面板内部，
+  /// 把常驻播放器顶掉（视觉上「面板被换成了专辑页」）。
+  /// 与 DlnaCastingOverlay 通过 appNavigatorKey 跳转的做法一致。
   NavigatorState? _pageNavigator(BuildContext context) {
+    if (widget.dockMode) return appNavigatorKey.currentState;
     return Navigator.maybeOf(context);
+  }
+
+  /// 车机模式顶栏左侧按钮：二次确认后退出车机模式（整块面板随之卸载）。
+  ///
+  /// 车机面板不可收起，所以这里是面板内唯一的「退出」入口；必须走二次确认，
+  /// 避免误触后常驻播放器突然消失、用户不知发生了什么。
+  Future<void> _confirmExitCarMode() async {
+    final exited = await confirmExitCarMode(context);
+    if (exited) showToast('已退出车机模式');
   }
 
   // ── 顶栏向下拖拽原路返回（与上滑展开镜像） ──
@@ -363,6 +416,8 @@ class _FullPlayerState extends State<FullPlayer>
         );
       });
     } else {
+      // 车机模式会走到这里：route 是面板宿主路由（非 DraggablePlayerRoute），
+      // navigatorState 已是根 Navigator，专辑页铺满主内容区、面板保持常驻。
       navigatorState?.push(
         MaterialPageRoute(builder: (_) => AlbumDetailPage(album: album)),
       );
@@ -518,6 +573,11 @@ class _FullPlayerState extends State<FullPlayer>
       initialIndex: 1,
     );
 
+    // 桌面歌词状态变化时刷新 UI（同步歌词按钮 icon）
+    _onDesktopLyricChanged = () {
+      if (mounted) setState(() {});
+    };
+    DesktopLyricService.instance.addListener(_onDesktopLyricChanged);
     _artworkFadeController = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
@@ -552,7 +612,63 @@ class _FullPlayerState extends State<FullPlayer>
       context.read<PlayerProvider>().addListener(_onPlayerSongChanged);
       _loadSpectrumSetting();
       _loadZenPressSetting();
+      _loadDynamicCoverSetting();
     });
+  }
+
+  /// 从设置加载「专辑动态封面」开关（默认开启）。
+  Future<void> _loadDynamicCoverSetting() async {
+    final enabled = await SettingsRepository().getDynamicAlbumCover();
+    if (!mounted || enabled == _dynamicCoverEnabled) return;
+    setState(() => _dynamicCoverEnabled = enabled);
+  }
+
+  /// 刷新「界面设置」菜单里的动态封面开关与当前歌曲状态。
+  ///
+  /// 顺带重读开关值（用户可能刚在设置页改过），保证菜单与设置一致；
+  /// 状态优先用 [DynamicCoverService.lastKnownResult] 即时展示，
+  /// 未探测过才发一次请求，失败时显示「未获取到」而不是「无」。
+  Future<void> _refreshDyCoverMenuState() async {
+    final player = context.read<PlayerProvider>();
+    final song = player.currentSong;
+    final isOnline = song is Song && song.isOnline;
+    final albumAudioId = (song is Song ? song.albumAudioId : null) ?? '';
+
+    await _loadDynamicCoverSetting();
+    if (!mounted) return;
+
+    if (!isOnline || albumAudioId.isEmpty) {
+      _dyCoverStatus.value = dyCoverStatusText(
+        isOnline: false,
+        albumAudioId: '',
+        known: null,
+      );
+      return;
+    }
+
+    final known = DynamicCoverService.instance.lastKnownResult(albumAudioId);
+    if (known != null) {
+      _dyCoverStatus.value = dyCoverStatusText(
+        isOnline: true,
+        albumAudioId: albumAudioId,
+        known: known,
+      );
+      return;
+    }
+
+    _dyCoverStatus.value = dyCoverStatusText(
+      isOnline: true,
+      albumAudioId: albumAudioId,
+      known: null,
+      probing: true,
+    );
+    await DynamicCoverService.instance.hasDynamicCover(albumAudioId);
+    if (!mounted) return;
+    _dyCoverStatus.value = dyCoverStatusText(
+      isOnline: true,
+      albumAudioId: albumAudioId,
+      known: DynamicCoverService.instance.lastKnownResult(albumAudioId),
+    );
   }
 
   /// 从设置加载「长按封面进入 Zen 模式」开关。
@@ -673,7 +789,11 @@ class _FullPlayerState extends State<FullPlayer>
     if (!mounted) return;
     final width = MediaQuery.sizeOf(context).width;
     final deviceIsPad = isPadLayout(context);
-    final isWideLayout = deviceIsPad || width >= 600;
+    // 车机模式恒按窄屏处理：面板宽度已由 CarModePanel 覆盖到 MediaQuery.size，
+    // 但用户若在设置里把「设备类型」手动选成平板，isPadLayout 仍会返回 true，
+    // 那会让 tab 结构删掉封面 tab —— 而面板走的是 compact 分支、没有左栏封面，
+    // 封面会彻底不可达。所以这里显式短路。
+    final isWideLayout = !widget.dockMode && (deviceIsPad || width >= 600);
     final player = context.read<PlayerProvider>();
     final song = player.currentSong;
     final isLocalSong = song != null && !song.isOnline;
@@ -696,11 +816,22 @@ class _FullPlayerState extends State<FullPlayer>
     );
     // ignore: avoid_print
     print(
-      '[PlayerTab] md length=${next.length} '
+      '[PlayerTab] md dock=${widget.dockMode} length=${next.length} '
       'cover=${next.hasCover} comments=${next.hasComments} '
       'local=$isLocalSong index=${_tabController.index}',
     );
     setState(() {});
+  }
+
+  /// 播放列表 tab 上「从右往左滑」→ 切到下一个 tab。
+  ///
+  /// 下标从 `_tabController.index + 1` 推导，不写死 1：宽屏（横屏/平板）没有封面
+  /// tab，此时下一页是歌词 tab；边界用 `_tabController.length`（等于
+  /// [_tabLayout].length）兜住，避免在最后一个 tab 上越界。
+  /// 播放列表恒为 index 0，故实际只有「封面页」或「歌词页」两种落点。
+  void _showNextTabFromPlaylist() {
+    final next = _tabController.index + 1;
+    if (next < _tabController.length) _tabController.animateTo(next);
   }
 
   @override
@@ -719,6 +850,11 @@ class _FullPlayerState extends State<FullPlayer>
       route.controller.addStatusListener(_onDragRouteStatus);
     } else if (route == null) {
       // 拖拽覆盖层（非路由）：不切换系统栏，展开后由路由接管
+      _dragRoute = null;
+      _systemUiModified = false;
+    } else if (widget.dockMode) {
+      // 车机常驻面板：面板内的 ModalRoute 是 CarModePanel 的宿主路由，
+      // 不是全屏页，不接管系统栏也不设横屏沉浸标志。
       _dragRoute = null;
       _systemUiModified = false;
     } else {
@@ -742,6 +878,9 @@ class _FullPlayerState extends State<FullPlayer>
       // 引发无效的 applyImmersiveForOrientation 调用导致系统栏闪烁
       if (_lastPhysicalSize == current) return;
       _lastPhysicalSize = current;
+      // 车机面板不接管系统栏：方向变化时什么都不做
+      // （面板宽度变化也不会走 didChangeMetrics，它量的是设备物理屏）。
+      if (widget.dockMode) return;
       if (_zenMode) {
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       } else {
@@ -766,6 +905,9 @@ class _FullPlayerState extends State<FullPlayer>
     // 切歌可能在本地/在线之间切换 → 评论 tab 有无随之变化；
     // 设置页改「关闭本地音乐评论区」也会经 PlayerProvider 通知走到这里。
     _syncTabLayout();
+    // 设置页可能改过动态封面开关 → 切歌时同步一次（幂等，值未变不触发重建）
+    // ignore: discarded_futures
+    _loadDynamicCoverSetting();
     final player = context.read<PlayerProvider>();
     final song = player.currentSong;
     if (song != null && song.id != _lastSongId) {
@@ -838,6 +980,7 @@ class _FullPlayerState extends State<FullPlayer>
     try {
       context.read<PlayerProvider>().removeListener(_onPlayerSongChanged);
     } catch (_) {}
+    DesktopLyricService.instance.removeListener(_onDesktopLyricChanged);
     WidgetsBinding.instance.removeObserver(this);
     _artworkFadeController.dispose();
     _zenController.dispose();
@@ -854,7 +997,11 @@ class _FullPlayerState extends State<FullPlayer>
     // 则保持沉浸，避免返回后状态栏闪现。
     // 拖拽覆盖层（非路由）从未修改系统栏，无需恢复
     if (_systemUiModified) {
-      restoreSystemUi();
+      if (kCoverFlowImmersiveActive.value) {
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      } else {
+        restoreSystemUi();
+      }
     }
     super.dispose();
   }
@@ -866,8 +1013,9 @@ class _FullPlayerState extends State<FullPlayer>
   }
 
   /// 当前是否需要横屏沉浸：横屏且设置开关（横屏隐藏状态栏）开启。
+  /// 车机模式下恒为 false：面板只是屏幕的一部分，不该让整个 App 的系统栏消失。
   bool _landscapeImmersiveNeeded() =>
-      _isLandscapeNow() && kLandscapeImmersiveEnabled;
+      !widget.dockMode && _isLandscapeNow() && kLandscapeImmersiveEnabled;
 
   /// 同步全局「横屏沉浸生效」标志：仅非 Zen 且开关开启的横屏为 true，供主界面 _SystemUiUpdater 短路。
   void _syncLandscapeImmersiveFlag() {
@@ -878,6 +1026,10 @@ class _FullPlayerState extends State<FullPlayer>
   /// 进入 Zen 沉浸模式：隐藏顶栏、控件、系统栏，拓宽歌词/封面视图。
   void _enterZenMode() {
     if (_zenMode) return;
+    // 车机模式：面板常驻不会 dispose，而 Zen 会设全局沉浸标志
+    // kPlayerZenImmersiveActive；面板一旦进入 Zen 就没有兜底清理点，
+    // 会让主界面 _SystemUiUpdater 被永久短路。
+    if (widget.dockMode) return;
     setState(() => _zenMode = true);
     _zenController.forward();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -959,7 +1111,9 @@ class _FullPlayerState extends State<FullPlayer>
   /// 封面长按包装：指针监听 + 按压内缩动效 + Zen 长按引导提示层。
   /// [child] 为原封面内容（含播放/暂停缩放动画）。
   Widget _wrapArtworkZenPress({required Widget child}) {
-    if (!_zenLongPressEnabled) return child;
+    // 车机模式禁用长按进 Zen：见 _enterZenMode 的说明。
+    // 这一处是主守卫（连长按提示层与按压动效一并去掉）。
+    if (!_zenLongPressEnabled || widget.dockMode) return child;
     return Listener(
       onPointerDown: _onArtworkPointerDown,
       onPointerMove: _onArtworkPointerMove,
@@ -1056,6 +1210,7 @@ class _FullPlayerState extends State<FullPlayer>
 
     setState(() {
       _isLoadingLyrics = true;
+      _lyrics = '';
       _lyricMetadata = const [];
       _hasTranslation = false;
       _hasRoma = false;
@@ -1113,8 +1268,10 @@ class _FullPlayerState extends State<FullPlayer>
         );
         setState(() {
           _isLoadingLyrics = false;
-          // 统一用 LyricParserChain 解析为 List<LyricLine> 直接交给
-          // AppleLyricsView（覆盖 LRC/KRC/增强型 LRC 全格式）。
+          // MD3 渲染器（LyricsView）内置的 LRC/KRC 正则无法解析 TTML 与
+          // 增强型 LRC（尖括号逐字）。统一用 LyricParserChain 解析得到主歌词行，
+          // 再序列化为标准 LRC 文本交给 LyricsView（保持其滚动/换行/点击逻辑不变）。
+          _lyrics = _toLyricsViewText(lyricText);
           _lyricMetadata = parsedLyrics;
           _hasTranslation = parsedLyrics.any(
             (line) => line.translation != null && line.translation!.isNotEmpty,
@@ -1128,12 +1285,68 @@ class _FullPlayerState extends State<FullPlayer>
       if (mounted) {
         setState(() {
           _isLoadingLyrics = false;
+          _lyrics = '';
           _lyricMetadata = const [];
           _hasTranslation = false;
           _hasRoma = false;
         });
       }
     }
+  }
+
+  /// 把原始歌词文本转换为 LyricsView 能识别的标准 LRC 行文本。
+  ///
+  /// LyricsView 内置的 LRC/KRC 正则无法解析 TTML（XML）与增强型 LRC（尖括号
+  /// `<mm:ss.xx>` / `<offset,duration,...>` 逐字）。这里用 LyricParserChain
+  /// 统一解析，仅取主歌词行
+  /// （text + 行起始时间），序列化为 `[mm:ss.fff]主歌词` 文本交给 LyricsView，
+  /// 保留其滚动、换行、点击跳转逻辑不变。
+  /// 若 LyricsView 本身已能解析（普通 LRC / KRC），直接原样返回，避免任何行为变化。
+  String _toLyricsViewText(String raw) {
+    if (raw.trim().isEmpty) return raw;
+    final format = LyricParserChain.detectFormat(raw);
+    // 增强型 LRC：行首 `[mm:ss]` 会误判为 lrc，但其尖括号逐字时间戳无法由
+    // LyricsView 直接处理。MD3 不需要逐字动态效果，因此先剥离内层标签，
+    // 保留行首时间戳并转换为普通 LRC。
+    if (_isEnhancedLrcText(raw)) {
+      final normalized = raw.replaceAll(_inlineLyricTagRegex, '');
+      return _serializeLines(LyricParserChain.parse(normalized));
+    }
+    // 个别本地文件把 KRC 的 `<offset,duration,...>` 标签嵌在 LRC 行中。
+    // 这种混合格式会被自动检测为 LRC，必须先移除内层标签，否则它们会
+    // 被 LyricsView 当成正文显示。
+    if (format == LyricFormat.lrc && _krcWordTagRegex.hasMatch(raw)) {
+      final normalized = raw.replaceAll(_krcWordTagRegex, '');
+      return _serializeLines(LyricParserChain.parse(normalized));
+    }
+    // 普通 LRC / KRC 由 LyricsView 原生支持，原样透传
+    if (format == LyricFormat.lrc || format == LyricFormat.krc) {
+      return raw;
+    }
+    return _serializeLines(LyricParserChain.parse(raw));
+  }
+
+  /// 增强型 LRC 的内层逐字时间标签，允许一位到三位分钟数。
+  static final RegExp _angleTimeRegex = RegExp(r'<\d{1,3}:\d{2}\.\d{2,3}>');
+  static final RegExp _krcWordTagRegex = RegExp(r'<-?\d+(?:,-?\d+)+>');
+  static final RegExp _inlineLyricTagRegex = RegExp(
+    r'<(?:\d{1,3}:\d{2}\.\d{2,3}|-?\d+(?:,-?\d+)+)>',
+  );
+  static bool _isEnhancedLrcText(String raw) => _angleTimeRegex.hasMatch(raw);
+
+  /// 把解析后的主歌词行序列化为 LyricsView 可识别的 `[mm:ss.fff]主歌词` 文本。
+  String _serializeLines(List<LyricLine> lines) {
+    if (lines.isEmpty) return '';
+    final sb = StringBuffer();
+    for (final l in lines) {
+      if (l.text.isEmpty) continue;
+      final ms = l.startTime;
+      final mm = (ms ~/ 60000).toString().padLeft(2, '0');
+      final ss = ((ms % 60000) ~/ 1000).toString().padLeft(2, '0');
+      final mmm = (ms % 1000).toString().padLeft(3, '0');
+      sb.write('[$mm:$ss.$mmm]${l.text}\n');
+    }
+    return sb.toString();
   }
 
   /// 封面淡入淡出：旧封面淡出 + 新封面淡入，400ms easeInOut。
@@ -1226,13 +1439,16 @@ class _FullPlayerState extends State<FullPlayer>
     );
     return PlayerSystemUiScope(
       dragRoute: _dragRoute,
-      // 拖拽覆盖层（非路由）期间系统栏恒为主页面样式。
-      forceMainStyle: _isDragOverlay,
+      // 拖拽覆盖层（非路由）期间系统栏恒为主页面样式；
+      // 车机面板也不是全屏页，同样一律沿用主页面样式。
+      forceMainStyle: _isDragOverlay || widget.dockMode,
       expandedOverlayStyle: mdOverlayStyle,
       child: PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, _) {
           if (didPop || _isDismissing) return;
+          // 车机面板常驻，返回键不得让它消失
+          if (widget.dockMode) return;
           if (_zenMode) {
             _exitZenMode();
             return;
@@ -1316,7 +1532,11 @@ class _FullPlayerState extends State<FullPlayer>
               controller: _tabController,
               children: [
                 // 播放列表面板（index 0，最左侧，与 AM 一致）
-                const PlayerPlaylistView(useAmColors: false),
+                // 左滑切页：列表卡片吃掉了水平拖拽，靠面板内的指针判定回调补齐
+                PlayerPlaylistView(
+                  useAmColors: false,
+                  onSwipeToNextTab: _showNextTabFromPlaylist,
+                ),
                 // 封面 tab：宽屏/平板不存在（封面常驻左栏）
                 if (_tabLayout.hasCover)
                   GestureDetector(
@@ -1327,10 +1547,18 @@ class _FullPlayerState extends State<FullPlayer>
                     },
                     behavior: HitTestBehavior.opaque,
                     // 封面 tab 与顶栏一样支持向下拖拽原路返回关闭播放器
-                    onVerticalDragStart: _onTopBarDragStart,
-                    onVerticalDragUpdate: _onTopBarDragUpdate,
-                    onVerticalDragEnd: _onTopBarDragEnd,
-                    onVerticalDragCancel: _onTopBarDragCancel,
+                    onVerticalDragStart: widget.dockMode
+                        ? null
+                        : _onTopBarDragStart,
+                    onVerticalDragUpdate: widget.dockMode
+                        ? null
+                        : _onTopBarDragUpdate,
+                    onVerticalDragEnd: widget.dockMode
+                        ? null
+                        : _onTopBarDragEnd,
+                    onVerticalDragCancel: widget.dockMode
+                        ? null
+                        : _onTopBarDragCancel,
                     child: _buildArtworkView(
                       playerProvider,
                       currentSong,
@@ -1351,19 +1579,18 @@ class _FullPlayerState extends State<FullPlayer>
                         // P0: 歌词时间只订阅 positionNotifier（高频 200ms），
                         // 不再因 positionStream 触发整页重建
                         : RepaintBoundary(
-                            child: ListenableBuilder(
-                              listenable: playerProvider,
-                              builder: (context, _) => AppleLyricsView(
-                                lines: _lyricMetadata,
-                                currentTimeMs: 0,
-                                positionListenable: playerProvider.positionNotifier,
-                                adaptTimeMs: (position) =>
-                                    _adjustedLyricPosition(position, currentSong).inMilliseconds,
-                                isPlaying: playerProvider.isPlaying,
-                                playbackNotReady: playerProvider.isPlaybackNotReady,
-                                doubleTapToJump: lyricDoubleTap,
-                                onSeek: (ms) => playerProvider.seek(Duration(milliseconds: ms)),
-                              ),
+                            child: LyricsView(
+                              lyrics: _lyrics,
+                              parsedLyrics: _lyricMetadata,
+                              position: Duration.zero,
+                              positionListenable:
+                                  playerProvider.positionNotifier,
+                              adaptPosition: (position) =>
+                                  _adjustedLyricPosition(position, currentSong),
+                              doubleTapToJump: lyricDoubleTap,
+                              onSeek: (duration) {
+                                playerProvider.seek(duration);
+                              },
                             ),
                           ),
                   ),
@@ -1387,7 +1614,10 @@ class _FullPlayerState extends State<FullPlayer>
               child: _buildControls(
                 playerProvider,
                 colorScheme,
-                isExpanded: false,
+                // 车机面板是窄容器：用紧凑档控件（传输行 164dp，见
+                // MD3ETransportRow），否则 212dp 的传输行 + 40dp 内边距
+                // 在 20% 宽的面板里必然 RenderFlex overflow。
+                isExpanded: widget.dockMode,
               ),
             ),
           ),
@@ -1486,10 +1716,18 @@ class _FullPlayerState extends State<FullPlayer>
                                         onTap: () {
                                           _consumeZenPressTap();
                                         },
-                                        onVerticalDragStart: _onTopBarDragStart,
-                                        onVerticalDragUpdate: _onTopBarDragUpdate,
-                                        onVerticalDragEnd: _onTopBarDragEnd,
-                                        onVerticalDragCancel: _onTopBarDragCancel,
+                                        onVerticalDragStart: widget.dockMode
+                                            ? null
+                                            : _onTopBarDragStart,
+                                        onVerticalDragUpdate: widget.dockMode
+                                            ? null
+                                            : _onTopBarDragUpdate,
+                                        onVerticalDragEnd: widget.dockMode
+                                            ? null
+                                            : _onTopBarDragEnd,
+                                        onVerticalDragCancel: widget.dockMode
+                                            ? null
+                                            : _onTopBarDragCancel,
                                         child: _wrapArtworkZenPress(
                                           child: AnimatedScale(
                                             // 频谱模式（style 0/1 圆形旋转封面）不需要封面的放大缩小动画
@@ -1567,7 +1805,11 @@ class _FullPlayerState extends State<FullPlayer>
                           controller: _tabController,
                           children: [
                             // 播放列表面板（index 0，最左侧，与 AM 一致）
-                            const PlayerPlaylistView(useAmColors: false),
+                            // 左滑切页：列表卡片吃掉了水平拖拽，靠面板内的指针判定回调补齐
+                            PlayerPlaylistView(
+                              useAmColors: false,
+                              onSwipeToNextTab: _showNextTabFromPlaylist,
+                            ),
                             _wrapMd3LyricsWithAuxToggle(
                               _isLoadingLyrics
                                   ? Center(
@@ -1577,19 +1819,21 @@ class _FullPlayerState extends State<FullPlayer>
                                     )
                                   // P0: 歌词时间只订阅 positionNotifier（高频 200ms）
                                   : RepaintBoundary(
-                                      child: ListenableBuilder(
-                                        listenable: playerProvider,
-                                        builder: (context, _) => AppleLyricsView(
-                                          lines: _lyricMetadata,
-                                          currentTimeMs: 0,
-                                          positionListenable: playerProvider.positionNotifier,
-                                          adaptTimeMs: (position) =>
-                                              _adjustedLyricPosition(position, currentSong).inMilliseconds,
-                                          isPlaying: playerProvider.isPlaying,
-                                          playbackNotReady: playerProvider.isPlaybackNotReady,
-                                          doubleTapToJump: lyricDoubleTap,
-                                          onSeek: (ms) => playerProvider.seek(Duration(milliseconds: ms)),
-                                        ),
+                                      child: LyricsView(
+                                        lyrics: _lyrics,
+                                        parsedLyrics: _lyricMetadata,
+                                        position: Duration.zero,
+                                        positionListenable:
+                                            playerProvider.positionNotifier,
+                                        adaptPosition: (position) =>
+                                            _adjustedLyricPosition(
+                                              position,
+                                              currentSong,
+                                            ),
+                                        doubleTapToJump: lyricDoubleTap,
+                                        onSeek: (duration) {
+                                          playerProvider.seek(duration);
+                                        },
                                       ),
                                     ),
                             ),
@@ -1720,10 +1964,18 @@ class _FullPlayerState extends State<FullPlayer>
                                           onTap: () {
                                             _consumeZenPressTap();
                                           },
-                                          onVerticalDragStart: _onTopBarDragStart,
-                                          onVerticalDragUpdate: _onTopBarDragUpdate,
-                                          onVerticalDragEnd: _onTopBarDragEnd,
-                                          onVerticalDragCancel: _onTopBarDragCancel,
+                                          onVerticalDragStart: widget.dockMode
+                                              ? null
+                                              : _onTopBarDragStart,
+                                          onVerticalDragUpdate: widget.dockMode
+                                              ? null
+                                              : _onTopBarDragUpdate,
+                                          onVerticalDragEnd: widget.dockMode
+                                              ? null
+                                              : _onTopBarDragEnd,
+                                          onVerticalDragCancel: widget.dockMode
+                                              ? null
+                                              : _onTopBarDragCancel,
                                           child: _wrapArtworkZenPress(
                                             child: AnimatedScale(
                                               // 频谱模式（style 0/1 圆形旋转封面）不需要封面的放大缩小动画
@@ -1792,7 +2044,11 @@ class _FullPlayerState extends State<FullPlayer>
                           controller: _tabController,
                           children: [
                             // 播放列表面板（index 0，最左侧，与 AM 一致）
-                            const PlayerPlaylistView(useAmColors: false),
+                            // 左滑切页：列表卡片吃掉了水平拖拽，靠面板内的指针判定回调补齐
+                            PlayerPlaylistView(
+                              useAmColors: false,
+                              onSwipeToNextTab: _showNextTabFromPlaylist,
+                            ),
                             _wrapMd3LyricsWithAuxToggle(
                               _isLoadingLyrics
                                   ? Center(
@@ -1802,19 +2058,21 @@ class _FullPlayerState extends State<FullPlayer>
                                     )
                                   // P0: 歌词时间只订阅 positionNotifier（高频 200ms）
                                   : RepaintBoundary(
-                                      child: ListenableBuilder(
-                                        listenable: playerProvider,
-                                        builder: (context, _) => AppleLyricsView(
-                                          lines: _lyricMetadata,
-                                          currentTimeMs: 0,
-                                          positionListenable: playerProvider.positionNotifier,
-                                          adaptTimeMs: (position) =>
-                                              _adjustedLyricPosition(position, currentSong).inMilliseconds,
-                                          isPlaying: playerProvider.isPlaying,
-                                          playbackNotReady: playerProvider.isPlaybackNotReady,
-                                          doubleTapToJump: lyricDoubleTap,
-                                          onSeek: (ms) => playerProvider.seek(Duration(milliseconds: ms)),
-                                        ),
+                                      child: LyricsView(
+                                        lyrics: _lyrics,
+                                        parsedLyrics: _lyricMetadata,
+                                        position: Duration.zero,
+                                        positionListenable:
+                                            playerProvider.positionNotifier,
+                                        adaptPosition: (position) =>
+                                            _adjustedLyricPosition(
+                                              position,
+                                              currentSong,
+                                            ),
+                                        doubleTapToJump: lyricDoubleTap,
+                                        onSeek: (duration) {
+                                          playerProvider.seek(duration);
+                                        },
                                       ),
                                     ),
                             ),
@@ -1862,19 +2120,32 @@ class _FullPlayerState extends State<FullPlayer>
     // 整个顶栏支持向下拖拽原路返回（点击按钮仍由子元素处理，竞技场自动区分）
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onVerticalDragStart: _onTopBarDragStart,
-      onVerticalDragUpdate: _onTopBarDragUpdate,
-      onVerticalDragEnd: _onTopBarDragEnd,
-      onVerticalDragCancel: _onTopBarDragCancel,
+      // 车机模式：顶栏不参与「下拉原路收起」，否则手势会被白白吃掉
+      // （_onTopBarDragStart 内部会因 route 不是 DraggablePlayerRoute 而早返回，
+      // 但仍是注册了手势识别器）。
+      onVerticalDragStart: widget.dockMode ? null : _onTopBarDragStart,
+      onVerticalDragUpdate: widget.dockMode ? null : _onTopBarDragUpdate,
+      onVerticalDragEnd: widget.dockMode ? null : _onTopBarDragEnd,
+      onVerticalDragCancel: widget.dockMode ? null : _onTopBarDragCancel,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(
           children: [
-            IconButton(
-              icon: const Icon(Icons.keyboard_arrow_down),
-              onPressed: _collapseByButton,
-            ),
+            // 车机模式：面板不可收起，左侧按钮改为「退出车机模式」（二次确认）
+            if (widget.dockMode)
+              IconButton(
+                icon: const Icon(Icons.close_fullscreen),
+                tooltip: '退出车机模式',
+                onPressed: _confirmExitCarMode,
+              )
+            else
+              IconButton(
+                icon: const Icon(Icons.keyboard_arrow_down),
+                onPressed: _collapseByButton,
+              ),
             const Spacer(),
+            // 一起听胶囊：在房间中时显示人数（1/5），点击进入/返回房间页
+            const ListenTogetherPill(),
             // MD3E v2: 顶部栏右侧 FLAC 质量徽章，点击复用 _showQualityDialog
             _buildQualityPill(playerProvider),
             // 睡眠药丸：外层订阅 provider（模式开关，低频），内层只订阅剩余
@@ -1979,6 +2250,11 @@ class _FullPlayerState extends State<FullPlayer>
             iconSize: iconSize,
             fallbackFilePath: currentSong.localPath,
           ),
+          // 动态封面层：视频就绪后淡入覆盖；无动态封面 / 开关关闭 /
+          // 网络不满足 / 加载失败时该层为空，静态封面完全不受影响。
+          // 频谱模式（style 0/1）在上方已提前 return SpectrumArtwork，不会走到这里。
+          if (currentSong is Song && currentSong.isOnline)
+            DynamicCoverView(song: currentSong, enabled: _dynamicCoverEnabled),
         ],
       ),
     );
@@ -2007,8 +2283,8 @@ class _FullPlayerState extends State<FullPlayer>
           if (isExpanded) ...[
             // 用 Expanded 包一层，让 LayoutBuilder 拿到**有界**的高度：
             // 原实现靠上下两个 Spacer 撑居中，Column 给非 flex 子级的高度约束
-            // 是 infinity，于是正方形封面只能按宽度取边长，短屏（横屏手机）
-            // 下会顶破剩余高度 → RenderFlex overflow。
+            // 是 infinity，于是正方形封面只能按宽度取边长，短屏（车机面板、
+            // 横屏手机）下会顶破剩余高度 → RenderFlex overflow。
             // 改后 maxSize 同时受可用高度约束，居中由 Center 保证，长屏观感不变。
             Expanded(
               child: LayoutBuilder(
@@ -2409,7 +2685,13 @@ class _FullPlayerState extends State<FullPlayer>
                   }
                 : null,
           ),
-        const PlayerTabItem(icon: Icons.lyrics_outlined),
+        PlayerTabItem(
+          // 桌面歌词开启时用实心 icon，与 mini_player 一致
+          icon: DesktopLyricService.instance.enabled
+              ? Icons.lyrics
+              : Icons.lyrics_outlined,
+          onLongPress: _toggleDesktopLyric,
+        ),
         if (_tabLayout.hasComments)
           PlayerTabItem(
             icon: Icons.comment_outlined,
@@ -2429,6 +2711,33 @@ class _FullPlayerState extends State<FullPlayer>
     final song = context.read<PlayerProvider>().currentSong;
     if (song == null) return;
     showCommentComposeSheet(context, song: song, target: target);
+  }
+
+  /// 长按歌词段：开关桌面歌词，并同步通知栏的「桌面歌词」按钮状态。
+  Future<void> _toggleDesktopLyric() async {
+    HapticFeedback.lightImpact();
+    await DesktopLyricService.instance.toggle();
+    if (!mounted) return;
+    final player = context.read<PlayerProvider>();
+    final song = player.currentSong;
+    // 收藏状态需实时查询，避免暂停时显示为未收藏
+    bool isFavorited = false;
+    if (song != null) {
+      try {
+        isFavorited = context.read<FavoritesProvider>().isFavorite(song.id);
+      } catch (_) {}
+    }
+    await MediaNotificationService.updateNotification(
+      // 用 displayName 剥离 .mp3 等后缀，避免标题显示文件名
+      title: song?.displayName ?? '',
+      artist: song?.artist ?? '',
+      artUrl: song?.artworkUri,
+      isPlaying: player.isPlaying,
+      position: player.position,
+      duration: player.duration ?? Duration.zero,
+      desktopLyricEnabled: DesktopLyricService.instance.enabled,
+      isFavorited: isFavorited,
+    );
   }
 
   /// 导航条拖动开始：记录起始 tab
@@ -2490,7 +2799,7 @@ class _FullPlayerState extends State<FullPlayer>
               child: unityLocked
                   ? _buildUnityVolumeNotice(context)
                   : StatefulBuilder(
-                builder: (context, setState) {
+                      builder: (context, setState) {
                   final volume = usbEnabled
                       ? usbService.usbVolumePercent / 100
                       : playerProvider.volume;
@@ -2789,6 +3098,20 @@ class _FullPlayerState extends State<FullPlayer>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // 查看 MV：仅在线歌曲显示（原顶栏按钮收纳到菜单，置顶）
+                if (song.isOnline == true)
+                  ListTile(
+                    leading: const Icon(Icons.music_video_outlined),
+                    title: const Text('查看 MV'),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      _pageNavigator(rootContext)?.push(
+                        MaterialPageRoute(
+                          builder: (_) => MvPlayerPage(song: song),
+                        ),
+                      );
+                    },
+                  ),
                 ListTile(
                   leading: const Icon(Icons.album),
                   title: Text(
@@ -2934,6 +3257,9 @@ class _FullPlayerState extends State<FullPlayer>
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
                     Navigator.pop(sheetContext);
+                    // 打开二级菜单前刷新动态封面开关与当前歌曲状态
+                    // ignore: discarded_futures
+                    _refreshDyCoverMenuState();
                     _showMoreSettingsSheet(rootContext);
                   },
                 ),
@@ -3031,6 +3357,36 @@ class _FullPlayerState extends State<FullPlayer>
                       _toggleSpectrum();
                     },
                   ),
+                // 专辑动态封面：开关（与设置页「播放页样式」联动，关闭即时生效）
+                // + 当前歌曲是否有动态封面的状态
+                ValueListenableBuilder<String?>(
+                  valueListenable: _dyCoverStatus,
+                  builder: (context, status, _) => Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SwitchListTile(
+                        title: const Text('专辑动态封面'),
+                        subtitle: const Text('封面播放专辑动态封面短视频'),
+                        value: _dynamicCoverEnabled,
+                        onChanged: (v) {
+                          HapticFeedback.lightImpact();
+                          setState(() => _dynamicCoverEnabled = v);
+                          // ignore: discarded_futures
+                          SettingsRepository().setDynamicAlbumCover(v);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.album_outlined),
+                        title: const Text('当前歌曲动态封面'),
+                        trailing: Text(
+                          status ?? '检测中…',
+                          style: Theme.of(sheetContext).textTheme.bodyMedium
+                              ?.copyWith(color: colorScheme.primary),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 // 3D 封面：与设置页开关同源（写入后 DepthCoverHost 即时响应）
                 StatefulBuilder(
                   builder: (context, setSheetState) => FutureBuilder<bool>(
@@ -3288,16 +3644,16 @@ class _FullPlayerState extends State<FullPlayer>
           right: 8,
           bottom: 4,
           child: ListenableBuilder(
-            listenable: LyricPreferences.instance,
+            listenable: Md3LyricPreferences.instance,
             builder: (context, _) {
               if (_zenMode || (!_hasTranslation && !_hasRoma)) {
                 return const SizedBox.shrink();
               }
-              final prefs = LyricPreferences.instance;
+              final prefs = Md3LyricPreferences.instance;
               final mode = _effectiveMd3DisplayMode(prefs);
-              final on = LyricPreferences.instance.showTranslation;
+              final on = prefs.showAuxiliary;
               return InkWell(
-                onTap: () => LyricPreferences.instance.setShowTranslation(!on),
+                onTap: () => prefs.setShowAuxiliary(!on),
                 onLongPress: _switchMd3LyricSubLineMode,
                 customBorder: const CircleBorder(),
                 child: SizedBox(
@@ -3305,7 +3661,7 @@ class _FullPlayerState extends State<FullPlayer>
                   height: 48,
                   child: Center(
                     child: Icon(
-                      mode == LyricDisplayMode.roma
+                      mode == Md3LyricDisplayMode.roma
                           ? Icons.abc
                           : Icons.translate,
                       size: 20,
@@ -3324,47 +3680,48 @@ class _FullPlayerState extends State<FullPlayer>
     );
   }
 
-  LyricDisplayMode _effectiveMd3DisplayMode(LyricPreferences prefs) {
+  Md3LyricDisplayMode _effectiveMd3DisplayMode(Md3LyricPreferences prefs) {
     final preferred = prefs.displayMode;
-    if (preferred == LyricDisplayMode.translation && _hasTranslation) {
+    if (preferred == Md3LyricDisplayMode.translation && _hasTranslation) {
       return preferred;
     }
-    if (preferred == LyricDisplayMode.roma && _hasRoma) {
+    if (preferred == Md3LyricDisplayMode.roma && _hasRoma) {
       return preferred;
     }
     return _hasTranslation
-        ? LyricDisplayMode.translation
-        : LyricDisplayMode.roma;
+        ? Md3LyricDisplayMode.translation
+        : Md3LyricDisplayMode.roma;
   }
 
   void _switchMd3LyricSubLineMode() {
     HapticFeedback.lightImpact();
-    final prefs = LyricPreferences.instance;
+    final prefs = Md3LyricPreferences.instance;
     final current = _effectiveMd3DisplayMode(prefs);
-    final next = current == LyricDisplayMode.translation
-        ? LyricDisplayMode.roma
-        : LyricDisplayMode.translation;
-    if (next == LyricDisplayMode.roma && !_hasRoma) {
+    final next = current == Md3LyricDisplayMode.translation
+        ? Md3LyricDisplayMode.roma
+        : Md3LyricDisplayMode.translation;
+    if (next == Md3LyricDisplayMode.roma && !_hasRoma) {
       showToast('当前歌曲暂无罗马音');
       return;
     }
-    if (next == LyricDisplayMode.translation && !_hasTranslation) {
+    if (next == Md3LyricDisplayMode.translation && !_hasTranslation) {
       showToast('当前歌曲暂无翻译');
       return;
     }
-    if (!LyricPreferences.instance.showTranslation) {
-      prefs.setShowTranslation(true);
+    if (!prefs.showAuxiliary) {
+      prefs.setShowAuxiliary(true);
     }
     prefs.setDisplayMode(next);
-    showToast(next == LyricDisplayMode.roma ? '已切换到罗马音' : '已切换到翻译');
+    showToast(next == Md3LyricDisplayMode.roma ? '已切换到罗马音' : '已切换到翻译');
   }
 
-  /// 弹出播放页歌词显示设置面板（字号/行间距/字体等）。
+  /// 弹出 MD3 风格播放页的歌词显示设置面板（字号/行间距/字体）。
+  /// 与 Apple Music 风格的 `LyricPreferences` 完全独立。
   void _showLyricPreferencesSheet(BuildContext context) {
     showM3EModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (context) => SafeArea(child: const LyricPreferencesPanel()),
+      builder: (context) => SafeArea(child: const Md3LyricPreferencesPanel()),
     );
   }
 }

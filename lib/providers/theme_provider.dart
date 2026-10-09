@@ -12,6 +12,7 @@ class ThemeProvider extends ChangeNotifier {
   static const String _key = 'theme_mode';
   static const String _dynamicKey = 'use_dynamic_color';
   static const String _coverDynamicKey = 'use_cover_dynamic_color';
+  static const String _amStylePlayerKey = 'use_am_style_player';
   static const String _manualSeedKey = 'manual_seed_color';
   static const String _oledBlackKey = 'use_oled_black';
   // 「显示大小」档位（安卓系统同名设置的语义，见 core/layout/ui_density.dart）
@@ -27,7 +28,10 @@ class ThemeProvider extends ChangeNotifier {
   static const String _artistPhotoOpacityKey = 'artist_photo_opacity';
   static const String _lyricDoubleTapToJumpKey = 'lyric_double_tap_to_jump';
   // 自定义背景图片（全局界面背景）
-  static const String _bgImageEnabledKey = 'use_background_image';
+  static const String backgroundImageEnabledPreferenceKey =
+      'use_background_image';
+  static const String _bgImageEnabledKey =
+      backgroundImageEnabledPreferenceKey;
   static const String _bgImagePathKey = 'background_image_path';
   static const String _bgBlurKey = 'background_blur';
   // AM 播放器模糊封面背景强度（高斯模糊 sigma，0~30）
@@ -46,6 +50,7 @@ class ThemeProvider extends ChangeNotifier {
   // 开启且提取成功时优先级高于系统壁纸色（见 effectiveSeedColor）。
   bool _useCoverSeedColor = false;
   Color? _coverSeedColor;
+  bool _useAmStylePlayer = false;
   Color? _manualSeedColor;
   bool _useOledBlack = false;
   double _displayScale = kDefaultDisplayScale;
@@ -63,13 +68,13 @@ class ThemeProvider extends ChangeNotifier {
   double _artistPhotoOpacity = 0.55;
   // AM 风格播放器歌词双击跳转开关（默认关闭，开启后需双击歌词才能跳转位置）
   bool _lyricDoubleTapToJump = false;
-  // 自定义背景图片（全局界面背景）；默认开启，未选择图片时回落到内置默认壁纸
-  bool _useBackgroundImage = true;
+  // 自定义背景图片（全局界面背景）；默认关闭，开启后未选择图片时回落到内置默认壁纸
+  bool _useBackgroundImage = false;
   String? _backgroundImagePath;
   double _backgroundBlur = 20.0;
   // AM 播放器背景模糊（sigma 0~30，默认 30 = 原硬编码值）
   double _amPlayerBlur = 30.0;
-  double _backgroundOpacity = 0.4;
+  double _backgroundOpacity = 0.2;
   // 按背景图莫奈取色（默认开启；关闭后背景图仍显示但不参与主题色）
   bool _useBackgroundMonet = true;
   // 文字阴影（默认关闭）：给全局文字加轮廓阴影，改善背景图上的可读性。
@@ -87,6 +92,7 @@ class ThemeProvider extends ChangeNotifier {
   Color? get systemSeedColor => _systemSeedColor;
   bool get useCoverSeedColor => _useCoverSeedColor;
   Color? get coverSeedColor => _coverSeedColor;
+  bool get useAmStylePlayer => _useAmStylePlayer;
   Color? get manualSeedColor => _manualSeedColor;
   bool get useOledBlack => _useOledBlack;
   double get displayScale => _displayScale;
@@ -149,10 +155,14 @@ class ThemeProvider extends ChangeNotifier {
     }
   }
 
-  ThemeProvider() {
+  ThemeProvider({bool? initialUseBackgroundImage}) {
+    if (initialUseBackgroundImage != null) {
+      _useBackgroundImage = initialUseBackgroundImage;
+    }
     _loadThemeMode();
     _loadDynamicColor();
     _loadUseCoverSeedColor();
+    _loadAmStylePlayer();
     _loadManualSeedColor();
     _loadOledBlack();
     _loadDisplayScale();
@@ -276,6 +286,25 @@ class ThemeProvider extends ChangeNotifier {
     if (_coverSeedColor == color) return;
     _coverSeedColor = color;
     notifyListeners();
+  }
+
+  /// 加载「Apple Music 风格播放页」开关持久化值，默认关闭。
+  Future<void> _loadAmStylePlayer() async {
+    final prefs = await SharedPreferences.getInstance();
+    _useAmStylePlayer = prefs.getBool(_amStylePlayerKey) ?? false;
+    notifyListeners();
+  }
+
+  /// 切换「Apple Music 风格播放页」开关。
+  /// - 开启：用 AM 风格 FullPlayer（模糊封面背景 + 弹簧动画 + KRC 逐字歌词）
+  /// - 关闭：用原版 MD3 FullPlayer（标准主题色 + LRC 行级歌词）
+  /// 切换后已打开的 FullPlayer 不会立即换 widget，下次 push 时才走新分支。
+  Future<void> setUseAmStylePlayer(bool enabled) async {
+    if (_useAmStylePlayer == enabled) return;
+    _useAmStylePlayer = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_amStylePlayerKey, enabled);
   }
 
   /// 加载「歌词双击跳转」开关持久化值，默认关闭。
@@ -518,13 +547,13 @@ class ThemeProvider extends ChangeNotifier {
   // ============== 自定义背景图片 ==============
 
   /// 加载背景图片相关持久化值（开关 / 路径 / 模糊 / 透明度 / 莫奈取色 / 文字阴影），
-  /// 默认开启（无用户图片时用内置默认壁纸）/ 莫奈取色默认开启 / 文字阴影默认开启。
+  /// 默认关闭（无用户图片时用内置默认壁纸）/ 莫奈取色默认开启 / 文字阴影默认开启。
   Future<void> _loadBackgroundImage() async {
     final prefs = await SharedPreferences.getInstance();
-    _useBackgroundImage = prefs.getBool(_bgImageEnabledKey) ?? true;
+    _useBackgroundImage = prefs.getBool(_bgImageEnabledKey) ?? false;
     _backgroundImagePath = prefs.getString(_bgImagePathKey);
     _backgroundBlur = prefs.getDouble(_bgBlurKey) ?? 20.0;
-    _backgroundOpacity = prefs.getDouble(_bgOpacityKey) ?? 0.4;
+    _backgroundOpacity = prefs.getDouble(_bgOpacityKey) ?? 0.2;
     _useBackgroundMonet = prefs.getBool(_bgMonetKey) ?? true;
     _useTextShadow = prefs.getBool(_textShadowKey) ?? false;
     _textShadowBlur =

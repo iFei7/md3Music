@@ -190,7 +190,52 @@
   },
   {
     "date": "2026-09-28",
-    "stars": 678,
+    "stars": 672,
+    "daily_growth": 10
+  },
+  {
+    "date": "2026-10-01",
+    "stars": 752,
+    "daily_growth": 80
+  },
+  {
+    "date": "2026-10-02",
+    "stars": 774,
+    "daily_growth": 22
+  },
+  {
+    "date": "2026-10-03",
+    "stars": 793,
+    "daily_growth": 19
+  },
+  {
+    "date": "2026-10-04",
+    "stars": 807,
+    "daily_growth": 14
+  },
+  {
+    "date": "2026-10-05",
+    "stars": 824,
+    "daily_growth": 17
+  },
+  {
+    "date": "2026-10-06",
+    "stars": 840,
     "daily_growth": 16
+  },
+  {
+    "date": "2026-10-07",
+    "stars": 843,
+    "daily_growth": 3
+  },
+  {
+    "date": "2026-10-08",
+    "stars": 851,
+    "daily_growth": 8
+  },
+  {
+    "date": "2026-10-09",
+    "stars": 853,
+    "daily_growth": 2
   }
 ]

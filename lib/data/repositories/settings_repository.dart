@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/services/audio_service_io.dart';
 import '../../core/services/volume_normalization_service.dart';
+import '../../modules/player/car_mode_layout.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 
 class SettingsRepository {
@@ -29,15 +30,27 @@ class SettingsRepository {
   // Pad 端网格页面列数偏好
   static const String _keyGridColumns = 'grid_columns';
   // MV 画中画：按 Home 自动进入画中画（默认关闭，手动按钮不受影响）
+  static const String _keyAutoPip = 'settings_auto_pip';
+  static const String _keyMvDanmakuEnabled = 'settings_mv_danmaku_enabled';
+  static const String _keyMvDanmakuOpacity = 'settings_mv_danmaku_opacity';
+
   /// 上传听歌时长（听歌等级累计上报）开关。默认关闭：不上传任何听歌时长数据。
-  static const String _keyUploadListeningDuration = 'settings_upload_listening_duration';
+  static const String _keyUploadListeningDuration =
+      'settings_upload_listening_duration';
   // 逐字歌词时间偏移（ms，默认 0；仅在线音乐生效，正值 = 歌词延后显示）
   static const String _keyLyricTimeOffset = 'lyric_time_offset_ms';
+
   /// 新版本提醒开关：启动时检查 GitHub Release，发现新版本 toast 提醒。默认开启。
   static const String _keyUpdateReminderEnabled =
       'settings_update_reminder_enabled';
+
+  /// Android 桌面图标是否使用旧版图标（默认关闭，沿用当前图标）。
+  static const String _keyLegacyAppIconEnabled =
+      'settings_legacy_app_icon_enabled';
+
   /// 上次网络检查的时间戳（ms）。属于记账状态而非用户设置，故不加 settings_ 前缀。
   static const String _keyUpdateLastCheckMs = 'update_last_check_ms';
+
   /// 上次已提醒过的版本号（形如 5.6.5），用于同一版本只提醒一次。同上，不加前缀。
   static const String _keyUpdateLastNotifiedVersion =
       'update_last_notified_version';
@@ -84,24 +97,25 @@ class SettingsRepository {
   }
 
   /// 悬浮迷你播放器（二级页面底部悬浮播放条）总开关。
-  /// 默认开启：保持既有形态；关闭后二级页面不渲染悬浮条、也不再预留底部空间。
-  static const String _keySecondaryPlayerEnabled =
+  /// 默认关闭；开启后在主页与二级页面使用悬浮播放条。
+  static const String secondaryPlayerEnabledPreferenceKey =
       'settings_secondary_player_enabled';
 
-  /// 是否启用悬浮迷你播放器。未设置时默认 true（保持既有形态）。
+  /// 是否启用悬浮迷你播放器。未设置时默认关闭。
   Future<bool> getSecondaryPlayerEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keySecondaryPlayerEnabled) ?? true;
+    return prefs.getBool(secondaryPlayerEnabledPreferenceKey) ?? false;
   }
 
   Future<void> setSecondaryPlayerEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keySecondaryPlayerEnabled, enabled);
+    await prefs.setBool(secondaryPlayerEnabledPreferenceKey, enabled);
   }
 
   /// 悬浮播放器折叠态停靠位（'left' | 'center' | 'right'）。
   /// null = 未设置（调用方按设备形态取默认：手机 center / Pad right）。
-  static const String _keySecondaryPlayerDock = 'settings_secondary_player_dock';
+  static const String _keySecondaryPlayerDock =
+      'settings_secondary_player_dock';
 
   Future<String?> getSecondaryPlayerDockRaw() async {
     final prefs = await SharedPreferences.getInstance();
@@ -233,6 +247,17 @@ class SettingsRepository {
     await prefs.setBool(_keyUpdateReminderEnabled, enabled);
   }
 
+  /// 是否还原旧版 Android 桌面图标。未设置时沿用当前图标。
+  Future<bool> getLegacyAppIconEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyLegacyAppIconEnabled) ?? false;
+  }
+
+  Future<void> setLegacyAppIconEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyLegacyAppIconEnabled, enabled);
+  }
+
   /// 上次成功发起 Release 检查的时间戳（ms）；未检查过返回 0。
   Future<int> getUpdateLastCheckMs() async {
     final prefs = await SharedPreferences.getInstance();
@@ -275,6 +300,40 @@ class SettingsRepository {
     await prefs.setBool(_keyAutoReceiveVip, autoReceive);
   }
 
+  /// MV 画中画：按 Home 自动进入画中画是否开启（默认关闭）。
+  Future<bool> getAutoPipEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyAutoPip) ?? false;
+  }
+
+  Future<void> setAutoPipEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyAutoPip, value);
+  }
+
+  /// MV 弹幕开关。默认关闭 —— 与酷狗官方 App 的 MV 弹幕默认行为一致。
+  Future<bool> getMvDanmakuEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyMvDanmakuEnabled) ?? false;
+  }
+
+  Future<void> setMvDanmakuEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyMvDanmakuEnabled, value);
+  }
+
+  /// MV 弹幕总透明度（PiliPlus `danmakuOpacity` 的对应物）。
+  /// 合法区间 [0.1, 1.0]，越界读回/写入一律钳制。
+  Future<double> getMvDanmakuOpacity() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_keyMvDanmakuOpacity)?.clamp(0.1, 1.0) ?? 1.0;
+  }
+
+  Future<void> setMvDanmakuOpacity(double value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyMvDanmakuOpacity, value.clamp(0.1, 1.0));
+  }
+
   /// 上传听歌时长（听歌等级累计上报）开关，默认关闭。
   Future<bool> getUploadListeningDuration() async {
     final prefs = await SharedPreferences.getInstance();
@@ -306,16 +365,87 @@ class SettingsRepository {
     await prefs.setInt(_keyLyricTimeOffset, clamped);
   }
 
-  // ===== 实时歌词推送协议 =====
-  // 两种协议（Lyricon / SuperLyric）二选一 + 关闭，翻译/罗马音等偏好共用。
+  // ===== 桌面歌词配置 =====
 
-  /// 当前选中的推送协议：'none' / 'lyricon' / 'super_lyric'。
+  Future<double> getDesktopLyricFontSize() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble('settings_dl_font_size') ?? 18.0;
+  }
+
+  Future<void> setDesktopLyricFontSize(double size) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('settings_dl_font_size', size);
+  }
+
+  Future<bool> getDesktopLyricDoubleLine() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('settings_dl_double_line') ?? false;
+  }
+
+  Future<void> setDesktopLyricDoubleLine(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('settings_dl_double_line', v);
+  }
+
+  Future<int> getDesktopLyricOpacity() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('settings_dl_opacity') ?? 80;
+  }
+
+  Future<void> setDesktopLyricOpacity(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('settings_dl_opacity', v);
+  }
+
+  Future<int> getDesktopLyricGradientStart() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('settings_dl_grad_start') ?? 0xFF00E5FF;
+  }
+
+  Future<void> setDesktopLyricGradientStart(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('settings_dl_grad_start', v);
+  }
+
+  Future<int> getDesktopLyricGradientEnd() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('settings_dl_grad_end') ?? 0xFFFF00FF;
+  }
+
+  Future<void> setDesktopLyricGradientEnd(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('settings_dl_grad_end', v);
+  }
+
+  Future<int> getDesktopLyricUnplayedColor() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('settings_dl_unplayed_color') ?? 0xFF666666;
+  }
+
+  Future<void> setDesktopLyricUnplayedColor(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('settings_dl_unplayed_color', v);
+  }
+
+  Future<bool> getDesktopLyricLocked() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('settings_dl_locked') ?? false;
+  }
+
+  Future<void> setDesktopLyricLocked(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('settings_dl_locked', v);
+  }
+
+  // ===== 实时歌词推送协议 =====
+  // 三种协议（Lyricon / SuperLyric / LyricInfo）三选一 + 关闭，翻译/罗马音等偏好共用。
+
+  /// 当前选中的推送协议：'none' / 'lyricon' / 'super_lyric' / 'lyric_info'。
   Future<String> getLyricPushProtocol() async {
     final prefs = await SharedPreferences.getInstance();
-    // Lite：LyricInfo 协议已下线（原 fork 默认值），历史值一并回落为 none。
-    final saved = prefs.getString('lyric_push_protocol');
-    if (saved == null || saved == 'lyric_info') return 'none';
-    return saved;
+    // MD3Music fork: 默认 lyric_info（Vivo 车载歌词依赖此链路推送整首歌词；
+    // 原默认 none 导致 lyricInfo 不推，原子随身听缺 8/16 能力位、车机无歌词）。
+    return prefs.getString('lyric_push_protocol') ?? 'lyric_info';
   }
 
   Future<void> setLyricPushProtocol(String v) async {
@@ -423,10 +553,53 @@ class SettingsRepository {
     await prefs.setBool('super_lyric_prefer_translation', v);
   }
 
+  // ===== 魅族 Flyme 状态栏歌词 =====
+  // 键名必须与原生 FlymeLyricBridge.PREF_KEY（加 flutter. 前缀后）一致，
+  // 因为进程被 MediaSession 唤醒时原生要先于 Dart 恢复开关状态。
+  static const String _keyFlymeStatusBarLyricEnabled =
+      'settings_flyme_status_bar_lyric_enabled';
+
+  Future<bool> getFlymeStatusBarLyricEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyFlymeStatusBarLyricEnabled) ?? false;
+  }
+
+  Future<void> setFlymeStatusBarLyricEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyFlymeStatusBarLyricEnabled, v);
+  }
+
+  /// 状态栏歌词提前量（ms）。默认值与上限只在这里定义，其它地方读取。
+  /// 120ms 的来由：notify() → SystemUI 取通知并重绘约 100ms 量级，
+  /// 加上 LRC 时间戳普遍标在"字已出声"之后，抵消后大致同步。
+  static const int kFlymeLyricAdvanceDefaultMs = 120;
+  static const int kFlymeLyricAdvanceMaxMs = 600;
+  // 与 DesktopLyricService.setFlymeAdvanceMs 的钳位保持一致，两处都要改才同步
+  static const String _keyFlymeLyricAdvanceMs =
+      'settings_flyme_lyric_advance_ms';
+
+  // 注意：这个值不需要原生侧对应键 —— 提前量参与的是 Dart 侧"选哪一行"，
+  // 原生只会收到已经选好的一行文本。与开关不同（开关必须原生也能恢复）。
+  Future<int> getFlymeLyricAdvanceMs() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getInt(_keyFlymeLyricAdvanceMs) ??
+            kFlymeLyricAdvanceDefaultMs)
+        .clamp(0, kFlymeLyricAdvanceMaxMs);
+  }
+
+  Future<void> setFlymeLyricAdvanceMs(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      _keyFlymeLyricAdvanceMs,
+      v.clamp(0, kFlymeLyricAdvanceMaxMs),
+    );
+  }
+
   // ===== 蓝牙歌词配置 =====
   // 通过修改 MediaSession 元数据（title 显示歌词，artist 显示「作者 - 标题」），
   // 在蓝牙 AVRCP 协议下让汽车主机等设备显示当前歌词。
-  static const String _keyBluetoothLyricEnabled = 'settings_bluetooth_lyric_enabled';
+  static const String _keyBluetoothLyricEnabled =
+      'settings_bluetooth_lyric_enabled';
 
   Future<bool> getBluetoothLyricEnabled() async {
     final prefs = await SharedPreferences.getInstance();
@@ -440,7 +613,8 @@ class SettingsRepository {
 
   // 蓝牙歌词封面压缩开关：默认 false（不压缩，保持原始 512px 封面质量）。
   // 开启后原生端 refreshMetadata 使用 256px 缩略图，降低 Binder 负载与 SystemUI 解码压力。
-  static const String _keyBluetoothLyricCompressArt = 'settings_bluetooth_lyric_compress_art';
+  static const String _keyBluetoothLyricCompressArt =
+      'settings_bluetooth_lyric_compress_art';
 
   Future<bool> getBluetoothLyricCompressArt() async {
     final prefs = await SharedPreferences.getInstance();
@@ -491,6 +665,50 @@ class SettingsRepository {
   Future<void> setDepthCoverNeuralInpaint(bool v) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyDepthCoverNeuralInpaint, v);
+  }
+
+  // ===== LyricInfo 歌词转发 =====
+  // 通过 MediaSession 元数据 extras.lyricInfo 发布整首歌词（LRC/ELRC），
+  // 供 ColorOS 桌面歌词 / LyricInfo 模块等第三方系统读取。
+  static const String _keyLyricInfoEnabled = 'settings_lyric_info_enabled';
+
+  Future<bool> getLyricInfoEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyLyricInfoEnabled) ?? false;
+  }
+
+  static const String _keyLyricInfoColorOs = 'settings_lyric_info_coloros';
+
+  /// ColorOS Bridge 兼容模式：lyricInfo JSON 输出 lyric=纯 LRC + rawLyric=ELRC，
+  /// 适配 ColorOS-Live-Lyrics-Bridge 插件（逐字高亮等增强）。默认关闭。
+  Future<bool> getLyricInfoColorOs() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyLyricInfoColorOs) ?? false;
+  }
+
+  Future<void> setLyricInfoColorOs(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyLyricInfoColorOs, v);
+  }
+
+  Future<void> setLyricInfoEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyLyricInfoEnabled, v);
+  }
+
+  // ===== 锁屏歌词 =====
+  // 锁屏时全屏显示逐字歌词（覆盖在系统锁屏上方），默认关闭。
+  static const String _keyLockScreenLyricEnabled =
+      'settings_lock_screen_lyric_enabled';
+
+  Future<bool> getLockScreenLyricEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyLockScreenLyricEnabled) ?? false;
+  }
+
+  Future<void> setLockScreenLyricEnabled(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyLockScreenLyricEnabled, v);
   }
 
   // ===== UI 缩放 =====
@@ -584,7 +802,8 @@ class SettingsRepository {
   /// 交叉淡化时长（秒），默认 [kCrossfadeDefaultSeconds]。
   Future<int> getCrossfadeSeconds() async {
     final prefs = await SharedPreferences.getInstance();
-    final value = prefs.getInt(_keyCrossfadeSeconds) ?? kCrossfadeDefaultSeconds;
+    final value =
+        prefs.getInt(_keyCrossfadeSeconds) ?? kCrossfadeDefaultSeconds;
     return value.clamp(kCrossfadeMinSeconds, kCrossfadeMaxSeconds);
   }
 
@@ -612,8 +831,10 @@ class SettingsRepository {
   }
 
   // ===== 音量均衡（响度归一） =====
-  static const String _keyVolumeNormalizationEnabled = 'settings_volume_normalization_enabled';
-  static const String _keyVolumeNormalizationLufs = 'settings_volume_normalization_lufs';
+  static const String _keyVolumeNormalizationEnabled =
+      'settings_volume_normalization_enabled';
+  static const String _keyVolumeNormalizationLufs =
+      'settings_volume_normalization_lufs';
 
   /// 音量均衡开关，默认 false。
   Future<bool> getVolumeNormalizationEnabled() async {
@@ -629,14 +850,18 @@ class SettingsRepository {
   /// 参考响度（LUFS），默认 -14，钳到 -20~-8。
   Future<double> getVolumeNormalizationReferenceLufs() async {
     final prefs = await SharedPreferences.getInstance();
-    final value = prefs.getDouble(_keyVolumeNormalizationLufs) ??
+    final value =
+        prefs.getDouble(_keyVolumeNormalizationLufs) ??
         VolumeNormalizationService.defaultReferenceLufs;
     return value.clamp(-20.0, -8.0);
   }
 
   Future<void> setVolumeNormalizationReferenceLufs(double value) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keyVolumeNormalizationLufs, value.clamp(-20.0, -8.0));
+    await prefs.setDouble(
+      _keyVolumeNormalizationLufs,
+      value.clamp(-20.0, -8.0),
+    );
   }
 
   // ===== 播放时保持屏幕常亮 =====
@@ -719,11 +944,13 @@ class SettingsRepository {
 
   // ── 环绕频谱透明度（柱状图 / 曲线，分开记忆） ──
   static const String _keySpectrumBarOpacity = 'settings_spectrum_bar_opacity';
-  static const String _keySpectrumCurveOpacity = 'settings_spectrum_curve_opacity';
+  static const String _keySpectrumCurveOpacity =
+      'settings_spectrum_curve_opacity';
 
   /// 频谱动态取色（独立开关，默认关闭）：开启后 AM 播放器频谱颜色取封面主色
-  /// 与白色 50/50 混合。
-  static const String _keySpectrumDynamicColor = 'settings_spectrum_dynamic_color';
+  /// 与白色 50/50 混合（与歌词动态取色无关）。
+  static const String _keySpectrumDynamicColor =
+      'settings_spectrum_dynamic_color';
 
   /// 柱状图频谱透明度（0.1~1.0，默认 1.0 不透明）。
   Future<double> getSpectrumBarOpacity() async {
@@ -759,7 +986,8 @@ class SettingsRepository {
   }
 
   // ===== MiniPlayer 滑动切歌 =====
-  static const String _keyMiniPlayerSwipeSwitch = 'settings_mini_player_swipe_switch';
+  static const String _keyMiniPlayerSwipeSwitch =
+      'settings_mini_player_swipe_switch';
 
   /// MiniPlayer 是否支持水平滑动切歌，默认开启。
   Future<bool> getMiniPlayerSwipeSwitchEnabled() async {
@@ -963,7 +1191,8 @@ class SettingsRepository {
   }
 
   Future<void> setAudioFocusInterruptionMode(
-      AudioFocusInterruptionMode mode) async {
+    AudioFocusInterruptionMode mode,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_keyAudioFocusInterruptionMode, mode.index);
   }
@@ -1073,6 +1302,123 @@ class SettingsRepository {
   Future<void> setCloseLocalMusicComments(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyCloseLocalMusicComments, value);
+  }
+
+  // ===== 专辑动态封面 =====
+  static const String _keyDynamicAlbumCover = 'settings_dynamic_album_cover';
+  static const String _keyDynamicAlbumCoverOnMobile =
+      'settings_dynamic_album_cover_on_mobile';
+
+  /// 全屏播放器专辑动态封面开关，默认开启。
+  Future<bool> getDynamicAlbumCover() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyDynamicAlbumCover) ?? true;
+  }
+
+  Future<void> setDynamicAlbumCover(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyDynamicAlbumCover, value);
+  }
+
+  /// 移动网络下是否也加载动态封面，默认关闭（单首视频约 9.5MB；
+  /// 公开构建每次播放都会重新拉流，流量开销更明显）。
+  Future<bool> getDynamicAlbumCoverOnMobile() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyDynamicAlbumCoverOnMobile) ?? false;
+  }
+
+  Future<void> setDynamicAlbumCoverOnMobile(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyDynamicAlbumCoverOnMobile, value);
+  }
+
+  // ===== 车机模式 =====
+  static const String _keyCarModeEnabled = 'settings_car_mode_enabled';
+  static const String _keyCarModeAutoScreen = 'settings_car_mode_auto_screen';
+  static const String _keyCarModePanelRatio = 'settings_car_mode_panel_ratio';
+  static const String _keyCarModeDockClearance =
+      'settings_car_mode_dock_clearance';
+  static const String _keyCarModePanelSide = 'settings_car_mode_panel_side';
+
+  /// 「车机模式」开关，默认关闭。
+  /// 开启后任何界面（设置页 / 登录页 / 引导页 / 用户协议页除外）常驻一块
+  /// 全屏播放器面板，且全站不再显示 MiniPlayer。
+  /// 这是**强制开启**开关：无论屏幕是什么类型都启用。它与自动检测开关
+  /// （[_keyCarModeAutoScreen]）相互独立，任一命中即启用车机模式。
+  Future<bool> getCarModeEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyCarModeEnabled) ?? false;
+  }
+
+  Future<void> setCarModeEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyCarModeEnabled, value);
+  }
+
+  /// 「检测到车机屏幕时自动开启」开关，默认关闭。
+  /// 独立于「车机模式」总开关：开启后按屏幕长比自动判断（见
+  /// [isCarLikeScreen]），命中车机屏即自动启用常驻面板。
+  Future<bool> getCarModeAutoScreenEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyCarModeAutoScreen) ?? false;
+  }
+
+  Future<void> setCarModeAutoScreenEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyCarModeAutoScreen, value);
+  }
+
+  /// 常驻播放器面板的宽度占比，默认 0.30。
+  ///
+  /// 合法区间取**最宽**范围（底部布局 10% ~ 50%，见
+  /// [kCarModePanelMinRatioBottom]）：本层只挡手改 prefs / 历史脏数据这类
+  /// 明显越界值；布局相关的精确下限（侧边 20% / 底部 10%）由
+  /// [CarModeProvider.setPanelRatio] 按当前布局夹取 —— 本层不知道布局形态，
+  /// 若在这里按 20% 夹会把底部布局存的 10%~20% 值在读回时错误抬高。
+  Future<double> getCarModePanelRatio() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getDouble(_keyCarModePanelRatio);
+    if (value == null) return kCarModePanelDefaultRatio;
+    return value.clamp(kCarModePanelMinRatioBottom, kCarModePanelMaxRatio);
+  }
+
+  Future<void> setCarModePanelRatio(double value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(
+      _keyCarModePanelRatio,
+      value.clamp(kCarModePanelMinRatioBottom, kCarModePanelMaxRatio),
+    );
+  }
+
+  /// 底部面板的 dock 避让高度（dp，逻辑像素）。
+  ///
+  /// 车联 dock 栏以系统悬浮窗绘在 App 之上、不产生 WindowInsets，用户在
+  /// 设置页按 dock 实际高度校准并持久化；默认 [kCarModeBottomDockClearance]
+  /// （48dp）。范围 0–160：0 = 不避让（贴屏幕底边），160 覆盖常见车机 dock。
+  Future<double> getCarModeDockClearance() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getDouble(_keyCarModeDockClearance);
+    if (value == null) return kCarModeBottomDockClearance;
+    return value.clamp(0.0, kCarModeDockClearanceMax);
+  }
+
+  Future<void> setCarModeDockClearance(double value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(
+      _keyCarModeDockClearance,
+      value.clamp(0.0, kCarModeDockClearanceMax),
+    );
+  }
+
+  /// 常驻播放器面板的停靠位置，默认左侧。
+  Future<CarModePanelSide> getCarModePanelSide() async {
+    final prefs = await SharedPreferences.getInstance();
+    return CarModePanelSide.fromIndex(prefs.getInt(_keyCarModePanelSide));
+  }
+
+  Future<void> setCarModePanelSide(CarModePanelSide side) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_keyCarModePanelSide, side.index);
   }
 
   // ===== MCP（AI 代理接口）=====

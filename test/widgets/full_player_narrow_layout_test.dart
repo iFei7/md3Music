@@ -10,11 +10,14 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:just_audio/just_audio.dart' as just_audio;
 import 'package:md3music/data/models/song.dart';
 import 'package:md3music/data/repositories/history_repository.dart';
+import 'package:md3music/modules/player/am_transport_controls.dart';
 import 'package:md3music/modules/player/full_player.dart';
+import 'package:md3music/modules/player/full_player_am.dart';
 import 'package:md3music/providers/comment_display_provider.dart';
 import 'package:md3music/providers/device_provider.dart';
 import 'package:md3music/providers/favorites_provider.dart';
 import 'package:md3music/providers/kugou_provider.dart';
+import 'package:md3music/providers/listen_together_provider.dart';
 import 'package:md3music/providers/local_favorites_provider.dart';
 import 'package:md3music/providers/player_provider.dart';
 import 'package:md3music/providers/theme_provider.dart';
@@ -22,8 +25,12 @@ import 'package:md3music/services/kugou_api/kugou_models.dart';
 import 'package:md3music/widgets/player_tab_strip.dart';
 import 'package:md3music/widgets/md3e_transport_row.dart';
 import 'package:md3music/widgets/playback_status_feedback.dart';
+import 'package:md3music/widgets/apple_lyrics/layout/lyric_preferences.dart';
+import 'package:md3music/widgets/dynamic_cover_view.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import '../support/controlled_audio_service.dart';
 
@@ -44,6 +51,66 @@ Song _song({
   albumAudioId: albumAudioId,
   isOnline: true,
 );
+
+class _FailingVideoPlayerPlatform extends VideoPlayerPlatform {
+  int createCount = 0;
+  int disposeCount = 0;
+  int _nextId = 0;
+  final Map<int, StreamController<VideoEvent>> _events = {};
+
+  @override
+  Future<int?> createWithOptions(VideoCreationOptions options) async {
+    final id = _nextId++;
+    createCount++;
+    late final StreamController<VideoEvent> events;
+    events = StreamController<VideoEvent>(
+      onListen: () => events.addError(
+        services.PlatformException(
+          code: 'injected-cover-init-failure',
+          message: 'injected dynamic cover initialization failure',
+        ),
+      ),
+    );
+    _events[id] = events;
+    return id;
+  }
+
+  @override
+  Stream<VideoEvent> videoEventsFor(int playerId) => _events[playerId]!.stream;
+
+  @override
+  Future<void> init() async {}
+
+  @override
+  Future<void> setMixWithOthers(bool mixWithOthers) async {}
+
+  @override
+  Future<void> setLooping(int playerId, bool looping) async {}
+
+  @override
+  Future<void> setVolume(int playerId, double volume) async {}
+
+  @override
+  Future<void> play(int playerId) async {}
+
+  @override
+  Future<void> pause(int playerId) async {}
+
+  @override
+  Future<void> seekTo(int playerId, Duration position) async {}
+
+  @override
+  Future<Duration> getPosition(int playerId) async => Duration.zero;
+
+  @override
+  Future<void> dispose(int playerId) async {
+    disposeCount++;
+    await _events.remove(playerId)?.close();
+  }
+
+  @override
+  Widget buildView(int playerId) => const SizedBox.expand();
+}
 
 class _ThrowingLyricProvider extends KugouProvider {
   _ThrowingLyricProvider() : super(registerDeviceOnStart: false);
@@ -124,6 +191,7 @@ Widget _host(PlayerProvider player, KugouProvider kugou, Widget page) =>
         ),
         ChangeNotifierProvider(create: (_) => LocalFavoritesProvider()),
         ChangeNotifierProvider(create: (_) => CommentDisplayProvider()),
+        ChangeNotifierProvider(create: (_) => ListenTogetherProvider()),
       ],
       child: MaterialApp(home: page),
     );
@@ -132,7 +200,8 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   for (final (name, page) in <(String, Widget Function())>[
-    ('MD3', () => const FullPlayer()),
+    ('MD3', () => const FullPlayer(dockMode: true)),
+    ('AM', () => const AmStyleFullPlayer(dockMode: true)),
   ]) {
     for (final (layout, viewport, textScale) in <(String, Size, double)>[
       ('窄屏2倍字', const Size(320, 640), 2),
@@ -176,7 +245,11 @@ void main() {
                   data: MediaQuery.of(
                     context,
                   ).copyWith(textScaler: TextScaler.linear(textScale)),
-                  child: const FullPlayer(),
+                  child: viewport.width > viewport.height
+                      ? (name == 'MD3'
+                            ? const FullPlayer(dockMode: false)
+                            : const AmStyleFullPlayer(dockMode: false))
+                      : page(),
                 ),
               ),
             ),
@@ -185,14 +258,22 @@ void main() {
 
           expect(tester.takeException(), isNull);
           expect(find.text('播放失败，请重试'), findsOneWidget);
-          final controls = find.byType(MD3ETransportRow);
+          final controls = name == 'MD3'
+              ? find.byType(MD3ETransportRow)
+              : find.byType(AMTransportControls);
           expect(controls, findsOneWidget);
           expect(find.byType(PlaybackStatusFeedback), findsOneWidget);
           final semantics = tester.ensureSemantics();
-          final pauseButton = find.bySemanticsLabel('暂停');
+          final pauseButton = name == 'MD3'
+              ? find.bySemanticsLabel('暂停')
+              : find.byTooltip('暂停');
           expect(pauseButton, findsOneWidget);
-          final previousButton = find.bySemanticsLabel('上一首');
-          final nextButton = find.bySemanticsLabel('下一首');
+          final previousButton = name == 'MD3'
+              ? find.bySemanticsLabel('上一首')
+              : find.byTooltip('上一首');
+          final nextButton = name == 'MD3'
+              ? find.bySemanticsLabel('下一首')
+              : find.byTooltip('下一首');
           expect(previousButton, findsOneWidget);
           expect(nextButton, findsOneWidget);
           for (final button in <Finder>[
@@ -247,7 +328,8 @@ void main() {
   }
 
   for (final (name, page) in <(String, Widget Function())>[
-    ('MD3', () => const FullPlayer()),
+    ('MD3', () => const FullPlayer(dockMode: true)),
+    ('AM', () => const AmStyleFullPlayer(dockMode: true)),
   ]) {
     testWidgets('$name 歌词请求异常后播放页仍可操作', (tester) async {
       final originalPhysicalSize = tester.view.physicalSize;
@@ -284,14 +366,22 @@ void main() {
         expect(kugou.requestCount, greaterThan(0));
         expect(tester.takeException(), isNull);
 
-        final controls = find.byType(MD3ETransportRow);
+        final controls = name == 'MD3'
+            ? find.byType(MD3ETransportRow)
+            : find.byType(AMTransportControls);
         expect(controls, findsOneWidget);
         final semantics = tester.ensureSemantics();
-        final buttons = <Finder>[
-          find.bySemanticsLabel('上一首'),
-          find.bySemanticsLabel('暂停'),
-          find.bySemanticsLabel('下一首'),
-        ];
+        final buttons = name == 'MD3'
+            ? <Finder>[
+                find.bySemanticsLabel('上一首'),
+                find.bySemanticsLabel('暂停'),
+                find.bySemanticsLabel('下一首'),
+              ]
+            : <Finder>[
+                find.byTooltip('上一首'),
+                find.byTooltip('暂停'),
+                find.byTooltip('下一首'),
+              ];
         for (final button in buttons) {
           expect(button, findsWidgets);
           expect(
@@ -323,7 +413,8 @@ void main() {
   }
 
   for (final (name, page) in <(String, Widget Function())>[
-    ('MD3', () => const FullPlayer()),
+    ('MD3', () => const FullPlayer(dockMode: true)),
+    ('AM', () => const AmStyleFullPlayer(dockMode: true)),
   ]) {
     for (final (source, artworkUri) in <(String, String)>[
       ('本地封面文件缺失', 'file:///md3music_test_missing/cover.jpg'),
@@ -341,6 +432,9 @@ void main() {
           'settings_spectrum_dynamic_color': false,
         });
         _mockPlatformChannels();
+        final lyricPreferences = LyricPreferences.instance;
+        final originalDynamicLyricColor = lyricPreferences.useDynamicLyricColor;
+        await lyricPreferences.setUseDynamicLyricColor(false);
         KugouProvider.restoreLyric = (_) async => const KugouLyric(
           content: '[00:00.00]test lyric',
           decodedContent: '[00:00.00]test lyric',
@@ -396,10 +490,14 @@ void main() {
               findsNothing,
             );
           }
-          final controls = find.byType(MD3ETransportRow);
+          final controls = name == 'MD3'
+              ? find.byType(MD3ETransportRow)
+              : find.byType(AMTransportControls);
           expect(controls, findsOneWidget);
           final semantics = tester.ensureSemantics();
-          final nextButton = find.bySemanticsLabel('下一首').first;
+          final nextButton = name == 'MD3'
+              ? find.bySemanticsLabel('下一首').first
+              : find.byTooltip('下一首');
           expect(
             tester
                 .getSemantics(nextButton)
@@ -422,6 +520,9 @@ void main() {
           AudioServiceLoader.setTestOverride(null);
           KugouProvider.restoreLyric = null;
           CachedNetworkImageProvider.defaultCacheManager = originalCacheManager;
+          await lyricPreferences.setUseDynamicLyricColor(
+            originalDynamicLyricColor,
+          );
           tester.view.physicalSize = originalPhysicalSize;
           tester.view.devicePixelRatio = originalDevicePixelRatio;
         }
@@ -429,4 +530,116 @@ void main() {
     }
   }
 
+  testWidgets('全屏页切歌与后台恢复时动态封面失败资源均释放', (tester) async {
+    final originalPhysicalSize = tester.view.physicalSize;
+    final originalDevicePixelRatio = tester.view.devicePixelRatio;
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    SharedPreferences.setMockInitialValues({});
+    _mockPlatformChannels();
+    KugouProvider.restoreLyric = (_) async => const KugouLyric(
+      content: '[00:00.00]test lyric',
+      decodedContent: '[00:00.00]test lyric',
+    );
+    final originalPlatform = VideoPlayerPlatform.instance;
+    final videoPlatform = _FailingVideoPlayerPlatform();
+    VideoPlayerPlatform.instance = videoPlatform;
+    final audio = ControlledAudioService();
+    AudioServiceLoader.setTestOverride(() async => audio);
+    DynamicCoverView.resolveLocalPath = (_) async => 'C:/fake/dynamic.mp4';
+    final kugou = KugouProvider(registerDeviceOnStart: false);
+    PlayerProvider? player;
+    try {
+      await tester.runAsync(() async {
+        player = PlayerProvider();
+        await player!.audioReady.timeout(const Duration(seconds: 10));
+        final loading = player!.playPlaylist([
+          _song(id: 'cover-first', albumAudioId: 'dynamic-first'),
+        ], 0);
+        await audio.waitForPlaylistLoads(1);
+        await audio.completeSourceLoad(0);
+        await loading;
+      });
+
+      await tester.pumpWidget(
+        _host(
+          player!,
+          kugou,
+          Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const FullPlayer(dockMode: true),
+                    ),
+                  ),
+                  child: const Text('打开全屏'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      for (var cycle = 1; cycle <= 100; cycle++) {
+        final createsBeforeCycle = videoPlatform.createCount;
+        await tester.tap(find.text('打开全屏'));
+        await tester.pumpAndSettle();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        expect(find.byType(VideoPlayer), findsNothing);
+        expect(videoPlatform.createCount, greaterThan(createsBeforeCycle));
+        expect(videoPlatform.disposeCount, videoPlatform.createCount);
+
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        await tester.pump();
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.pumpAndSettle();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        expect(videoPlatform.disposeCount, videoPlatform.createCount);
+
+        await tester.runAsync(() async {
+          final loading = player!.playPlaylist([
+            _song(
+              id: 'cover-cycle-$cycle',
+              albumAudioId: 'dynamic-cycle-$cycle',
+            ),
+          ], 0);
+          await audio.waitForPlaylistLoads(cycle + 1);
+          await audio.completeSourceLoad(cycle);
+          await loading;
+        });
+        await tester.pumpAndSettle();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        expect(find.byType(VideoPlayer), findsNothing);
+        expect(
+          videoPlatform.createCount,
+          greaterThanOrEqualTo(createsBeforeCycle + 2),
+        );
+        expect(videoPlatform.disposeCount, videoPlatform.createCount);
+
+        tester.state<NavigatorState>(find.byType(Navigator).first).pop();
+        await tester.pumpAndSettle();
+        expect(videoPlatform.disposeCount, videoPlatform.createCount);
+        expect(tester.takeException(), isNull);
+      }
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      player?.dispose();
+      kugou.dispose();
+      await tester.runAsync(audio.dispose);
+      await tester.runAsync(() => HistoryRepository().flush());
+      AudioServiceLoader.setTestOverride(null);
+      DynamicCoverView.resolveLocalPath = null;
+      KugouProvider.restoreLyric = null;
+      VideoPlayerPlatform.instance = originalPlatform;
+      tester.view.physicalSize = originalPhysicalSize;
+      tester.view.devicePixelRatio = originalDevicePixelRatio;
+    }
+  });
 }

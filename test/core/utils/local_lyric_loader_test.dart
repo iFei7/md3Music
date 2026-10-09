@@ -6,7 +6,7 @@ import 'package:md3music/core/utils/local_lyric_loader.dart';
 
 /// LocalLyricLoader 单元测试
 ///
-/// 覆盖：同目录 .lrc / .txt 文件查找与读取、内嵌优先（无内嵌时回退文件）、
+/// 覆盖：同目录 .lrc / .ttml 文件查找与读取、内嵌优先（无内嵌时回退文件）、
 /// 无歌词文件返回 null。用临时目录模拟本地歌曲。
 void main() {
   late Directory tempDir;
@@ -36,12 +36,12 @@ void main() {
     expect(result, '[00:10.00]Hello world');
   });
 
-  test('L2. 无 .lrc 时回退 .txt', () {
+  test('L2. 无 .lrc 时回退 .ttml', () {
     final audio = _write('song.mp3', 'not a real mp3');
-    _write('song.txt', '[00:10.00]plain text fallback');
+    _write('song.ttml', '<tt xmlns="http://www.w3.org/ns/ttml"></tt>');
 
     final result = LocalLyricLoader.loadForAudio(audio.path);
-    expect(result, contains('plain text fallback'));
+    expect(result, contains('<tt'));
   });
 
   test('L3. 无任何歌词文件返回 null', () {
@@ -49,10 +49,10 @@ void main() {
     expect(LocalLyricLoader.loadForAudio(audio.path), isNull);
   });
 
-  test('L4. 扩展名优先级：.lrc 优先于 .txt', () {
+  test('L4. 扩展名优先级：.lrc 优先于 .ttml', () {
     final audio = _write('song.mp3', 'not a real mp3');
     _write('song.lrc', '[00:10.00]LRC content');
-    _write('song.txt', 'TXT content');
+    _write('song.ttml', '<tt xmlns="http://www.w3.org/ns/ttml">TTML</tt>');
 
     final result = LocalLyricLoader.loadForAudio(audio.path);
     expect(result, '[00:10.00]LRC content');
@@ -66,14 +66,14 @@ void main() {
     );
   });
   test('L6. FLAC 内嵌歌词含 = 不被截断（audio_metadata_reader 1.4.1 bug 回归）', () {
-    // 构造最小 FLAC：fLaC + STREAMINFO + VORBIS_COMMENT（LYRICS 为含 = 的歌词）
-    const lyrics = '[00:01.00]key=value\n[00:05.00]a=b=c';
+    // 构造最小 FLAC：fLaC + STREAMINFO + VORBIS_COMMENT（LYRICS 为含 = 的 TTML XML）
+    const lyrics = '<?xml version="1.0" encoding="utf-8"?><tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="0.000" end="5000">飞云之下</p></div></body></tt>';
     final flac = _buildFlacWithLyrics(lyrics);
     final f = File('${tempDir.path}${Platform.pathSeparator}song.flac');
     f.writeAsBytesSync(flac);
 
     final result = LocalLyricLoader.loadForAudio(f.path);
-    // 必须是完整歌词，而非被 `=` 截断
+    // 必须是完整 XML，而非被 `=` 截断成 `<?xml version`
     expect(result, lyrics);
   });
 

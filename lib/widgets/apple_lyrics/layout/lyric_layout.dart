@@ -340,7 +340,16 @@ class LyricLayout {
   /// 非当前行缩放（enableScale=true 时）。
   ///
   /// 由用户在设置页调节（[LyricPreferences.inactiveScale]），默认 0.850。
+  /// 清晰层非当前行与 AM 歌词模糊层共用此值：模糊图在离屏渲染时烘焙同一
+  /// pivot+scale 变换，保证两层字形尺寸在任何取值下都严格一致。
   static double get inactiveScale => LyricPreferences.instance.inactiveScale;
+
+  /// 模糊层离屏渲染缩放：与清晰层非当前行 scale 完全同源，不叠任何额外因子。
+  ///
+  /// 必须与 `_LyricsPainter.paint` 中非当前行的 scale 取值口径一致
+  /// （enableScale=false 时清晰层非当前行为 [activeScale]），否则两层再次错位。
+  static double blurRenderScale({required bool enableScale}) =>
+      enableScale ? inactiveScale : activeScale;
 
   /// 背景行：当前行缩放
   static const double backgroundActiveScale = 1.0;
@@ -411,6 +420,28 @@ class LyricLayout {
 
   /// 用户滚动后自动回弹到当前行的超时时间
   static const int autoReturnMs = 3000;
+
+  // ============== 弹簧参数：行缩放 ==============
+
+  /// 主行缩放弹簧：mass
+  static const double scaleSpringMass = 2;
+
+  /// 主行缩放弹簧：damping
+  static const double scaleSpringDamping = 25;
+
+  /// 主行缩放弹簧：stiffness
+  static const double scaleSpringStiffness = 100;
+
+  // ============== 弹簧参数：背景行缩放 ==============
+
+  /// 背景行缩放弹簧：mass
+  static const double bgScaleSpringMass = 1;
+
+  /// 背景行缩放弹簧：damping
+  static const double bgScaleSpringDamping = 20;
+
+  /// 背景行缩放弹簧：stiffness
+  static const double bgScaleSpringStiffness = 50;
 
   // ============== 弹簧参数：posY seeking/间奏模式 ==============
 

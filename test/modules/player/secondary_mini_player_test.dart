@@ -10,6 +10,7 @@ import 'package:md3music/data/models/song.dart';
 import 'package:md3music/modules/player/full_player_route.dart';
 import 'package:md3music/modules/player/mini_player.dart';
 import 'package:md3music/modules/player/secondary_mini_player.dart';
+import 'package:md3music/providers/car_mode_provider.dart';
 import 'package:md3music/providers/device_provider.dart';
 import 'package:md3music/providers/player_provider.dart';
 import 'package:md3music/providers/theme_provider.dart';
@@ -63,6 +64,7 @@ void main() {
   );
 
   late _FakePlayer player;
+  late CarModeProvider carMode;
   late ValueNotifier<bool> collapsed;
 
   setUp(() {
@@ -73,11 +75,13 @@ void main() {
     kSecondaryPlayerDock.value = SecondaryPlayerDockSide.center;
     collapsed = ValueNotifier<bool>(true);
     player = _FakePlayer()..simulate(song: song('s0'), playing: true);
+    carMode = CarModeProvider();
   });
 
   tearDown(() {
     collapsed.dispose();
     player.dispose();
+    carMode.dispose();
     playerExpansion.value = 0.0;
     kSecondaryPlayerEnabled.value = true;
     kSecondaryPlayerDock.value = SecondaryPlayerDockSide.center;
@@ -87,6 +91,7 @@ void main() {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<PlayerProvider>.value(value: player),
+        ChangeNotifierProvider<CarModeProvider>.value(value: carMode),
         ChangeNotifierProvider<DeviceProvider>(create: (_) => DeviceProvider()),
         ChangeNotifierProvider<ThemeProvider>(create: (_) => ThemeProvider()),
       ],
@@ -123,6 +128,7 @@ void main() {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<PlayerProvider>.value(value: player),
+        ChangeNotifierProvider<CarModeProvider>.value(value: carMode),
         ChangeNotifierProvider<DeviceProvider>(create: (_) => DeviceProvider()),
         ChangeNotifierProvider<ThemeProvider>(create: (_) => ThemeProvider()),
       ],
@@ -150,6 +156,7 @@ void main() {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<PlayerProvider>.value(value: player),
+        ChangeNotifierProvider<CarModeProvider>.value(value: carMode),
         ChangeNotifierProvider<DeviceProvider>(create: (_) => DeviceProvider()),
         ChangeNotifierProvider<ThemeProvider>(create: (_) => ThemeProvider()),
       ],
@@ -167,19 +174,29 @@ void main() {
     );
   }
 
-  /// 胶囊本体：`_buildMorph` 内唯一 `elevation: 8.0` 的 `Material`
-  /// （`Material.elevation` 类型是 `double`）。限定在 SecondaryMiniPlayer
-  /// 子树内查找，避免 M3E 组件里的同高度 Material 干扰。
+  /// 胶囊本体：按 32dp 胶囊圆角定位，不依赖视觉 elevation。
   Finder capsule(WidgetTester tester) {
     final f = find.descendant(
       of: find.byType(SecondaryMiniPlayer),
       matching: find.byWidgetPredicate(
-        (w) => w is Material && w.elevation == 8.0,
+        (w) => w is Material && w.borderRadius == BorderRadius.circular(32),
       ),
     );
     expect(f, findsOneWidget, reason: '胶囊应唯一可定位');
     return f;
   }
+
+  testWidgets('浮动迷你播放器的歌曲名和歌手居中对齐', (tester) async {
+    _setViewport(tester, _kPhonePortrait);
+    collapsed.value = false;
+    await tester.pumpWidget(host());
+    await tester.pump();
+
+    expect(tester.widget<Text>(find.text('标题')).textAlign, TextAlign.center);
+    expect(tester.widget<Text>(find.text('artist')).textAlign, TextAlign.center);
+
+    await tester.pumpWidget(const SizedBox());
+  });
 
   // —— 帧率约定（AGENTS.md §10）——
 

@@ -24,6 +24,7 @@ import 'data/models/playlist.dart';
 import 'data/models/song.dart';
 import 'data/repositories/settings_repository.dart';
 import 'services/kugou_api/kugou_api_client.dart';
+import 'services/kugou_api/listen_together_models.dart';
 import 'main.dart'
     show
         appNavigatorKey,
@@ -31,25 +32,38 @@ import 'main.dart'
         pendingShortcutType,
         shortcutTabRequest;
 import 'modules/discover/discover_page.dart';
+import 'modules/mcp/mcp_player_control.dart';
+import 'modules/mcp/mcp_service.dart';
+import 'modules/coverflow/coverflow_page.dart';
 import 'utils/landscape_immersive.dart';
 import 'modules/charts/charts_page.dart';
+import 'modules/ip/ip_page.dart';
 import 'modules/user/user_center_page.dart';
 import 'modules/user/favorites_page.dart';
+import 'modules/brush/brush_page.dart';
+import 'modules/listen_together/listen_together_page.dart';
+import 'modules/listen_together/widgets/guest_play_confirm_dialog.dart';
 
 import 'modules/player/full_player.dart';
 import 'modules/player/full_player_route.dart';
 import 'modules/player/mini_player.dart';
 import 'modules/player/player_drag_overlay.dart';
+import 'modules/player/car_mode_panel.dart';
 import 'modules/player/secondary_mini_player.dart';
 import 'modules/playlist/playlist_page.dart';
 import 'modules/search/search_page.dart';
 import 'modules/settings/settings_page.dart';
 import 'modules/library/library_page.dart';
+import 'modules/launchpad/launchpad_page.dart';
 import 'modules/login/login_page.dart';
 import 'widgets/app_animation.dart';
 import 'modules/onboarding/onboarding_page.dart';
 import 'modules/onboarding/user_agreement_page.dart';
 import 'modules/personal_fm/personal_fm_page.dart';
+import 'modules/audiobook/audiobook_page.dart';
+import 'modules/recognition/song_recognition_page.dart';
+import 'modules/scene/scene_page.dart';
+import 'modules/channel/channel_page.dart';
 import 'providers/dlna_provider.dart';
 import 'providers/favorites_provider.dart';
 import 'providers/kugou_provider.dart';
@@ -64,6 +78,8 @@ import 'providers/shortcut_config_provider.dart';
 import 'providers/tab_config_provider.dart';
 import 'providers/theme_provider.dart';
 import 'providers/comment_display_provider.dart';
+import 'providers/car_mode_provider.dart';
+import 'providers/listen_together_provider.dart';
 import 'services/kugou_server.dart';
 import 'widgets/dlna_casting_overlay.dart';
 import 'core/widgets/local_server_down_banner.dart';
@@ -128,6 +144,7 @@ class _UpFadeMainRoute<T> extends MaterialPageRoute<T> {
 class MyApp extends StatelessWidget {
   final bool showOnboarding;
   final bool showUserAgreement;
+  final bool initialUseBackgroundImage;
 
   /// 可选扩展：额外注册的 Provider 列表（默认无，由私有构建注入，
   /// 用于注册私有功能 Provider）。
@@ -137,6 +154,7 @@ class MyApp extends StatelessWidget {
     super.key,
     this.showOnboarding = false,
     this.showUserAgreement = false,
+    this.initialUseBackgroundImage = true,
     this.extraProviders,
   });
 
@@ -144,11 +162,27 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider(
+          create: (_) => ThemeProvider(
+            initialUseBackgroundImage: initialUseBackgroundImage,
+          ),
+        ),
         ChangeNotifierProvider(create: (_) => DeviceProvider()),
         ChangeNotifierProvider(create: (_) => GridColumnsProvider()),
         ChangeNotifierProvider(create: (_) => PlayerProvider()),
-        // Lite：AI 代理接口（MCP）已下线，不再注册 McpService。
+        // AI 代理接口（MCP）：默认关闭。非惰性创建——需要在每次冷启动时读取
+        // 持久化设置决定是否恢复监听，否则用户开启后必须先进一次设置页才会起服务。
+        // 默认关闭时构造只做一次 SharedPreferences 读取即返回，零网络副作用。
+        ChangeNotifierProxyProvider<PlayerProvider, McpService>(
+          lazy: false,
+          create: (context) => McpService(
+            playerControl: PlayerProviderBackedControl(
+              context.read<PlayerProvider>(),
+            ),
+          ),
+          update: (context, player, previous) => previous ??
+              McpService(playerControl: PlayerProviderBackedControl(player)),
+        ),
         ChangeNotifierProvider(create: (_) => LibraryProvider()),
         ChangeNotifierProvider(create: (_) => KugouProvider()),
         ChangeNotifierProvider(create: (_) => FavoritesProvider()),
@@ -163,7 +197,10 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => DlnaProvider()),
         // 评论显示设置（字号等）
         ChangeNotifierProvider(create: (_) => CommentDisplayProvider()),
-        // Lite：一起听（众乐房）已下线，不再注册 ListenTogetherProvider。
+        // 车机模式（常驻播放器面板的开关 / 宽度 / 停靠位置）
+        ChangeNotifierProvider(create: (_) => CarModeProvider()),
+        // 一起听（众乐房）：广场列表 + 房间会话（心跳/轮询/播放同步）
+        ChangeNotifierProvider(create: (_) => ListenTogetherProvider()),
         // 可选扩展：私有构建注入的额外 Provider（默认无）
         ...?extraProviders,
       ],
@@ -190,7 +227,7 @@ class _AppViewState extends State<_AppView> {
   // 持有引用以便 dispose 时移除 listener（provider 销毁顺序晚于 _AppViewState）。
   PlayerProvider? _playerProvider;
   // 上一次已提取/正在提取的封面 url：同一首歌反复 notify 不重复提取，
-  // 且异步提取期间切歌时丢弃过期结果。
+  // 且异步提取期间切歌时丢弃过期结果（参考 AM 歌词动态取色 _lastAccentUrl 模式）。
   String? _lastCoverUrl;
   // 背景图莫奈取色桥接：监听 ThemeProvider 背景图路径变化 → 提取主色注入 seed 链。
   // 持有引用以便 dispose 时移除 listener。
@@ -273,7 +310,7 @@ class _AppViewState extends State<_AppView> {
     if (url == null || url == _lastCoverUrl) return;
     _lastCoverUrl = url;
     final color = await ArtworkColorExtractor.extract(url);
-    // 过期校验：提取期间已切歌则丢弃结果
+    // 过期校验：提取期间已切歌则丢弃结果（参考 AM 歌词动态取色模式）
     if (context.read<PlayerProvider>().currentSong?.artworkUri != url) return;
     context.read<ThemeProvider>().setCoverSeedColor(color);
   }
@@ -368,12 +405,19 @@ class _AppViewState extends State<_AppView> {
                   // 全局背景层（主页/底层背景）：复用 AppBackground 组件。
                   // 二级页面由路由过渡内嵌 AppBackground，随页面位移入场。
                   Positioned.fill(child: AppBackground()),
-                  // material_ui 兼容桥：dynamic_color / cached_network_image 等第三方包
+                  // 车机模式：把整棵 Navigator 与常驻播放器面板并排。
+                  // 必须包在 Navigator **之外**（就是这里）——面板要同时覆盖
+                  // push 出来的所有二级页面，放进任何路由内部都覆盖不到。
+                  // 未开启车机模式（或当前页面声明抑制）时本组件原样返回 child，
+                  // 布局与改动前完全一致。
+                  // material_ui 兼容桥：chewie / dynamic_color / cached_network_image 等第三方包
                   // 仍导入 package:flutter/material.dart，其 Theme.of(context) 取不到本项目的
                   // material_ui 主题。本桥把 ThemeData / MaterialLocalizations 提供给它们。
                   // 官方定位为过渡工具，待依赖全部迁移到 material_ui 后移除。
-                  // ignore: deprecated_member_use
-                  MaterialUiCompatibilityBridge(child: child!),
+                  CarModePanel(
+                    // ignore: deprecated_member_use
+                    child: MaterialUiCompatibilityBridge(child: child!),
+                  ),
                   const DlnaCastingOverlay(),
                   // 上滑拖拽跟手覆盖层（在 Navigator 之上，拖拽期间显示预览）
                   const PlayerDragOverlay(),
@@ -566,6 +610,10 @@ class _SystemUiUpdaterState extends State<_SystemUiUpdater>
   }
 
   void _updateSystemUi() {
+    // 封面流页横屏实际沉浸中：保留 SystemUiMode.immersiveSticky，
+    // 不覆盖系统栏模式（否则方向变化等 rebuild 会冲掉沉浸设置）。
+    // 用「实际生效」标志：用户请求沉浸但切到其他 tab/竖屏时仍需恢复系统栏样式。
+    if (kCoverFlowImmersiveActive.value) return;
     // 播放器 Zen 沉浸生效中：保留 immersiveSticky，不被主界面 edgeToEdge 覆盖
     // （否则亮屏 resumed 会把状态栏重新显示出来）。
     if (kPlayerZenImmersiveActive.value) return;
@@ -619,8 +667,14 @@ class _MainLayoutState extends State<_MainLayout>
   final GlobalKey<DesktopShellState> _desktopShellKey =
       GlobalKey<DesktopShellState>();
 
+  /// 上一次同步的沉浸状态，避免重复调用 SystemChrome（幂等去重）。
+  bool _immersiveSynced = false;
+
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
   bool _lyriconFailDialogShown = false;
+
+  /// 一起听听众起播确认窗展示中标记：连点/多入口并发时只允许一个确认窗。
+  bool _roomGuestPlayDialogOpen = false;
 
   /// 二次返回退出：首次返回后置位，3 秒内再次返回触发真正退出。
   bool _exitPressed = false;
@@ -643,8 +697,18 @@ class _MainLayoutState extends State<_MainLayout>
     // 与外层 AnimatedSwitcher 的左右滑动叠加，形成"内容上浮 → 页面滑入"的层次感。
     Widget page;
     switch (tabId) {
+      case 'launchpad':
+        page = LaunchPadPage(
+          onTabSelected: _switchToTab,
+          onTabEnabled: _enableAndSwitchToTab,
+          onTabOpened: _openTabAsPage,
+        );
+        break;
       case 'discover':
         page = const DiscoverPage();
+        break;
+      case 'coverflow':
+        page = const CoverFlowPage();
         break;
       case 'library':
         page = const LibraryPage();
@@ -661,6 +725,28 @@ class _MainLayoutState extends State<_MainLayout>
         break;
       case 'charts':
         page = const ChartsPage();
+        break;
+      case 'ip':
+        page = const IpPage();
+        break;
+      case 'recognition':
+        // Tab 模式：SongRecognitionPage 自包悬浮宿主，一级形态自动退化交由 MiniPlayer 承载
+        page = const SongRecognitionPage();
+        break;
+      case 'audiobook':
+        page = const AudiobookPage();
+        break;
+      case 'scene':
+        page = const ScenePage();
+        break;
+      case 'channel':
+        page = const ChannelPage();
+        break;
+      case 'brush':
+        page = const BrushPage();
+        break;
+      case 'listen_together':
+        page = const ListenTogetherPage();
         break;
       case 'settings':
         page = const SettingsPage();
@@ -680,12 +766,30 @@ class _MainLayoutState extends State<_MainLayout>
   NavigationDestination _buildDestination(TabItem tab, int index) {
     final isSelected = index == _selectedIndex;
     switch (tab.id) {
+      case 'launchpad':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.grid_view_outlined,
+            filledIcon: Icons.grid_view,
+          ),
+          label: tab.label,
+        );
       case 'discover':
         return NavigationDestination(
           icon: _AnimatedTabIcon(
             selected: isSelected,
             outlinedIcon: Icons.explore_outlined,
             filledIcon: Icons.explore,
+          ),
+          label: tab.label,
+        );
+      case 'coverflow':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.album_outlined,
+            filledIcon: Icons.album,
           ),
           label: tab.label,
         );
@@ -734,6 +838,69 @@ class _MainLayoutState extends State<_MainLayout>
           ),
           label: tab.label,
         );
+      case 'ip':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.edit_note_outlined,
+            filledIcon: Icons.edit_note,
+          ),
+          label: tab.label,
+        );
+      case 'recognition':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.mic_none_outlined,
+            filledIcon: Icons.mic,
+          ),
+          label: tab.label,
+        );
+      case 'audiobook':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.auto_stories_outlined,
+            filledIcon: Icons.auto_stories,
+          ),
+          label: tab.label,
+        );
+      case 'scene':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.landscape_outlined,
+            filledIcon: Icons.landscape,
+          ),
+          label: tab.label,
+        );
+      case 'channel':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.dynamic_feed_outlined,
+            filledIcon: Icons.dynamic_feed,
+          ),
+          label: tab.label,
+        );
+      case 'brush':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.swipe_outlined,
+            filledIcon: Icons.swipe,
+          ),
+          label: tab.label,
+        );
+      case 'listen_together':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.groups_outlined,
+            filledIcon: Icons.groups,
+          ),
+          label: tab.label,
+        );
       case 'settings':
         return NavigationDestination(
           icon: _AnimatedTabIcon(
@@ -770,10 +937,22 @@ class _MainLayoutState extends State<_MainLayout>
     //（与底部 NavigationBar 一致；仅图标模式下文字被隐藏，label 仍用于无障碍朗读）。
     final label = Text(tab.label);
     switch (tab.id) {
+      case 'launchpad':
+        return NavigationRailDestination(
+          icon: const Icon(Icons.grid_view_outlined),
+          selectedIcon: const Icon(Icons.grid_view),
+          label: label,
+        );
       case 'discover':
         return NavigationRailDestination(
           icon: const Icon(Icons.explore_outlined),
           selectedIcon: const Icon(Icons.explore),
+          label: label,
+        );
+      case 'coverflow':
+        return NavigationRailDestination(
+          icon: const Icon(Icons.album_outlined),
+          selectedIcon: const Icon(Icons.album),
           label: label,
         );
       case 'library':
@@ -804,6 +983,48 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationRailDestination(
           icon: const Icon(Icons.leaderboard_outlined),
           selectedIcon: const Icon(Icons.leaderboard),
+          label: label,
+        );
+      case 'ip':
+        return NavigationRailDestination(
+          icon: const Icon(Icons.edit_note_outlined),
+          selectedIcon: const Icon(Icons.edit_note),
+          label: label,
+        );
+      case 'recognition':
+        return NavigationRailDestination(
+          icon: const Icon(Icons.mic_none_outlined),
+          selectedIcon: const Icon(Icons.mic),
+          label: label,
+        );
+      case 'audiobook':
+        return NavigationRailDestination(
+          icon: const Icon(Icons.auto_stories_outlined),
+          selectedIcon: const Icon(Icons.auto_stories),
+          label: label,
+        );
+      case 'scene':
+        return NavigationRailDestination(
+          icon: const Icon(Icons.landscape_outlined),
+          selectedIcon: const Icon(Icons.landscape),
+          label: label,
+        );
+      case 'channel':
+        return NavigationRailDestination(
+          icon: const Icon(Icons.dynamic_feed_outlined),
+          selectedIcon: const Icon(Icons.dynamic_feed),
+          label: label,
+        );
+      case 'brush':
+        return NavigationRailDestination(
+          icon: const Icon(Icons.swipe_outlined),
+          selectedIcon: const Icon(Icons.swipe),
+          label: label,
+        );
+      case 'listen_together':
+        return NavigationRailDestination(
+          icon: const Icon(Icons.groups_outlined),
+          selectedIcon: const Icon(Icons.groups),
           label: label,
         );
       case 'settings':
@@ -829,10 +1050,24 @@ class _MainLayoutState extends State<_MainLayout>
 
   NavigationDrawerDestination _buildDrawerDestination(TabItem tab) {
     switch (tab.id) {
+      case 'launchpad':
+        return NavigationDrawerDestination(
+          icon: const Icon(Icons.grid_view_outlined),
+          selectedIcon: const Icon(Icons.grid_view),
+          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
+          label: const Text(''),
+        );
       case 'discover':
         return NavigationDrawerDestination(
           icon: const Icon(Icons.explore_outlined),
           selectedIcon: const Icon(Icons.explore),
+          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
+          label: const Text(''),
+        );
+      case 'coverflow':
+        return NavigationDrawerDestination(
+          icon: const Icon(Icons.album_outlined),
+          selectedIcon: const Icon(Icons.album),
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
@@ -868,6 +1103,55 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationDrawerDestination(
           icon: const Icon(Icons.leaderboard_outlined),
           selectedIcon: const Icon(Icons.leaderboard),
+          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
+          label: const Text(''),
+        );
+      case 'ip':
+        return NavigationDrawerDestination(
+          icon: const Icon(Icons.edit_note_outlined),
+          selectedIcon: const Icon(Icons.edit_note),
+          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
+          label: const Text(''),
+        );
+      case 'recognition':
+        return NavigationDrawerDestination(
+          icon: const Icon(Icons.mic_none_outlined),
+          selectedIcon: const Icon(Icons.mic),
+          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
+          label: const Text(''),
+        );
+      case 'audiobook':
+        return NavigationDrawerDestination(
+          icon: const Icon(Icons.auto_stories_outlined),
+          selectedIcon: const Icon(Icons.auto_stories),
+          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
+          label: const Text(''),
+        );
+      case 'scene':
+        return NavigationDrawerDestination(
+          icon: const Icon(Icons.landscape_outlined),
+          selectedIcon: const Icon(Icons.landscape),
+          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
+          label: const Text(''),
+        );
+      case 'channel':
+        return NavigationDrawerDestination(
+          icon: const Icon(Icons.dynamic_feed_outlined),
+          selectedIcon: const Icon(Icons.dynamic_feed),
+          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
+          label: const Text(''),
+        );
+      case 'brush':
+        return NavigationDrawerDestination(
+          icon: const Icon(Icons.swipe_outlined),
+          selectedIcon: const Icon(Icons.swipe),
+          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
+          label: const Text(''),
+        );
+      case 'listen_together':
+        return NavigationDrawerDestination(
+          icon: const Icon(Icons.groups_outlined),
+          selectedIcon: const Icon(Icons.groups),
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
@@ -915,18 +1199,72 @@ class _MainLayoutState extends State<_MainLayout>
     );
     // 未登录时尝试播放联网歌曲,弹出登录提示
     context.read<PlayerProvider>().onLoginRequired = _showLoginRequiredDialog;
-    // 冷启动自动播放：首帧后尝试按设置起播（默认关闭，关闭时对播放零参与）。
-    // 等audioReady（PlayerProvider 的时序不变量保证此时 _restoreState 已跑完），
-    // 「继续上次播放」才拿得到恢复态与播放进度。
-    // 导航决策留在这一层：服务只负责起播，不认识 Navigator。
+    // 一起听房主播放守卫：房间歌单外的曲目（本地音乐等）不允许本地起播
+    context.read<PlayerProvider>().onRoomOwnerInterceptPlayback =
+        _interceptRoomOwnerLocalPlayback;
+    // 一起听房主播放态通告：播放器自身的暂停/恢复按钮也同步到房间
+    context.read<PlayerProvider>().onPlaybackStateChangedByUser =
+        _forwardPlaybackStateToRoom;
+    // 一起听进度通告：对房主是上报（player_operation action=2），对成员是复同步
+    context.read<PlayerProvider>().onSeekedByUser = _forwardSeekToRoom;
+    // 一起听听众：房间内点播其他歌曲前的确认窗。
+    // 同步判定（要不要弹）+ 异步确认（弹什么、怎么处理）分两个钩子：
+    // 不需要弹的调用不能因此多出一次 await（见 PlayerProvider._roomGuestPlayGate）。
+    context.read<PlayerProvider>().shouldConfirmRoomGuestPlay =
+        _shouldConfirmRoomGuestPlay;
+    context.read<PlayerProvider>().onRoomGuestPlayConfirm =
+        _confirmRoomGuestPlay;
+    // 一起听：自然播完与上一首/下一首的房间路由（听众暂停等待，房主切歌上报）
+    final ltProvider = context.read<ListenTogetherProvider>();
+    final playerProvider = context.read<PlayerProvider>();
+    playerProvider.onRoomGuestCompletionPause = () {
+      final s = ltProvider.session;
+      return s != null && !s.isOwner && !s.playbackDetached;
+    };
+    playerProvider.onRoomOwnerCompletionSwitch = () {
+      final s = ltProvider.session;
+      if (s == null || !s.isOwner || s.playbackDetached) return false;
+      final song = playerProvider.currentSong;
+      return song == null ? false : s.ownerHandleSongCompleted(song);
+    };
+    playerProvider.onRoomOwnerSkip = ({required bool forward}) {
+      final s = ltProvider.session;
+      if (s == null || !s.isOwner || s.playbackDetached) return false;
+      return s.ownerSkip(forward: forward);
+    };
+    playerProvider.onRoomGuestSkipBlocked = () {
+      final s = ltProvider.session;
+      if (s == null || s.isOwner || s.playbackDetached) return false;
+      showToast('一起听中由房主控制播放');
+      return true;
+    };
+    playerProvider.onRoomSessionActive = () {
+      final s = ltProvider.session;
+      return s != null && !s.playbackDetached;
+    };
+    playerProvider.onRoomPlayModeChanged = (mode) {
+      ltProvider.session?.ownerSetPlayMode(mode);
+    };
+    // 冷启动一起听会话恢复：进程被杀后服务端会话仍在进行（其他成员还能看到
+    // 自己），按服务端会话重建 RoomSession，让播放器胶囊不进页也立即回到
+    // 会话态。首帧后执行（等 Provider 挂载），恢复失败静默跳过。
+    // 启动自动播放串在它**之后**：一起听恢复末尾可能自己 resume()/playSong()
+    // （见 ListenTogetherProvider 的恢复路径），并发会互相顶掉播放目标。
+    // 默认关闭（见 SettingsRepository.getStartupAutoPlayEnabled），关着时
+    // 这里对播放零参与。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(() async {
-        final playerProvider = context.read<PlayerProvider>();
+        await ltProvider.restoreCurrentSessionIfAny(
+          player: playerProvider,
+          account: context.read<KugouProvider>(),
+        );
+        if (!mounted) return;
         final result = await StartupAutoPlay.maybeAutoPlay(
           kugou: context.read<KugouProvider>(),
           player: playerProvider,
         );
+        // 导航决策留在这一层：服务只负责起播，不认识 Navigator。
         // 必须等「真的起播了」再推 —— 联网源解析播放地址要 1~3s，
         // 提前推会先闪一个空播放页。
         if (!mounted || !result.started || !result.openPlayerPage) return;
@@ -944,6 +1282,8 @@ class _MainLayoutState extends State<_MainLayout>
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _handleExternalMediaRequest(),
     );
+    // 监听封面流沉浸请求（长按切换 / 返回键恢复），变更时重算沉浸状态
+    kCoverFlowImmersive.addListener(_onCoverFlowImmersiveChanged);
     // 桌面外壳总开关：启动时载入持久化值 + 监听运行时切换（设置页开关）。
     // 载入前默认 false（常规响应式布局），载入/切换后触发整棵子树重建。
     kDesktopModeEnabled.addListener(_onDesktopModeChanged);
@@ -968,11 +1308,28 @@ class _MainLayoutState extends State<_MainLayout>
     _exitResetTimer?.cancel();
     _exitController.dispose();
     LyriconProviderService.instance.removeListener(_onLyriconStateChanged);
+    kCoverFlowImmersive.removeListener(_onCoverFlowImmersiveChanged);
     kDesktopModeEnabled.removeListener(_onDesktopModeChanged);
     shortcutTabRequest.removeListener(_handleShortcutTabRequest);
     externalMediaRequest.removeListener(_handleExternalMediaRequest);
     WidgetsBinding.instance.removeObserver(this);
+    // 若 App 销毁时仍处于封面流沉浸，恢复系统栏（edgeToEdge，与主界面一致）
+    if (_immersiveSynced) {
+      _immersiveSynced = false;
+      kCoverFlowImmersiveActive.value = false;
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: SystemUiOverlay.values,
+      );
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
     super.dispose();
+  }
+
+  /// 封面流沉浸请求变化（长按 / 返回键）→ 重算实际沉浸状态。
+  void _onCoverFlowImmersiveChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   /// 启动时从持久化载入桌面外壳开关，写入全局 [kDesktopModeEnabled]。
@@ -1068,6 +1425,13 @@ class _MainLayoutState extends State<_MainLayout>
     final song = service.buildSong(request, meta);
     debugPrint('[ExtMedia] 播放: ${song.title}');
 
+    // 一起听房主：从文件管理器打开的本机文件无法加入房间歌单，明确拒绝，
+    // 避免推起播放器页却处于「本地在响、成员跟不了」的半同步状态
+    if (_interceptRoomOwnerLocalPlayback(song)) {
+      debugPrint('[ExtMedia] 房主房间内拒绝播放本地文件');
+      return;
+    }
+
     // fire-and-forget：冷启动早期 playSong 的 Future 可能长时间不完成，
     // 若 await 会导致后续 push 播放器页被永久阻塞。
     unawaited(player.playSong(song));
@@ -1089,6 +1453,21 @@ class _MainLayoutState extends State<_MainLayout>
       _previousSelectedIndex = _selectedIndex;
       _selectedIndex = index;
     });
+  }
+
+  /// LaunchPad 长按启用：先启用隐藏的 tab，再切换到该 tab。
+  /// 与 [toggleTabVisibility] 的差异：这是 LaunchPad 专属入口，
+  /// 隐藏 tab 只有在 LaunchPad 中长按才会被启用（点击不启用）。
+  void _enableAndSwitchToTab(String tabId) {
+    if (isFullPlayerOnTop) return;
+    final tabConfig = context.read<TabConfigProvider>();
+    if (tabConfig.hiddenTabs.contains(tabId)) {
+      // toggleTabVisibility 内部先同步更新 hiddenTabs 再异步持久化，
+      // 调用返回后 visibleIndexOf 即可拿到正确索引，无需等待
+      // ignore: discarded_futures
+      tabConfig.toggleTabVisibility(tabId);
+    }
+    _switchToTab(tabId);
   }
 
   /// LaunchPad 点击隐藏 tab：以二级页面路由打开对应功能页（不切换主 tab）。
@@ -1115,6 +1494,9 @@ class _MainLayoutState extends State<_MainLayout>
       case 'discover':
         page = const DiscoverPage();
         break;
+      case 'coverflow':
+        page = const CoverFlowPage();
+        break;
       case 'library':
         page = const LibraryPage();
         break;
@@ -1129,6 +1511,27 @@ class _MainLayoutState extends State<_MainLayout>
         break;
       case 'charts':
         page = const ChartsPage();
+        break;
+      case 'ip':
+        page = const IpPage();
+        break;
+      case 'recognition':
+        page = const SongRecognitionPage();
+        break;
+      case 'audiobook':
+        page = const AudiobookPage();
+        break;
+      case 'scene':
+        page = const ScenePage();
+        break;
+      case 'channel':
+        page = const ChannelPage();
+        break;
+      case 'brush':
+        page = const BrushPage();
+        break;
+      case 'listen_together':
+        page = const ListenTogetherPage();
         break;
       case 'settings':
         page = const SettingsPage();
@@ -1188,6 +1591,139 @@ class _MainLayoutState extends State<_MainLayout>
     _lyriconFailDialogShown = false;
   }
 
+  /// 一起听听众：起播前是否需要弹确认窗（同步判定）。
+  ///
+  /// 判定口径见 `shouldPromptGuestPlay`：不在房间/房主/房间自己的跟随装载/
+  /// 本地文件一律 false。**保持同步**——它运行在播放器起播链路的最前面。
+  bool _shouldConfirmRoomGuestPlay(Song song) {
+    final session = context.read<ListenTogetherProvider>().session;
+    if (session == null) return false;
+    return shouldPromptGuestPlay(
+      inRoom: !session.closed,
+      isOwner: session.isOwner,
+      isTakeoverTarget: session.isRoomTakeoverTarget(song),
+      canOrder: canOrderSongIntoRoom(song),
+    );
+  }
+
+  /// 一起听听众：起播确认窗。返回 true 表示允许继续起播。
+  ///
+  /// - 脱离房间播放 → 置脱离标记（幂等）后放行，由调用方正常起播；
+  /// - 申请点歌 → 发起点歌请求，并**放弃本次本地播放**（房间继续播原曲）；
+  /// - 取消 → 放弃本次本地播放，房间与播放器现状不变。
+  ///
+  /// 用全局 [appNavigatorKey] 取 context，任何页面都能弹（与词幕失败弹窗同款）。
+  Future<bool> _confirmRoomGuestPlay(Song song) async {
+    final session = context.read<ListenTogetherProvider>().session;
+    // 同步判定到弹窗之间房间可能已解散/已换会话：这里再兜一次
+    if (session == null || session.closed || session.isOwner) return true;
+    if (_roomGuestPlayDialogOpen) return true;
+    final ctx = appNavigatorKey.currentContext;
+    if (ctx == null) return true;
+    _roomGuestPlayDialogOpen = true;
+    final GuestPlayChoice choice;
+    try {
+      choice = await showGuestPlayConfirmDialog(
+        context: ctx,
+        song: song,
+        roomName: session.roomName,
+        alreadyDetached: session.playbackDetached,
+      );
+    } finally {
+      _roomGuestPlayDialogOpen = false;
+    }
+    switch (choice) {
+      case GuestPlayChoice.detachAndPlay:
+        // 幂等：已脱离时重复置位无副作用
+        session.detachIfPlayingOutside(song);
+        return true;
+      case GuestPlayChoice.orderSong:
+        try {
+          await session.orderSong(RoomSong.fromSong(song));
+        } catch (_) {
+          // orderSong 内部已 toast「点歌失败」并 rethrow；此处吞掉避免未捕获异常
+        }
+        return false;
+      case GuestPlayChoice.dismissed:
+        return false;
+    }
+  }
+
+  /// 一起听房主播放守卫：返回 true 表示已拦截，调用方不得起播。
+  ///
+  /// 房主在房间里是播放权威，每次起播都会上报服务端让成员跟随；房间歌单外
+  /// 的曲目（本地文件没有可上报的上游 hash）若照播，只有房主本地在响，
+  /// 成员会跟着拿到无法解析的曲目。这里统一拦截并给出可操作的提示。
+  ///
+  /// 房主在房间歌单里点播同曲时顺带转发为切歌（成员跟随），并同时拦下
+  /// 调用方自身的播放，避免房间会话与调用方把同一首播放两遍。
+  bool _interceptRoomOwnerLocalPlayback(Song song) {
+    final session = context.read<ListenTogetherProvider>().session;
+    // 听众在房间外点播其他音乐 → 进入脱离态（不拦截播放，只停止房间接管）
+    if (session != null && !session.isOwner) {
+      session.detachIfPlayingOutside(song);
+      return false;
+    }
+    if (session == null || !session.isOwner) return false;
+    // 房间会话自己的接管起播（ownerSwitchSong→_playRoomSong→playSong）也会
+    // 进入守卫：歌单内必命中 handledByRoom，若再路由回 ownerPlaySong→
+    // ownerSwitchSong 会无限递归（切歌→守卫→切歌→…）且外层 playSong 永远
+    // 被拦下 → 永不起播。接管窗口内直接放行，上报由房间会话自己完成。
+    if (session.isRoomTakeoverPlaybackActive) return false;
+    switch (session.ownerPlaySong(song)) {
+      case OwnerPlayRejection.handledByRoom:
+        // 已由房间会话切歌并上报，调用方必须停手
+        return true;
+      case OwnerPlayRejection.noRoom:
+        // 会话已失效：放行普通播放
+        return false;
+      case OwnerPlayRejection.notInRoom:
+        showToast('房间里只能播放房间歌单中的在线歌曲，请先在「歌单」中点歌或切歌', long: true);
+        return true;
+    }
+  }
+
+  /// 一起听：把本地播放态变化转报房间。
+  ///
+  /// 房主的播放态变化上报服务端让成员跟随；听众的暂停/恢复则置上/清除
+  /// 本机暂停豁免标记。房间自身的远端纠偏已被
+  /// [PlayerProvider.suppressPlaybackNotify] 挡在门外，
+  /// 所以这里收到的都是真实的用户操作。
+  void _forwardPlaybackStateToRoom(bool playing) {
+    final session = context.read<ListenTogetherProvider>().session;
+    if (session == null) return;
+    // 听众：播放器任意入口（迷你/全屏播放器、耳机、通知栏）的暂停/恢复都是
+    // 「本机暂停意图」——暂停置豁免标记（轮询不再自动拉回播放），恢复清除标记
+    // 并立即强制同步追上房间进度。远端纠偏引发的播放态变化已被
+    // PlayerProvider.suppressPlaybackNotify 挡住，不会走到这里，无回声风险。
+    if (!session.isOwner) {
+      if (playing) {
+        unawaited(session.guestResume());
+      } else {
+        session.guestPause();
+      }
+      return;
+    }
+    session.ownerSetPlaying(playing);
+  }
+
+  /// 一起听：把用户拖动进度转交给房间。
+  ///
+  /// 房主上报 action=2 让成员跟随；听众拖动 = 显式偏离房间进度 → 进入
+  /// 脱离态（本地从拖动位置自由播放，远端不再接管），恢复跟随走房间页
+  /// 中央按钮 / 广场横幅的 resumeRoomPlayback。
+  void _forwardSeekToRoom(int positionMs) {
+    final session = context.read<ListenTogetherProvider>().session;
+    debugPrint('[ListenTogether] 用户 seek 通告: ${positionMs}ms '
+        'session=${session == null ? "null" : (session.isOwner ? "房主" : (session.playbackDetached ? "已脱离" : "跟随中"))}');
+    if (session == null) return;
+    if (session.isOwner) {
+      session.ownerSeek(positionMs);
+    } else {
+      session.detachBySeek();
+    }
+  }
+
   void _showLoginRequiredDialog() {
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
@@ -1236,12 +1772,22 @@ class _MainLayoutState extends State<_MainLayout>
         .map(_buildDrawerDestination)
         .toList();
 
-    // Lite：封面流已下线，横屏沉浸分支随之移除，页面不再需要 immersive 参与判定。
-    const immersive = false;
+    // 封面流页横屏沉浸：由「当前 tab + 方向 + 用户长按请求」统一判定。
+    // 横屏默认显示 tab 栏，用户长按封面流页面进入沉浸（隐藏 tab 栏），
+    // 沉浸中按返回键恢复。判定与页面生命周期无关，
+    // 保证「在封面流页内竖屏→横屏旋转」也能正确进入/退出沉浸。
+    final safeIndex = _selectedIndex.clamp(0, visibleTabs.length - 1);
+    final currentTab = visibleTabs[safeIndex];
+    final immersive =
+        currentTab.id == 'coverflow' &&
+        MediaQuery.orientationOf(context) == Orientation.landscape &&
+        kCoverFlowImmersive.value;
+    _syncImmersiveMode(immersive);
 
     // 一级页面返回拦截：
     // 1) PopScope 拦截系统返回手势 / 物理返回键，canPop=false → 触发 onPopInvoked
-    // 2) 双击返回回到手机桌面：首次返回 Toast 提示，3 秒内再按一次
+    // 2) 封面流沉浸中：返回键先恢复 tab 栏（退出沉浸），不弹退出确认
+    // 3) 否则双击返回回到手机桌面：首次返回 Toast 提示，3 秒内再按一次
     //    走 moveTaskToBack 挂后台（不杀进程、不停播放器、不停本地 Rust 服务器）
     return PopScope(
       canPop: false,
@@ -1258,7 +1804,11 @@ class _MainLayoutState extends State<_MainLayout>
             (_desktopShellKey.currentState?.maybePop() ?? false)) {
           return;
         }
-        _onBackPressedForExit();
+        if (immersive) {
+          kCoverFlowImmersive.value = false;
+        } else {
+          _onBackPressedForExit();
+        }
       },
       child: AbsorbPointer(
         absorbing: _isExiting,
@@ -1331,6 +1881,30 @@ class _MainLayoutState extends State<_MainLayout>
           ),
         ),
     );
+  }
+
+  /// 封面流横屏沉浸：同步「实际生效」标志并设置系统栏沉浸模式。
+  /// [immersive] 已由调用方按「tab + 方向 + 用户请求」算好；
+  /// 状态变化时调用，非沉浸时恢复默认系统栏。
+  void _syncImmersiveMode(bool immersive) {
+    if (_immersiveSynced == immersive) return;
+    _immersiveSynced = immersive;
+    kCoverFlowImmersiveActive.value = immersive;
+    // build 阶段不直接调用平台 channel，推迟到帧末执行
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (immersive) {
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      } else {
+        // 退出沉浸回到主界面的 edgeToEdge（与 _SystemUiUpdater 一致），
+        // 先 manual 显式 show 一次：部分设备从 immersiveSticky 直接切
+        // edgeToEdge 时系统栏不会自动重新显示。
+        SystemChrome.setEnabledSystemUIMode(
+          SystemUiMode.manual,
+          overlays: SystemUiOverlay.values,
+        );
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      }
+    });
   }
 
   Widget _buildBody(

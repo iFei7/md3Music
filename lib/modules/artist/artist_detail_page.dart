@@ -521,9 +521,11 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                               if (value == 'hot' || value == 'new') {
                                 _switchArtistSongSort(value);
                               } else {
-                                final sortBy = value == 'title' ? _SortBy.title : _SortBy.duration;
+                                final sortBy = value == 'title'
+                                    ? _SortBy.title
+                                    : _SortBy.duration;
                                 setState(() {
-                                  if (repeated) {
+                                  if (_sortBy == sortBy) {
                                     _sortAscending = !_sortAscending;
                                   } else {
                                     _sortBy = sortBy;

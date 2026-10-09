@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'bottom_chrome_scope.dart';
 
+import '../utils/app_haptics.dart';
 import '../../providers/device_provider.dart';
 import '../../providers/theme_provider.dart';
 
@@ -54,12 +55,12 @@ final ValueNotifier<bool> kDesktopModeEnabled = ValueNotifier<bool>(false);
 
 /// 播放器形态总开关（SecondaryMiniPlayerHost 渲染悬浮条还是底部常驻条）。
 ///
-/// 默认 true（悬浮形态）。开启后**主页与二级页面**均使用悬浮播放条；关闭后
+/// 默认关闭（底部常驻形态）。开启后**主页与二级页面**均使用悬浮播放条；关闭后
 /// 统一改用底部常驻播放条（主页由 shell 承载，二级页面由宿主补上同一条）。
 ///
 /// 与 [kDesktopModeEnabled] 同为"外壳/播放栏形态"开关，放同一处便于查找。
 /// 宿主用 [ValueListenableBuilder] 直接订阅即可即时生效，无需整棵子树重建。
-final ValueNotifier<bool> kSecondaryPlayerEnabled = ValueNotifier<bool>(true);
+final ValueNotifier<bool> kSecondaryPlayerEnabled = ValueNotifier<bool>(false);
 
 /// 悬浮播放器折叠态（圆盘）的停靠位。
 enum SecondaryPlayerDockSide {
@@ -213,7 +214,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   /// 点击 destination 完成后的统一入口：先触发该 tab 胶囊自驱动的水平
   /// 超出回弹（点击已选中项时），再转发原生选择回调（不改变原有切换行为；
   /// 切换选中项时胶囊由 _CapsuleBounce 的 didUpdateWidget 自动播放）。
+  /// 选择类震动（EFFECT_TICK）：竖屏 NavigationBar / 横屏 NavigationRail 共用。
   void _handleDestinationSelected(int index) {
+    AppHaptics.tick();
     _bounceKeys[index].currentState?.playBounce();
     _selectedBounceKeys[index].currentState?.playBounce();
     widget.onDestinationSelected(index);

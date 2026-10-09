@@ -210,7 +210,6 @@ class AudioService {
     String? artUri,
     double? loudnessLufs,
     double? loudnessPeakDb,
-    double automixRate = 1.0,
   }) async => false;
 
   void discardPreparedCrossfade() {}
@@ -221,7 +220,7 @@ class AudioService {
     void Function()? onCrossover,
   }) async {}
 
-  void abortCrossfade() {}
+  void abortCrossfade({bool keepVolume = false}) {}
 
   Future<void> dispose() async {
     await _player.dispose();

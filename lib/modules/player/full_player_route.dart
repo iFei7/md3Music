@@ -2,10 +2,14 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../../core/theme/motion_constants.dart';
+import '../../providers/theme_provider.dart';
+import '../../providers/car_mode_provider.dart';
 import '../../utils/landscape_immersive.dart';
 import 'full_player.dart';
+import 'full_player_am.dart';
 
 /// 全局过渡进度（0.0 = mini，1.0 = full）。
 ///
@@ -68,7 +72,7 @@ bool get isFullPlayerOnTop => playerExpansion.value > 0.5;
 /// 此前各调用点各自判重且口径不一：多数用 `activePlayerRoute?.isCurrent == true`
 /// ——播放页已在栈中但**非栈顶**时（用户从播放页又打开了歌单/其他页面）
 /// `isCurrent=false`，仍会再 push 一个播放页；另有调用点完全不判重。结果是
-/// 路由栈里同时存在多个播放页实例，每个实例各自驱动歌词 /
+/// 路由栈里同时存在多个 [AmStyleFullPlayer] 实例，每个实例各自驱动歌词 /
 /// 进度等动画，整页帧率翻倍（120Hz 屏实测 ~120fps 且明显发热）。
 ///
 /// 统一语义：
@@ -76,6 +80,12 @@ bool get isFullPlayerOnTop => playerExpansion.value > 0.5;
 /// - 播放页在栈中但被其它页面盖住 → 回退到它（不再新建）
 /// - 不存在 → push 新路由
 void openFullPlayer(BuildContext context) {
+  // 车机模式：播放器已常驻在面板里，任何「打开全屏播放页」的入口都忽略。
+  // 否则会在面板之外再 push 一个播放页 —— 两个实例各自驱动歌词/进度等动画，
+  // 整页帧率翻倍。
+  // active 含自动检测：命中车机屏同样忽略。
+  if (context.read<CarModeProvider>().active) return;
+
   // rootNavigator: true —— 桌面布局下内容区是嵌套 Navigator，若走最近的
   // Navigator 会把完整播放页 push 进中央内容区（只盖住内容区、盖不住侧栏与
   // 底部播放栏）。改用根 Navigator 让播放页覆盖整个 shell。手机布局下根
@@ -106,8 +116,9 @@ DraggablePlayerRoute<void> fullPlayerRoute(
   double? dragOriginTop,
   double? screenHeight,
 }) {
+  final useAm = context.read<ThemeProvider>().useAmStylePlayer;
   return DraggablePlayerRoute<void>(
-    builder: (_) => const FullPlayer(),
+    builder: (_) => useAm ? const AmStyleFullPlayer() : const FullPlayer(),
     dragOriginTop: dragOriginTop,
     screenHeight: screenHeight,
   );

@@ -295,12 +295,15 @@ jobs:
           mv "$standard_backup" "$standard_apk"
 
       # ============================================================
-      # 6.5 产物改名为中文（便于区分）
+      # 6.5 产物改名为发布名（ASCII）
       # ============================================================
       # Flutter CLI 按固定名 app-<abi>-<flavor>-<type>.apk 查找产物（flutter_tools 的
       # gradle.dart listApkPaths），**不能在 Gradle 层改名**，故在构建完成后统一重命名。
-      # ⚠️ 命名规则与 scripts/lib/common.ps1 的 Get-ApkDisplayName 必须同步。
-      - name: Rename APKs to Chinese display names
+      # ⚠️ GitHub Release 会把 asset 文件名中的非 ASCII 字符规范化为 '.'（下载名由
+      # GitHub 控制，softprops/action-gh-release 只能尽量恢复展示 label，带全角括号
+      # 的文件恢复 label 还会 404 导致整条 job 失败），因此发布名必须使用纯 ASCII。
+      # 中文含义映射见 release notes 的 Downloads 列表。
+      - name: Rename APKs to release-ready names
         run: |
           set -euo pipefail
           apk_dir="build/app/outputs/flutter-apk"
@@ -309,23 +312,7 @@ jobs:
           rename_apk() {
             local src="$apk_dir/$1"
             if [[ ! -f "$src" ]]; then return 0; fi
-            local flavor_cn abi_cn
-            case "$2" in
-              standard)    flavor_cn="标准版" ;;
-              depth3d)     flavor_cn="3D封面版" ;;
-              apple-music) flavor_cn="随身听兼容版" ;;
-              *)           flavor_cn="$2" ;;
-            esac
-            case "$3" in
-              arm64-v8a)   abi_cn="64位" ;;
-              armeabi-v7a) abi_cn="32位" ;;
-              x86_64)      abi_cn="模拟器" ;;
-              *)           abi_cn="$3" ;;
-            esac
-            # 「（推荐）」前缀：面向普通用户的默认下载项（standard + arm64-v8a 的 release 包）
-            local prefix=""
-            if [[ "$2" == "standard" && "$3" == "arm64-v8a" ]]; then prefix="（推荐）"; fi
-            mv "$src" "$apk_dir/${prefix}MD3音乐-${ver}-${flavor_cn}-${abi_cn}.apk"
+            mv "$src" "$apk_dir/MD3Music-${ver}-$2-$3.apk"
           }
           rename_apk app-arm64-v8a-standard-release.apk    standard    arm64-v8a
           rename_apk app-armeabi-v7a-standard-release.apk  standard    armeabi-v7a
@@ -354,11 +341,11 @@ jobs:
 
           aapt2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
           apk_id() { "$aapt2" dump badging "$1" | sed -n "s/^package: name='\([^']*\)'.*/\1/p"; }
-          # 产物已在上一步改中文名（规则与 scripts/lib/common.ps1 的 Get-ApkDisplayName 同步）
+          # 产物已在上一步改为 ASCII 发布名（规则与本文件 Rename 步骤同步）
           ver="${{ steps.version.outputs.version }}"
-          std_apk="$apk_dir/（推荐）MD3音乐-${ver}-标准版-64位.apk"
-          d3d_apk="$apk_dir/MD3音乐-${ver}-3D封面版-64位.apk"
-          am_apk="$apk_dir/MD3音乐-${ver}-随身听兼容版-64位.apk"
+          std_apk="$apk_dir/MD3Music-${ver}-standard-arm64-v8a.apk"
+          d3d_apk="$apk_dir/MD3Music-${ver}-depth3d-arm64-v8a.apk"
+          am_apk="$apk_dir/MD3Music-${ver}-apple-music-arm64-v8a.apk"
           test "$(apk_id "$std_apk")" = "com.md3music.md3music"
           test "$(apk_id "$am_apk")" = "com.apple.android.music"
 
@@ -472,13 +459,13 @@ jobs:
             echo "_Built: $(date -u '+%Y-%m-%d %H:%M UTC')_"
             echo ""
             echo "### Downloads"
-            echo "- **（推荐）MD3音乐-${VERSION}-标准版-64位.apk** — 推荐：大多数现代 Android 设备"
+            echo "- **MD3Music-${VERSION}-standard-arm64-v8a.apk** — （推荐）标准版-64位：大多数现代 Android 设备"
             if [ "${{ steps.assets3d.outputs.has_aar }}" = "true" ]; then
-              echo "- **MD3音乐-${VERSION}-3D封面版-64位.apk** — 同上，并内置 3D 深度封面（体积更大）"
+              echo "- **MD3Music-${VERSION}-depth3d-arm64-v8a.apk** — 3D封面版-64位：同上，并内置 3D 深度封面（体积更大）"
             fi
-            echo "- **MD3音乐-${VERSION}-标准版-32位.apk** — 较旧的 32 位设备"
-            echo "- **MD3音乐-${VERSION}-标准版-模拟器.apk** — Android 模拟器"
-            echo "- **MD3音乐-${VERSION}-随身听兼容版-64位.apk** — Vivo 原子随身听兼容包（包名 \`com.apple.android.music\`，不含 3D 封面）"
+            echo "- **MD3Music-${VERSION}-standard-armeabi-v7a.apk** — 标准版-32位：较旧的 32 位设备"
+            echo "- **MD3Music-${VERSION}-standard-x86_64.apk** — 标准版-模拟器：Android 模拟器"
+            echo "- **MD3Music-${VERSION}-apple-music-arm64-v8a.apk** — 随身听兼容版-64位：Vivo 原子随身听兼容包（包名 \`com.apple.android.music\`，不含 3D 封面）"
             echo ""
             echo "### 更新内容 (${RANGE:-最近 20 条})"
             echo ""
@@ -522,7 +509,7 @@ jobs:
           prerelease: false
           append_body: false  # 默认行为：用自动生成的 changelog 替换 release 描述
           files: |
-            build/app/outputs/flutter-apk/*MD3音乐-*.apk
+            build/app/outputs/flutter-apk/*MD3Music-*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

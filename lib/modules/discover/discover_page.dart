@@ -16,12 +16,16 @@ import '../../widgets/song_list_item.dart';
 import 'home_discover_refill.dart';
 import '../personal_fm/personal_fm_section.dart';
 import '../player/secondary_mini_player.dart';
+import '../recognition/song_recognition_page.dart';
 import '../search/search_page.dart';
 
-/// 顶栏图标按钮（搜索）的尺寸：36 而不是 MD3 默认的 48；
-/// 纵向仍保留 40dp 触达高度。
+/// 顶栏图标按钮（搜索 / 识曲）的尺寸：36 而不是 MD3 默认的 48，让两个图标之间
+/// 由 24dp 收到 12dp；纵向仍保留 40dp 触达高度。
 const double _kActionButtonWidth = 36.0;
 const double _kActionButtonHeight = 40.0;
+
+/// 补回按钮收窄的宽度，让最右那枚图标与屏幕边缘的距离保持不变。
+const double _kActionTrailingGap = 6.0;
 
 class DiscoverPage extends StatefulWidget {
   const DiscoverPage({super.key});
@@ -228,6 +232,15 @@ class _DiscoverPageState extends State<DiscoverPage> {
             onPressed: () => Navigator.of(
               context,
             ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: _kActionTrailingGap),
+            child: _buildActionIcon(
+              icon: Icons.mic_outlined,
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SongRecognitionPage()),
+              ),
+            ),
           ),
         ],
       ),

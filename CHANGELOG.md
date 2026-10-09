@@ -1,47 +1,37 @@
-## lite 分支
+## v5.8.0
 
-> 精简分支（`applicationId = com.md3music.md3music.lite`，与完整版共存）。以下为本分支相对上游的删减记录。
-
-### 2026-09-30 — 下线锁屏歌词 / 魅族状态栏歌词 / LyricInfo 转发
-
-- 移除锁屏歌词整链：原生 `LockScreenLyricActivity`（锁屏全屏滚动歌词）、`LockScreenLyricReceiver`
-  （SCREEN_OFF / SCREEN_ON 拉起）、`Theme.MD3Music.LockScreen` 样式与 Manifest 声明；
-  Dart 侧开关、整包数据 / 轻量进度 / 主色三路推送、`LockScreenProgressPushGate` 节流门控
-  与设置页「锁屏歌词（实验性）」分组
-- 移除魅族状态栏歌词整链：原生 `FlymeLyricBridge`（复用媒体通知 tickerText + Flyme 私有 flag）、
-  `MD3MusicMediaSessionService` 的 `FlymeNotificationProvider` 包装层；Dart 侧开关、行级推送、
-  设置页「提前量」面板与设备能力探测
-- 移除 LyricInfo 转发协议：Dart 侧 `lyric_info_json_builder`（ELRC / ColorOS Bridge 两种 payload）
-  与 `MediaSession extras.lyricInfo` 推送；原生侧 `applyLyricInfoUpdate`、`settings_lyric_info_*`
-  偏好与设置页协议选项
-- **连带影响**：LyricInfo 是 Vivo 原子随身听（vivomusicmix）与 Vivo 车载歌词（ucar
-  `LYRICS_WHOLE`）的数据源，两者随之下线；原生 `pushVivoAtomicExtras` 与 fork 内
-  `extractCarLyricsFromLyricInfo` / UCAR extras 注入一并删除
-- 移除 media3 通知栏「歌词翻译」自定义按钮与 `CMD_TOGGLE_TRANSLATION` 会话命令（ColorOS Bridge 专用），
-  同时移除随之失去用途的 `ic_translation` 资源
-- `lyric_push_service.dart` 收敛为「蓝牙歌词 + SuperLyric」两个通道（1,115 → 646 行）
-- 行为变化：`btLyricRewriteActive()` 原以「推送协议 == lyric_info」作为不改写媒体会话 TITLE
-  的条件（保 ColorOS 自带桌面歌词的真实曲名）；该协议下线后条件退化为「蓝牙歌词开启且有当前歌词行」，
-  即恢复上游 AVRCP 行为
-- 设置迁移：读取到历史值 `lyric_push_protocol = 'lyric_info'` 时回落为 `'none'`
-- 已知不可达残留（有意保留）：vendored media3 `MediaSessionCompat` 的 `resendVivoLrcChange`
-  与 setMetadata 车载歌词钩子已无生产方；`LegacyConversions` 的 `support_event` 能力位服务于
-  原子随身听播控能力位判定，与本批次目标无关，故未改动
-- 测试：删除 `lyric_info_json_builder_test.dart`；`lyric_push_parse_test.dart` 去掉锁屏节流用例；
-  `page_lyric_push_dedup_test.dart` 的同键并发去重断言由锁屏通道改挂到蓝牙歌词通道
+- 新增评论范围筛选、只看我的评论及歌曲/歌单/专辑评论删除功能
+- 优化评论视图布局适配、按钮样式与字号调节控件
+- 新增首页刷歌推荐功能
+- 新增启动时自动播放设置及睡眠定时功能，支持倒计时或播完当前歌曲后停止
+- 新增自动混音功能，支持 BPM 分析、缓存、变速播放与响度补偿
+- 新增蝰蛇母带音质处理与 Direct PCM 音频输出，支持 bit-perfect 播放
+- 重构播放恢复与错误处理，提升网络异常、CDN 卡顿、音频加载失败和状态恢复的稳定性
+- 优化播放队列，支持左滑删除、弹簧重排、大队列懒加载与分页交互
+- 新增悬浮播放器总开关、折叠停靠位及 Pad 限宽右下停靠布局
+- 重绘二级迷你播放器，优化背景透明度、歌曲信息居中与封面展示
+- 在多个页面接入迷你播放器并优化搜索页交互
+- 新增 Pad 设置页双列布局、三级导航模型与设置搜索索引
+- 新增桌面布局开关、自适应内容网格及旧版应用图标切换功能
+- 全面升级 M3E 组件，替换底部弹窗、滑块、下拉控件、列表、悬浮按钮与排序菜单
+- 新增强调排版设置，并统一全局文字主题与触觉反馈
+- 新增魅族 Flyme 状态栏歌词及提前量设置，修复歌词重复滚动问题
+- 优化车载模式底部面板避让与紧凑歌词条布局
+- 新增播放页背景模糊、歌词模糊强度设置及歌词动画效果分组
+- 新增 3D 封面功能，支持深度模型导入、内置模型、视差效果、强度调节与缓存清理
+- 优化 3D 封面渲染，加入遮挡步进、背景修补、帧同步插值与按需帧泵，降低卡顿和功耗
+- 缩减 3D 深度模型与 ONNX Runtime 体积，优化 APK 产物大小
+- 修复 3D 封面首次安装失败、模型反射注册、混淆及异常提示问题
+- 优化 Android 后台播放、媒体按键、通知操作、媒体服务与 Activity 生命周期恢复
+- 修复动态封面、通知封面及艺术缓存的并发、失效、内存和资源释放问题
+- 优化歌词解析与请求去重，完善桌面歌词、锁屏歌词、进度同步及无歌词缓存
+- 优化启动性能，延迟非必要权限处理并将 Android 启动流程移出 UI isolate
+- 限制服务端并发请求、缓存和响应资源，提升网络服务生命周期管理稳定性
+- 新增播放稳定性诊断追踪与多项 Android、Rust、Flutter 回归测试
+- 更新应用图标、启动图标、自适应图标及 APK 中文文件名
+- 更新 README、项目参考链接、贡献者信息与 Star 趋势自动更新流程
 
 ---
-### 2026-09-30 — 下线桌面歌词悬浮窗
-
-- 移除桌面歌词功能：原生 `FloatingLyricService`（悬浮窗 + specialUse 前台服务）、MethodChannel 浮窗方法、
-  Dart 侧悬浮窗逻辑与配置下发、全部入口（设置页 / 播放页 / 迷你播放器 / 通知栏按钮）、引导文案与设置搜索索引
-- `desktop_lyric_service.dart` 更名为 `lyric_push_service.dart`（`DesktopLyricService` → `LyricPushService`）；
-  蓝牙歌词、锁屏歌词、魅族状态栏歌词、SuperLyric、LyricInfo 全部歌词外显通道原样保留
-- 同步移除 `SYSTEM_ALERT_WINDOW`、`FOREGROUND_SERVICE_SPECIAL_USE` 权限与 specialUse 服务声明
-- 移除 `ACTION_REFRESH_FOREGROUND` 广播与 `refreshKeepaliveForeground()`（原用于悬浮窗让位结束后恢复保活前台）
-- 移除 media3 通知栏「桌面歌词」自定义按钮及其会话命令（fork 插件内无条件渲染，须同步摘除）
-- 移除熄屏休眠门控：其存在理由是悬浮窗熄屏不可见，下线后改为单一 tick 路径
-- 保留 ColorOS / LyricInfo 歌词转发协议（独立外部推送，不依赖悬浮窗）
 
 ---
 

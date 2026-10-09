@@ -12,10 +12,18 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 悬浮窗识曲：Android 14+ 使用 MediaProjection 的前台服务必须声明此类型权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Android 15+（API 35+）：MediaProjection 前台服务还需 PROJECT_MEDIA 权限，
+         否则 targetSDK 35 在 Android 15/16 上 startForeground 抛 SecurityException；
+         低版本不认识此权限名会自动忽略，声明无害 -->
+    <uses-permission android:name="com.android.permission.PROJECT_MEDIA" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- 触感反馈：设置页/播放器等处的 Haptic 震动（VibratorManager 直写马达） -->
+    <!-- 悬浮窗识曲：拖拽悬浮窗到底部删除时提供震动反馈 -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.MEDIA_AUDIO_UPLOAD" />
     <uses-permission android:name="android.permission.MEDIA_VIDEO_UPLOAD" />
@@ -54,10 +62,6 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
             <!-- 外部调用：文件管理器等以 ACTION_VIEW 打开音频文件。
                  同时接收 content://（MediaStore / SAF）与 file:// 两种 scheme；
                  MIME 覆盖 audio/* 与常见的 ogg/opus 容器类型。
@@ -73,6 +77,31 @@
                 <data android:mimeType="application/opus" />
             </intent-filter>
         </activity>
+        <!-- 两个 launcher alias 共用 MainActivity，运行时始终只启用一个，供用户切换桌面图标。 -->
+        <activity-alias
+            android:name=".LauncherModernIcon"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="MD3Music">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherLegacyIcon"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_legacy_cropped"
+            android:label="MD3Music">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
         <service
             android:name=".AudioPlaybackService"
             android:foregroundServiceType="mediaPlayback"
@@ -107,6 +136,25 @@
                 <action android:name="com.vivo.musicwidgetmix.support.service" />
             </intent-filter>
         </service>
+        <service
+            android:name=".FloatingLyricService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false" />
+        <!-- 悬浮窗听歌识曲：AudioPlaybackCapture 采集系统音频识别，需前台服务保活；
+             mediaProjection 类型为 Android 14+ 使用 MediaProjection 的前台服务硬性要求 -->
+        <service
+            android:name=".FloatingRecognitionService"
+            android:foregroundServiceType="specialUse|mediaProjection"
+            android:exported="false" />
+        <!-- 锁屏歌词：全屏覆盖在锁屏上方，显示逐字歌词 -->
+        <activity
+            android:name=".LockScreenLyricActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:theme="@style/Theme.MD3Music.LockScreen" />
         <!-- 用 Lyrico 外部编辑本地歌曲：通过 FileProvider 把音频文件以 content:// URI
              授权给 Lyrico 读写（用户对本地文件拥有完整编辑权，保存由 Lyrico 写回）。 -->
         <provider

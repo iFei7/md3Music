@@ -153,7 +153,7 @@ class AutomixAnalyzer {
     if (_channel != null && !Platform.isAndroid) return null;
     final args = <String, dynamic>{'uri': url, 'windowMs': windowMs};
     final raw = _handler != null
-        ? await _handler(MethodCall('decodeHead', args))
+        ? await _handler!(MethodCall('decodeHead', args))
         : await _channel!.invokeMethod<Map<dynamic, dynamic>>('decodeHead', args);
     if (raw is! Map) return null;
     final sr = raw['sampleRate'];

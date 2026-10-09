@@ -14,6 +14,7 @@ class WakelockService {
 
   bool _settingEnabled = false; // 设置开关
   bool _songPlaying = false; // 歌曲正在播放
+  bool _videoPlaying = false; // MV 正在播放
   bool _lastApplied = false; // 上次下发给原生的状态，用于去重
 
   /// 启动时从 SharedPreferences 恢复开关状态。
@@ -37,8 +38,15 @@ class WakelockService {
     _apply();
   }
 
+  /// MV 播放状态变更（来自 MvPlayerPage）。
+  void setVideoPlaying(bool v) {
+    if (_videoPlaying == v) return;
+    _videoPlaying = v;
+    _apply();
+  }
+
   void _apply() {
-    final on = _settingEnabled && _songPlaying;
+    final on = _settingEnabled && (_songPlaying || _videoPlaying);
     if (on == _lastApplied) return;
     _lastApplied = on;
     _channel.invokeMethod('setKeepScreenOn', {'on': on});

@@ -1,6 +1,9 @@
 import 'package:material_ui/material_ui.dart';
+import 'package:provider/provider.dart';
 
+import '../../providers/theme_provider.dart';
 import 'full_player.dart';
+import 'full_player_am.dart';
 import 'full_player_route.dart';
 
 /// 上滑拖拽期间的跟手覆盖层（位于 Navigator 之上）。
@@ -74,7 +77,7 @@ class _DragPlayerContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Lite：播放页已统一为 MD3 单一风格（AmStyleFullPlayer 已下线）。
-    return const FullPlayer();
+    final useAm = context.watch<ThemeProvider>().useAmStylePlayer;
+    return useAm ? const AmStyleFullPlayer() : const FullPlayer();
   }
 }

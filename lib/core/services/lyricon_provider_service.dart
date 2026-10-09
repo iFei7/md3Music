@@ -12,7 +12,7 @@ import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 /// 提供方推送歌曲信息、播放进度、播放状态以及用户偏好（翻译 / 罗马音），
 /// 并接收 Kotlin 侧反向回调的连接状态变更，通知 UI 刷新。
 ///
-/// 设计参考 [LyricPushService]：单例 + `addListener` 通知模式，
+/// 设计参考 [DesktopLyricService]：单例 + `addListener` 通知模式，
 /// 所有 MethodChannel 调用均 try-catch 静默吞异常，避免桥接失败影响主播放流程。
 enum LyriconConnectionState {
   /// 未启用

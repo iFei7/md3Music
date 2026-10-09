@@ -6,11 +6,15 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/layout/bottom_chrome_scope.dart';
+import '../../core/services/desktop_lyric_service.dart';
+import '../../core/services/media_notification_service.dart';
 import '../../core/theme/motion_constants.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../data/repositories/settings_repository.dart';
+import '../../providers/favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
+import '../../providers/car_mode_provider.dart';
 import '../../widgets/smart_artwork_image.dart';
 import '../../widgets/playback_status_feedback.dart';
 import 'full_player_route.dart';
@@ -341,7 +345,7 @@ class _MiniPlayerState extends State<MiniPlayer>
   void _expandPlayerFromDrag() {
     final progress = playerExpansion.value;
     // 防重复入栈：路由栈里已有播放页时不再 push，否则会出现多个
-    // 播放页实例、各自驱动歌词等动画，整页帧率翻倍（实测
+    // AmStyleFullPlayer 实例、各自驱动歌词等动画，整页帧率翻倍（实测
     // 120Hz 屏 ~120fps 且明显发热）。与 openFullPlayer 同一语义。
     if (activePlayerRoute != null) {
       playerDragActive.value = false;
@@ -384,6 +388,14 @@ class _MiniPlayerState extends State<MiniPlayer>
 
     if (currentSong == null) {
       _hadSong = false; // 清空后再次播放可重弹
+      return const SizedBox.shrink();
+    }
+
+    // 车机模式：播放器常驻在侧边面板里，任何界面都不再显示 MiniPlayer。
+    // 判定用 active 而不是 panelVisible —— 设置页 / 登录页虽然不显示面板，
+    // 但同样不该出现迷你条，否则「开了车机模式还有迷你条」前后不一致。
+    // active 含自动检测：命中车机屏也静音 MiniPlayer。
+    if (context.watch<CarModeProvider>().active) {
       return const SizedBox.shrink();
     }
 
@@ -658,6 +670,50 @@ class _MiniPlayerState extends State<MiniPlayer>
                     ),
                   ),
                   // —— 固定区：右侧按钮不参与滑动 ——
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: DesktopLyricService.instance.enabled
+                        ? '关闭桌面歌词'
+                        : '开启桌面歌词',
+                    icon: Icon(
+                      DesktopLyricService.instance.enabled
+                          ? Icons.lyrics
+                          : Icons.lyrics_outlined,
+                      color: DesktopLyricService.instance.enabled
+                          ? colorScheme.primary
+                          : null,
+                    ),
+                    onPressed: () async {
+                      await DesktopLyricService.instance.toggle();
+                      if (context.mounted) {
+                        (context as Element).markNeedsBuild();
+                        // 同步通知栏"桌面歌词"按钮状态
+                        final player = context.read<PlayerProvider>();
+                        final song = player.currentSong;
+                        // 收藏状态需实时查询，避免暂停时显示为未收藏
+                        bool isFavorited = false;
+                        if (song != null) {
+                          try {
+                            isFavorited = context
+                                .read<FavoritesProvider>()
+                                .isFavorite(song.id);
+                          } catch (_) {}
+                        }
+                        await MediaNotificationService.updateNotification(
+                          // 用 displayName 剥离 .mp3 等后缀，避免标题显示文件名
+                          title: song?.displayName ?? '',
+                          artist: song?.artist ?? '',
+                          artUrl: song?.artworkUri,
+                          isPlaying: player.isPlaying,
+                          position: player.position,
+                          duration: player.duration ?? Duration.zero,
+                          desktopLyricEnabled:
+                              DesktopLyricService.instance.enabled,
+                          isFavorited: isFavorited,
+                        );
+                      }
+                    },
+                  ),
                   IconButton(
                     visualDensity: VisualDensity.compact,
                     icon: Icon(

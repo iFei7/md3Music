@@ -8,9 +8,9 @@ import 'package:palette_generator/palette_generator.dart';
 import '../services/local_artwork_cache.dart';
 import '../services/media_store_service.dart';
 
-/// 从专辑封面提取单个主色调，供全局「封面动态取色」等场景使用。
+/// 从专辑封面提取单个主色调，供歌词「动态字体颜色」、全局「封面动态取色」等场景使用。
 ///
-/// 提取思路复用动态流光背景的部分逻辑：
+/// 提取思路复用 [FlowingBackground]（动态流光背景）的部分逻辑：
 /// - 用 [PaletteGenerator] 从封面图片提取候选色（按像素占比降序）
 /// - 过滤近黑 / 近白 / 低饱和的候选，避免稀释色彩层次
 /// - 对饱和度做温和归一化（0.55~0.9），低饱和封面避免灰扑扑、过高避免刺眼

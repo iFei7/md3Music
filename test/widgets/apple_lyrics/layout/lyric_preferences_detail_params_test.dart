@@ -51,4 +51,27 @@ void main() {
       expect(prefs.getDouble('lyric_lift_height_px'), isNull);
     });
   });
+
+  group('④ 级联错峰起点 staggerFromCurrentLine', () {
+    test('默认 true（从当前行开始错峰）', () {
+      expect(LyricPreferences.instance.staggerFromCurrentLine, isTrue);
+      expect(LyricPreferences.instance.staggerFromCurrentLine,
+          equals(LyricPreferences.defaultStaggerFromCurrentLine));
+    });
+
+    test('setter 落盘到 lyric_stagger_from_current', () async {
+      await LyricPreferences.instance.setStaggerFromCurrentLine(false);
+      expect(LyricPreferences.instance.staggerFromCurrentLine, isFalse);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('lyric_stagger_from_current'), isFalse);
+    });
+
+    test('reset 后回到默认 true 且 key 被移除', () async {
+      await LyricPreferences.instance.setStaggerFromCurrentLine(false);
+      await LyricPreferences.instance.reset();
+      expect(LyricPreferences.instance.staggerFromCurrentLine, isTrue);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('lyric_stagger_from_current'), isNull);
+    });
+  });
 }

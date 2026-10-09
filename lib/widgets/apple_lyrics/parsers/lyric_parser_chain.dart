@@ -17,9 +17,10 @@ import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 import 'package:md3music/widgets/apple_lyrics/parsers/krc_parser.dart';
 import 'package:md3music/widgets/apple_lyrics/parsers/lrc_parser.dart';
 import 'package:md3music/widgets/apple_lyrics/parsers/plaintext_parser.dart';
+import 'package:md3music/widgets/apple_lyrics/parsers/ttml_parser.dart';
 
 /// 歌词格式枚举，用于 [LyricParserChain.parseAs] 显式指定格式。
-enum LyricFormat { krc, lrc, plaintext }
+enum LyricFormat { krc, lrc, ttml, plaintext }
 
 /// 歌词解析器链调度器。
 ///
@@ -214,6 +215,10 @@ class LyricParserChain {
   static LyricFormat detectFormat(String text) {
     if (text.isEmpty) return LyricFormat.plaintext;
 
+    // TTML 是 XML 文档：仅当以 <tt 根元素开头时判定为 TTML（优先级最高）。
+    // 避免 LRC 正文任意位置出现 "<tt " 或 ttml 命名空间字符串而误判。
+    if (_looksLikeTtml(text)) return LyricFormat.ttml;
+
     for (final rawLine in LineSplitter.split(text)) {
       final line = rawLine.trim();
 
@@ -244,9 +249,42 @@ class LyricParserChain {
         return KrcParser.parse(text);
       case LyricFormat.lrc:
         return LrcParser.parse(text);
+      case LyricFormat.ttml:
+        return TtmlParser.parse(text);
       case LyricFormat.plaintext:
         return PlainTextParser.parse(text);
     }
+  }
+
+  /// 判断文本是否以 TTML 根元素 `<tt` 开头。
+  ///
+  /// 允许 BOM、前导空白、XML 声明（`<?xml ... ?>`）与 XML 注释（参考 Lyrico looksLikeTtml）。
+  static bool _looksLikeTtml(String text) {
+    var rest = text.trimLeft();
+    if (rest.startsWith('\uFEFF')) rest = rest.substring(1);
+
+    while (true) {
+      rest = rest.trimLeft();
+      if (rest.startsWith('<?')) {
+        final end = rest.indexOf('?>');
+        if (end < 0) return false;
+        rest = rest.substring(end + 2);
+      } else if (rest.startsWith('<!--')) {
+        final end = rest.indexOf('-->');
+        if (end < 0) return false;
+        rest = rest.substring(end + 3);
+      } else {
+        return _isTtRootElement(rest);
+      }
+    }
+  }
+
+  /// 判断片段是否以 `<tt` 根元素起始（`<tt>` / `<tt ` / `<tt/>`）。
+  static bool _isTtRootElement(String text) {
+    if (!text.startsWith('<tt')) return false;
+    if (text.length <= 3) return false;
+    final boundary = text[3];
+    return boundary == '>' || boundary == '/' || boundary.trim().isEmpty;
   }
 
   /// 判断是否为元数据行（KRC 与 LRC 共用同一套前缀）。

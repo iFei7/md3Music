@@ -15,11 +15,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/services/audio_service.dart';
 import '../core/services/audio_service_io.dart'
     hide AudioService, createAudioSource;
+import '../core/services/automix/automix_analysis.dart';
 import '../core/services/automix/automix_analysis_store.dart';
 import '../core/services/automix/automix_analyzer.dart';
 import '../core/services/automix/automix_planner.dart';
 import '../core/services/audio_source_load_deadline.dart';
-import '../core/services/lyric_push_service.dart';
+import '../core/services/desktop_lyric_service.dart';
 import '../core/services/diagnostic_logger.dart';
 import '../core/services/home_widget_service.dart';
 import '../core/services/lyricon_provider_service.dart';
@@ -34,6 +35,7 @@ import '../core/services/direct_pcm_service.dart';
 import '../core/services/output_mode_coordinator.dart';
 import '../data/models/song.dart';
 import '../modules/player/comments_view.dart';
+import '../modules/player/mv_player_page.dart';
 import '../core/utils/app_toast.dart';
 import '../core/utils/local_lyric_loader.dart';
 import '../data/repositories/history_repository.dart';
@@ -60,6 +62,20 @@ import '../services/kugou_api/kugou_models.dart';
 
 enum AppLoopMode { off, one, all }
 
+/// 睡眠定时模式（与倒计时互斥，同一时刻只保留一种）。
+enum SleepTimerMode {
+  /// 未启用。
+  off,
+
+  /// 倒计时：到点自动暂停。
+  countdown,
+
+  /// 「定时结束后播完当前歌曲」的到点等待态：定时已到点但**不打断**当前
+  /// 播放，等正在播的这首自然播完（下一个正常 completed）时再暂停
+  /// （见 _handlePlaybackCompleted）。
+  endOfTrack,
+}
+
 const Duration kAudioSourceLoadDeadline = Duration(seconds: 15);
 
 enum _PlaybackRequestCancellationSource {
@@ -85,20 +101,6 @@ class _PlayerProviderDisposed implements Exception {
 /// 队列排序维度（播放列表面板的排序菜单）。
 /// [queue] = 保持当前播放顺序，即不排序。
 enum PlaylistSortBy { queue, title, duration }
-
-/// 睡眠定时模式（与倒计时互斥，同一时刻只保留一种）。
-enum SleepTimerMode {
-  /// 未启用。
-  off,
-
-  /// 倒计时：到点自动暂停。
-  countdown,
-
-  /// 「定时结束后播完当前歌曲」的到点等待态：定时已到点但**不打断**当前
-  /// 播放，等正在播的这首自然播完（下一个正常 completed）时再暂停
-  /// （见 _handlePlaybackCompleted）。
-  endOfTrack,
-}
 
 enum AudioQuality {
   standard('128', '标准音质'),
@@ -393,10 +395,14 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   // App 被杀后失效（无后台服务），符合"不持久化"决策。
   DateTime? _sleepTimerEndTime;
   Timer? _sleepTimerTicker;
-  /// 睡眠定时单一真相源：倒计时进行中 / 已到点等待播完本曲 / 未启用。
-  /// [_sleepTimerEndTime] 只在 countdown 模式下有值。
+
+  // 当前睡眠定时模式。倒计时与「到点后播完当前歌曲」由同一字段表达：
+  // countdown = 倒计时进行中；endOfTrack = 已到点且不打断，等当前曲播完。
+  // endOfTrack 由倒计时到点进入（一次性），用户取消勾选或关闭定时时撤销。
   SleepTimerMode _sleepTimerMode = SleepTimerMode.off;
-  /// 「定时结束后播完当前歌曲」的勾选偏好。到点后仍保留，供下次定时沿用。
+
+  // 「定时结束后播完当前歌曲」的用户勾选偏好。true 时定时到点不再立即暂停，
+  // 而是进入 endOfTrack 等待态；该偏好到点后保留，供下一次定时沿用。
   bool _stopAfterTimerEnds = false;
 
   // —— 在线歌曲异常结束重试限制 ——
@@ -854,7 +860,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 「一起听」房主播放态通告：本地暂停/恢复后转报服务端让成员跟随。
   ///
   /// 播放器自身的暂停/恢复按钮没有房间概念（迷你播放器、全屏播放器、
-  /// 耳机按键等都会走 [pause]/[resume]），若不在这里统一通告，
+  /// 桌面歌词、耳机按键等都会走 [pause]/[resume]），若不在这里统一通告，
   /// 房主用播放器按钮暂停时房间与成员端不会同步。
   ///
   /// [playing] 为 true 表示已恢复播放。**只在用户主动操作时触发**：
@@ -1608,7 +1614,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// 输出模式切换后重配输出：复刻[pause → play]（只有 Media3 重建 AudioTrack
+  /// 输出模式切换后重配输出：复刻 [pause → play]（只有 Media3 重建 AudioTrack
   /// 才会重跑 `DefaultAudioSink.configure`，新的 float / performanceMode / 缓冲
   /// 才会生效）。
   Future<void> _rebuildOutputForModeChange() async {
@@ -2272,7 +2278,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
-      // 「定时结束后播完当前歌曲」：到点已进入endOfTrack 等待态。
+      // 「定时结束后播完当前歌曲」：到点已进入 endOfTrack 等待态。
       // 语义 = 定时到点那一刻正在播的这首自然播完（下一个正常 completed）
       // 即暂停，不看队列位置——单曲循环 / 私人 FM 同样只播完当前首就停。
       // 异常结束（URL 过期 / 试听片段）不是「播完」，交给下方重试链路。
@@ -2923,7 +2929,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 1. 分析是异步的（几秒），回来时必须确认**还在播这首歌**，否则会把
   ///    上一首的响度套到新曲上；
   /// 2. 上游已提供权威响度时不覆盖（`song.loudnessLufs` 非空即上游有值）；
-  /// 3. 是否真的施加补偿仍由「音量均衡」开关决定（在 AudioService侧判）。
+  /// 3. 是否真的施加补偿仍由「音量均衡」开关决定（在 AudioService 侧判）。
   Future<void> _analyzeAndApplyLoudness(
     AutomixAnalyzer analyzer,
     Song song,
@@ -3021,7 +3027,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (UsbAudioService.instance.lastStatus['enabled'] == true) {
       return 'USB 独占输出已开启';
     }
-    // 系统 Direct PCM：同一条AudioSink 出口，unity 音量档下两个播放器音量
+    // 系统 Direct PCM：同一条 AudioSink 出口，unity 音量档下两个播放器音量
     // 语义冲突（辅播放器无法各自 unity），叠加同样会错乱。
     if (OutputModeCoordinator.instance.isDirectPcmActive) {
       return '系统 Direct PCM 已开启';
@@ -3187,7 +3193,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         url,
         speed: _speed,
         // MD3Music fork：传真实歌曲 id，使 aux/main 的 currentSong.id 为真实 hash，
-        // 否则 just_audio 生成随机 id，LyricPushService 拉歌词失败（蓝牙歌词不显示）。
+        // 否则 just_audio 生成随机 id，DesktopLyricService 拉歌词失败（蓝牙歌词/词幕不显示）。
         id: song.id,
         title: song.displayName,
         artist: song.artist,
@@ -3392,10 +3398,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       if (_originalPlaylist[i].id == song.id) _originalPlaylist[i] = song;
     }
     _updateNotification();
-    // 歌词渠道补推：这些渠道都按 song.id 去重，而回写保持 id 不变 →
-    // 不显式通知就会永久停在「未知歌曲」占位标题。
+    // 歌词渠道补推：这些渠道都按 song.id 去重（lyricInfo 更是每首只推一次），
+    // 而回写保持 id 不变 → 不显式通知就会永久停在「未知歌曲」占位标题。
     // Lyricon 例外：它由 _handleLyriconSongChange 的元数据签名自动触发重推。
-    unawaited(LyricPushService.instance.notifySongMetadataChanged());
+    unawaited(DesktopLyricService.instance.notifySongMetadataChanged());
     notifyListeners();
   }
 
@@ -4357,8 +4363,11 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     // 取消正在进行的淡入
     final fadeToken = ++_fadeToken;
     // 交叉淡化进行中被暂停：先收掉正在淡出的那一路，否则下面的暂停淡出
-    // 只作用于活动播放器，旧歌会继续响
-    _audioService?.abortCrossfade();
+    // 只作用于活动播放器，旧歌会继续响。
+    // keepVolume：本方法后面一定会走到 pause，恢复音量只会让淡入中的新歌
+    // 先"音量升上去"再停 —— 真机实测 t=0.54 处 incoming 0.72 → 1.00，
+    // 正是用户报的「点暂停时音量突然变大」。
+    _audioService?.abortCrossfade(keepVolume: true);
     _resetCrossfadePrepared();
     final fadeEnabled = await SettingsRepository().getPauseFadeEnabled();
     if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) return;
@@ -4397,6 +4406,12 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         return;
       }
       // 恢复音量设置（下次播放时使用）
+      // 取证：暂停淡出收尾会直接把音量拉回 _volume。若它发生在交叉淡化期间
+      // （未被 _fadeToken 拦住），听感正是「音量突然变大」。
+      // ignore: avoid_print
+      print('[VolAudit] 暂停淡出收尾 tokenOk=${fadeToken == _fadeToken} '
+          '目标=${_volume.toStringAsFixed(3)} '
+          '播放器当前=${target.volume.toStringAsFixed(3)}');
       if (fadeToken == _fadeToken) target.setVolume(_volume);
     } else {
       if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
@@ -4637,6 +4652,12 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         }
         target.setVolume(targetVolume * i / steps);
       }
+      // 取证：暂停淡入收尾同样会把音量一次性拉到 targetVolume。
+      // ignore: avoid_print
+      print('[VolAudit] 暂停淡入收尾 superseded=$superseded '
+          'tokenOk=${token == _fadeToken} '
+          '目标=${targetVolume.toStringAsFixed(3)} '
+          '播放器当前=${target.volume.toStringAsFixed(3)}');
       if (!superseded && token == _fadeToken) target.setVolume(targetVolume);
     } else {
       await _audioService?.playCommand();
@@ -5826,6 +5847,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 把通知与路由生命周期帧解耦。
   void _scheduleSleepNotifier(Duration? value) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 回调可能排到 dispose 之后（定时器刚设置就退出 App / 测试 teardown），
+      // 那时 notifier 已失效，赋值会命中 ChangeNotifier 的
+      // "used after being disposed" 断言。此处与其余 7 处做法一致：先看弃用标记。
+      if (_isDisposed) return;
       sleepTimerRemainingNotifier.value = value;
     });
   }
@@ -5920,7 +5945,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     _updateNotification();
   }
 
-  /// 手动选歌无法播放时，弹出提示对话框（提供评论入口）。
+  /// 手动选歌无法播放时，弹出提示对话框（提供查看 MV 和评论的入口）。
   /// 通过 [appNavigatorKey] 获取全局 context，不依赖具体 widget 重建。
   void _showUnplayableSongDialog(Song song) {
     final ctx = appNavigatorKey.currentContext;
@@ -5934,6 +5959,16 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           TextButton(
             onPressed: () => Navigator.pop(dialogCtx),
             child: const Text('关闭'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogCtx);
+              Navigator.push(
+                ctx,
+                MaterialPageRoute(builder: (_) => MvPlayerPage(song: song)),
+              );
+            },
+            child: const Text('去看MV'),
           ),
           // 与列表长按菜单同一谓词：本地歌曲开启「关闭本地音乐评论区」时不提供入口
           if (showsCommentsFor(song))
@@ -6060,6 +6095,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       isPlaying: _isPlaying,
       position: _position,
       duration: _duration ?? Duration.zero,
+      desktopLyricEnabled: DesktopLyricService.instance.enabled,
       isFavorited: isFavorited,
     );
   }
@@ -6277,7 +6313,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 拉取歌词 → 解析 → 推送 Lyricon onSongChanged。
   ///
-  /// 参考 [LyricPushService._onTick] / [_fetchLyricFor] 的模式：
+  /// 参考 [DesktopLyricService._onTick] / [_fetchLyricFor] 的模式：
   /// - 通过 appNavigatorKey.currentContext 拿 KugouProvider
   /// - 调 kugou.getLyric 拉 LRC（Task 15 双请求会同时拉 KRC）
   /// - 用 LyricParserChain.parse 自动识别 KRC/LRC/纯文本

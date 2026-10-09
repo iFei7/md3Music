@@ -1155,19 +1155,21 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             // MD3Music fork: 用唯一会话 ID，避免默认空串被 SESSION_ID_TO_SESSION_MAP 判重冲突
             sessionBuilder.setId(sessionId);
             // MD3Music fork: 处理媒体3自定义命令（阶段4，自研交互迁往媒体3）。
-            // 通知栏自定义按钮（收藏）经 onCustomCommand 到达，转发给 App 处理。
+            // 通知栏自定义按钮（桌面歌词/收藏）经 onCustomCommand 到达，转发给 App 处理。
             sessionBuilder.setCallback(new MediaSession.Callback() {
                 @Override
                 public MediaSession.ConnectionResult onConnect(
                         MediaSession session, MediaSession.ControllerInfo controller) {
-                    // MD3Music fork: 让自定义命令（收藏）对所有 controller 可用，
+                    // MD3Music fork: 让自定义命令（桌面歌词/收藏）对所有 controller 可用，
                     // 否则内部媒体通知 controller 的 customLayout 会把它们过滤成禁用/移除，
                     // 通知栏自定义按钮无法渲染（阶段4）。
                     MediaSession.ConnectionResult.AcceptedResultBuilder builder =
                             new MediaSession.ConnectionResult.AcceptedResultBuilder(session);
                     androidx.media3.session.SessionCommands.Builder cmdBuilder =
                             new androidx.media3.session.SessionCommands.Builder();
+                    cmdBuilder.add(CMD_TOGGLE_DESKTOP_LYRIC);
                     cmdBuilder.add(CMD_TOGGLE_FAVORITE);
+                    cmdBuilder.add(CMD_TOGGLE_TRANSLATION);
                     builder.setAvailableSessionCommands(cmdBuilder.build());
                     return builder.build();
                 }
@@ -1220,7 +1222,9 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     final CustomActionListener listener = sCustomActionListener;
                     if (customCommand != null && listener != null) {
                         String action = customCommand.customAction;
-                        if (CMD_TOGGLE_FAVORITE.customAction.equals(action)) {
+                        if (CMD_TOGGLE_DESKTOP_LYRIC.customAction.equals(action)) {
+                            listener.onToggleDesktopLyric();
+                        } else if (CMD_TOGGLE_FAVORITE.customAction.equals(action)) {
                             listener.onToggleFavorite();
                         }
                     }
@@ -1390,10 +1394,15 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         }
     }
 
-    /// 仅更新媒体3会话稳定标题/艺术家（不重压缩封面，不改写蓝牙歌词 TITLE）。
+    /// 仅更新媒体3会话稳定标题/艺术家（不重压缩封面）。
     public static void updateActiveSessionTitleArtist(
             String expectedMediaId, long generation, String title, String artist) {
-        updateActiveSessionTitleArtist(expectedMediaId, generation, title, artist, null, null);
+        AudioPlayer p = sActivePlayer;
+        if (p != null) {
+            p.applySessionTitleArtist(expectedMediaId, generation, title, artist);
+        } else {
+            Log.w("AudioFocusFork", "updateActiveSessionTitleArtist: no active AudioPlayer");
+        }
     }
 
     /// 写媒体3 MediaItem 的 MediaMetadata（标题/艺术家/内嵌封面位图）。
@@ -1415,6 +1424,51 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     expectedMediaId, generation, title, artist, art, artUri));
         } catch (Exception e) {
             Log.w("AudioFocusFork", "applySessionMetadata dispatch failed: " + e);
+        }
+    }
+
+    /// 阶段3：仅更新媒体3会话 标题/艺术家（不重压缩封面）。
+    /// ExoPlayer 必须在创建它的 Looper 线程访问，先派发到 player 所在线程执行。
+    private void applySessionTitleArtist(
+            final String expectedMediaId,
+            final long generation,
+            final String title,
+            final String artist) {
+        try {
+            final androidx.media3.common.Player p = player;
+            if (p == null) return;
+            Handler handler = new Handler(p.getApplicationLooper());
+            if (!registerExternalMetadataGeneration(generation)) return;
+            handler.post(() ->
+                    doApplySessionTitleArtist(expectedMediaId, generation, title, artist));
+        } catch (Exception e) {
+            Log.w("AudioFocusFork", "applySessionTitleArtist dispatch failed: " + e);
+        }
+    }
+
+    /// 在 player 线程只更新 Title/Artist；与现有值相同则跳过，避免无谓的 MediaItem 替换事件。
+    private void doApplySessionTitleArtist(
+            String expectedMediaId, long generation, String title, String artist) {
+        try {
+            if (!isExternalMetadataGenerationCurrent(generation)) return;
+            MediaItem cur = player.getCurrentMediaItem();
+            if (cur == null) return;
+            if (!matchesExpectedMediaItem(cur, expectedMediaId, title, artist)) {
+                logDiscardedIdentity("title/artist", cur, expectedMediaId);
+                return;
+            }
+            MediaMetadata m = cur.mediaMetadata;
+            String curTitle = m.title != null ? m.title.toString() : null;
+            String curArtist = m.artist != null ? m.artist.toString() : null;
+            if (equalsOrBothNull(curTitle, title) && equalsOrBothNull(curArtist, artist)) return;
+            MediaMetadata.Builder mb = m.buildUpon();
+            if (title != null && !title.isEmpty()) mb.setTitle(title);
+            if (artist != null && !artist.isEmpty()) mb.setArtist(artist);
+            player.replaceMediaItem(
+                    player.getCurrentMediaItemIndex(),
+                    cur.buildUpon().setMediaMetadata(mb.build()).build());
+        } catch (Exception e) {
+            Log.w("AudioFocusFork", "doApplySessionTitleArtist failed: " + e);
         }
     }
 
@@ -1470,34 +1524,119 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 + (item.mediaId == null ? 0 : item.mediaId.hashCode()));
     }
 
-    /// 根因3修复：一次 replaceMediaItem 更新 标题/艺术家，消除 performMetadataRefresh
-    /// 的两次紧邻提交（OPlus 防抖窗口会丢弃第二次，日志表现为
-    /// "within debounce period, ignore"，导致首曲元数据缺失）。
-    ///
-    /// [title]/[artist] 是用于身份校验的真实曲名/歌手；[btTitle]/[btArtist] 是实际
-    /// 写入的值（蓝牙歌词改写 TITLE 时传歌词行），为空则回落到 [title]/[artist]。
-    public static void updateActiveSessionTitleArtist(
+    // ==== MD3Music fork: 给媒体3会话下发 LyricInfo extras（阶段3b） ====
+    // 自定义会话把整首歌词 JSON 写进 MediaSession 元数据 extras.lyricInfo，供
+    // ColorOS 桌面歌词 / LyricInfo 模块等第三方系统读取。这里让媒体3会话的
+    // MediaItem.mediaMetadata.extras 同样携带该字段，为后续移除自定义会话做准备。
+    private static final String SESSION_LYRIC_INFO_KEY = "lyricInfo";
+
+    // ==== MD3Music fork: Vivo 车载歌词注入（ucar 车联投屏 + vivomusicmix 原子随身听） ====
+    // 随 lyricInfo 一起写进 MediaItem.mediaMetadata.extras。media3 会把 extras 原样
+    // 并入 framework MediaMetadataCompat，车机按 PlaybackState 进度自行滚动整段 LRC。
+    // 铁律（VIVO_CAR_LYRICS_GUIDE）：无歌词时不写任何字段（负状态 = 车机永久单行），
+    // 绝不写 LYRICS_LINE（单行模式信号）。
+    private static final String UCAR_LYRICS_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
+    private static final String UCAR_LYRICS_STATUS = "ucar.media.metadata.LYRICS_STATUS";
+    private static final String VMM_SUPPORT_EVENT = "vivomusicmix.media.metadata.support_event";
+
+    /**
+     * 从 lyricInfo JSON 提取可用于 Vivo 车机的整段 LRC：
+     * 取 "lyric" 字段，并把 ELRC 词级时间标签 {@code <mm:ss.xxx>} 过滤成纯行级 LRC
+     * （车机 LRC 解析器会把词级标签当文本渲染）。无歌词返回 null。
+     *
+     * MD3Music fork 修复（2026-09-23）：非中文歌曲车机定位到翻译行而非原文行。
+     * lyricInfo 的 lyric 字段开启翻译推送时（includeTranslation）每行原文后追加
+     * 同时间戳翻译行；车机 LRC 解析对同时间戳行取「最后一行」作主句高亮，
+     * 于是英文/日文歌的当前行永远落在中文翻译上（原文反而被当次行淡显）。
+     * 修复：按时间戳去重只保留首行（原文），翻译不推给车机。
+     */
+    public static String extractCarLyricsFromLyricInfo(String lyricInfo) {
+        if (lyricInfo == null || lyricInfo.isEmpty()) return null;
+        try {
+            org.json.JSONObject json = new org.json.JSONObject(lyricInfo);
+            String lyric = json.optString("lyric", null);
+            if (lyric == null || lyric.isEmpty()) return null;
+            // 去词级时间标签：<mm:ss.xxx> / <m:ss.x> 等
+            String lrc = lyric.replaceAll("<\\d{1,2}:\\d{1,2}(?:\\.\\d{1,3})?>", "");
+            // 同时间戳去重：原文在前、翻译在后（同戳追加），只保留原文行
+            lrc = keepFirstLinePerTimestamp(lrc);
+            return lrc.trim().isEmpty() ? null : lrc.trim();
+        } catch (Exception e) {
+            Log.w("AudioFocusFork", "extractCarLyricsFromLyricInfo failed: " + e);
+            return null;
+        }
+    }
+
+    /** LRC 行首时间标签：[mm:ss(.frac)]，分钟可三位数（超长曲目）。 */
+    private static final java.util.regex.Pattern LRC_LINE_TAG_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "^\\s*\\[(\\d{1,3}):(\\d{1,2}(?:\\.\\d{1,3})?)\\]");
+
+    /**
+     * 同时间戳去重：保留每个时间戳的首个 LRC 行（原文），丢弃其后同戳行（翻译）。
+     * 时间戳按毫秒归一（[00:12.5] 与 [00:12.050] 视为同一时间）。
+     * 无时间标签的行（元数据/空行）原样保留。
+     */
+    static String keepFirstLinePerTimestamp(String lrc) {
+        if (lrc == null || lrc.indexOf('\n') < 0 && !LRC_LINE_TAG_PATTERN.matcher(lrc).find()) {
+            return lrc;
+        }
+        java.util.Set<Long> seen = new java.util.HashSet<>();
+        StringBuilder out = new StringBuilder(lrc.length());
+        for (String raw : lrc.split("\n", -1)) {
+            java.util.regex.Matcher m = LRC_LINE_TAG_PATTERN.matcher(raw);
+            if (m.find()) {
+                long minutes = Long.parseLong(m.group(1));
+                String[] secParts = m.group(2).split("\\.", 2);
+                long seconds = Long.parseLong(secParts[0]);
+                long millis = secParts.length > 1 ? fracToMillis(secParts[1]) : 0L;
+                long key = minutes * 60_000L + seconds * 1_000L + millis;
+                if (!seen.add(key)) continue; // 同时间戳后续行（翻译行）丢弃
+            }
+            if (out.length() > 0) out.append('\n');
+            out.append(raw);
+        }
+        return out.toString();
+    }
+
+    /** 小数毫秒段 ".5" / ".05" / ".050" → 500 / 50 / 50 ms（补齐三位精度）。 */
+    private static long fracToMillis(String frac) {
+        try {
+            String padded = (frac + "000").substring(0, 3);
+            return Long.parseLong(padded);
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+
+    /// 根因3修复：一次 replaceMediaItem 同时更新 标题/艺术家 与 extras.lyricInfo，
+    /// 消除 performMetadataRefresh 的两次紧邻提交（OPlus 防抖窗口会丢弃第二次，
+    /// 日志表现为 "within debounce period, ignore"，导致首曲 hasLyric=false）。
+    public static void updateActiveSessionTitleArtistAndLyricInfo(
             String expectedMediaId,
             long generation,
             String title,
             String artist,
+            String lyricInfo,
             String btTitle,
             String btArtist) {
         AudioPlayer p = sActivePlayer;
         if (p != null) {
-            p.applySessionTitleArtist(
-                    expectedMediaId, generation, title, artist, btTitle, btArtist);
+            p.applySessionTitleArtistAndLyricInfo(
+                    expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist);
         } else {
-            Log.w("AudioFocusFork", "updateActiveSessionTitleArtist: no active AudioPlayer");
+            Log.w("AudioFocusFork", "updateActiveSessionTitleArtistAndLyricInfo: no active AudioPlayer");
         }
     }
 
     // ==== MD3Music fork: 媒体3自定义命令（阶段4，自研 action 迁往媒体3） ====
-    // 收藏、翻译以 media3 自定义 Command 承载：App 把状态/图标推给
+    // 桌面歌词开关、收藏以 media3 自定义 Command 承载：App 把状态/图标推给
     // setActiveSessionCustomActions，渲染为通知栏按钮；点击经 onCustomCommand 回传 App。
     // 上一首/下一首不再用自定义按钮：改由拦截原生 seekToPrevious/seekToNext 命令
     // （onPlayerCommandRequest）转发 App 队列逻辑，见 buildAndHostMediaSession。
     public interface CustomActionListener {
+        void onToggleDesktopLyric();
         void onToggleFavorite();
         // MD3Music fork（阶段6·修复媒体卡片上一首/下一首）：
         // 原生 PREVIOUS/NEXT 命令拦截后回调，走 App 自有切歌逻辑。
@@ -1508,29 +1647,53 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     private static volatile CustomActionListener sCustomActionListener;
     // 用 new Bundle() 而非 Bundle.EMPTY：后者要求 API 26+，本项目 minSdk 为 24/25。
+    private static final SessionCommand CMD_TOGGLE_DESKTOP_LYRIC =
+            new SessionCommand("com.md3music.toggle_desktop_lyric", new android.os.Bundle());
     private static final SessionCommand CMD_TOGGLE_FAVORITE =
             new SessionCommand("com.md3music.toggle_favorite", new android.os.Bundle());
+    // MD3Music fork: ColorOS-Live-Lyrics-Bridge 公开翻译切换动作（LYRIC_INFO 协议）。
+    // Bridge 在 SystemUI 侧按该 action 定位 OPlus 锁屏翻译按钮并接管点击；未安装 Bridge
+    // 时点击经 onCustomCommand 到达，default 分支返回 RESULT_SUCCESS 安全忽略。
+    private static final SessionCommand CMD_TOGGLE_TRANSLATION =
+            new SessionCommand(
+                    "io.github.andrealtb.lockscreenlyrics.action.TOGGLE_TRANSLATION",
+                    new android.os.Bundle());
+
     /// 由 App 注册，接收媒体3通知按钮触发的自定义命令。
     public static void setCustomActionListener(CustomActionListener listener) {
         sCustomActionListener = listener;
     }
 
     /// 由 App 在元数据/开关变化时推送媒体3通知栏的自定义按钮（图标按开/关态切换）。
-    /// 阶段6：下一首已改回原生按钮，这里保留收藏一个固定自定义按钮。
+    /// 阶段6：下一首已改回原生按钮，这里保留收藏/桌面歌词两个固定自定义按钮。
+    /// hasTranslation=true 时追加 ColorOS 翻译切换按钮（仅 Bridge 消费，播放器不处理
+    /// 其回调）；翻译图标缺省用模块自带（未新增 ic_translation）。
     public static void setActiveSessionCustomActions(
+            boolean desktopLyricEnabled,
             boolean isFavorited,
+            boolean hasTranslation,
+            int translationIconResId,
+            int desktopLyricOnIcon,
+            int desktopLyricOffIcon,
             int favoriteOnIcon,
             int favoriteOffIcon) {
         AudioPlayer p = sActivePlayer;
         if (p != null) {
-            p.applySessionCustomActions(isFavorited, favoriteOnIcon, favoriteOffIcon);
+            p.applySessionCustomActions(
+                    desktopLyricEnabled, isFavorited, hasTranslation, translationIconResId,
+                    desktopLyricOnIcon, desktopLyricOffIcon, favoriteOnIcon, favoriteOffIcon);
         } else {
             Log.w("AudioFocusFork", "setActiveSessionCustomActions: no active AudioPlayer");
         }
     }
 
     private void applySessionCustomActions(
+            final boolean desktopLyricEnabled,
             final boolean isFavorited,
+            final boolean hasTranslation,
+            final int translationIconResId,
+            final int desktopLyricOnIcon,
+            final int desktopLyricOffIcon,
             final int favoriteOnIcon,
             final int favoriteOffIcon) {
         try {
@@ -1541,14 +1704,28 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 try {
                     // MD3Music fork（阶段6）：下一首改回 media3 原生按钮（自动渲染）。
                     // 收藏放在自定义布局首位，确保 SystemUI 的有限按钮槽位优先显示
-                    // “我喜欢”。
-                    java.util.List<CommandButton> layout = new java.util.ArrayList<>(1);
+                    // “我喜欢”；翻译仍保留在布局中，供 Bridge 按 command 识别并接管。
+                    java.util.List<CommandButton> layout = new java.util.ArrayList<>(3);
                     layout.add(new CommandButton.Builder()
                             .setSessionCommand(CMD_TOGGLE_FAVORITE)
                             .setDisplayName("收藏")
                             .setIconResId(isFavorited ? favoriteOnIcon : favoriteOffIcon)
                             .setEnabled(true)
                             .build());
+                    layout.add(new CommandButton.Builder()
+                            .setSessionCommand(CMD_TOGGLE_DESKTOP_LYRIC)
+                            .setDisplayName("桌面歌词")
+                            .setIconResId(desktopLyricEnabled ? desktopLyricOnIcon : desktopLyricOffIcon)
+                            .setEnabled(true)
+                            .build());
+                    if (hasTranslation) {
+                        layout.add(new CommandButton.Builder()
+                                .setSessionCommand(CMD_TOGGLE_TRANSLATION)
+                                .setDisplayName("歌词翻译")
+                                .setIconResId(translationIconResId)
+                                .setEnabled(true)
+                                .build());
+                    }
                     mediaSession.setCustomLayout(layout);
                     // MD3Music fork: 自定义按钮 layout 变化不会自动重渲染 now playing 通知，
                     // 需让承载服务按最新 layout 强制刷新一次（见 MediaSessionService.refreshNotification）。
@@ -1566,11 +1743,12 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     /// ExoPlayer 必须在创建它的 Looper 线程访问，先派发到 player 所在线程执行。
-    private void applySessionTitleArtist(
+    private void applySessionTitleArtistAndLyricInfo(
             final String expectedMediaId,
             final long generation,
             final String title,
             final String artist,
+            final String lyricInfo,
             final String btTitle,
             final String btArtist) {
         try {
@@ -1578,19 +1756,21 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             if (p == null) return;
             Handler handler = new Handler(p.getApplicationLooper());
             if (!registerExternalMetadataGeneration(generation)) return;
-            handler.post(() -> doApplySessionTitleArtist(
-                    expectedMediaId, generation, title, artist, btTitle, btArtist));
+            handler.post(() -> doApplySessionTitleArtistAndLyricInfo(
+                    expectedMediaId, generation, title, artist, lyricInfo, btTitle, btArtist));
         } catch (Exception e) {
-            Log.w("AudioFocusFork", "applySessionTitleArtist dispatch failed: " + e);
+            Log.w("AudioFocusFork", "applySessionTitleArtistAndLyricInfo dispatch failed: " + e);
         }
     }
 
-    /// 在 player 线程一次性提交 title/artist（文本真的变化时才 replaceMediaItem）。
-    private void doApplySessionTitleArtist(
+    /// 在 player 线程一次性提交 title/artist + extras.lyricInfo。
+    /// 跳过逻辑：仅当稳定 title/artist 与 lyricInfo 均未变化才 return。
+    private void doApplySessionTitleArtistAndLyricInfo(
             String expectedMediaId,
             long generation,
             String title,
             String artist,
+            String lyricInfo,
             String btTitle,
             String btArtist) {
         try {
@@ -1598,7 +1778,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             MediaItem cur = player.getCurrentMediaItem();
             if (cur == null) return;
             if (!matchesExpectedMediaItem(cur, expectedMediaId, title, artist)) {
-                logDiscardedIdentity("title/artist", cur, expectedMediaId);
+                logDiscardedIdentity("lyricInfo", cur, expectedMediaId);
                 return;
             }
             MediaMetadata m = cur.mediaMetadata;
@@ -1606,20 +1786,49 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             String curArtist = m.artist != null ? m.artist.toString() : null;
             String writeTitle = (btTitle != null && !btTitle.isEmpty()) ? btTitle : title;
             String writeArtist = (btArtist != null && !btArtist.isEmpty()) ? btArtist : artist;
-            if (equalsOrBothNull(curTitle, writeTitle) && equalsOrBothNull(curArtist, writeArtist)) {
-                return;
-            }
+            android.os.Bundle currentExtras = m.extras;
+            String currentLyric = currentExtras != null
+                    ? currentExtras.getString(SESSION_LYRIC_INFO_KEY) : null;
+            String incomingLyric = (lyricInfo == null || lyricInfo.isEmpty()) ? null : lyricInfo;
+
+            boolean titleChanged =
+                    !(equalsOrBothNull(curTitle, writeTitle) && equalsOrBothNull(curArtist, writeArtist));
+            boolean lyricChanged = !((incomingLyric == null && currentLyric == null)
+                    || (incomingLyric != null && incomingLyric.equals(currentLyric)));
+            if (!titleChanged && !lyricChanged) return;
 
             MediaMetadata.Builder mb = m.buildUpon();
             if (writeTitle != null && !writeTitle.isEmpty()) mb.setTitle(writeTitle);
             if (writeArtist != null && !writeArtist.isEmpty()) mb.setArtist(writeArtist);
-            MediaMetadata updated = mb.build();
+            android.os.Bundle newExtras = currentExtras != null
+                    ? new android.os.Bundle(currentExtras)
+                    : new android.os.Bundle();
+            if (incomingLyric == null) {
+                newExtras.remove(SESSION_LYRIC_INFO_KEY);
+            } else {
+                newExtras.putString(SESSION_LYRIC_INFO_KEY, incomingLyric);
+            }
+            // MD3Music fork: Vivo 车载歌词注入（随 lyricInfo 同步写入）。
+            // 无整段歌词时移除字段（铁律：不写负状态，否则车机永久退回单行）。
+            String carLrc = extractCarLyricsFromLyricInfo(incomingLyric);
+            if (carLrc == null || carLrc.isEmpty()) {
+                newExtras.remove(UCAR_LYRICS_WHOLE);
+                newExtras.remove(UCAR_LYRICS_STATUS);
+                newExtras.remove(VMM_SUPPORT_EVENT);
+            } else {
+                newExtras.putString(UCAR_LYRICS_WHOLE, carLrc);
+                newExtras.putLong(UCAR_LYRICS_STATUS, 0L);
+                newExtras.putLong(VMM_SUPPORT_EVENT, 31L);
+            }
+            MediaMetadata updated = mb.setExtras(newExtras).build();
             player.replaceMediaItem(
                     player.getCurrentMediaItemIndex(),
                     cur.buildUpon().setMediaMetadata(updated).build());
-            Log.d("AudioFocusFork", "doApplySessionTitleArtist OK");
+            Log.d("AudioFocusFork", "doApplySessionTitleArtistAndLyricInfo OK hasLyricInfo="
+                    + (incomingLyric != null)
+                    + " titleChanged=" + titleChanged + " lyricChanged=" + lyricChanged);
         } catch (Exception e) {
-            Log.w("AudioFocusFork", "doApplySessionTitleArtist failed: " + e);
+            Log.w("AudioFocusFork", "doApplySessionTitleArtistAndLyricInfo failed: " + e);
         }
     }
 

@@ -12,7 +12,9 @@ import '../../core/layout/responsive_layout.dart';
 import '../../core/services/player_frame_driver.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../data/repositories/settings_repository.dart';
+import '../../providers/car_mode_provider.dart';
 import '../../providers/player_provider.dart';
+import '../../providers/theme_provider.dart';
 import '../../widgets/smart_artwork_image.dart';
 import 'full_player_route.dart';
 import 'mini_player.dart';
@@ -159,7 +161,8 @@ class _SecondaryMiniPlayerHostState extends State<SecondaryMiniPlayerHost> {
     final hasSong = context.select<PlayerProvider, bool>(
       (p) => p.currentSong != null,
     );
-    final reserve = hasSong ? _kReservedBottom : 0.0;
+    final carMode = context.select<CarModeProvider, bool>((p) => p.enabled);
+    final reserve = (hasSong && !carMode) ? _kReservedBottom : 0.0;
     final mq = MediaQuery.of(context);
     // 标记本宿主正在承载悬浮条，供子树内的嵌套宿主检测后退化透传。
     return _SecondaryPlayerHostScope(
@@ -223,9 +226,9 @@ const double kSecondaryPlayerPadMaxWidth = 400.0;
 
 /// 二级页面悬浮播放器本体（[MiniPlayer] 的二级悬浮模式）。
 ///
-/// 展开态：带阴影的圆角悬浮条（封面 + 歌曲信息 + 播放控制 + 切歌，点击进
-/// 完整播放页）。收起态：底部居中圆形唱片，封面随播放旋转、外围绘制环形
-/// 进度，点击仅展开播放器。两态之间用圆角/尺寸/透明度连续过渡。
+/// 展开态：扁平圆角悬浮条（封面 + 歌曲信息 + 播放控制 + 切歌，点击进
+/// 完整播放页）。收起态：底部居中圆形唱片，封面随播放旋转，点击仅展开
+/// 播放器。两态之间用圆角/尺寸/透明度连续过渡。
 class SecondaryMiniPlayer extends StatefulWidget {
   const SecondaryMiniPlayer({
     super.key,
@@ -255,7 +258,7 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
   /// 是否已挂在共享 60fps 帧驱动上。
   bool _boundToDriver = false;
 
-  /// 由 build 计算出的「播放中 + 卡片可见」（含无歌 / 全屏已展开）。
+  /// 由 build 计算出的「播放中 + 卡片可见」（含无歌 / 车机模式 / 全屏已展开）。
   bool _shouldSpin = false;
 
   /// TickerMode 是否被关闭（被不透明路由覆盖 / TabBarView 切走）。
@@ -412,8 +415,14 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
       _setShouldSpin(0.0, false);
       return const SizedBox.shrink();
     }
+    // 车机模式：播放器常驻侧边面板，任何界面都不显示悬浮播放器（沿用现有规则）。
+    if (context.watch<CarModeProvider>().enabled) {
+      _setShouldSpin(0.0, false);
+      return const SizedBox.shrink();
+    }
     _setShouldSpin(playerExpansion.value, player.isPlaying);
     final cs = Theme.of(context).colorScheme;
+    final useBackgroundImage = context.watch<ThemeProvider>().useBackgroundImage;
 
     // 完整播放页展开时淡出（与底部常驻 MiniPlayer 同一 playerExpansion 规则）。
     return ValueListenableBuilder<double>(
@@ -457,6 +466,7 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
                     alignment: _dockAlignment(dock),
                     dock: dock,
                     trackW: trackW,
+                    useBackgroundImage: useBackgroundImage,
                   ),
                 ),
               );
@@ -561,6 +571,7 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
     Alignment alignment = Alignment.bottomCenter,
     SecondaryPlayerDockSide dock = SecondaryPlayerDockSide.center,
     double trackW = 0,
+    bool useBackgroundImage = false,
   }) {
     // 弹簧可能轻微过冲到 [0,1] 之外；几何取值 clamp，过冲仅体现在时间曲线上。
     final t = _morph.value.clamp(0.0, 1.0);
@@ -569,16 +580,12 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
     final radius = _disc / 2;
     // 文字/按钮在前 60% 行程内淡出，收起后完全让位给圆盘。
     final textOpacity = (1.0 - t / 0.6).clamp(0.0, 1.0);
-    // 胶囊环在形变前半程淡出（收起后完全让位给贯穿两态的圆形环）。
-    final capsuleOpacity = (1.0 - t / 0.45).clamp(0.0, 1.0);
-
     // —— 贯穿两态的封面（唯一贯穿两态的元素）——
     // 封面容器恒为 _disc(64)×_disc：展开态填满胶囊条高度（封面即主视觉，
     // 封面更大），收起态即为圆盘本体。只在水平方向从左缘平移到条中心：
     //   展开 left=2（贴左，留 2 与胶囊左缘）；收起 w=64 → left=0（居中）。
     //   中间帧 w>64，(w-64)/2 让圆盘随条收拢自然居中（见改版计划补充五）。
-    // 进度指示按状态二选一：展开态=胶囊环（环绕整条），收起态=封面外圆环；
-    // 二者随 t 交叉淡入淡出，任一时刻只读到一个进度（消除旧实现的双环重复）。
+    // 封面是唯一视觉焦点，不叠加彩色进度环。
     final coverLeft = _lerp(2.0, (w - _disc) / 2, t);
 
     return Align(
@@ -604,31 +611,17 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
             }
           },
           child: Material(
-          elevation: 8,
-          color: cs.surfaceContainerHigh,
-          shadowColor: Colors.black.withValues(alpha: 0.3),
-          borderRadius: BorderRadius.circular(radius),
-          // 环需画在胶囊边缘，必须裁掉外圈的描边溢出（抗锯齿边）。
-          clipBehavior: Clip.antiAlias,
-          child: SizedBox(
-            width: w,
-            height: _disc,
-            child: Stack(
-              children: [
-                // 展开态：沿胶囊外圈的胶囊形进度环（贴合圆角矩形边缘走一圈，
-                // 覆盖整个悬浮条；收起时淡出让位给贯穿两态的圆形环）。
-                // 高度定死 64，宽度随形变收缩，只裁剪不重排，避免文字跳动。
-                if (t < 0.45)
-                  Positioned.fill(
-                    child: Opacity(
-                      opacity: capsuleOpacity,
-                      child: _CapsuleRing(
-                        player: player,
-                        color: cs.primary,
-                        track: cs.surfaceContainerHighest,
-                      ),
-                    ),
-                  ),
+            elevation: 0,
+            color: useBackgroundImage
+                ? cs.surface.withValues(alpha: 0.80)
+                : cs.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(radius),
+            clipBehavior: Clip.antiAlias,
+            child: SizedBox(
+              width: w,
+              height: _disc,
+              child: Stack(
+                children: [
                 // 文字信息 + 播放控制：随宽度收缩淡出，用 OverflowBox 保持
                 // 全宽布局，收缩过程只裁剪不重排，避免文字挤压跳动。
                 if (textOpacity > 0.01)
@@ -649,19 +642,19 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
                       ),
                     ),
                   ),
-                // 贯穿两态的封面（+ 收起态圆环）：从左缘平移到中心。
+                // 贯穿两态的封面：从左缘平移到中心。
                 Positioned(
                   left: coverLeft,
                   top: 0,
                   width: _disc,
                   height: _disc,
-                  child: _coverRing(player, song, cs, t),
+                  child: _cover(song, t),
                 ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -688,18 +681,20 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
           Expanded(
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Text(
                   song.displayName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 Text(
                   song.artist,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: cs.onSurfaceVariant,
                   ),
@@ -741,16 +736,8 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
   /// **抗闪烁**：`SmartArtworkImage` 的 `size`/`borderRadius`/decode 恒为
   /// [_kCoverDecode]，ImageCache key 不随形变变化；封面可见尺寸的变化只由
   /// raster 上的 `Transform.scale` 承担，不触发重解码。
-  Widget _coverRing(
-    PlayerProvider player,
-    dynamic song,
-    ColorScheme cs,
-    double t,
-  ) {
-    // 圆环仅属于收起态：展开态(t=0)透明，t 越大越清晰。
-    final ringOpacity = (t / 0.6).clamp(0.0, 1.0);
-    // 封面可见尺寸：展开 58（比旧 52.5 更大），收起 52（留出外圈圆环）。
-    final coverVisible = _lerp(58.0, 52.0, t);
+  Widget _cover(dynamic song, double t) {
+    final coverVisible = _lerp(58.0, 56.0, t);
     final coverScale = coverVisible / _kCoverDecode;
 
     return RepaintBoundary(
@@ -758,206 +745,26 @@ class _SecondaryMiniPlayerState extends State<SecondaryMiniPlayer>
       child: SizedBox(
         width: _disc,
         height: _disc,
-        child: ValueListenableBuilder<Duration>(
-          valueListenable: player.positionNotifier,
-          builder: (context, pos, _) {
-            final dur = player.duration ?? Duration.zero;
-            final progress = dur.inMilliseconds > 0
-                ? pos.inMilliseconds / dur.inMilliseconds
-                : 0.0;
-            return Stack(
-              alignment: Alignment.center,
-              children: [
-                // 收起态圆盘外圈环形进度（展开态透明，不与胶囊环重复）
-                if (ringOpacity > 0.01)
-                  Positioned.fill(
-                    child: Opacity(
-                      opacity: ringOpacity,
-                      child: CustomPaint(
-                        painter: _RingPainter(
-                          progress: progress.clamp(0.0, 1.0),
-                          color: cs.primary,
-                          track: cs.surfaceContainerHighest,
-                        ),
-                      ),
-                    ),
-                  ),
-                // 封面：解码尺寸恒定，raster 上缩放到可见尺寸，随收起旋转。
-                Transform.scale(
-                  scale: coverScale,
-                  child: AnimatedBuilder(
-                    animation: _spin,
-                    builder: (context, _) => Transform.rotate(
-                      // 旋转随过渡逐渐加深：t=0（展开）不转、t=1（圆盘）全速。
-                      angle: _spin.value * 2 * math.pi * t,
-                      child: ClipOval(
-                        child: SmartArtworkImage(
-                          artworkUri: song.artworkUri,
-                          fallbackFilePath: song.localPath,
-                          songId: song.id,
-                          size: _kCoverDecode,
-                          borderRadius: _kCoverDecode / 2,
-                        ),
-                      ),
-                    ),
-                  ),
+        child: Transform.scale(
+          scale: coverScale,
+          child: AnimatedBuilder(
+            animation: _spin,
+            builder: (context, _) => Transform.rotate(
+              // 旋转随过渡逐渐加深：t=0（展开）不转、t=1（圆盘）全速。
+              angle: _spin.value * 2 * math.pi * t,
+              child: ClipOval(
+                child: SmartArtworkImage(
+                  artworkUri: song.artworkUri,
+                  fallbackFilePath: song.localPath,
+                  songId: song.id,
+                  size: _kCoverDecode,
+                  borderRadius: _kCoverDecode / 2,
                 ),
-              ],
-            );
-          },
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
-}
-
-/// 展开态沿胶囊外圈的胶囊形（圆角矩形）环形进度描边。
-/// 整个圆角条（宽=当前形变宽、高=64、圆角=32）外缘内缩 1.5dp 画一圈，
-/// 与胶囊完全贴合，实现「进度条环绕胶囊」（见改版计划五）。
-class _CapsuleRing extends StatelessWidget {
-  const _CapsuleRing({
-    required this.player,
-    required this.color,
-    required this.track,
-  });
-
-  final PlayerProvider player;
-  final Color color;
-  final Color track;
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<Duration>(
-      valueListenable: player.positionNotifier,
-      builder: (context, pos, _) {
-        final dur = player.duration ?? Duration.zero;
-        final progress = dur.inMilliseconds > 0
-            ? pos.inMilliseconds / dur.inMilliseconds
-            : 0.0;
-        return CustomPaint(
-          painter: _CapsuleRingPainter(
-            progress: progress.clamp(0.0, 1.0),
-            color: color,
-            track: track,
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// _CapsuleRing 的绘制：rrect 沿胶囊外圈描边 + 进度弧（起点 12 点方向）。
-class _CapsuleRingPainter extends CustomPainter {
-  _CapsuleRingPainter({
-    required this.progress,
-    required this.color,
-    required this.track,
-  });
-
-  final double progress;
-  final Color color;
-  final Color track;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const stroke = 3.0;
-    // 描边向内缩，round cap 不被 Material 的 antiAlias 裁剪掉。
-    final inset = stroke / 2 + 0.5;
-    final rect = Rect.fromLTWH(
-      inset,
-      inset,
-      size.width - inset * 2,
-      size.height - inset * 2,
-    );
-    // 胶囊(体育场形)圆角半径 = 半高（宽退化时取半宽，防两端半圆交叠）。
-    final r = math.min(rect.width, rect.height) / 2;
-    // 关键修复：进度必须沿胶囊真实周长走。旧实现用 drawArc(rrect.outerRect)
-    // 会沿外接椭圆走，直边段完全脱离胶囊边缘（宽条时尤为明显）——这是
-    // 「进度环绕胶囊」看起来错位的隐形 bug。改为构造真实周长 Path，
-    // 用 PathMetric 截取前 progress 段绘制。
-    // 起点=顶边中点(12 点方向)，顺时针一圈。
-    final path = Path()
-      ..moveTo(rect.center.dx, rect.top)
-      ..lineTo(rect.right - r, rect.top)
-      ..arcTo(
-        Rect.fromCircle(
-          center: Offset(rect.right - r, rect.center.dy),
-          radius: r,
-        ),
-        -math.pi / 2,
-        math.pi,
-        false,
-      )
-      ..lineTo(rect.left + r, rect.bottom)
-      ..arcTo(
-        Rect.fromCircle(
-          center: Offset(rect.left + r, rect.center.dy),
-          radius: r,
-        ),
-        math.pi / 2,
-        math.pi,
-        false,
-      )
-      ..lineTo(rect.center.dx, rect.top);
-
-    final trackPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = stroke
-      ..color = track;
-    final progPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = stroke
-      ..strokeCap = StrokeCap.round
-      ..color = color;
-
-    canvas.drawPath(path, trackPaint);
-    if (progress <= 0) return;
-    final p = progress.clamp(0.0, 1.0);
-    for (final metric in path.computeMetrics()) {
-      canvas.drawPath(metric.extractPath(0, metric.length * p), progPaint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_CapsuleRingPainter old) =>
-      old.progress != progress || old.color != color || old.track != track;
-}
-
-/// 收起态唱片外围的环形进度绘制。
-class _RingPainter extends CustomPainter {
-  _RingPainter({
-    required this.progress,
-    required this.color,
-    required this.track,
-  });
-
-  final double progress;
-  final Color color;
-  final Color track;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const stroke = 3.0;
-    final rect = Rect.fromLTWH(
-      stroke / 2,
-      stroke / 2,
-      size.width - stroke,
-      size.height - stroke,
-    );
-    final trackPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = stroke
-      ..color = track;
-    final progPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = stroke
-      ..strokeCap = StrokeCap.round
-      ..color = color;
-    canvas.drawArc(rect, 0, 2 * math.pi, false, trackPaint);
-    canvas.drawArc(rect, -math.pi / 2, 2 * math.pi * progress, false, progPaint);
-  }
-
-  @override
-  bool shouldRepaint(_RingPainter old) =>
-      old.progress != progress || old.color != color || old.track != track;
 }

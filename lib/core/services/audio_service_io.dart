@@ -370,6 +370,14 @@ class AudioService {
   /// 音量均衡衰减倍率（gainDb<0 时折进音量，ExoPlayer 只能衰减；>0 留给 enhancer 放大）。
   double _vnAttenLinear = 1.0;
 
+  /// **备用（淡入方）**播放器的衰减倍率。
+  ///
+  /// 必须与 [_vnAttenLinear] 分开：交叉淡化期间两路是**不同的歌**、响度不同，
+  /// `prepareCrossfade` 会为 standby 算出一份新衰减。若共用一个字段，
+  /// 正在播放的旧歌会被新歌的衰减值改写音量 —— 这正是「切歌时音量突然变大」
+  /// 的一类成因。降级路径：两者都只在「音量均衡」开启且该曲需要衰减时才 ≠ 1.0。
+  double _vnAttenLinearStandby = 1.0;
+
   /// 应用增益：正增益（放大）走 native LoudnessEnhancer，负增益（衰减）折进音量。
   /// 只用一个 enhancer：主/辅播放器共享同一 audio session，一个 LoudnessEnhancer
   /// 作用于该 session 即可覆盖两路音频（避免同 session 创建第二个 enhancer 冲突）。
@@ -591,6 +599,17 @@ class AudioService {
     // 固定已由 fork 处理）；不在此对抗 play()——实测会与对方 app 反复抢焦点
     // 导致音频叠加错乱。
     if (_ignoreAudioFocus) return;
+    // 取证：logcat 显示 MIUI 侧频繁处理焦点丢失
+    // （plgin_MiuiAudioPlaybackManager: currentTime - mLossAudioFocusTime）。
+    // 若焦点事件落在交叉淡化期间，pauseAndResume 模式会走 abortCrossfade() + pause()，
+    // 而 abort 会把**已 promote 成活动播放器**的 incoming 音量从斜坡中的低值
+    // 一次性拉到 _userVolume —— 听感正是「切歌时音量突然变大」。
+    // 这条日志是坐实/排除该路径的唯一判据（abort 自身只打 crossed=…，看不出触发原因）。
+    if (_crossfading) {
+      // ignore: avoid_print
+      print('[VolAudit] 淡化中收到焦点变化 focusChange=$focusChange '
+          'mode=${_interruptionMode.name} playing=${_activePlayer.playing}');
+    }
     if (_interruptionMode == AudioFocusInterruptionMode.keepPlaying) {
       // keepPlaying：短暂中断（导航等 transient/duck）native 已 skip（保持播放
       // 有声、进度一致）。独占型 LOSS（B 站视频 / 来电等）主动暂停让路——
@@ -675,13 +694,15 @@ class AudioService {
   Future<void> pause() async {
     // 用户主动暂停：清除中断暂停标记（中断引起的暂停不在 GAIN 时自动恢复）
     _pausedByInterruption = false;
-    // 淡化进行中被暂停：先收掉正在淡出的那一路，否则它会继续响
-    abortCrossfade();
+    // 淡化进行中被暂停：先收掉正在淡出的那一路，否则它会继续响。
+    // keepVolume：紧接着就 pause，恢复音量只会让淡入中的一路先"升上去"再停
+    // （用户实测报的「点暂停时音量突然变大」）。
+    abortCrossfade(keepVolume: true);
     await _activePlayer.pause();
   }
 
   Future<void> stop() async {
-    abortCrossfade();
+    abortCrossfade(keepVolume: true);
     await _mainPlayer.stop();
     final aux = _auxPlayer;
     if (aux != null) await aux.stop();
@@ -726,7 +747,13 @@ class AudioService {
     _userVolume = volume.clamp(0.0, 1.0);
     // 淡化中不要打断斜坡：新音量在斜坡结束时自然生效
     // 叠加音量均衡的衰减倍率（响歌压低）
-    if (_crossfading) return;
+    if (_crossfading) {
+      // 取证：用户报「切歌时音量突然变大」，需要能区分「外部改音量被忽略」
+      // 与「外部绕开这里直接写播放器」。这条日志是前者的判据。
+      // ignore: avoid_print
+      print('[VolAudit] setVolume(${_userVolume.toStringAsFixed(3)}) 淡化中被忽略');
+      return;
+    }
     await _activePlayer.setVolume(_userVolume * _vnAttenLinear);
   }
 
@@ -888,10 +915,16 @@ class AudioService {
       }
       final standby = _standbyPlayer();
       // 淡入段响度即正确：预加载时设置新歌的归一增益（旧歌保持各自增益直至淡出）。
+      // 先记下旧歌（活动播放器）的衰减 —— 下面的 _applyNormalizationGainTo
+      // 会把 _vnAttenLinear 覆盖成新歌的值。
+      final outgoingAtten = _vnAttenLinear;
       _vnLufs = loudnessLufs;
       _vnPeakDb = loudnessPeakDb;
       await _applyNormalizationGainTo(standby);
       if (generation != _crossfadePrepareGeneration) return false;
+      // 两路分开存：standby 那份给淡入方，还原后的那份留给正在播的旧歌。
+      _vnAttenLinearStandby = _vnAttenLinear;
+      _vnAttenLinear = outgoingAtten;
       // 上一次 abort 留下的 retire 链（pause→seek0→恢复音量）若还在飞，
       // 必须先等它收尾再把这个播放器重新拉去当淡入方——否则 retire 末尾的
       // setVolume(_userVolume) 会落在下面的 setVolume(0) 之后，新歌以全音量
@@ -1026,7 +1059,15 @@ class AudioService {
       int loggedQuartile = -1;
       while (true) {
         await Future<void>.delayed(Duration(milliseconds: stepMs));
-        if (token != _crossfadeToken) return;
+        if (token != _crossfadeToken) {
+          // 取证：斜坡被中止 = 有别的路径（abortCrossfade / 已过交叉点的暂停收尾 /
+          // 手动切歌）接管了这两个播放器。若用户听到「音量突然变大」，
+          // 这条日志与紧随其后的 VolAudit 一起能定位是谁写的音量。
+          // ignore: avoid_print
+          print('[Crossfade] ⚠ 斜坡被中止（token 失效）'
+              ' t=${(DateTime.now().difference(started).inMilliseconds / (totalMs <= 0 ? 1 : totalMs)).clamp(0.0, 1.0).toStringAsFixed(2)}');
+          return;
+        }
         // 进度按**真实经过时间**算，不是累加步数。切歌那一瞬 Dart 事件循环要
         // 跑 UI 重建 / 封面取色 / 预取，Future.delayed 会显著超时；累加步数会
         // 把斜坡越拖越长，表现为"规定时间到了还没淡完，最后突然跳回正常音量"。
@@ -1034,19 +1075,40 @@ class AudioService {
         final elapsed = DateTime.now().difference(started).inMilliseconds;
         final t = totalMs <= 0 ? 1.0 : (elapsed / totalMs).clamp(0.0, 1.0);
         final gains = crossfadeGains(t);
+        // 两路各自的响度衰减：旧歌用 _vnAttenLinear、新歌用 _vnAttenLinearStandby。
+        // 漏掉任一都会让该路比正常播放响 1/atten 倍（音量均衡开启时最明显）。
+        final rampOut = targetVolume * gains.outGain * _vnAttenLinear;
+        final rampIn = targetVolume * gains.inGain * _vnAttenLinearStandby;
         // 不 await：每步两次 MethodChannel 调用，串行 await 会把步长拉长
         // ignore: discarded_futures
-        outgoing.setVolume(targetVolume * gains.outGain);
+        outgoing.setVolume(rampOut);
         // ignore: discarded_futures
-        incoming.setVolume(targetVolume * gains.inGain);
-        final quartile = (t * 4).floor();
+        incoming.setVolume(rampIn);
+        final quartile = (t * 8).floor();
         if (quartile != loggedQuartile) {
           loggedQuartile = quartile;
+          // 期望值必须与上面**实际下发**的值同源（含衰减），否则衰减 ≠ 1 时
+          // 偏差检测会误报。
+          final expectedOut = rampOut;
+          final expectedIn = rampIn;
+          // 读回**实际**音量与曲线期望值比对（volume 是同步 getter，零开销）。
+          // 偏差过大 = 有别的代码路径在同一时间往这两个播放器写音量
+          // （暂停淡入/淡出循环、音量滑块、abort 收尾、归一化增益下发等），
+          // 斜坡被外来音量覆盖正是切歌爆音的头号嫌疑。
+          // 必须留证据再动手，不靠猜。
+          final actualOut = outgoing.volume;
+          final actualIn = incoming.volume;
+          final outDrift = (actualOut - expectedOut).abs();
+          final inDrift = (actualIn - expectedIn).abs();
+          final driftNote = (outDrift > 0.1 || inDrift > 0.1)
+              ? ' ⚠音量偏差 out实际=${actualOut.toStringAsFixed(2)}'
+                  ' in实际=${actualIn.toStringAsFixed(2)}'
+              : '';
           // ignore: avoid_print
           print(
-            '[Crossfade] t=${t.toStringAsFixed(2)} '
-            '$outLabel(out)=${(gains.outGain * targetVolume).toStringAsFixed(2)} '
-            '$inLabel(in)=${(gains.inGain * targetVolume).toStringAsFixed(2)}',
+            '[Crossfade] t=${t.toStringAsFixed(3)} '
+            '$outLabel(out)=${expectedOut.toStringAsFixed(2)} '
+            '$inLabel(in)=${expectedIn.toStringAsFixed(2)}$driftNote',
           );
         }
         if (t >= 1.0) break;
@@ -1060,7 +1122,10 @@ class AudioService {
         '[Crossfade] 收尾 setVolume 后 activeIsMain=' +
             (_activePlayer == _mainPlayer).toString(),
       );
-      await incoming.setVolume(_userVolume);
+      // 活动播放器即将换给 incoming：此刻把新歌的衰减升格为「当前」，
+      // 这样后续 setVolume / abort / 归一化重算都按新歌的衰减走。
+      _vnAttenLinear = _vnAttenLinearStandby;
+      await incoming.setVolume(_userVolume * _vnAttenLinear);
       await _retireFadedPlayer(outgoing);
       // ignore: avoid_print
       print(
@@ -1104,7 +1169,12 @@ class AudioService {
   /// - 未过交叉点：上层账目还在旧歌上，收掉那个已经静音起播的新歌，
   ///   让旧歌继续播下去（看到的和听到的都还是它）。旧歌之后自然播完时
   ///   走原有 completed → next() 流程。
-  void abortCrossfade() {
+  ///
+  /// [keepVolume]：调用方**紧接着就要让播放器停声**（`pause()` / `stop()`）时置 true。
+  /// 此时恢复音量毫无意义 —— 只会让淡入中的一路先"音量升上去"再停，
+  /// 听感就是用户报的「点暂停时音量突然变大」。恢复播放由 `resume()` 的
+  /// 淡入流程负责（它会从 0.01 重新淡入到目标音量），不需要这里兜。
+  void abortCrossfade({bool keepVolume = false}) {
     if (!_crossfading) return;
     _crossfadeToken++;
     final outgoing = _fadingOutPlayer;
@@ -1113,8 +1183,22 @@ class AudioService {
     _setCrossfading(false);
     _fadingOutPlayer = null;
     _fadingInPlayer = null;
+    // 取证：abort 的收尾会把已 promote 的 incoming 音量拉回正常（见下方），
+    // 中途接管时正是用户报的「切歌时音量突然变大」。必须知道**是谁**在淡化中途
+    // 调了它（实测 t≈0.54 被 `pause()` 路径打断），才能判断这次中断是否必要。
+    final caller = StackTrace.current
+        .toString()
+        .split('\n')
+        .skip(1)
+        .take(3)
+        .map((l) {
+          final m = RegExp(r'\((?:(?:package|dart):[^)]*?/)?([^/)]+\.dart(?::\d+)?)')
+              .firstMatch(l);
+          return m?.group(1) ?? l.trim().split(' ').first;
+        })
+        .join(' <- ');
     // ignore: avoid_print
-    print('[Crossfade] aborted crossed=$crossed');
+    print('[Crossfade] aborted crossed=$crossed 调用方: $caller');
     final discard = crossed ? outgoing : incoming;
     if (discard != null && discard != _activePlayer) {
       // 记录 in-flight 的 retire 链，prepareCrossfade 复用该播放器前 await 它
@@ -1126,8 +1210,52 @@ class AudioService {
         if (identical(_retireInFlight, future)) _retireInFlight = null;
       });
     }
+    // 已过交叉点：活动播放器已经是 incoming（新歌），它的衰减是 standby 那份。
+    // 不升格会把旧歌的衰减套到新歌上，导致音量偏差。
+    if (crossed) _vnAttenLinear = _vnAttenLinearStandby;
+    // 调用方马上要停声：不恢复音量（见 [keepVolume] 的说明）
+    if (keepVolume) return;
+    // 收尾**绝不能一步 setVolume**：实测 abort 常发生在淡化中途（t≈0.54），
+    // 此时 incoming 音量还在斜坡低位（约 0.72），一步拉到满就是用户听到的
+    // 「点暂停/切歌时音量突然变大」。改为 150ms 的补偿斜坡 —— 快速但连续。
+    final rampToken = _crossfadeToken;
     // ignore: discarded_futures
-    _activePlayer.setVolume(_userVolume * _vnAttenLinear);
+    _rampVolumeTo(_activePlayer, _userVolume * _vnAttenLinear, rampToken);
+  }
+
+  /// 把播放器音量从**当前值**平滑升降到 [target]（默认 150ms / 6 步）。
+  ///
+  /// 专供 abort 收尾：`abortCrossfade` 会在淡化中途被 `pause()` / `setUrl()` 等
+  /// 路径打断，此时淡入方音量还在斜坡低位，直接 `setVolume(target)` 会造成
+  /// 「切歌时音量突然变大」（真机实测 12:46:58，t=0.54 处 incoming 0.72 → 1.00）。
+  ///
+  /// [token] 是抢占保护：期间若又开始新的淡化或再次 abort，立即停手，
+  /// 否则会把音量写到已经换过角色的播放器上。
+  Future<void> _rampVolumeTo(
+    AudioPlayer p,
+    double target,
+    int token, {
+    int ms = 150,
+  }) async {
+    final from = p.volume;
+    if (!from.isFinite || (from - target).abs() < 0.01) {
+      try {
+        await p.setVolume(target);
+      } catch (_) {}
+      return;
+    }
+    const steps = 6;
+    final stepMs = (ms / steps).round();
+    for (var i = 1; i <= steps; i++) {
+      if (token != _crossfadeToken) return;
+      await Future<void>.delayed(Duration(milliseconds: stepMs));
+      if (token != _crossfadeToken) return;
+      try {
+        await p.setVolume(from + (target - from) * i / steps);
+      } catch (_) {
+        return;
+      }
+    }
   }
 
   /// 回收淡出结束的播放器：pause + seek(0)，**绝不 stop()**。

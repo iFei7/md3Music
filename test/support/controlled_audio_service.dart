@@ -60,8 +60,12 @@ class ControlledAudioService {
     if (completer != null) await completer.future;
   }
 
-  void abortCrossfade() {}
+  void abortCrossfade({bool keepVolume = false}) {}
   void discardPreparedCrossfade() {}
+  Future<void> resetAutomixRate(double _) async {}
+
+  /// AutoMix 实测响度补给（真实实现会改音量均衡增益）；替身只吞掉调用。
+  Future<void> applyMeasuredLoudness(double? _) async {}
 
   Future<void> playCommand({
     void Function(Object error, StackTrace stackTrace)? onError,
@@ -117,17 +121,6 @@ class ControlledAudioService {
 
   void emitPosition(Duration position) => _positionState.add(position);
 
-  /// 模拟平台自然播完：同步 processingState 后在 playerStateStream 上吐一次
-  /// completed，走 PlayerProvider 真实的 `_handlePlaybackCompleted` 通路。
-  ///
-  /// 睡眠定时「播完本曲后停止」（`SleepTimerMode.endOfTrack`）测试依赖此方法。
-  void emitCompleted() {
-    _player.processingState = just_audio.ProcessingState.completed;
-    _playerState.add(
-      just_audio.PlayerState(_player.playing, just_audio.ProcessingState.completed),
-    );
-  }
-
   void setDiagnosticSnapshot({
     required Duration position,
     required Duration bufferedPosition,
@@ -141,6 +134,15 @@ class ControlledAudioService {
   void emitPlayerState() => _playerState.add(
     just_audio.PlayerState(_player.playing, _player.processingState),
   );
+
+  /// 模拟平台自然播完：同步 processingState 后在 playerStateStream 上吐一次
+  /// completed，走 PlayerProvider 真实的 `_handlePlaybackCompleted` 通路。
+  void emitCompleted() {
+    _player.processingState = just_audio.ProcessingState.completed;
+    _playerState.add(
+      just_audio.PlayerState(_player.playing, just_audio.ProcessingState.completed),
+    );
+  }
 
   void emitSpeed(double speed) {
     _player.speed = speed;

@@ -9,12 +9,12 @@ import 'package:flutter/foundation.dart' show compute;
 ///
 /// 本地音乐歌词来源（参考 Lyrico 歌词文件约定）：
 /// 1. 音频内嵌歌词（ID3 USLT / SYLT、Vorbis LYRICS、MP4 ©lyr）—— 最高优先；
-/// 2. 音频同目录同名歌词文件（.lrc / .txt，按此顺序查找）。
+/// 2. 音频同目录同名歌词文件（.lrc / .ttml / .txt，按此顺序查找）。
 class LocalLyricLoader {
   LocalLyricLoader._();
 
   /// 支持的本地歌词文件扩展名（按优先级排列）。
-  static const List<String> lyricExtensions = ['.lrc', '.txt'];
+  static const List<String> lyricExtensions = ['.lrc', '.ttml', '.txt'];
 
   /// 仅从音频头部读取元数据的最大字节数。
   ///
@@ -59,7 +59,7 @@ class LocalLyricLoader {
   ///
   /// FLAC 特殊处理：audio_metadata_reader 1.4.1 的 FlacParser 用
   /// `comment.split("=")[1]` 解析 Vorbis comment，含 `=` 的歌词值
-  /// （如带 `=` 的文本歌词）会被截断到第一个 `=`，
+  /// （如 TTML XML 声明的 `version="1.0"`）会被截断到第一个 `=`，
   /// 因此 FLAC 内嵌歌词改为手动解析 LYRICS 标签（取第一个 `=` 后完整值）。
   static String? _readEmbeddedLyrics(String filePath) {
     if (filePath.toLowerCase().endsWith('.flac')) {
@@ -375,7 +375,7 @@ class LocalLyricLoader {
     return null;
   }
 
-  /// 查找音频同目录下的同名歌词文件（.lrc / .txt 优先级）。
+  /// 查找音频同目录下的同名歌词文件（.lrc / .ttml / .txt 优先级）。
   static String? _findSidecarLyric(String audioPath) {
     try {
       final audio = File(audioPath);

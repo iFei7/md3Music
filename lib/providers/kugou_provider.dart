@@ -154,7 +154,7 @@ class KugouProvider extends ChangeNotifier {
   int _lyricRequestGeneration = 0;
   // 歌词 LRU 仅保存有效歌词；typed API 已能区分 notFound 与失败，
   // 但有限TTL负缓存尚未落地，因此当前不缓存无歌词结果。
-  // 播放页 / 歌词外显推送 / Lyricon 三通道共享，命中不再发网络请求
+  // 播放页 / 桌面歌词链路 / Lyricon 三通道共享，命中不再发网络请求
   // （fmt='lrc' 实际是 LRC+KRC 并发双请求，重复拉取代价翻倍）。
   final Map<LyricRequestKey, KugouLyric> _lyricCache = {};
   final LyricRequestDeduplicator<LyricLookupResult> _lyricRequests =
@@ -415,6 +415,7 @@ class KugouProvider extends ChangeNotifier {
       _playlistSongs?.songs.map((e) => e.toSong()).toList() ?? [];
   List<Song> get personalFmAsSongs =>
       _personalFmSongs.map((e) => e.toSong()).toList();
+
   // ==================== 首页刷歌推荐 ====================
 
   List<KugouSongDetail> get homeDiscoverSongs => _homeDiscoverSongs;
@@ -1513,7 +1514,6 @@ class KugouProvider extends ChangeNotifier {
     // 刷歌断点同样按账号隔离（游标 = 这个账号今天刷到哪了）
     _resetHomeDiscoverProgress();
 
-
     // 重载新账号的签到日历
     _localSignedDays.clear();
     await _loadLocalSignedDays();
@@ -1560,7 +1560,6 @@ class KugouProvider extends ChangeNotifier {
       _localSignedDays.clear();
       _resetHomeDiscoverProgress();
 
-
       final remaining = _apiClient.sortedAccounts;
       if (remaining.isNotEmpty) {
         // 自动切换到最近登录的其他账号
@@ -1590,7 +1589,6 @@ class KugouProvider extends ChangeNotifier {
     await removeAccount(uid);
   }
 
-
   /// 丢掉刷歌的断点与已消费集合。
   ///
   /// 断点与账号绑定：游标是"这个账号今天刷到哪了"，带着它换账号会让新账号从
@@ -1604,6 +1602,7 @@ class KugouProvider extends ChangeNotifier {
     _homeDiscoverProgressLoaded = false;
     unawaited(_homeDiscoverStore.clear());
   }
+
   void _clearAvatarCache() {
     try {
       // emptyCache 返回 Future，异步错误需用 catchError 捕获，
