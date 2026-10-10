@@ -1,7 +1,7 @@
 // 车机模式「退出」动作：顶栏按钮 → 二次确认弹窗 → 关闭车机模式开关。
 //
-// 抽成顶层函数是因为 MD（FullPlayer）与 AM（AmStyleFullPlayer）是两份独立 State，
-// 都要提供同一个退出入口；文案与确认流程共用一份，避免两处各写一遍后逐渐分叉。
+// 抽成顶层函数是为了让 FullPlayer 与其他需要该入口的组件共用同一份
+// 文案与确认流程，避免多处各写一遍后逐渐分叉。
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';

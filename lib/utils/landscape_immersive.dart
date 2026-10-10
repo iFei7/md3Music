@@ -37,7 +37,7 @@ bool kLandscapeImmersiveEnabled = true;
 
 /// 全屏播放器竖屏下的系统栏样式。
 ///
-/// **重要**：[AmStyleFullPlayer._buildFullLayout] 中 AnnotatedRegion 的 value
+/// **重要**：FullPlayer 的 AnnotatedRegion 的 value
 /// 必须引用本常量，确保 applyImmersiveForOrientation 与 AnnotatedRegion
 /// 使用同一引用——否则 SystemUiOverlayStyle 未重写 ==，引用不等会触发
 /// 平台 channel 真实调用，导致系统栏反复重设（视觉闪烁）。

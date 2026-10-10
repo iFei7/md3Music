@@ -4,7 +4,6 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/layout/responsive_layout.dart';
-import '../../core/services/desktop_lyric_service.dart';
 import '../../core/services/equalizer_service.dart';
 import '../../core/services/media_notification_service.dart';
 import '../../widgets/depth_cover_host.dart';
@@ -114,9 +113,6 @@ class _FullPlayerState extends State<FullPlayer>
 
   // 封面淡入淡出动画
   late final AnimationController _artworkFadeController;
-
-  // 桌面歌词状态监听：长按歌词按钮 toggle 后同步 icon
-  late final VoidCallback _onDesktopLyricChanged;
   late final Animation<double> _artworkFadeAnimation;
 
   /// 旧封面淡出动画：C8 优化，值恒等于 `1 - _artworkFadeAnimation.value`
@@ -224,7 +220,7 @@ class _FullPlayerState extends State<FullPlayer>
   /// 面板内「整页跳转」的目标 Navigator。
   ///
   /// 车机模式下必须走根 Navigator：面板自带一层 Navigator，按原逻辑
-  /// `Navigator.of(context)` 会把专辑页 / 歌手页 / MV 等 pushed 到面板内部，
+  /// `Navigator.of(context)` 会把专辑页 / 歌手页等 pushed 到面板内部，
   /// 把常驻播放器顶掉（视觉上「面板被换成了专辑页」）。
   /// 与 DlnaCastingOverlay 通过 appNavigatorKey 跳转的做法一致。
   NavigatorState? _pageNavigator(BuildContext context) {
@@ -533,11 +529,6 @@ class _FullPlayerState extends State<FullPlayer>
       initialIndex: 1,
     );
 
-    // 桌面歌词状态变化时刷新 UI（同步歌词按钮 icon）
-    _onDesktopLyricChanged = () {
-      if (mounted) setState(() {});
-    };
-    DesktopLyricService.instance.addListener(_onDesktopLyricChanged);
     _artworkFadeController = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
@@ -776,7 +767,6 @@ class _FullPlayerState extends State<FullPlayer>
     try {
       context.read<PlayerProvider>().removeListener(_onPlayerSongChanged);
     } catch (_) {}
-    DesktopLyricService.instance.removeListener(_onDesktopLyricChanged);
     WidgetsBinding.instance.removeObserver(this);
     _artworkFadeController.dispose();
     _zenController.dispose();
@@ -1451,7 +1441,7 @@ class _FullPlayerState extends State<FullPlayer>
                     builder: (context) {
                       // 封面 + 标题视作一个整体，以统一间距 g 贴合左栏：
                       // 方角封面左锚定（文字左缘 = 封面左缘，右侧余量归歌词面板）、
-                      // 圆盘封面（频谱 0/1）整块居中；纵向居中令上下留白相等。
+                      // 圆盘封面整块居中；纵向居中令上下留白相等。
                       // 异形屏内嵌“算入”等距而非叠加：内层左 padding = clamp(g - 刘海, 0, g)，
                       // 叠加外层 SafeArea 已让出的刘海后物理左间距 = max(g, 刘海)，不再右推封面。
                       const g = 16.0;
@@ -1682,7 +1672,7 @@ class _FullPlayerState extends State<FullPlayer>
                     builder: (context) {
                       // 封面 + 标题视作一个整体，以统一间距 g 贴合左栏：
                       // 方角封面左锚定（文字左缘 = 封面左缘，右侧余量归歌词面板）、
-                      // 圆盘封面（频谱 0/1）整块居中；纵向居中令上下留白相等。
+                      // 圆盘封面整块居中；纵向居中令上下留白相等。
                       // 异形屏内嵌“算入”等距而非叠加：内层左 padding = clamp(g - 刘海, 0, g)，
                       // 叠加外层 SafeArea 已让出的刘海后物理左间距 = max(g, 刘海)，不再右推封面。
                       const g = 16.0;
@@ -2412,13 +2402,6 @@ class _FullPlayerState extends State<FullPlayer>
                   }
                 : null,
           ),
-        PlayerTabItem(
-          // 桌面歌词开启时用实心 icon，与 mini_player 一致
-          icon: DesktopLyricService.instance.enabled
-              ? Icons.lyrics
-              : Icons.lyrics_outlined,
-          onLongPress: _toggleDesktopLyric,
-        ),
         if (_tabLayout.hasComments)
           PlayerTabItem(
             icon: Icons.comment_outlined,
@@ -2438,33 +2421,6 @@ class _FullPlayerState extends State<FullPlayer>
     final song = context.read<PlayerProvider>().currentSong;
     if (song == null) return;
     showCommentComposeSheet(context, song: song, target: target);
-  }
-
-  /// 长按歌词段：开关桌面歌词，并同步通知栏的「桌面歌词」按钮状态。
-  Future<void> _toggleDesktopLyric() async {
-    HapticFeedback.lightImpact();
-    await DesktopLyricService.instance.toggle();
-    if (!mounted) return;
-    final player = context.read<PlayerProvider>();
-    final song = player.currentSong;
-    // 收藏状态需实时查询，避免暂停时显示为未收藏
-    bool isFavorited = false;
-    if (song != null) {
-      try {
-        isFavorited = context.read<FavoritesProvider>().isFavorite(song.id);
-      } catch (_) {}
-    }
-    await MediaNotificationService.updateNotification(
-      // 用 displayName 剥离 .mp3 等后缀，避免标题显示文件名
-      title: song?.displayName ?? '',
-      artist: song?.artist ?? '',
-      artUrl: song?.artworkUri,
-      isPlaying: player.isPlaying,
-      position: player.position,
-      duration: player.duration ?? Duration.zero,
-      desktopLyricEnabled: DesktopLyricService.instance.enabled,
-      isFavorited: isFavorited,
-    );
   }
 
   /// 导航条拖动开始：记录起始 tab
@@ -3308,7 +3264,6 @@ class _FullPlayerState extends State<FullPlayer>
   }
 
   /// 弹出 MD3 风格播放页的歌词显示设置面板（字号/行间距/字体）。
-  /// 与 Apple Music 风格的 `LyricPreferences` 完全独立。
   void _showLyricPreferencesSheet(BuildContext context) {
     showM3EModalBottomSheet(
       context: context,

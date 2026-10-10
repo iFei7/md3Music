@@ -1,16 +1,13 @@
 import 'package:material_ui/material_ui.dart';
-import 'package:provider/provider.dart';
 
-import '../../providers/theme_provider.dart';
 import 'full_player.dart';
-import 'full_player_am.dart';
 import 'full_player_route.dart';
 
 /// 上滑拖拽期间的跟手覆盖层（位于 Navigator 之上）。
 ///
 /// 关键约束：手势期间不能 push 路由（实测 push 会立即切断 Flutter 事件流，
 /// 导致跟手失效）。因此拖拽过程中由本覆盖层跟随手指显示**真实的 FullPlayer**
-/// （MD / AM 风格，与路由渲染同一组件），与展开后的播放器界面完全一致，
+/// （与路由渲染同一组件），与展开后的播放器界面完全一致，
 /// 松手后由路由从相同进度接管，视觉无缝衔接：
 /// - 位置：顶端从 [playerDragOriginTop]（= MiniPlayer 顶端）随进度上移到 0
 /// - 透明度：前 20% 屏高内线性 0→1，之后保持 1
@@ -77,7 +74,6 @@ class _DragPlayerContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final useAm = context.watch<ThemeProvider>().useAmStylePlayer;
-    return useAm ? const AmStyleFullPlayer() : const FullPlayer();
+    return const FullPlayer();
   }
 }

@@ -3,26 +3,16 @@ import 'package:material_ui/material_ui.dart';
 import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../core/layout/ui_density.dart';
-import '../core/services/custom_font_loader.dart';
 import '../core/theme/app_theme.dart';
-import '../data/repositories/settings_repository.dart';
 
 class ThemeProvider extends ChangeNotifier {
   static const String _key = 'theme_mode';
   static const String _dynamicKey = 'use_dynamic_color';
   static const String _coverDynamicKey = 'use_cover_dynamic_color';
-  static const String _amStylePlayerKey = 'use_am_style_player';
   static const String _manualSeedKey = 'manual_seed_color';
   static const String _oledBlackKey = 'use_oled_black';
-  // 「显示大小」档位（安卓系统同名设置的语义，见 core/layout/ui_density.dart）
-  static const String _displayScaleKey = 'ui_display_scale';
-  // 已废弃的逐元素缩放键，加载时清理（见 _loadDisplayScale）
-  static const String _legacyUiScaleKey = 'ui_scale';
   // 底部导航栏文字显示行为：始终显示 / 仅当前页 / 始终不显示
   static const String _navLabelBehaviorKey = 'nav_label_behavior';
-  static const String _fontSourceKey = 'font_source';
-  static const String _customFontPathKey = 'custom_font_path';
   static const String _artistPhotoBgKey = 'use_artist_photo_background';
   static const String _artistPhotoIntervalKey = 'artist_photo_interval';
   static const String _artistPhotoOpacityKey = 'artist_photo_opacity';
@@ -34,8 +24,6 @@ class ThemeProvider extends ChangeNotifier {
       backgroundImageEnabledPreferenceKey;
   static const String _bgImagePathKey = 'background_image_path';
   static const String _bgBlurKey = 'background_blur';
-  // AM 播放器模糊封面背景强度（高斯模糊 sigma，0~30）
-  static const String _amPlayerBlurKey = 'am_player_blur';
   static const String _bgOpacityKey = 'background_opacity';
   // 按背景图莫奈取色开关（默认开启）
   static const String _bgMonetKey = 'use_background_monet';
@@ -50,19 +38,11 @@ class ThemeProvider extends ChangeNotifier {
   // 开启且提取成功时优先级高于系统壁纸色（见 effectiveSeedColor）。
   bool _useCoverSeedColor = false;
   Color? _coverSeedColor;
-  bool _useAmStylePlayer = false;
   Color? _manualSeedColor;
   bool _useOledBlack = false;
-  double _displayScale = kDefaultDisplayScale;
   // 底部导航栏文字显示行为（默认始终不显示）
   NavigationDestinationLabelBehavior _navLabelBehavior =
       NavigationDestinationLabelBehavior.alwaysHide;
-  // 字体来源（system / bundled（已废弃，等同 system）/ custom）
-  FontSource _fontSource = FontSource.system;
-  // 用户选择的字体文件路径（原生端拷贝到 filesDir 后的真实路径）
-  String? _customFontPath;
-  // 运行时加载成功后填充的 fontFamily（仅在 custom 模式且加载成功时非 null）
-  String? _loadedCustomFontFamily;
   bool _useArtistPhotoBackground = false;
   int _artistPhotoInterval = 15;
   double _artistPhotoOpacity = 0.55;
@@ -72,8 +52,6 @@ class ThemeProvider extends ChangeNotifier {
   bool _useBackgroundImage = true;
   String? _backgroundImagePath;
   double _backgroundBlur = 20.0;
-  // AM 播放器背景模糊（sigma 0~30，默认 30 = 原硬编码值）
-  double _amPlayerBlur = 30.0;
   double _backgroundOpacity = 0.2;
   // 按背景图莫奈取色（默认开启；关闭后背景图仍显示但不参与主题色）
   bool _useBackgroundMonet = true;
@@ -84,21 +62,15 @@ class ThemeProvider extends ChangeNotifier {
   double _textShadowBlur = AppTheme.defaultTextShadowBlur;
   // 从背景图片提取的主色（运行时，作为莫奈取色种子）
   Color? _backgroundSeedColor;
-  // 强调排版（M3E Emphasized Typography）：默认开启，关闭后回退常规字重
-  bool _emphasizedTypography = true;
 
   ThemeMode get themeMode => _themeMode;
   bool get useDynamicColor => _useDynamicColor;
   Color? get systemSeedColor => _systemSeedColor;
   bool get useCoverSeedColor => _useCoverSeedColor;
   Color? get coverSeedColor => _coverSeedColor;
-  bool get useAmStylePlayer => _useAmStylePlayer;
   Color? get manualSeedColor => _manualSeedColor;
   bool get useOledBlack => _useOledBlack;
-  double get displayScale => _displayScale;
   NavigationDestinationLabelBehavior get navLabelBehavior => _navLabelBehavior;
-  FontSource get fontSource => _fontSource;
-  String? get customFontPath => _customFontPath;
   bool get useArtistPhotoBackground => _useArtistPhotoBackground;
   int get artistPhotoInterval => _artistPhotoInterval;
   double get artistPhotoOpacity => _artistPhotoOpacity;
@@ -106,13 +78,11 @@ class ThemeProvider extends ChangeNotifier {
   bool get useBackgroundImage => _useBackgroundImage;
   String? get backgroundImagePath => _backgroundImagePath;
   double get backgroundBlur => _backgroundBlur;
-  double get amPlayerBlur => _amPlayerBlur;
   double get backgroundOpacity => _backgroundOpacity;
   bool get useBackgroundMonet => _useBackgroundMonet;
   bool get useTextShadow => _useTextShadow;
   double get textShadowBlur => _textShadowBlur;
   Color? get backgroundSeedColor => _backgroundSeedColor;
-  bool get emphasizedTypographyEnabled => _emphasizedTypography;
 
   /// 文字阴影是否实际生效：开关本身开启 **且** 已启用自定义背景图片。
   /// 未启用背景图时纯色主题自带足够对比度，阴影只会让文字发虚，故不生效。
@@ -140,21 +110,6 @@ class ThemeProvider extends ChangeNotifier {
     return _manualSeedColor ?? AppTheme.defaultSeedColor;
   }
 
-  /// 当前生效的 fontFamily（传给 AppTheme）：
-  /// - [FontSource.system]：返回 null（让 Flutter 走系统字体链）
-  /// - [FontSource.bundled]：已废弃（内置 SimHei 已移除），等同 system 返回 null
-  /// - [FontSource.custom]：返回 [_loadedCustomFontFamily]，
-  ///   加载失败时为 null（实际降级为 system 行为）
-  String? get effectiveFontFamily {
-    switch (_fontSource) {
-      case FontSource.system:
-      case FontSource.bundled:
-        return null;
-      case FontSource.custom:
-        return _loadedCustomFontFamily;
-    }
-  }
-
   ThemeProvider({bool? initialUseBackgroundImage}) {
     if (initialUseBackgroundImage != null) {
       _useBackgroundImage = initialUseBackgroundImage;
@@ -162,17 +117,12 @@ class ThemeProvider extends ChangeNotifier {
     _loadThemeMode();
     _loadDynamicColor();
     _loadUseCoverSeedColor();
-    _loadAmStylePlayer();
     _loadManualSeedColor();
     _loadOledBlack();
-    _loadDisplayScale();
     _loadNavLabelBehavior();
-    _loadFontSource();
     _loadArtistPhotoBackground();
     _loadLyricDoubleTapToJump();
     _loadBackgroundImage();
-    _loadAmPlayerBlur();
-    _loadEmphasizedTypography();
   }
 
   Future<void> _loadThemeMode() async {
@@ -288,25 +238,6 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 加载「Apple Music 风格播放页」开关持久化值，默认关闭。
-  Future<void> _loadAmStylePlayer() async {
-    final prefs = await SharedPreferences.getInstance();
-    _useAmStylePlayer = prefs.getBool(_amStylePlayerKey) ?? false;
-    notifyListeners();
-  }
-
-  /// 切换「Apple Music 风格播放页」开关。
-  /// - 开启：用 AM 风格 FullPlayer（模糊封面背景 + 弹簧动画 + KRC 逐字歌词）
-  /// - 关闭：用原版 MD3 FullPlayer（标准主题色 + LRC 行级歌词）
-  /// 切换后已打开的 FullPlayer 不会立即换 widget，下次 push 时才走新分支。
-  Future<void> setUseAmStylePlayer(bool enabled) async {
-    if (_useAmStylePlayer == enabled) return;
-    _useAmStylePlayer = enabled;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_amStylePlayerKey, enabled);
-  }
-
   /// 加载「歌词双击跳转」开关持久化值，默认关闭。
   Future<void> _loadLyricDoubleTapToJump() async {
     final prefs = await SharedPreferences.getInstance();
@@ -403,44 +334,6 @@ class ThemeProvider extends ChangeNotifier {
     await prefs.setBool(_oledBlackKey, enabled);
   }
 
-  /// 加载「强调排版」开关持久化值（M3E Emphasized Typography），默认开启。
-  Future<void> _loadEmphasizedTypography() async {
-    _emphasizedTypography =
-        await SettingsRepository().getEmphasizedTypographyEnabled();
-    notifyListeners();
-  }
-
-  /// 切换「强调排版」开关并持久化。
-  /// 开启时全局 TextTheme 走 M3ETypography.emphasized；关闭后回退常规字重。
-  Future<void> setEmphasizedTypographyEnabled(bool enabled) async {
-    if (_emphasizedTypography == enabled) return;
-    _emphasizedTypography = enabled;
-    notifyListeners();
-    await SettingsRepository().setEmphasizedTypographyEnabled(enabled);
-  }
-
-  /// 加载「显示大小」档位，默认 [kDefaultDisplayScale]（设备真实 dp）。
-  ///
-  /// 顺带清掉旧键 `ui_scale`：那是已删除的逐元素缩放实现留下的，值域 0.5~5.0，
-  /// 沿用会让存了 3.0 的用户拿到 131dp 宽的视口。不做值迁移，一律从 1.00 起。
-  Future<void> _loadDisplayScale() async {
-    final prefs = await SharedPreferences.getInstance();
-    _displayScale = (prefs.getDouble(_displayScaleKey) ?? kDefaultDisplayScale)
-        .clamp(kMinDisplayScale, kMaxDisplayScale);
-    notifyListeners();
-    await prefs.remove(_legacyUiScaleKey);
-  }
-
-  /// 设置「显示大小」档位（[kMinDisplayScale] ~ [kMaxDisplayScale]）。
-  Future<void> setDisplayScale(double scale) async {
-    final clamped = scale.clamp(kMinDisplayScale, kMaxDisplayScale);
-    if (_displayScale == clamped) return;
-    _displayScale = clamped;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_displayScaleKey, clamped);
-  }
-
   /// 加载底部导航栏文字显示行为的持久化值，默认始终不显示。
   Future<void> _loadNavLabelBehavior() async {
     final prefs = await SharedPreferences.getInstance();
@@ -483,67 +376,6 @@ class ThemeProvider extends ChangeNotifier {
     await _saveThemeMode(mode);
   }
 
-  // ============== 字体来源 ==============
-
-  /// 加载持久化的字体来源与自定义字体路径。
-  /// 读完后若为 custom 模式，自动触发 FontLoader 注册（异步，不阻塞构造）。
-  Future<void> _loadFontSource() async {
-    final prefs = await SharedPreferences.getInstance();
-    _fontSource = CustomFontLoader.fromName(prefs.getString(_fontSourceKey));
-    _customFontPath = prefs.getString(_customFontPathKey);
-    notifyListeners();
-    // 若已配置自定义字体，立即尝试加载（Fire-and-forget，加载完成后会 notifyListeners）
-    if (_fontSource == FontSource.custom) {
-      await _tryLoadCustomFont();
-    }
-  }
-
-  /// 设置字体来源并持久化。
-  /// 切换到 custom 时若 [_loadedCustomFontFamily] 仍为 null（未加载成功），
-  /// 调用方应同时调用 [setCustomFontPath] 触发加载流程。
-  Future<void> setFontSource(FontSource source) async {
-    if (_fontSource == source) return;
-    _fontSource = source;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_fontSourceKey, source.name);
-  }
-
-  /// 设置自定义字体文件路径并立即尝试加载注册。
-  /// 传 null 清除路径并卸载已加载的字体（实际效果降级到 system）。
-  Future<void> setCustomFontPath(String? path) async {
-    if (_customFontPath == path) return;
-    _customFontPath = path;
-    final prefs = await SharedPreferences.getInstance();
-    if (path != null) {
-      await prefs.setString(_customFontPathKey, path);
-      // 立即尝试加载（路径变化时重新注册）
-      await _tryLoadCustomFont();
-    } else {
-      await prefs.remove(_customFontPathKey);
-      _loadedCustomFontFamily = null;
-      notifyListeners();
-    }
-  }
-
-  /// 启动时调用：若 fontSource == custom 且 path 存在，尝试加载注册。
-  /// 失败时静默降级（不修改持久化值，UI 表现等同 system）。
-  Future<void> loadCustomFontOnStartup() async {
-    if (_fontSource != FontSource.custom) return;
-    await _tryLoadCustomFont();
-  }
-
-  /// 内部：尝试用 FontLoader 加载 [_customFontPath] 指向的字体文件。
-  /// 加载成功则填充 [_loadedCustomFontFamily] 并 notifyListeners。
-  /// 失败时 [_loadedCustomFontFamily] 置 null，UI 自然降级为 system 行为。
-  Future<void> _tryLoadCustomFont() async {
-    final path = _customFontPath;
-    final family = await CustomFontLoader.loadIfAvailable(path);
-    final changed = family != _loadedCustomFontFamily;
-    _loadedCustomFontFamily = family;
-    if (changed) notifyListeners();
-  }
-
   // ============== 自定义背景图片 ==============
 
   /// 加载背景图片相关持久化值（开关 / 路径 / 模糊 / 透明度 / 莫奈取色 / 文字阴影），
@@ -558,16 +390,6 @@ class ThemeProvider extends ChangeNotifier {
     _useTextShadow = prefs.getBool(_textShadowKey) ?? false;
     _textShadowBlur =
         prefs.getDouble(_textShadowBlurKey) ?? AppTheme.defaultTextShadowBlur;
-    notifyListeners();
-  }
-
-  /// 加载 AM 播放器背景模糊强度（默认 30，与历史硬编码视觉一致）。
-  ///
-  /// 无持久化值时保持 [_amPlayerBlur] 当前值：构造函数的异步加载可能在
-  /// [setAmPlayerBlur] 之后才完成，硬写 30 会把用户刚设置的值覆盖掉。
-  Future<void> _loadAmPlayerBlur() async {
-    final prefs = await SharedPreferences.getInstance();
-    _amPlayerBlur = prefs.getDouble(_amPlayerBlurKey) ?? _amPlayerBlur;
     notifyListeners();
   }
 
@@ -643,16 +465,6 @@ class ThemeProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_bgBlurKey, clamped);
-  }
-
-  /// 设置 AM 播放器背景模糊强度（高斯模糊 sigma，0~30；0 = 不模糊）。
-  Future<void> setAmPlayerBlur(double blur) async {
-    final clamped = blur.clamp(0.0, 30.0);
-    if (_amPlayerBlur == clamped) return;
-    _amPlayerBlur = clamped;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_amPlayerBlurKey, clamped);
   }
 
   /// 设置背景图片透明度（0.2~1.0，1.0 完全显示图片）。

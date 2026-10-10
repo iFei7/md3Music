@@ -10,12 +10,10 @@ import 'package:provider/provider.dart';
 
 import '../../providers/car_mode_provider.dart';
 import '../../providers/player_provider.dart';
-import '../../providers/theme_provider.dart';
 import '../../widgets/smart_artwork_image.dart';
 import 'car_mode_layout.dart';
 import 'car_mode_lyric_bar.dart';
 import 'full_player.dart';
-import 'full_player_am.dart';
 import 'full_player_route.dart';
 
 /// 车机模式外壳：开启时把 [child]（整棵根 Navigator）与常驻播放器面板并排。
@@ -441,7 +439,7 @@ class _CarModePanelState extends State<CarModePanel>
 /// `Navigator.of` 与 `Overlay`，没有这层会直接抛
 /// "Navigator operation requested with a context that does not include a Navigator"。
 ///
-/// 面板内的**整页跳转**（专辑 / 歌手 / MV / 歌曲信息 / 均衡器 / 音效）已由
+/// 面板内的**整页跳转**（专辑 / 歌手 / 歌曲信息 / 均衡器 / 音效）已由
 /// [FullPlayer.dockMode] 重定向到根 Navigator —— 否则那些页面会顶掉面板内容，
 /// 常驻播放器视觉上消失。
 class _CarModePlayerHost extends StatelessWidget {
@@ -450,8 +448,8 @@ class _CarModePlayerHost extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 这层 Navigator 只创建一次：路由页复用同一个 [_CarModePlayerBody]，
-    // 播放页样式（MD/AM）切换由它内部的 watch 处理，只替换播放器组件、
-    // 不重建 Navigator —— 重建会让旧实例 dispose 时 stop 掉频谱服务。
+    // 播放页样式切换由它内部的 watch 处理，只替换播放器组件、
+    // 不重建 Navigator。
     // 面板这层 Navigator 必须有**自己的** HeroController：
     // MaterialApp 通过 HeroControllerScope 把同一个 HeroController 提供给其下
     // 所有 Navigator，嵌套 Navigator 会拿到根 Navigator 已绑定的那个 →
@@ -471,17 +469,14 @@ class _CarModePlayerHost extends StatelessWidget {
   }
 }
 
-/// 二选一渲染当前播放页样式（MD / AM）。位于面板 Navigator 的某一页内部，
+/// 渲染当前播放页（FullPlayer）。位于面板 Navigator 的某一页内部，
 /// 但依赖的 Provider 在 MaterialApp 之上，所以样式开关切换时本组件会重建。
 class _CarModePlayerBody extends StatelessWidget {
   const _CarModePlayerBody();
 
   @override
   Widget build(BuildContext context) {
-    final useAm = context.watch<ThemeProvider>().useAmStylePlayer;
-    return useAm
-        ? const AmStyleFullPlayer(dockMode: true)
-        : const FullPlayer(dockMode: true);
+    return const FullPlayer(dockMode: true);
   }
 }
 

@@ -7,8 +7,7 @@ import 'md3_lyric_preferences.dart';
 
 /// MD3 风格播放页的歌词显示调节面板。
 ///
-/// 与 Apple Music 风格的 `LyricPreferencesPanel` 结构类似，但内部使用
-/// [Md3LyricPreferences] 独立配置（与 Apple Music 风格的设置互不干扰）。
+/// 内部使用 [Md3LyricPreferences] 独立配置，修改即时生效。
 ///
 /// 包含：
 /// - 字号滑块

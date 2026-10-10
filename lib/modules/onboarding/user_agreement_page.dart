@@ -5,6 +5,7 @@ import 'package:md3music/providers/theme_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../player/car_mode_panel.dart';
+import '../update/github_release_client.dart';
 
 /// 用户协议页（首次启动展示）。
 ///
@@ -35,7 +36,7 @@ class UserAgreementPage extends StatefulWidget {
   State<UserAgreementPage> createState() => _UserAgreementPageState();
 
   /// 弹出免责声明全文（Markdown 原文）。在 GitHub 仓库中访问
-  /// `https://github.com/zzyoxml/md3Music/blob/arch-local-first/DISCLAIMER.md` 可看完整版。
+  /// `https://github.com/iFei7/md3Music/blob/master/DISCLAIMER.md` 可看完整版。
   static Future<void> showDisclaimerDialog(BuildContext context) {
     return showDialog<void>(
       context: context,
@@ -44,7 +45,7 @@ class UserAgreementPage extends StatefulWidget {
         content: const SingleChildScrollView(
           child: Text(
             '感谢你关注 MD3Music。在下载、安装或使用本软件之前，请仔细阅读以下条款。\n\n'
-            '一、本应用 MD3Music 是由开发者 zzyoxml 个人独立维护的开源音乐播放器，'
+            '一、本应用 MD3Music 是基于开源项目 MD3Music 的社区 fork 版本，'
             '不是酷狗音乐的官方软件，也未获得酷狗音乐及其母公司的官方授权、认可或赞助。\n\n'
             '二、本软件所有的音乐播放链接、歌词文本、专辑封面、歌单数据等，'
             '均通过调用网络上酷狗音乐公开的 公开 API 接口获取 获取。'
@@ -53,7 +54,9 @@ class UserAgreementPage extends StatefulWidget {
             '软件仅充当"浏览器"角色，在用户本地展示公开数据。\n\n'
             '四、本应用从未收集任何用户隐私数据，所有操作产生的数据都保留在用户本地。\n\n'
             '五、该软件仅供交流学习，严禁用于商业用途，请于下载后的 24 小时内卸载。\n\n'
-            '完整版请访问：\nhttps://github.com/zzyoxml/md3Music/blob/arch-local-first/DISCLAIMER.md',
+            '完整版请访问：\n'
+            'https://github.com/${GithubReleaseClient.owner}/${GithubReleaseClient.repo}'
+            '/blob/master/DISCLAIMER.md',
           ),
         ),
         actions: [
@@ -61,9 +64,10 @@ class UserAgreementPage extends StatefulWidget {
             onPressed: () {
               Navigator.of(ctx).pop();
               Clipboard.setData(
-                const ClipboardData(
+                ClipboardData(
                   text:
-                      'https://github.com/zzyoxml/md3Music/blob/rust-local-two/DISCLAIMER.md',
+                      'https://github.com/${GithubReleaseClient.owner}/${GithubReleaseClient.repo}'
+                      '/blob/master/DISCLAIMER.md',
                 ),
               );
             },

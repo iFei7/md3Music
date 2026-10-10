@@ -5,7 +5,6 @@ import 'package:just_audio/just_audio.dart' as just_audio;
 import 'package:md3music/data/models/song.dart';
 import 'package:md3music/data/repositories/history_repository.dart';
 import 'package:md3music/providers/player_provider.dart';
-import 'package:md3music/modules/player/am_transport_controls.dart';
 import 'package:md3music/widgets/md3e_transport_row.dart';
 import 'package:md3music/widgets/playback_status_feedback.dart';
 import 'package:provider/provider.dart';
@@ -167,85 +166,6 @@ void main() {
       await tester.pump();
       expect(audio.playCommandCount, 2);
       expect(player.resolveError, isNull);
-    } finally {
-      await tester.pumpWidget(const SizedBox.shrink());
-      player.dispose();
-      await tester.runAsync(() => HistoryRepository().flush());
-      await audio.dispose();
-      AudioServiceLoader.setTestOverride(null);
-    }
-  });
-
-  testWidgets('封面和歌词失败提示可见时，两套播放器传输控件仍可操作', (tester) async {
-    SharedPreferences.setMockInitialValues({});
-    _mockConnectivityStream();
-    final audio = ControlledAudioService();
-    AudioServiceLoader.setTestOverride(() async => audio);
-    late final PlayerProvider player;
-    var mdPlayCalls = 0;
-    var amPlayCalls = 0;
-    try {
-      await tester.runAsync(() async {
-        player = PlayerProvider();
-        await player.audioReady.timeout(const Duration(seconds: 10));
-        final load = player.playPlaylist([_song()], 0);
-        await audio.waitForPlaylistLoads(1);
-        await audio.completeSourceLoad(0);
-        await load;
-        audio.emitPlaying(true);
-        audio.emitError(just_audio.PlayerException(2, 'decoder failed', 0));
-      });
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<PlayerProvider>.value(
-          value: player,
-          child: MaterialApp(
-            home: Scaffold(
-              body: Column(
-                children: [
-                  const Text('封面加载失败'),
-                  const Text('歌词加载失败'),
-                  const PlaybackStatusFeedback(),
-                  MD3ETransportRow(
-                    isPlaying: player.isPlaying,
-                    onPlayPause: () => mdPlayCalls++,
-                  ),
-                  AMTransportControls(
-                    isPlaying: player.isPlaying,
-                    onPlayPause: () => amPlayCalls++,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.text('封面加载失败'), findsOneWidget);
-      expect(find.text('歌词加载失败'), findsOneWidget);
-      expect(find.text('播放失败，请重试'), findsOneWidget);
-      expect(find.byType(MD3ETransportRow), findsOneWidget);
-      expect(find.byType(AMTransportControls), findsOneWidget);
-      expect(find.byTooltip(player.isPlaying ? '暂停' : '播放'), findsWidgets);
-      expect(find.byTooltip('上一首'), findsWidgets);
-      expect(find.byTooltip('下一首'), findsWidgets);
-
-      final semantics = tester.ensureSemantics();
-      expect(find.bySemanticsLabel('上一首'), findsWidgets);
-      expect(find.bySemanticsLabel('下一首'), findsWidgets);
-      expect(
-        find.bySemanticsLabel(player.isPlaying ? '暂停' : '播放'),
-        findsWidgets,
-      );
-      semantics.dispose();
-
-      await tester.tapAt(tester.getCenter(find.byType(MD3ETransportRow)));
-      await tester.pumpAndSettle();
-      await tester.tapAt(tester.getCenter(find.byType(AMTransportControls)));
-      await tester.pumpAndSettle();
-      expect(mdPlayCalls, 1);
-      expect(amPlayCalls, 1);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       player.dispose();

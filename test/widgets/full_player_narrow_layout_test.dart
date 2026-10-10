@@ -10,9 +10,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:just_audio/just_audio.dart' as just_audio;
 import 'package:md3music/data/models/song.dart';
 import 'package:md3music/data/repositories/history_repository.dart';
-import 'package:md3music/modules/player/am_transport_controls.dart';
 import 'package:md3music/modules/player/full_player.dart';
-import 'package:md3music/modules/player/full_player_am.dart';
 import 'package:md3music/providers/comment_display_provider.dart';
 import 'package:md3music/providers/device_provider.dart';
 import 'package:md3music/providers/favorites_provider.dart';
@@ -24,7 +22,6 @@ import 'package:md3music/services/kugou_api/kugou_models.dart';
 import 'package:md3music/widgets/player_tab_strip.dart';
 import 'package:md3music/widgets/md3e_transport_row.dart';
 import 'package:md3music/widgets/playback_status_feedback.dart';
-import 'package:md3music/widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -136,7 +133,6 @@ void main() {
 
   for (final (name, page) in <(String, Widget Function())>[
     ('MD3', () => const FullPlayer(dockMode: true)),
-    ('AM', () => const AmStyleFullPlayer(dockMode: true)),
   ]) {
     for (final (layout, viewport, textScale) in <(String, Size, double)>[
       ('窄屏2倍字', const Size(320, 640), 2),
@@ -181,9 +177,7 @@ void main() {
                     context,
                   ).copyWith(textScaler: TextScaler.linear(textScale)),
                   child: viewport.width > viewport.height
-                      ? (name == 'MD3'
-                            ? const FullPlayer(dockMode: false)
-                            : const AmStyleFullPlayer(dockMode: false))
+                      ? const FullPlayer(dockMode: false)
                       : page(),
                 ),
               ),
@@ -193,22 +187,14 @@ void main() {
 
           expect(tester.takeException(), isNull);
           expect(find.text('播放失败，请重试'), findsOneWidget);
-          final controls = name == 'MD3'
-              ? find.byType(MD3ETransportRow)
-              : find.byType(AMTransportControls);
+          final controls = find.byType(MD3ETransportRow);
           expect(controls, findsOneWidget);
           expect(find.byType(PlaybackStatusFeedback), findsOneWidget);
           final semantics = tester.ensureSemantics();
-          final pauseButton = name == 'MD3'
-              ? find.bySemanticsLabel('暂停')
-              : find.byTooltip('暂停');
+          final pauseButton = find.bySemanticsLabel('暂停');
           expect(pauseButton, findsOneWidget);
-          final previousButton = name == 'MD3'
-              ? find.bySemanticsLabel('上一首')
-              : find.byTooltip('上一首');
-          final nextButton = name == 'MD3'
-              ? find.bySemanticsLabel('下一首')
-              : find.byTooltip('下一首');
+          final previousButton = find.bySemanticsLabel('上一首');
+          final nextButton = find.bySemanticsLabel('下一首');
           expect(previousButton, findsOneWidget);
           expect(nextButton, findsOneWidget);
           for (final button in <Finder>[
@@ -264,7 +250,6 @@ void main() {
 
   for (final (name, page) in <(String, Widget Function())>[
     ('MD3', () => const FullPlayer(dockMode: true)),
-    ('AM', () => const AmStyleFullPlayer(dockMode: true)),
   ]) {
     testWidgets('$name 歌词请求异常后播放页仍可操作', (tester) async {
       final originalPhysicalSize = tester.view.physicalSize;
@@ -301,22 +286,14 @@ void main() {
         expect(kugou.requestCount, greaterThan(0));
         expect(tester.takeException(), isNull);
 
-        final controls = name == 'MD3'
-            ? find.byType(MD3ETransportRow)
-            : find.byType(AMTransportControls);
+        final controls = find.byType(MD3ETransportRow);
         expect(controls, findsOneWidget);
         final semantics = tester.ensureSemantics();
-        final buttons = name == 'MD3'
-            ? <Finder>[
-                find.bySemanticsLabel('上一首'),
-                find.bySemanticsLabel('暂停'),
-                find.bySemanticsLabel('下一首'),
-              ]
-            : <Finder>[
-                find.byTooltip('上一首'),
-                find.byTooltip('暂停'),
-                find.byTooltip('下一首'),
-              ];
+        final buttons = <Finder>[
+          find.bySemanticsLabel('上一首'),
+          find.bySemanticsLabel('暂停'),
+          find.bySemanticsLabel('下一首'),
+        ];
         for (final button in buttons) {
           expect(button, findsWidgets);
           expect(
@@ -349,7 +326,6 @@ void main() {
 
   for (final (name, page) in <(String, Widget Function())>[
     ('MD3', () => const FullPlayer(dockMode: true)),
-    ('AM', () => const AmStyleFullPlayer(dockMode: true)),
   ]) {
     for (final (source, artworkUri) in <(String, String)>[
       ('本地封面文件缺失', 'file:///md3music_test_missing/cover.jpg'),
@@ -365,9 +341,6 @@ void main() {
         tester.view.devicePixelRatio = 1;
         SharedPreferences.setMockInitialValues({});
         _mockPlatformChannels();
-        final lyricPreferences = LyricPreferences.instance;
-        final originalDynamicLyricColor = lyricPreferences.useDynamicLyricColor;
-        await lyricPreferences.setUseDynamicLyricColor(false);
         KugouProvider.restoreLyric = (_) async => const KugouLyric(
           content: '[00:00.00]test lyric',
           decodedContent: '[00:00.00]test lyric',
@@ -423,14 +396,10 @@ void main() {
               findsNothing,
             );
           }
-          final controls = name == 'MD3'
-              ? find.byType(MD3ETransportRow)
-              : find.byType(AMTransportControls);
+          final controls = find.byType(MD3ETransportRow);
           expect(controls, findsOneWidget);
           final semantics = tester.ensureSemantics();
-          final nextButton = name == 'MD3'
-              ? find.bySemanticsLabel('下一首').first
-              : find.byTooltip('下一首');
+          final nextButton = find.bySemanticsLabel('下一首').first;
           expect(
             tester
                 .getSemantics(nextButton)
@@ -453,9 +422,6 @@ void main() {
           AudioServiceLoader.setTestOverride(null);
           KugouProvider.restoreLyric = null;
           CachedNetworkImageProvider.defaultCacheManager = originalCacheManager;
-          await lyricPreferences.setUseDynamicLyricColor(
-            originalDynamicLyricColor,
-          );
           tester.view.physicalSize = originalPhysicalSize;
           tester.view.devicePixelRatio = originalDevicePixelRatio;
         }

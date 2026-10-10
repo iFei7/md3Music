@@ -8,15 +8,9 @@ import '../../providers/player_provider.dart';
 
 /// 投屏二级菜单 BottomSheet。
 ///
-/// 支持两种模式：
-/// - 歌曲投屏（默认）：从 PlayerProvider 获取当前歌曲 URL
-/// - MV 投屏：通过 [mvUrl] 参数传入已解析的播放地址
+/// 从 PlayerProvider 获取当前歌曲 URL 进行歌曲投屏。
 class DlnaCastSheet extends StatefulWidget {
-  /// MV 投屏时传入播放地址，null 表示歌曲投屏。
-  final String? mvUrl;
-  final String? mvTitle;
-
-  const DlnaCastSheet({super.key, this.mvUrl, this.mvTitle});
+  const DlnaCastSheet({super.key});
 
   @override
   State<DlnaCastSheet> createState() => _DlnaCastSheetState();
@@ -37,13 +31,9 @@ class _DlnaCastSheetState extends State<DlnaCastSheet> {
     final dlna = context.read<DlnaProvider>();
     dlna.selectDevice(device);
 
-    if (widget.mvUrl != null) {
-      await dlna.castMv(widget.mvUrl!, widget.mvTitle ?? 'MV');
-    } else {
-      final song = context.read<PlayerProvider>().currentSong;
-      if (song != null) {
-        await dlna.castSong(context, song);
-      }
+    final song = context.read<PlayerProvider>().currentSong;
+    if (song != null) {
+      await dlna.castSong(context, song);
     }
   }
 
@@ -82,7 +72,7 @@ class _DlnaCastSheetState extends State<DlnaCastSheet> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    widget.mvUrl != null ? '投屏 MV 到设备' : '投屏到设备',
+                    '投屏到设备',
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
@@ -291,9 +281,7 @@ class _DlnaCastSheetState extends State<DlnaCastSheet> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.skip_previous, size: 36),
-                    onPressed: widget.mvUrl == null
-                        ? () => dlna.castPreviousSong(context)
-                        : null,
+                    onPressed: () => dlna.castPreviousSong(context),
                   ),
                   if (dlna.canPause) ...[
                     const SizedBox(width: 16),
@@ -314,9 +302,7 @@ class _DlnaCastSheetState extends State<DlnaCastSheet> {
                   ],
                   IconButton(
                     icon: const Icon(Icons.skip_next, size: 36),
-                    onPressed: widget.mvUrl == null
-                        ? () => dlna.castNextSong(context)
-                        : null,
+                    onPressed: () => dlna.castNextSong(context),
                   ),
                 ],
               ),

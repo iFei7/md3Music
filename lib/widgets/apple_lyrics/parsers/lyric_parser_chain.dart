@@ -144,7 +144,7 @@ class LyricParserChain {
     final fieldLines = LrcParser.parse(text);
     final fieldLabel = isRoma ? 'roma' : 'translation';
     debugPrint(
-      '[LyriconDebug._mergeField] '
+      '[LyricMergeDebug._mergeField] '
       'lines.len=${lines.length}, $fieldLabel.len=${text.length}, '
       'fieldLines.len=${fieldLines.length}, '
       'hasTimestamps=${fieldLines.any((l) => l.startTime > 0)}',
@@ -196,7 +196,7 @@ class LyricParserChain {
       );
     }
     debugPrint(
-      '[LyriconDebug._mergeField] $fieldLabel matched=$matchedCount/${lines.length}',
+      '[LyricMergeDebug._mergeField] $fieldLabel matched=$matchedCount/${lines.length}',
     );
     return result;
   }

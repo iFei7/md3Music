@@ -18,21 +18,16 @@ enum Md3LyricDisplayMode { translation, roma }
 
 /// MD3 风格播放页的歌词显示偏好（字号 + 行间距 + 字体）。
 ///
-/// 与 `LyricPreferences`（Apple Music 风格播放页）完全独立的另一份配置：
-/// - 独立的 SharedPreferences key 前缀（`md3_lyric_*`）
-/// - 独立的 static instance
-/// - 独立的字段默认值
-///
-/// 这样两种播放页的歌词设置互不影响，用户在一种播放页中修改
-/// 字号/行间距/字体不会污染另一种播放页。
+/// 独立的 SharedPreferences key 前缀（`md3_lyric_*`）、独立的
+/// static instance 与独立的字段默认值，用户修改字号/行间距/字体
+/// 即时生效并持久化。
 class Md3LyricPreferences extends ChangeNotifier {
   Md3LyricPreferences._();
   static final Md3LyricPreferences instance = Md3LyricPreferences._();
 
   /// MD3 歌词自定义字体注册到 Flutter 的 family 名（固定前缀）。
   ///
-  /// 与 [CustomFontLoader.customFontFamily] / [LyricPreferences.lyricCustomFontFamily]
-  /// 都不同，避免家族名冲突。
+  /// 与 [CustomFontLoader.customFontFamily] 不同，避免家族名冲突。
   static const String md3LyricCustomFontFamily = 'Md3LyricUserCustomFont';
 
   // ============== 范围与默认值 ==============

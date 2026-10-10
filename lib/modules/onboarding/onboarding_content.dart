@@ -12,9 +12,6 @@ class OnboardingPageData {
   final String description;
   final List<String> highlights;
 
-  /// 是否为播放器风格选择页（交互式特殊页面）。
-  final bool isPlayerStylePicker;
-
   /// 是否为播放页隐藏操作页（交互式特殊页面）。
   final bool isHiddenOpsPage;
 
@@ -26,13 +23,12 @@ class OnboardingPageData {
     required this.title,
     required this.description,
     this.highlights = const [],
-    this.isPlayerStylePicker = false,
     this.isHiddenOpsPage = false,
     this.isColorPicker = false,
   });
 }
 
-/// 8 页引导内容静态配置。
+/// 7 页引导内容静态配置。
 const List<OnboardingPageData> onboardingPages = [
   OnboardingPageData(
     icon: Icons.explore,
@@ -70,12 +66,6 @@ const List<OnboardingPageData> onboardingPages = [
     description: '8 种主题色、动态取色、OLED 纯黑模式，打造属于你的视觉风格。',
     highlights: ['Material 3 主题', '动态色', 'OLED 纯黑'],
     isColorPicker: true,
-  ),
-  OnboardingPageData(
-    icon: Icons.style,
-    title: '选择播放器风格',
-    description: '挑选你喜欢的播放器界面，随时可在设置中切换。',
-    isPlayerStylePicker: true,
   ),
   OnboardingPageData(
     icon: Icons.rocket_launch,
@@ -136,8 +126,7 @@ class OnboardingIllustration extends StatelessWidget {
                   progress: animation.value,
                 );
               // case 5 是主题色选择页，不使用插画（交互式取色网格）
-              // case 6 是播放器风格选择页，不使用插画（交互式卡片）
-              case 7:
+              case 6:
                 return _GetStartedIllustration(
                   colorScheme: colorScheme,
                   progress: animation.value,
@@ -685,7 +674,7 @@ class _LongPressDeleteIllustration extends StatelessWidget {
   }
 }
 
-// ── Page 7: 开始使用 ─────────────────────────────────────────────────
+// ── Page 6: 开始使用 ─────────────────────────────────────────────────
 
 class _GetStartedIllustration extends StatelessWidget {
   final ColorScheme colorScheme;
