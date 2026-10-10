@@ -39,18 +39,17 @@ bool isLiteTag(String? tag) {
   return t.startsWith('v') && t.contains('-lite-');
 }
 
-/// 从 releases 列表页 HTML 中解析**第一个** release 的 tag 名。
+/// 从 releases 列表页 HTML 中解析第一个 lite release 的 tag 名。
 ///
 /// 匹配 `/releases/tag/<tag>` 形式的链接。GitHub 的 releases 页面已按
 /// 发布时间倒序排列，故扫描到的**第一个 lite tag** 即最新。
 /// `ci-<sha>` 形式的 Release 会被 [isLiteTag] 跳过。
-/// 解析不出返回 null（放弃，不抛异常）。
+/// 解析不出（或页面里没有 lite tag）返回 null（放弃，不抛异常）。
 ///
 /// 不用 HTML 实体解码：tag 只含字母数字与 `-` / `_` / `.`，GitHub 在链接
 /// 里原样输出，无需 `unescape`。
 String? parseTagFromReleasesHtml(String html) {
   const marker = '/releases/tag/';
-  String? firstAny;
   var cursor = 0;
   while (true) {
     final start = html.indexOf(marker, cursor);
@@ -65,11 +64,10 @@ String? parseTagFromReleasesHtml(String html) {
     if (slash >= 0) tag = tag.substring(slash + 1);
     tag = tag.trim();
     if (tag.isEmpty || tag == 'tag') continue;
-    firstAny ??= tag;
     if (isLiteTag(tag)) return tag;
   }
-  // 没有 lite tag 时退回首个 link，保持旧行为（不因格式变化而彻底失效）
-  return firstAny;
+  // 没有 lite tag 时放弃本次更新提醒，绝不把非 lite tag 当作最新版
+  return null;
 }
 
 /// GitHub Release 客户端：REST API 为主链路，HTML 页面为回退链路。
@@ -156,11 +154,18 @@ class GithubReleaseClient implements ReleaseSource {
       }
       // 仓库里混有 `ci-<sha>` 形式的 Release（另一个 CI 步骤产出），
       // 列表按时间倒序时它可能排在 lite 之前。挑第一个 lite tag；
-      // 无 liteTag 前缀的老 release（历史 `lite-<sha>` 形式）也接受。
-      final picked = items.firstWhere(
-        (e) => isLiteTag(e['tag_name'] as String?),
-        orElse: () => items.first,
-      );
+      // 无 lite tag 时返回 null 放弃本次更新提醒，绝不推荐非 lite tag。
+      Map<String, dynamic>? picked;
+      for (final e in items) {
+        if (isLiteTag(e['tag_name'] as String?)) {
+          picked = e;
+          break;
+        }
+      }
+      if (picked == null) {
+        debugPrint('[UpdateCheck] API 列表中无 lite tag，放弃本次更新提醒');
+        return null;
+      }
       final tagName = (picked['tag_name'] as String?)?.trim();
       if (tagName == null || tagName.isEmpty) {
         debugPrint('[UpdateCheck] API 响应缺少 tag_name，转回退链路');

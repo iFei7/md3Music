@@ -68,8 +68,8 @@ class ThemeProvider extends ChangeNotifier {
   double _artistPhotoOpacity = 0.55;
   // AM 风格播放器歌词双击跳转开关（默认关闭，开启后需双击歌词才能跳转位置）
   bool _lyricDoubleTapToJump = false;
-  // 自定义背景图片（全局界面背景）；默认关闭，开启后未选择图片时回落到内置默认壁纸
-  bool _useBackgroundImage = false;
+  // 自定义背景图片（全局界面背景）；默认开启，未选择图片时回落到内置默认壁纸
+  bool _useBackgroundImage = true;
   String? _backgroundImagePath;
   double _backgroundBlur = 20.0;
   // AM 播放器背景模糊（sigma 0~30，默认 30 = 原硬编码值）
@@ -547,10 +547,10 @@ class ThemeProvider extends ChangeNotifier {
   // ============== 自定义背景图片 ==============
 
   /// 加载背景图片相关持久化值（开关 / 路径 / 模糊 / 透明度 / 莫奈取色 / 文字阴影），
-  /// 默认关闭（无用户图片时用内置默认壁纸）/ 莫奈取色默认开启 / 文字阴影默认开启。
+  /// 默认开启（无用户图片时用内置默认壁纸）/ 莫奈取色默认开启 / 文字阴影默认开启。
   Future<void> _loadBackgroundImage() async {
     final prefs = await SharedPreferences.getInstance();
-    _useBackgroundImage = prefs.getBool(_bgImageEnabledKey) ?? false;
+    _useBackgroundImage = prefs.getBool(_bgImageEnabledKey) ?? true;
     _backgroundImagePath = prefs.getString(_bgImagePathKey);
     _backgroundBlur = prefs.getDouble(_bgBlurKey) ?? 20.0;
     _backgroundOpacity = prefs.getDouble(_bgOpacityKey) ?? 0.2;
