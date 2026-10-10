@@ -78,9 +78,45 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   static const double _kButtonSize = 52.0;
   static const Duration _kMorphDuration = Duration(milliseconds: 260);
 
+  /// 展开态控制胶囊内 4 个紧凑 IconButton 的总宽（40dp/个），
+  /// 用于小屏下计算歌名 marquee 的可压缩宽度。
+  static const double _kControlsButtonsWidth = 160.0;
+
+  @override
+  void initState() {
+    super.initState();
+    // 状态联动：导航展开 ⇒ 播放器工具强制收起（两个展开态不得同时存在，
+    // 否则总宽超出屏宽）。收起播放器工具后导航保持坍缩，由滚动 /
+    // 手势 / 切 tab 自然恢复，避免乒乓。
+    widget.navExpanded.addListener(_onNavExpandedChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant GlassDockPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.navExpanded != widget.navExpanded) {
+      oldWidget.navExpanded.removeListener(_onNavExpandedChanged);
+      widget.navExpanded.addListener(_onNavExpandedChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.navExpanded.removeListener(_onNavExpandedChanged);
+    super.dispose();
+  }
+
+  void _onNavExpandedChanged() {
+    if (widget.navExpanded.value && _controlsExpanded) {
+      setState(() => _controlsExpanded = false);
+    }
+  }
+
   void _toggleControls() {
     AppHaptics.click();
     setState(() => _controlsExpanded = !_controlsExpanded);
+    // 播放器工具展开时请求导航坍缩（_MainLayout 侧置 _navExpanded = false）。
+    if (_controlsExpanded) widget.onNavExpandedChanged(false);
   }
 
   @override
@@ -119,12 +155,21 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                 alignment: Alignment.bottomCenter,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  // 宽度防御：播放器按钮用 Flexible（loose）吃剩余宽度，
+                  // 极限屏宽下歌名区先压缩，整体任何状态不超屏宽。
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       _buildNavPart(),
                       const SizedBox(width: 8),
-                      _buildPlayerButton(player, song, isPlaying, duration),
+                      Flexible(
+                        child: _buildPlayerButton(
+                          player,
+                          song,
+                          isPlaying,
+                          duration,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -290,47 +335,55 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
         padding: const EdgeInsets.fromLTRB(14, 0, 4, 0),
         child: SizedBox(
           height: _kButtonSize,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 歌名 marquee：点击打开播放页。
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: song == null ? null : () => openFullPlayer(context),
-                child: _MarqueeText(
-                  text: song?.displayName ?? '未在播放',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: song == null ? cs.onSurfaceVariant : cs.onSurface,
+          // 宽度防御：歌名 marquee 区随可用宽度压缩（上限 120，下限 0），
+          // 4 个按钮区固定，保证小屏（含 320dp）下胶囊自身也不超宽。
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final marqueeWidth = (constraints.maxWidth - _kControlsButtonsWidth)
+                  .clamp(0.0, 120.0);
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 歌名 marquee：点击打开播放页。
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: song == null ? null : () => openFullPlayer(context),
+                    child: _MarqueeText(
+                      text: song?.displayName ?? '未在播放',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: song == null ? cs.onSurfaceVariant : cs.onSurface,
+                      ),
+                      width: marqueeWidth,
+                      playing: player.isPlaying,
+                    ),
                   ),
-                  width: 120,
-                  playing: player.isPlaying,
-                ),
-              ),
-              _DockIconButton(
-                icon: Icons.skip_previous,
-                tooltip: '上一曲',
-                onTap: song == null ? null : player.previous,
-              ),
-              _DockIconButton(
-                icon: player.isPlaying ? Icons.pause : Icons.play_arrow,
-                tooltip: player.isPlaying ? '暂停' : '播放',
-                onTap: song == null
-                    ? null
-                    : () => player.isPlaying
-                          ? player.pause()
-                          : player.resume(),
-              ),
-              _DockIconButton(
-                icon: Icons.skip_next,
-                tooltip: '下一曲',
-                onTap: song == null ? null : player.next,
-              ),
-              _DockIconButton(
-                icon: Icons.keyboard_arrow_up,
-                tooltip: '展开播放页',
-                onTap: song == null ? null : () => openFullPlayer(context),
-              ),
-            ],
+                  _DockIconButton(
+                    icon: Icons.skip_previous,
+                    tooltip: '上一曲',
+                    onTap: song == null ? null : player.previous,
+                  ),
+                  _DockIconButton(
+                    icon: player.isPlaying ? Icons.pause : Icons.play_arrow,
+                    tooltip: player.isPlaying ? '暂停' : '播放',
+                    onTap: song == null
+                        ? null
+                        : () => player.isPlaying
+                              ? player.pause()
+                              : player.resume(),
+                  ),
+                  _DockIconButton(
+                    icon: Icons.skip_next,
+                    tooltip: '下一曲',
+                    onTap: song == null ? null : player.next,
+                  ),
+                  _DockIconButton(
+                    icon: Icons.keyboard_arrow_up,
+                    tooltip: '展开播放页',
+                    onTap: song == null ? null : () => openFullPlayer(context),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),

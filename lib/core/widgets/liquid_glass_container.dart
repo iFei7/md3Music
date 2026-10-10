@@ -46,18 +46,20 @@ class LiquidGlassContainer extends StatelessWidget {
 
   /// 按外形裁剪（同时裁掉模糊层与描边的溢出）。
   ///
-  /// 胶囊形的圆角取容器实际高度的一半（StadiumBorder 语义），需经
-  /// [LayoutBuilder] 测量，避免 `BorderRadius.circular(∞)` 的断言失败。
+  /// 胶囊形的圆角取**实际渲染高度**的一半（StadiumBorder 语义），由
+  /// [ClipRRect.clipper] 在布局完成后按真实尺寸计算。不能用
+  /// `LayoutBuilder` 的 `constraints.maxHeight`：Dock 场景
+  /// （`Positioned(bottom)` → `Align` → `Row`）传下来的是**无界高度（∞）**，
+  /// `BorderRadius.circular(∞)` 会让 ClipRRect 退化为矩形裁剪，
+  /// 叠色 / 模糊按矩形漏出（装机实测 bug）。
   Widget _clip(Widget child) {
     switch (shape) {
       case GlassShape.circle:
         return ClipOval(child: child);
       case GlassShape.pill:
-        return LayoutBuilder(
-          builder: (context, constraints) => ClipRRect(
-            borderRadius: BorderRadius.circular(constraints.maxHeight / 2),
-            child: child,
-          ),
+        return ClipRRect(
+          clipper: const _StadiumClipper(),
+          child: child,
         );
       case GlassShape.roundedRect:
         return ClipRRect(
@@ -107,6 +109,21 @@ class LiquidGlassContainer extends StatelessWidget {
 
 /// 玻璃容器外形。
 enum GlassShape { pill, circle, roundedRect }
+
+/// 胶囊形（Stadium）裁剪器：按实际渲染尺寸取圆角（高度一半），
+/// 不依赖布局约束，无界高度下也不会退化。
+class _StadiumClipper extends CustomClipper<RRect> {
+  const _StadiumClipper();
+
+  @override
+  RRect getClip(Size size) => RRect.fromRectAndRadius(
+        Offset.zero & size,
+        Radius.circular(size.height / 2),
+      );
+
+  @override
+  bool shouldReclip(_StadiumClipper oldClipper) => false;
+}
 
 /// 玻璃描边绘制器：
 /// - 外缘 1px 线性渐变描边（左上高光 → 右下渐隐）；

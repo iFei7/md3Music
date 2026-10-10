@@ -1039,6 +1039,11 @@ class _MainLayoutState extends State<_MainLayout>
     if (!_navExpanded.value) _navExpanded.value = true;
   }
 
+  /// 坍缩 Dock 导航（播放器工具胶囊展开时强制让位，避免两展开态同屏超宽）。
+  void _collapseNav() {
+    if (_navExpanded.value) _navExpanded.value = false;
+  }
+
   /// 页面滚动驱动 Dock 导航展开/坍缩（24dp 同向累计滞回，防抖动）。
   bool _onDockScrollNotification(ScrollNotification n) {
     if (n is ScrollUpdateNotification) {
@@ -1368,7 +1373,14 @@ class _MainLayoutState extends State<_MainLayout>
             onSelectTab: _switchToTab,
             navExpanded: _navExpanded,
             onNavExpandedChanged: (expanded) {
-              if (expanded) _expandNav();
+              // 双向语义：true = 用户点坍缩圆请求展开；false = 播放器工具
+              // 胶囊展开时请求导航让位（收起工具后导航不自动恢复，
+              // 由滚动 / 切 tab 自然展开，避免乒乓）。
+              if (expanded) {
+                _expandNav();
+              } else {
+                _collapseNav();
+              }
             },
             playerOnly: isLandscape,
           ),
