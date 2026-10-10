@@ -25,7 +25,6 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
-import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import io.flutter.embedding.engine.FlutterEngine
@@ -38,7 +37,6 @@ import com.hchen.superlyricapi.SuperLyricLine
 import com.hchen.superlyricapi.SuperLyricWord
 import com.ryanheise.just_audio.AudioPlayer
 import io.flutter.plugins.GeneratedPluginRegistrant
-import io.github.proify.lyricon.provider.ConnectionListener
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -46,11 +44,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Semaphore
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
-import io.github.proify.lyricon.provider.LyriconFactory
-import io.github.proify.lyricon.provider.LyriconProvider
-import io.github.proify.lyricon.lyric.model.LyricWord
-import io.github.proify.lyricon.lyric.model.RichLyricLine
-import io.github.proify.lyricon.lyric.model.Song
 
 class AudioPlaybackService : Service() {
     companion object {
@@ -68,7 +61,6 @@ class AudioPlaybackService : Service() {
         const val ACTION_PAUSE = "com.md3music.md3music.ACTION_PAUSE"
         const val ACTION_NEXT = "com.md3music.md3music.ACTION_NEXT"
         const val ACTION_STOP = "com.md3music.md3music.ACTION_STOP"
-        const val ACTION_TOGGLE_DESKTOP_LYRIC = "com.md3music.md3music.ACTION_TOGGLE_DESKTOP_LYRIC"
         const val ACTION_TOGGLE_FAVORITE = "com.md3music.md3music.ACTION_TOGGLE_FAVORITE"
         // 蓝牙歌词兼容通道；不得再改写 SystemUI 共用 MediaSession 的 TITLE/ARTIST。
         const val ACTION_UPDATE_BT_LYRIC = "com.md3music.md3music.ACTION_UPDATE_BT_LYRIC"
@@ -81,7 +73,6 @@ class AudioPlaybackService : Service() {
         const val EXTRA_IS_PLAYING = "isPlaying"
         const val EXTRA_POSITION = "position"
         const val EXTRA_DURATION = "duration"
-        const val EXTRA_DESKTOP_LYRIC_ENABLED = "desktopLyricEnabled"
         const val EXTRA_IS_FAVORITED = "isFavorited"
         const val EXTRA_BT_LYRIC_TEXT = "btLyricText"
         const val EXTRA_BT_LYRIC_ENABLED = "btLyricEnabled"
@@ -453,307 +444,8 @@ class AudioPlaybackService : Service() {
             wifiLock = null
         }
 
-        // Lyricon Provider 单例引用（companion 持有，方便 MainActivity channel 直接访问）
-        @Volatile
-        private var lyriconProvider: LyriconProvider? = null
-        private var lyriconChannel: MethodChannel? = null
-
-        // —— 词幕（Lyricon）连接重试控制 ——
-        // 启动/连接过程中可能因中心服务尚未就绪等原因失败，按预设次数重试；
-        // 全部失败后向 Dart 发 connect_failed 事件，由 UI 弹窗提示用户。
-        private const val LYRICON_MAX_RETRIES = 3
-        private const val LYRICON_RETRY_DELAY_MS = 2000L
         // P0: setMetadata 合并节流窗口：歌词行高频变化时 300ms 内只执行一次刷新
         private const val METADATA_REFRESH_DELAY_MS = 300L
-        private val lyriconRetryHandler = Handler(Looper.getMainLooper())
-        // 用户意图上是否启用词幕（非 SDK 的 ConnectionStatus），决定失败后是否重试
-        @Volatile
-        private var lyriconEnabled = false
-        // 已重试次数 / 是否已有一次重试排期（避免并发事件重复 register）
-        @Volatile
-        private var lyriconRetryCount = 0
-        @Volatile
-        private var lyriconRetryScheduled = false
-
-        // 缓存最近一次 isPlaying，供 setPosition 组装 Auto PlaybackState
-        @Volatile
-        private var lyriconIsPlaying = false
-
-        fun setLyriconChannel(channel: MethodChannel?) {
-            lyriconChannel = channel
-        }
-
-        /** 同步记录用户意图的启用状态（setEnabled / 启动恢复时调用）。 */
-        fun setLyriconEnabledState(enabled: Boolean) {
-            lyriconEnabled = enabled
-            if (!enabled) {
-                // 用户主动禁用：取消排期中的重试并清零计数
-                lyriconRetryCount = 0
-                lyriconRetryScheduled = false
-                lyriconRetryHandler.removeCallbacksAndMessages(null)
-            }
-        }
-
-        /**
-         * 连接失败（timeout/disconnected）后的重试调度。
-         * 仅在用户仍启用词幕时有效；重试次数耗尽后向 Dart 发送 connect_failed。
-         * 每次重试间隔 [LYRICON_RETRY_DELAY_MS]，避免对中心服务发起风暴式重连。
-         */
-        private fun retryLyriconConnect(reason: String) {
-            if (!lyriconEnabled) return
-            if (lyriconRetryScheduled) return
-            val provider = getLyriconProvider() ?: return
-            if (lyriconRetryCount >= LYRICON_MAX_RETRIES) {
-                lyriconRetryCount = 0
-                lyriconRetryScheduled = false
-                android.util.Log.w("LyriconDebug",
-                    "lyricon connect failed after $LYRICON_MAX_RETRIES retries ($reason)")
-                invokeLyriconChannelOnMain("onConnectionStateChanged", "connect_failed")
-                return
-            }
-            lyriconRetryCount++
-            lyriconRetryScheduled = true
-            val attempt = lyriconRetryCount
-            android.util.Log.d("LyriconDebug",
-                "lyricon retry $attempt/$LYRICON_MAX_RETRIES (reason=$reason)")
-            lyriconRetryHandler.postDelayed({
-                lyriconRetryScheduled = false
-                if (!lyriconEnabled) return@postDelayed
-                val p = getLyriconProvider() ?: return@postDelayed
-                try {
-                    p.register()
-                } catch (_: Exception) {
-                    // register 抛异常也视为一次失败，继续下一轮重试
-                    retryLyriconConnect("register exception")
-                }
-            }, LYRICON_RETRY_DELAY_MS)
-        }
-
-        /** 连接成功（connected/reconnected）或重新启用时重置重试状态。 */
-        private fun resetLyriconRetryState() {
-            lyriconRetryCount = 0
-            lyriconRetryScheduled = false
-            lyriconRetryHandler.removeCallbacksAndMessages(null)
-        }
-
-        /** 在主线程安全调用 lyriconChannel.invokeMethod，避免 SDK 回调在后台线程触发崩溃 */
-        private fun invokeLyriconChannelOnMain(method: String, argument: Any?) {
-            val channel = lyriconChannel ?: return
-            val handler = Handler(Looper.getMainLooper())
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                channel.invokeMethod(method, argument)
-            } else {
-                handler.post { channel.invokeMethod(method, argument) }
-            }
-        }
-
-        fun getLyriconProvider(): LyriconProvider? = lyriconProvider
-
-        /** 由 MainActivity 的 lyricon channel handler 调用，把 Dart 端 Map 转成 SDK 的 Song */
-        fun buildLyriconSong(arg: Map<String, Any?>): Song {
-            @Suppress("UNCHECKED_CAST")
-            val lyricsRaw = arg["lyrics"] as? List<Map<String, Any?>> ?: emptyList()
-            val lyrics = lyricsRaw.map { line ->
-                @Suppress("UNCHECKED_CAST")
-                val wordsRaw = line["words"] as? List<Map<String, Any?>> ?: emptyList()
-                RichLyricLine(
-                    begin = (line["begin"] as? Number)?.toLong() ?: 0L,
-                    end = (line["end"] as? Number)?.toLong() ?: 0L,
-                    text = line["text"] as? String ?: "",
-                    translation = line["translation"] as? String,
-                    roma = line["roma"] as? String,
-                    words = wordsRaw.map { w ->
-                        LyricWord(
-                            text = w["text"] as? String ?: "",
-                            begin = (w["begin"] as? Number)?.toLong() ?: 0L,
-                            end = (w["end"] as? Number)?.toLong() ?: 0L
-                        )
-                    }
-                )
-            }
-            val song = Song(
-                id = arg["id"] as? String ?: "",
-                name = arg["name"] as? String ?: "",
-                artist = arg["artist"] as? String ?: "",
-                duration = (arg["duration"] as? Number)?.toLong() ?: 0L,
-                lyrics = lyrics
-            )
-            // 调试日志：让用户用 adb logcat -s LyriconDebug 验证实际数据
-            // 关注点：lyrics.size 是否为 0；首行 begin/end 是否合法（begin < end）
-            val first = lyrics.firstOrNull()
-            val withTranslation = lyrics.count { !it.translation.isNullOrEmpty() }
-            val withRoma = lyrics.count { !it.roma.isNullOrEmpty() }
-            android.util.Log.d("LyriconDebug",
-                "buildLyriconSong: name='${song.name}', artist='${song.artist}', " +
-                "duration=${song.duration}, lyrics.size=${lyrics.size}, " +
-                "withTranslation=$withTranslation, withRoma=$withRoma, " +
-                "first=${first?.let { "begin=${it.begin}, end=${it.end}, text='${it.text}', translation='${it.translation}', roma='${it.roma}', words=${it.words?.size ?: 0}" }}"
-            )
-            return song
-        }
-
-        /**
-         * 组装带时间戳的 framework PlaybackState，走 SDK 的 Auto 同步路径。
-         * PlaybackState.Builder 会自动把构造时刻的 SystemClock.elapsedRealtime() 记为
-         * lastPositionUpdateTime，SDK 的 Auto 模式据此按时间差插值推进播放时间轴，
-         * 从而在两次更新之间平滑走时（消除 200ms 播步）。
-         */
-        fun buildLyriconPlaybackState(
-            positionMs: Long,
-            isPlaying: Boolean,
-        ): android.media.session.PlaybackState {
-            return android.media.session.PlaybackState.Builder()
-                .setState(
-                    if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
-                    positionMs,
-                    if (isPlaying) 1f else 0f,
-                )
-                .build()
-        }
-
-        /**
-         * 注册 Lyricon Provider MethodChannel（Dart ↔ 原生双向）。
-         * 由 MainActivity（正常启动）与 setupHeadlessChannels（进程被杀唤醒）
-         * 共用，避免 headless 场景下 Dart 的 setSong/setEnabled 等调用因缺少
-         * 原生 handler 而静默失败，也保证原生 onConnectionStateChanged 事件
-         * 能送达 Dart（这是 Lyricon 自动恢复的前提）。
-         */
-        fun registerLyriconChannel(engine: FlutterEngine) {
-            val channel = MethodChannel(
-                engine.dartExecutor.binaryMessenger,
-                "com.md3music.md3music/lyricon"
-            )
-            setLyriconChannel(channel)
-            channel.setMethodCallHandler { call, result ->
-                val provider = getLyriconProvider()
-                when (call.method) {
-                    "setEnabled" -> {
-                        val enabled = call.argument<Boolean>("enabled") ?: false
-                        setLyriconEnabledState(enabled)
-                        try {
-                            if (enabled) {
-                                // 重新启用：清零重试计数，重新走连接流程
-                                resetLyriconRetryState()
-                                provider?.register()
-                            } else {
-                                provider?.unregister()
-                            }
-                            result.success(true)
-                        } catch (_: Exception) {
-                            result.success(false)
-                        }
-                    }
-                    "setSong" -> {
-                        val arg = call.argument<Map<String, Any?>>("song")
-                        if (arg == null) {
-                            try {
-                                // SDK 的 setSong 不接受 null，传一个空 Song 表示清空
-                                provider?.player?.setSong(Song())
-                                result.success(true)
-                            } catch (_: Exception) {
-                                result.success(false)
-                            }
-                        } else {
-                            try {
-                                val song = buildLyriconSong(arg)
-                                provider?.player?.setSong(song)
-                                // 切歌后立即喂一个 Auto PlaybackState 基点（新歌 position 0 + 当前播放态）。
-                                // 若只 setSong 不推 PlaybackState，中心服务无法确定播放进度与状态，
-                                // 歌词会不渲染、回退显示"作者-歌名"。
-                                val startPos = (arg["startPositionMs"] as? Number)
-                                    ?.toLong() ?: 0L
-                                provider?.player?.setPlaybackState(
-                                    buildLyriconPlaybackState(startPos, lyriconIsPlaying)
-                                )
-                                result.success(true)
-                            } catch (e: Exception) {
-                                result.error("BUILD_SONG_FAILED", e.message, null)
-                            }
-                        }
-                    }
-                    "sendText" -> {
-                        val text = call.argument<String>("text")
-                        try {
-                            provider?.player?.sendText(text)
-                            result.success(true)
-                        } catch (_: Exception) {
-                            result.success(false)
-                        }
-                    }
-                    "setPosition" -> {
-                        val pos = call.argument<Number>("positionMs")?.toLong() ?: 0L
-                        try {
-                            // 不再调 setPosition（会切成 Manually 同步），
-                            // 改喂带时间戳的 Auto PlaybackState，SDK 在两次更新间插值平滑
-                            provider?.player?.setPlaybackState(
-                                buildLyriconPlaybackState(pos, lyriconIsPlaying)
-                            )
-                            result.success(true)
-                        } catch (_: Exception) {
-                            result.success(false)
-                        }
-                    }
-                    "setPlaybackState" -> {
-                        val state = call.argument<Number>("state")?.toInt()
-                            ?: PlaybackStateCompat.STATE_NONE
-                        val pos = call.argument<Number>("position")?.toLong() ?: 0L
-                        // SDK 的 setPlaybackState 接受 Boolean，从 PlaybackStateCompat 状态码推导 isPlaying
-                        val isPlaying = state == PlaybackStateCompat.STATE_PLAYING
-                        lyriconIsPlaying = isPlaying
-                        try {
-                            // 统一走 Auto PlaybackState，附带 position+speed 时间戳
-                            provider?.player?.setPlaybackState(
-                                buildLyriconPlaybackState(pos, isPlaying)
-                            )
-                            result.success(true)
-                        } catch (_: Exception) {
-                            result.success(false)
-                        }
-                    }
-                    "seekTo" -> {
-                        val pos = call.argument<Number>("positionMs")?.toLong() ?: 0L
-                        try {
-                            // 统一走 Auto PlaybackState：seek 仅需把新位置作为基点喂给 SDK，
-                            // 若用 player.seekTo 会切回 Manually，下一次 syncs 会 seekTo(旧 lastPosition=0) 闪回开头
-                            provider?.player?.setPlaybackState(
-                                buildLyriconPlaybackState(pos, lyriconIsPlaying)
-                            )
-                            result.success(true)
-                        } catch (_: Exception) {
-                            result.success(false)
-                        }
-                    }
-                    "setDisplayTranslation" -> {
-                        val enabled = call.argument<Boolean>("enabled") ?: false
-                        try {
-                            provider?.player?.setDisplayTranslation(enabled)
-                            result.success(true)
-                        } catch (_: Exception) {
-                            result.success(false)
-                        }
-                    }
-                    "setDisplayRoma" -> {
-                        val enabled = call.argument<Boolean>("enabled") ?: false
-                        try {
-                            // SDK 0.1.70+ 已原生支持 setDisplayRoma，直接调用
-                            provider?.player?.setDisplayRoma(enabled)
-                            result.success(true)
-                        } catch (_: Exception) {
-                            // 兜底：反射调用兼容旧版 SDK
-                            try {
-                                val method = provider?.player?.javaClass
-                                    ?.getMethod("setDisplayRoma", Boolean::class.java)
-                                method?.invoke(provider?.player, enabled)
-                                result.success(true)
-                            } catch (_: Exception) {
-                                result.success(false)
-                            }
-                        }
-                    }
-                    else -> result.notImplemented()
-                }
-            }
-        }
 
         /**
          * 注册 SuperLyric MethodChannel（Dart → 原生单向）。
@@ -821,8 +513,6 @@ class AudioPlaybackService : Service() {
     private var notificationManager: NotificationManager? = null
     private var receiver: BroadcastReceiver? = null
     private var flutterEngine: FlutterEngine? = null
-    // Lyricon Provider 是否已 register（restoreLyriconStateIfNeeded 可能被调用多次，需幂等）
-    private var lyriconRegistered = false
 
     // 蓝牙歌词兼容状态。保留通道与设置，但共享 MediaSession 始终使用真实歌曲身份。
     private var bluetoothLyricEnabled = false
@@ -854,7 +544,6 @@ class AudioPlaybackService : Service() {
     private var lastArtUrl: String? = null
     // 缓存最近一次通知构建所需的播放状态，供 refreshMetadata 复用
     private var lastIsPlaying = false
-    private var lastDesktopLyricEnabled = false
     private var lastIsFavorited = false
     private var lastDuration = 0L
     // 是否已调用过 startForeground（启动前台服务后必须尽快调用，Android 12+ 超时崩溃）
@@ -917,44 +606,6 @@ class AudioPlaybackService : Service() {
         // P0: 不再在 onCreate 无条件持有 WakeLock（此时未必在播放）。
         // 仅当 onStartCommand 收到 isPlaying=true 时才持有，暂停时释放。
 
-        // 初始化 Lyricon Provider（用 try-catch 包裹，防止 SDK 在低版本 Android 抛异常）
-        lyriconProvider = try {
-            LyriconFactory.createProvider(this).apply {
-                autoSync = true
-                try {
-                    // SDK 的 ConnectionListener 是 interface，必须用 object 表达式实现
-                    service.addConnectionListener(object : ConnectionListener {
-                        override fun onConnected(provider: LyriconProvider) {
-                            resetLyriconRetryState()
-                            invokeLyriconChannelOnMain("onConnectionStateChanged", "connected")
-                        }
-                        override fun onReconnected(provider: LyriconProvider) {
-                            resetLyriconRetryState()
-                            invokeLyriconChannelOnMain("onConnectionStateChanged", "reconnected")
-                        }
-                        override fun onDisconnected(provider: LyriconProvider) {
-                            // 用户主动禁用（unregister）也会触发本回调，此时 lyriconEnabled 为 false，
-                            // retryLyriconConnect 内部会直接返回；仅对「仍启用但断联」的场景重试。
-                            invokeLyriconChannelOnMain("onConnectionStateChanged", "disconnected")
-                            retryLyriconConnect("disconnected")
-                        }
-                        override fun onConnectTimeout(provider: LyriconProvider) {
-                            invokeLyriconChannelOnMain("onConnectionStateChanged", "timeout")
-                            retryLyriconConnect("timeout")
-                        }
-                    })
-                } catch (_: Exception) {}
-            }
-        } catch (_: Exception) {
-            null
-        }
-
-        // 自动恢复用户上次保存的 Lyricon 启用状态：
-        // 冷启动后用户没播放前 provider 不存在，setEnabled 静默失败；
-        // 这里在 Service onCreate（首次 startForegroundService 即首次播放时）
-        // 创建 provider 后立即读 SharedPreferences 恢复 enabled，并通知 Dart
-        // 端通过 auto_restored 事件触发重推当前歌曲。
-        restoreLyriconStateIfNeeded()
         // 注册 SuperLyric 发布者（应用播放服务启动即首次播放时注册，进程终止后系统自动清理；
         // 播放/暂停由 SuperLyric 自动监听 App 的 MediaSession 处理）
         try {
@@ -975,7 +626,6 @@ class AudioPlaybackService : Service() {
         // 阶段6：原生上一首/下一首命令拦截后也走这里，转发 App 自有切歌逻辑。
         try {
             AudioPlayer.setCustomActionListener(object : AudioPlayer.CustomActionListener {
-                override fun onToggleDesktopLyric() { handleAction(ACTION_TOGGLE_DESKTOP_LYRIC) }
                 override fun onToggleFavorite() { handleAction(ACTION_TOGGLE_FAVORITE) }
                 // MediaNotificationService 的切歌命令需要带 commandId 确认；复用媒体键队列
                 // 派发，避免直接 invokeMethod 时因缺少 commandId 被 Dart 端拒绝。
@@ -999,48 +649,6 @@ class AudioPlaybackService : Service() {
         } catch (_: Exception) {}
     }
 
-    /// 从 SharedPreferences 读取 flutter. 前缀的开关状态并恢复。
-    /// Flutter SharedPreferences 在 Android 端存储于 FlutterSharedPreferences.xml，
-    /// key 带 `flutter.` 前缀。
-    private fun restoreLyriconStateIfNeeded() {
-        val provider = lyriconProvider ?: run {
-            android.util.Log.w("LyriconDebug", "restoreLyriconStateIfNeeded: provider is null")
-            return
-        }
-        try {
-            val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-            val enabled = prefs.getBoolean("flutter.lyricon_enabled", false)
-            val displayTranslation = prefs.getBoolean("flutter.lyricon_display_translation", true)
-            val displayRoma = prefs.getBoolean("flutter.lyricon_display_roma", false)
-            // 记录用户意图：headless 唤醒 / 连接失败重试都依赖该标志判断是否继续重试
-            setLyriconEnabledState(enabled)
-            android.util.Log.d("LyriconDebug",
-                "restoreLyriconStateIfNeeded: enabled=$enabled, displayTranslation=$displayTranslation, " +
-                "displayRoma=$displayRoma, channelSet=${lyriconChannel != null}")
-            if (enabled) {
-                // 幂等：headless 唤醒时会再次调用本方法（首次在 onCreate，channel 尚为 null），
-                // 只在首次真正 register，避免对 SDK 重复注册。
-                if (!lyriconRegistered) {
-                    provider.register()
-                    lyriconRegistered = true
-                    android.util.Log.d("LyriconDebug", "restoreLyriconStateIfNeeded: provider.register() done")
-                }
-                // 通知 Dart 端：Provider 已自动恢复 enabled 状态
-                // 让 Dart 端同步 _state 并重推当前歌曲
-                invokeLyriconChannelOnMain("onConnectionStateChanged", "auto_restored")
-            }
-            // 同步恢复 displayTranslation / displayRoma 偏好
-            try { provider.player.setDisplayTranslation(displayTranslation) } catch (e: Exception) {
-                android.util.Log.w("LyriconDebug", "setDisplayTranslation failed: ${e.message}")
-            }
-            try { provider.player.setDisplayRoma(displayRoma) } catch (e: Exception) {
-                android.util.Log.w("LyriconDebug", "setDisplayRoma failed: ${e.message}")
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("LyriconDebug", "restoreLyriconStateIfNeeded failed", e)
-        }
-    }
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
@@ -1050,7 +658,7 @@ class AudioPlaybackService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_PREV, ACTION_PLAY_PAUSE, ACTION_PAUSE, ACTION_NEXT,
-            ACTION_TOGGLE_DESKTOP_LYRIC, ACTION_TOGGLE_FAVORITE,
+            ACTION_TOGGLE_FAVORITE,
             ACTION_WIDGET_PLAY_PAUSE, ACTION_WIDGET_NEXT -> {
                 handleAction(intent)
                 return START_STICKY
@@ -1099,8 +707,6 @@ class AudioPlaybackService : Service() {
         val isPlaying = intent?.getBooleanExtra(EXTRA_IS_PLAYING, false) ?: false
         val position = intent?.getLongExtra(EXTRA_POSITION, 0L) ?: 0L
         val duration = intent?.getLongExtra(EXTRA_DURATION, 0L) ?: 0L
-        val desktopLyricEnabled =
-            intent?.getBooleanExtra(EXTRA_DESKTOP_LYRIC_ENABLED, false) ?: false
         val isFavorited =
             intent?.getBooleanExtra(EXTRA_IS_FAVORITED, false) ?: false
 
@@ -1124,7 +730,6 @@ class AudioPlaybackService : Service() {
             isPlaying,
             position,
             duration,
-            desktopLyricEnabled,
             isFavorited
         )
 
@@ -1183,7 +788,6 @@ class AudioPlaybackService : Service() {
                 ACTION_PAUSE -> "pause"
                 ACTION_PLAY_PAUSE, ACTION_WIDGET_PLAY_PAUSE -> "togglePlayPause"
                 ACTION_NEXT, ACTION_WIDGET_NEXT -> "next"
-                ACTION_TOGGLE_DESKTOP_LYRIC -> "toggleDesktopLyric"
                 ACTION_TOGGLE_FAVORITE -> "toggleFavorite"
                 else -> return
             }
@@ -1200,7 +804,6 @@ class AudioPlaybackService : Service() {
             ACTION_PAUSE -> "pause"
             ACTION_PLAY_PAUSE -> "togglePlayPause"
             ACTION_NEXT -> "next"
-            ACTION_TOGGLE_DESKTOP_LYRIC -> "toggleDesktopLyric"
             ACTION_TOGGLE_FAVORITE -> "toggleFavorite"
             else -> return
         }
@@ -1497,11 +1100,6 @@ class AudioPlaybackService : Service() {
                 TAG,
                 "headless playerReady confirmed for engine=${System.identityHashCode(engine)}; dispatching pending media command",
             )
-            // playerReady 意味着 Dart main() 已跑完 runApp，Lyricon 反向 handler
-            // 必然已注册，此时补发 auto_restored 事件才可靠（setupHeadlessChannels
-            // 里那次可能因 Dart 尚未注册 handler 而丢消息）。幂等：register 已由
-            // onCreate 完成，这里只负责把事件送达 Dart。
-            restoreLyriconStateIfNeeded()
             dispatchToDartWithRetry(engine)
         } catch (e: Exception) {
             Log.w(TAG, "headless media command dispatch failed: $e")
@@ -1591,7 +1189,6 @@ class AudioPlaybackService : Service() {
                             isPlaying = call.argument<Boolean>("isPlaying") ?: false,
                             position = call.argument<Number>("position")?.toLong() ?: 0L,
                             duration = call.argument<Number>("duration")?.toLong() ?: 0L,
-                            desktopLyricEnabled = call.argument<Boolean>("desktopLyricEnabled") ?: false,
                             isFavorited = call.argument<Boolean>("isFavorited") ?: false,
                         )
                         result.success(true)
@@ -1630,13 +1227,8 @@ class AudioPlaybackService : Service() {
                     else -> result.notImplemented()
                 }
             }
-            // 进程被杀唤醒场景：Lyricon channel 原生 handler 只能在这里注册
-            // （无 MainActivity），注册后重新通知 Dart 端 Lyricon 已自动恢复，
-            // 否则词幕不会随播放自动连接（Dart 端 _state 一直停留在 disabled）。
-            registerLyriconChannel(engine)
-            // SuperLyric channel 原生 handler 同样只能在 headless 场景下在此注册
+            // SuperLyric channel 原生 handler 只能在 headless 场景下在此注册
             registerSuperLyricChannel(engine)
-            restoreLyriconStateIfNeeded()
             // 音量均衡通道：headless 引擎同样需要，播放/AudioService 在此 isolate 运行。
             registerVolumeNormalizationChannel(engine)
             // 后台引擎初始化期间，Dart 也会推送桌面小组件状态；与 Activity 共用同一 handler。
@@ -1680,7 +1272,6 @@ class AudioPlaybackService : Service() {
             addAction(ACTION_PREV)
             addAction(ACTION_PLAY_PAUSE)
             addAction(ACTION_NEXT)
-            addAction(ACTION_TOGGLE_DESKTOP_LYRIC)
             addAction(ACTION_TOGGLE_FAVORITE)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1961,7 +1552,6 @@ class AudioPlaybackService : Service() {
         isPlaying: Boolean,
         position: Long,
         duration: Long,
-        desktopLyricEnabled: Boolean = false,
         isFavorited: Boolean = false
     ) {
         if (mediaId.isNotEmpty() && mediaId != originalMediaId) {
@@ -1981,17 +1571,12 @@ class AudioPlaybackService : Service() {
         originalArtist = artist
         lastArtUrl = artUrl
         lastIsPlaying = isPlaying
-        lastDesktopLyricEnabled = desktopLyricEnabled
         lastIsFavorited = isFavorited
         lastDuration = duration
         // 通知会在下方所有分支中调用 startForeground，标记已进入前台
         foregroundStarted = true
-        // 方案B阶段4：随通知更新把桌面歌词/收藏状态推到媒体3会话（渲染成通知栏按钮）。
-        pushMedia3CustomActions(
-            desktopLyricEnabled,
-            isFavorited,
-            hasTranslationForCurrentTrack()
-        )
+        // 方案B阶段4：随通知更新把收藏状态推到媒体3会话（渲染成通知栏按钮）。
+        pushMedia3CustomActions(isFavorited)
         val displayTitle = originalTitle
         val displayArtist = originalArtist
 
@@ -2100,33 +1685,15 @@ class AudioPlaybackService : Service() {
             AudioPlayer.updateActiveSessionTitleArtist(
                 requestMediaId, requestGeneration, displayTitle, displayArtist)
         }
-
-        // 同步播放状态到 Lyricon：必须走 Auto PlaybackState（带 position+speed 时间戳）。
-        // 不能调 Boolean 重载 / setPosition / seekTo，否则会切回 Manually 并 seek 到
-        // 旧位置（lastPosition=0），导致歌词每隔一次同步就闪回开头。
-        try {
-            lyriconProvider?.player?.setPlaybackState(
-                buildLyriconPlaybackState(position, isPlaying)
-            )
-        } catch (_: Exception) {}
     }
 
-    /// 方案B阶段4：把当前桌面歌词/收藏状态推给媒体3会话，渲染为通知栏自定义按钮。
+    /// 方案B阶段4：把当前收藏状态推给媒体3会话，渲染为通知栏自定义按钮。
     /// 图标资源在 app 模块（R.drawable），fork 仅持有 command/回调，不依赖资源。
-    /// 阶段6：下一首已改回 media3 原生按钮，这里保留 收藏/桌面歌词/翻译(可选)。
-    /// 翻译按钮仅在 hasLyricTranslation 时发布（ColorOS Bridge 消费）；占位图标必须是
-    /// 包内有效资源（CustomAction.Builder 需要有效 iconResId，SystemUI 建立 Action 时
-    /// 先解析该资源）。Bridge 识别 Action 后会换成自己的标准翻译图标。
-    private fun pushMedia3CustomActions(
-        desktopLyricEnabled: Boolean,
-        isFavorited: Boolean,
-        hasTranslation: Boolean,
-    ) {
+    /// 阶段6：下一首已改回 media3 原生按钮，这里保留收藏一个固定自定义按钮。
+    private fun pushMedia3CustomActions(isFavorited: Boolean) {
         try {
             AudioPlayer.setActiveSessionCustomActions(
-                desktopLyricEnabled, isFavorited, hasTranslation,
-                R.drawable.ic_translation,
-                R.drawable.ic_lyric_on, R.drawable.ic_lyric_off,
+                isFavorited,
                 R.drawable.ic_favorite_on, R.drawable.ic_favorite_off,
             )
         } catch (e: Throwable) {
@@ -2135,19 +1702,9 @@ class AudioPlaybackService : Service() {
     }
 
     /// 方案B：是否允许用歌词行改写 MediaSession TITLE。
-    /// 蓝牙歌词开启 + 有当前歌词行时才允许；但 LyricInfo(ColorOS) 协议激活时
-    /// 保留真实曲名（ColorOS 桌面歌词走 extras.lyricInfo，不依赖 TITLE）。
-    private fun btLyricRewriteActive(): Boolean {
-        if (!bluetoothLyricEnabled) return false
-        if (currentBtLyricText.isEmpty()) return false
-        val colorOsActive = try {
-            getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-                .getString("flutter.lyric_push_protocol", "") == "lyric_info"
-        } catch (_: Exception) {
-            false
-        }
-        return !colorOsActive
-    }
+    /// 蓝牙歌词开启 + 有当前歌词行时才允许。
+    private fun btLyricRewriteActive(): Boolean =
+        bluetoothLyricEnabled && currentBtLyricText.isNotEmpty()
 
     private fun btLyricDisplayTitle(): String =
         if (btLyricRewriteActive()) currentBtLyricText else originalTitle
@@ -2173,8 +1730,8 @@ class AudioPlaybackService : Service() {
             scheduleMetadataRefresh()
             return
         }
-        // 方案B：蓝牙歌词开启且非 ColorOS(LyricInfo) 场景时，把歌词行写入 TITLE
-        // （AVRCP 设备据此显示歌词）；ColorOS 场景保留真实曲名（歌词走 extras.lyricInfo）。
+        // 方案B：蓝牙歌词开启时，把歌词行写入 TITLE
+        // （AVRCP 设备据此显示歌词）。
         val displayTitle = btLyricDisplayTitle()
         val displayArtist = btLyricDisplayArtist()
 
@@ -2230,12 +1787,8 @@ class AudioPlaybackService : Service() {
             btLyricDisplayTitle(),
             btLyricDisplayArtist()
         )
-        // 方案B阶段4：按当前开关状态渲染媒体3通知栏的自定义按钮（桌面歌词/收藏）。
-        pushMedia3CustomActions(
-            lastDesktopLyricEnabled,
-            lastIsFavorited,
-            hasTranslationForCurrentTrack()
-        )
+        // 方案B阶段4：按当前开关状态渲染媒体3通知栏的自定义按钮（收藏）。
+        pushMedia3CustomActions(lastIsFavorited)
         // MD3Music fork: Vivo 原子随身听（vivomusicmix）歌词推送（歌词就绪后发一次，
         // 定时器 25s 重发兜底）。
         pushVivoAtomicExtras()
@@ -2290,9 +1843,6 @@ class AudioPlaybackService : Service() {
             currentLyricInfoMediaId == originalMediaId) currentLyricInfo else ""
     }
 
-    private fun hasTranslationForCurrentTrack(): Boolean =
-        lyricInfoForCurrentTrack().isNotEmpty() && hasLyricTranslation
-
     private fun isMetadataRequestCurrent(mediaId: String, generation: Long): Boolean =
         mediaId.isNotEmpty() &&
             mediaId == originalMediaId &&
@@ -2304,16 +1854,6 @@ class AudioPlaybackService : Service() {
                 unregisterReceiver(it)
             } catch (_: Exception) {}
         }
-        // 释放 Lyricon Provider
-        try {
-            lyriconProvider?.unregister()
-        } catch (_: Exception) {}
-        try {
-            lyriconProvider?.destroy()
-        } catch (_: Exception) {}
-        lyriconProvider = null
-        // 取消排期中的词幕重连任务，防止服务销毁后回调仍触发
-        setLyriconEnabledState(false)
         // P0: 取消排期中的 setMetadata 合并刷新，防止服务销毁后仍回调
         metadataRefreshHandler.removeCallbacksAndMessages(null)
         // MD3Music fork: 取消原子随身听 25s 重发定时器

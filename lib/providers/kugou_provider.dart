@@ -164,7 +164,7 @@ class KugouProvider extends ChangeNotifier {
   int _lyricRequestGeneration = 0;
   // 歌词 LRU 仅保存有效歌词；typed API 已能区分 notFound 与失败，
   // 但有限TTL负缓存尚未落地，因此当前不缓存无歌词结果。
-  // 播放页 / 桌面歌词链路 / Lyricon 三通道共享，命中不再发网络请求
+  // 播放页 / 桌面歌词链路 / LyricInfo 三通道共享，命中不再发网络请求
   // （fmt='lrc' 实际是 LRC+KRC 并发双请求，重复拉取代价翻倍）。
   final Map<LyricRequestKey, KugouLyric> _lyricCache = {};
   final LyricRequestDeduplicator<LyricLookupResult> _lyricRequests =

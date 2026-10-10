@@ -23,7 +23,6 @@ import '../core/services/audio_source_load_deadline.dart';
 import '../core/services/desktop_lyric_service.dart';
 import '../core/services/diagnostic_logger.dart';
 import '../core/services/home_widget_service.dart';
-import '../core/services/lyricon_provider_service.dart';
 import '../core/services/listening_grade_service.dart';
 import '../core/services/listen_report_service.dart';
 import '../core/services/playback_duration_tracker.dart';
@@ -33,14 +32,11 @@ import '../core/services/media_store_service.dart';
 import '../data/models/song.dart';
 import '../modules/player/comments_view.dart';
 import '../core/utils/app_toast.dart';
-import '../core/utils/local_lyric_loader.dart';
 import '../data/repositories/history_repository.dart';
 import '../data/repositories/player_state_repository.dart';
 import '../data/repositories/settings_repository.dart';
 import '../main.dart';
 import '../services/kugou_server.dart';
-import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
-import '../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import 'favorites_provider.dart';
 import 'kugou_provider.dart';
 import 'crossfade_preparation_ticket.dart';
@@ -134,10 +130,6 @@ String? safePlaybackErrorMessage(String? error) {
     _ => '播放失败，请重试',
   };
 }
-
-/// 冷启动恢复播放状态时置 true：让 MiniPlayer 首次出现「直接满显示、不播放入场动画」，
-/// 避免启动期入场动画偶发未完整淡出、背景色遮罩残留导致内容偏灰。由 MiniPlayer 消费后清零。
-bool kMiniPlayerSkipNextEntrance = false;
 
 class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   static int _nextDiagnosticSessionId = 0;
@@ -812,14 +804,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   // 未登录时尝试播放需联网歌曲,通知 UI 弹窗
   void Function()? onLoginRequired;
 
-  // —— Lyricon 钩子字段 ——
-  // 记录上次推送给 Lyricon 的「id + 元数据」签名，用于在 notifyListeners 回调中
-  // 检测切歌与元数据变化（PlayerProvider 没有专门的切歌回调，用 addListener
-  // 监听自身是最小侵入方式）
-  String? _lastLyriconSongSig;
-  // 歌词异步拉取的竞态 token：每次切歌自增，过期结果被丢弃
-  int _lyriconFetchToken = 0;
-
   // —— 播放状态持久化 ——
   final PlayerStateRepository _stateRepo;
   bool _stateRestored = false;
@@ -849,8 +833,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
        _isAndroidPlatform = isAndroidForTest ?? Platform.isAndroid {
     WidgetsBinding.instance.addObserver(this);
     _scheduleAudioServiceInit();
-    // 监听自身变化检测切歌 → 推送 Lyricon（仅 enabled 时实际推送）
-    addListener(_handleLyriconSongChange);
     // 同步「是否正在播放在线歌曲」到听歌等级服务（累计本地听歌时长用）
     addListener(_syncListeningGradeOnline);
     // CSCC 真实播放事件上报（/user/listen/report）：切歌 → 补发前一首 end + 发新 start。
@@ -861,10 +843,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     ListenReportService.instance.setDeviceInfoLoader(
       _ensureListenReportDeviceInfo,
     );
-    // 监听 Lyricon 连接状态：headless 唤醒等场景下 auto_restored/connected
-    // 事件到达时可能晚于状态恢复的 notifyListeners，这里补推当前歌曲，
-    // 否则词幕不会自动连接显示（PlayerProvider 自己监听自己无法感知 Lyricon 启用）。
-    LyriconProviderService.instance.addListener(_handleLyriconEnabledChanged);
   }
 
   /// 推送当前「在线歌曲播放中」状态到听歌等级服务。
@@ -889,7 +867,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 监听自身 notifyListeners：切歌时上报 CSCC `end` + `start`。
   ///
   /// PlayerProvider 无专门切歌回调（playSong/next/previous/playSongAt 多处切歌），
-  /// 与 [_handleLyriconSongChange] 同法用 addListener 监听自身，首行 short-circuit。
+  /// 与其他切歌监听同法用 addListener 监听自身，首行 short-circuit。
   /// 登录态与开关由 [ListenReportService] 内部自行判定（未登录/未开启则不请求），
   /// 故此处只负责「切歌边沿」这一件事，不重复判定登录态。
   void _handleListenReportSongChange() {
@@ -1390,8 +1368,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       _currentSong = state.currentSong;
-      // 冷启动恢复出上次播放的歌：标记让 MiniPlayer 首次出现直接满显示、不弹入场动画
-      if (_currentSong != null) kMiniPlayerSkipNextEntrance = true;
       _playlist = List.from(state.playlist);
       _originalPlaylist = List.from(state.playlist);
       _currentIndex = state.currentIndex;
@@ -1642,17 +1618,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         }
         // 交叉淡化调度：与位置兜底共用同一个 ~200ms tick，无需额外 Timer
         _maybeCrossfade(position);
-        // 直接转发给 Lyricon，无节流。
-        // positionStream 本身就是 ~200ms 周期（just_audio 默认），是天然节流。
-        // MethodChannel 是异步的，不阻塞 Dart UI；setPosition 是 fire-and-forget。
-        // 仅在播放中推送，暂停时跳过避免无意义 IPC。
-        if (LyriconProviderService.instance.enabled && _isPlaying) {
-          try {
-            LyriconProviderService.instance.setPosition(
-              position.inMilliseconds,
-            );
-          } catch (_) {}
-        }
       }, onError: (e) {});
 
       _durationSubscription = _audioService.durationStream.listen((duration) {
@@ -1676,17 +1641,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           _updateNotification();
         } catch (_) {}
         notifyListeners();
-        // 播放/暂停切换时立即推 Lyricon，避免等下一个 positionStream tick
-        // state 必须用 PlaybackStateCompat.STATE_PLAYING=3 / STATE_PAUSED=2
-        if (LyriconProviderService.instance.enabled) {
-          try {
-            LyriconProviderService.instance.setPlaybackState(
-              state: isPlaying ? 3 : 2,
-              position: _position.inMilliseconds,
-              speed: 1.0,
-            );
-          } catch (_) {}
-        }
       }, onError: (e) {});
 
       // ExoPlayer/播放器错误进诊断日志（app.log 随诊断报告导出）；
@@ -4259,13 +4213,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
     await _audioService?.seek(position);
     _saveState();
-    // 同步进度到 Lyricon（仅 enabled 时推送，避免无意义 IPC；
-    // seek 由用户拖动进度条或切歌/上一首/下一首触发，频率自然不高，无需额外节流）
-    if (LyriconProviderService.instance.enabled) {
-      try {
-        LyriconProviderService.instance.seekTo(position.inMilliseconds);
-      } catch (_) {}
-    }
     // seek 后立即同步通知/小组件进度（频率天然低），并重置节流时间戳，
     // 使新位置立即反映到媒体通知进度条。
     _lastNotificationUpdate = null;
@@ -5621,7 +5568,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       isPlaying: _isPlaying,
       position: _position,
       duration: _duration ?? Duration.zero,
-      desktopLyricEnabled: DesktopLyricService.instance.enabled,
       isFavorited: isFavorited,
     );
   }
@@ -5782,139 +5728,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     return result;
   }
 
-  /// 监听自身 notifyListeners：检测 currentSong 变化时推送 Lyricon。
-  ///
-  /// PlayerProvider 没有专门的切歌回调（playSong / next / previous / playSongAt
-  /// 等多处都会切歌），用 addListener 监听自身是最小侵入方式。
-  /// 每次 notifyListeners（含 position tick）都会触发本方法，但首行 short-circuit
-  /// 仅做一次字符串比较，开销可忽略。
-  void _handleLyriconSongChange() {
-    if (!LyriconProviderService.instance.enabled) return;
-    final song = _currentSong;
-    // 去重键必须包含元数据，不能只用 id：播放中的歌曲元数据可能由后台富化
-    // 补齐后就地回写（**id 不变**），若仅比 id 就会被拦掉，Lyricon 永久停在
-    // 占位标题。加入 title/artist/cover 后，元数据一变即重推；
-    // 同时 position tick 场景三者均不变，原有防抖语义不受影响。
-    final sig = buildLyriconSongSignature(song);
-    // 签名相同（含都为 null）则不处理，避免高频 tick 触发重复推送
-    if (sig == _lastLyriconSongSig) return;
-    _lastLyriconSongSig = sig;
-    _pushLyriconSongChange(song);
-  }
-
-  // 记录上次的 enabled 状态，只在 disabled→enabled 边界触发重推，
-  // 避免断开/超时等保持 enabled 的事件反复触发歌词重推
-  bool _lyriconWasEnabled = false;
-
-  /// 上次 Lyricon 连接状态（用于检测「断开 → 重连成功」边界，重推当前歌曲）。
-  LyriconConnectionState _lastLyriconState = LyriconConnectionState.disabled;
-
-  /// Lyricon 状态变化时：
-  /// - enabled 从 false→true（auto_restored / connected）→ 重置 _lastLyriconSongSig 重推。
-  /// - enabled 保持 true 但连接状态从断开（disconnected/timeout）恢复为 connected
-  ///   （Lyricon 断开后自动重连成功）→ 同样重推当前歌曲，否则重连后词幕无歌词数据不显示。
-  void _handleLyriconEnabledChanged() {
-    final enabled = LyriconProviderService.instance.enabled;
-    final state = LyriconProviderService.instance.state;
-    if (enabled && !_lyriconWasEnabled) {
-      _lyriconWasEnabled = true;
-      _lastLyriconState = state;
-      _lastLyriconSongSig = null;
-      _handleLyriconSongChange();
-    } else if (!enabled) {
-      _lyriconWasEnabled = false;
-      _lastLyriconState = LyriconConnectionState.disabled;
-    } else if (_lastLyriconState != state) {
-      final wasDisconnected =
-          _lastLyriconState == LyriconConnectionState.disconnected ||
-          _lastLyriconState == LyriconConnectionState.timeout;
-      _lastLyriconState = state;
-      if (wasDisconnected && state == LyriconConnectionState.connected) {
-        _lastLyriconSongSig = null;
-        _handleLyriconSongChange();
-      }
-    }
-  }
-
-  /// 拉取歌词 → 解析 → 推送 Lyricon onSongChanged。
-  ///
-  /// 参考 [DesktopLyricService._onTick] / [_fetchLyricFor] 的模式：
-  /// - 通过 appNavigatorKey.currentContext 拿 KugouProvider
-  /// - 调 kugou.getLyric 拉 LRC（Task 15 双请求会同时拉 KRC）
-  /// - 用 LyricParserChain.parse 自动识别 KRC/LRC/纯文本
-  /// - 推送 LyriconProviderService.instance.onSongChanged
-  ///
-  /// 竞态处理：每次切歌自增 _lyriconFetchToken，异步结果过期则丢弃，
-  /// 避免快速切歌时旧歌词覆盖新歌词。
-  Future<void> _pushLyriconSongChange(Song? song) async {
-    if (!LyriconProviderService.instance.enabled) return;
-    final token = ++_lyriconFetchToken;
-    try {
-      List<LyricLine> lines = const [];
-      if (song != null) {
-        // 本地歌曲优先读取内嵌歌词
-        if (!song.isOnline) {
-          final localPath = song.localPath;
-          if (localPath != null && localPath.isNotEmpty) {
-            String filePath = localPath;
-            if (filePath.startsWith('file://')) {
-              filePath = Uri.parse(filePath).toFilePath();
-            }
-            final embedded = await LocalLyricLoader.loadForAudioAsync(filePath);
-            if (embedded != null && embedded.isNotEmpty) {
-              lines = await parseLyricOffMainThread(embedded);
-            }
-          }
-        }
-
-        // 内嵌歌词为空时从酷狗 API 获取
-        if (lines.isEmpty) {
-          final ctx = appNavigatorKey.currentContext;
-          if (ctx != null && ctx.mounted) {
-            try {
-              final kugou = ctx.read<KugouProvider>();
-              // 本地歌曲传空 hash + "歌名 艺术家" 关键词搜索；搜索词与播放器页面 full_player 保持一致，
-              // 确保 Lyricon 推送与播放器页面命中同一版本歌词。
-              final lyricHash = song.isOnline ? song.id : '';
-              // 用 isUnknownArtist 而非比较单一字面量：在线与本地侧的占位值
-              // 不同（「未知歌手」/「未知艺术家」），只比一个会漏判，
-              // 导致把「未知歌曲 未知歌手」当检索词去搜。
-              final searchName = !isUnknownArtist(song.artist)
-                  ? '${song.title} ${song.artist}'
-                  : song.title;
-              final lyric = await kugou.getLyric(
-                lyricHash,
-                songName: searchName,
-                fmt: 'lrc',
-                localIdentity: song.isOnline ? null : song.localPath,
-              );
-              if (token != _lyriconFetchToken) return;
-              final text = lyric?.displayLyric;
-              final translationText = lyric?.translatedContent;
-              final romaText = lyric?.romaContent;
-              if (text != null && text.isNotEmpty) {
-                lines = LyricParserChain.parse(
-                  text,
-                  translationText: translationText,
-                  romaText: romaText,
-                );
-              }
-            } catch (_) {}
-          }
-        }
-      }
-      if (token != _lyriconFetchToken) return;
-      // 传入当前播放进度和状态，让 Lyricon 能立即触发歌词渲染
-      // （Lyricon 推荐调用顺序：setSong → setPosition → setPlaybackState）
-      await LyriconProviderService.instance.onSongChanged(
-        song,
-        lines,
-        positionMs: _position.inMilliseconds,
-        isPlaying: _isPlaying,
-      );
-    } catch (_) {}
-  }
-
   /// —— CSCC：进程终止前的兜底结算 ——
   ///
   /// 缺口：`PlaybackDurationTracker` 是**纯内存**的，进程一退，当前这段未上报的
@@ -5992,11 +5805,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     _connectivitySub = null;
     _stopRetryFailedTimer();
     WidgetsBinding.instance.removeObserver(this);
-    removeListener(_handleLyriconSongChange);
     removeListener(_handleListenReportSongChange);
-    LyriconProviderService.instance.removeListener(
-      _handleLyriconEnabledChanged,
-    );
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
     _playingSubscription?.cancel();
@@ -6080,19 +5889,4 @@ bool shouldHintQueueEnd({
   if (loopMode != 'off') return false;
   if (playlistLength <= 0) return false;
   return currentIndex >= playlistLength - 1;
-}
-
-/// 构造 Lyricon 推送的去重签名（`null` 表示无当前歌）。
-///
-/// **为什么签名必须含元数据而不只是 id**：播放中的歌曲元数据可能由后台富化
-/// 补齐后就地回写，而该回写**刻意保持 id 不变**（避免打断播放）。
-/// 若去重只看 id，这次回写会被判为「无变化」直接拦掉，
-/// Lyricon 就会整首歌停在占位标题。
-///
-/// 用 `\u0000` 作分隔符：它是不会出现在正常歌曲元数据里的控制字符，
-/// 避免「标题结尾 + 歌手开头」拼出与其他歌相同的串而产生误判。
-String? buildLyriconSongSignature(Song? song) {
-  if (song == null) return null;
-  return '${song.id}\u0000${song.title}\u0000${song.artist}\u0000'
-      '${song.artworkUri ?? ''}';
 }

@@ -8,13 +8,11 @@ import 'package:quick_actions/quick_actions.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
-import 'core/layout/responsive_layout.dart';
 import 'core/services/desktop_lyric_service.dart';
 import 'core/services/diagnostic_logger.dart';
 import 'modules/recognition/floating_recognition_service.dart';
 import 'core/services/equalizer_service.dart';
 import 'core/services/viper_master_service.dart';
-import 'core/services/lyricon_provider_service.dart';
 import 'core/services/listening_grade_service.dart';
 import 'core/services/listen_report_service.dart';
 import 'core/services/media_notification_service.dart';
@@ -25,7 +23,6 @@ import 'modules/update/update_check_service.dart';
 import 'modules/onboarding/user_agreement_page.dart';
 import 'services/kugou_server.dart';
 import 'utils/landscape_immersive.dart';
-import 'widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'widgets/md3_lyric_preferences.dart';
 
 /// 顶级 Navigator 的 GlobalKey，预留供后续扩展使用。
@@ -129,9 +126,7 @@ Future<(bool, bool, bool)> runBootstrap() async {
   // 同时预取 SharedPreferences（onboarding / 用户协议检查复用）。
   final prefsFuture = SharedPreferences.getInstance();
   await Future.wait([
-    // 加载歌词字号/行间距偏好（从 SharedPreferences）
-    LyricPreferences.instance.load(),
-    // 加载 MD3 风格播放页的独立歌词偏好（与 Apple Music 风格完全分离）
+    // 加载 MD3 风格播放页的独立歌词偏好（从 SharedPreferences）
     Md3LyricPreferences.instance.load(),
     // 恢复屏幕常亮开关状态，供 PlayerProvider/MV 页播放时读取
     WakelockService.instance.init().catchError((_) {}),
@@ -139,7 +134,7 @@ Future<(bool, bool, bool)> runBootstrap() async {
     EqualizerService.instance.init().catchError((_) {}),
     // 初始化蝰蛇母带服务（恢复开关与 10 段增益并推送原生处理链）
     ViperMasterService.instance.init().catchError((_) {}),
-    // 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric/LyricInfo 三选一）：
+    // 恢复蓝牙歌词开关 + 实时歌词推送协议（SuperLyric + 关闭）：
     // 让歌词服务定时器在需要时启动、启用选中协议。
     // 原生端 AudioPlaybackService.onCreate 会自行从 SharedPreferences 恢复开关。
     _restoreLyricPushPref(),
@@ -148,14 +143,11 @@ Future<(bool, bool, bool)> runBootstrap() async {
   ]);
   markStartup('local_preferences_ready');
 
-  // 注册通知栏/悬浮窗回调（悬浮窗内按钮 → DesktopLyricService；通知栏桌面歌词按钮 → toggle）
+  // 注册通知栏回调（通知栏按钮 → DesktopLyricService 转发播放控制/收藏）
   MediaNotificationService.initCallbacks();
   DesktopLyricService.instance.registerNativeCallbacks();
   // 注册悬浮窗识曲原生回调（PCM 段回传 / MediaProjection 授权结果 / 悬浮窗按钮动作）
   FloatingRecognitionService.instance.registerNativeCallbacks();
-  // 注册 Lyricon 反向回调（连接状态变更 → UI 刷新）
-  // initialize 内部仅 setMethodCallHandler，同步完成，无需 await
-  LyriconProviderService.instance.initialize();
 
   // 启动听歌等级：本地听歌时长累计 + 自动上报（内部按平台/登录态自行处理）
   ListeningGradeService.instance.init();
@@ -215,9 +207,6 @@ Future<(bool, bool, bool)> runBootstrap() async {
     initialUseBackgroundImage =
         prefs.getBool(ThemeProvider.backgroundImageEnabledPreferenceKey) ??
             true;
-    kSecondaryPlayerEnabled.value =
-        prefs.getBool(SettingsRepository.secondaryPlayerEnabledPreferenceKey) ??
-            false;
   } catch (_) {}
   markStartup('onboarding_state_ready');
 
@@ -236,7 +225,7 @@ Future<(bool, bool, bool)> runBootstrap() async {
   return (needsOnboarding, needsUserAgreement, initialUseBackgroundImage);
 }
 
-/// 恢复蓝牙歌词开关 + 实时歌词推送协议（Lyricon/SuperLyric/LyricInfo 三选一 + 关闭）。
+/// 恢复蓝牙歌词开关 + 实时歌词推送协议（SuperLyric + 关闭）。
 /// 从 SettingsRepository 读取协议与共用偏好，启用选中协议、禁用其他，并同步偏好。
 Future<void> _restoreLyricPushPref() async {
   try {
@@ -264,10 +253,6 @@ Future<void> _restoreLyricPushPref() async {
     final translation = await translationFuture;
     final roma = await romaFuture;
     final preferTranslation = await preferTranslationFuture;
-    // 记录各协议 enabled key（兼容 Kotlin restoreLyricon 读 lyricon_enabled）
-    await settings.setLyriconEnabled(protocol == 'lyricon');
-    await settings.setSuperLyricEnabled(protocol == 'super_lyric');
-    await settings.setLyricInfoEnabled(protocol == 'lyric_info');
     // 应用共用偏好
     // ignore: discarded_futures
     DesktopLyricService.instance.setLyricPushPreferences(
@@ -275,28 +260,13 @@ Future<void> _restoreLyricPushPref() async {
       roma: roma,
       preferTranslation: preferTranslation,
     );
-    // 启用选中协议
-    if (protocol == 'lyricon') {
-      try {
-        await LyriconProviderService.instance.setDisplayTranslation(
-          translation,
-        );
-        await LyriconProviderService.instance.setDisplayRoma(roma);
-        await LyriconProviderService.instance.setEnabled(true);
-      } catch (_) {}
-    } else if (protocol == 'super_lyric') {
+    // 启用选中协议（词幕渠道已在 lite 精简中移除；LyricInfo 下方无条件启用）
+    if (protocol == 'super_lyric') {
       // ignore: discarded_futures
       DesktopLyricService.instance.setSuperLyricEnabled(true);
-    } else if (protocol == 'lyric_info') {
-      // 先恢复 ColorOS Bridge 兼容模式，再启用推送（避免首推旧格式）
-      final colorOs = await settings.getLyricInfoColorOs();
-      // ignore: discarded_futures
-      DesktopLyricService.instance.setLyricInfoColorOs(colorOs);
-      // ignore: discarded_futures
-      await DesktopLyricService.instance.setLyricInfoEnabled(true);
     }
     // MD3Music fork: lyricInfo 推送无条件启用（Vivo 车载歌词依赖此链路：extras LYRICS_WHOLE
-    // + 原子随身听 lrc_change）。协议开关只控制 lyricon/super_lyric 等展示通道；
+    // + 原子随身听 lrc_change）。协议开关只控制 super_lyric 等展示通道；
     // 此前受开关控制 + 覆盖安装残留旧设置（lyric_push_protocol='none'）导致链路关闭，
     // 原子随身听缺 8/16 能力位（无歌词无进度条）、车机无歌词。
     // ignore: discarded_futures

@@ -4137,7 +4137,7 @@ public class MediaSessionCompat {
           sLiveApi21Impls.add(this);
         }
       }
-      // MD3Music fork: mediaId 为空时补稳定身份——必须在所有 metadata 更新上做
+      // MD3Music fork: mediaId 为空时补稳定身份——必须在所有 metadata 更新上做：
       // （不只歌词更新）：切歌后先到的无歌词更新若 mediaId 为空，原子 E0()/z1()
       // 匹配失败 → 封面回退纯色。放 hook 最前，任何更新都带稳定身份。
       if (fwkMetadata != null) {

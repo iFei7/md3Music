@@ -1046,7 +1046,7 @@ class AudioService {
       // ignore: discarded_futures
       incoming.play();
       // MD3Music fork（方案A·fade 起点切歌）：起播后立即把活动播放器切给新歌（incoming），
-      // 使对外的 currentSong/媒体卡片/蓝牙歌词/Lyricon 在 fade 一开始就基于下一首，
+      // 使对外的 currentSong/媒体卡片/蓝牙歌词在 fade 一开始就基于下一首，
       // 避免切歌后媒体卡片/歌词卡在旧歌（原实现等到交叉点 t=0.5 才切）。
       _promoteIncoming(incoming, onCrossover);
 

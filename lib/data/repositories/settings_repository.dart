@@ -22,17 +22,9 @@ class SettingsRepository {
       'settings_startup_auto_play_source';
   static const String _keyStartupAutoPlayOpenPage =
       'settings_startup_auto_play_open_page';
-  // 早期预留的死键，全仓无任何调用方，勿与上面的启动自动播放混用。
-  static const String _keyAutoPlay = 'settings_auto_play';
-  static const String _keyShowLyrics = 'settings_show_lyrics';
   static const String _keyAutoReceiveVip = 'settings_auto_receive_vip';
-  static const String _keyUiScale = 'settings_ui_scale';
   // Pad 端网格页面列数偏好
   static const String _keyGridColumns = 'grid_columns';
-  // MV 画中画：按 Home 自动进入画中画（默认关闭，手动按钮不受影响）
-  static const String _keyAutoPip = 'settings_auto_pip';
-  static const String _keyMvDanmakuEnabled = 'settings_mv_danmaku_enabled';
-  static const String _keyMvDanmakuOpacity = 'settings_mv_danmaku_opacity';
 
   /// 上传听歌时长（听歌等级累计上报）开关。默认关闭：不上传任何听歌时长数据。
   static const String _keyUploadListeningDuration =
@@ -96,37 +88,6 @@ class SettingsRepository {
     await prefs.setBool(_keyDesktopModeEnabled, enabled);
   }
 
-  /// 悬浮迷你播放器（二级页面底部悬浮播放条）总开关。
-  /// 默认关闭；开启后在主页与二级页面使用悬浮播放条。
-  static const String secondaryPlayerEnabledPreferenceKey =
-      'settings_secondary_player_enabled';
-
-  /// 是否启用悬浮迷你播放器。未设置时默认关闭。
-  Future<bool> getSecondaryPlayerEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(secondaryPlayerEnabledPreferenceKey) ?? false;
-  }
-
-  Future<void> setSecondaryPlayerEnabled(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(secondaryPlayerEnabledPreferenceKey, enabled);
-  }
-
-  /// 悬浮播放器折叠态停靠位（'left' | 'center' | 'right'）。
-  /// null = 未设置（调用方按设备形态取默认：手机 center / Pad right）。
-  static const String _keySecondaryPlayerDock =
-      'settings_secondary_player_dock';
-
-  Future<String?> getSecondaryPlayerDockRaw() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keySecondaryPlayerDock);
-  }
-
-  Future<void> setSecondaryPlayerDockRaw(String side) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keySecondaryPlayerDock, side);
-  }
-
   /// 桌面侧栏宽度（dp）。未设置时返回 null，由调用方套用默认值。
   Future<double?> getDesktopSidebarWidth() async {
     final prefs = await SharedPreferences.getInstance();
@@ -161,21 +122,6 @@ class SettingsRepository {
   Future<void> setThemeMode(ThemeMode mode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_keyThemeMode, mode.index);
-  }
-
-  /// 「强调排版」开关（M3E Emphasized Typography），默认开启。
-  /// 开启时全局 TextTheme 走 M3ETypography.emphasized（提升字重 + 写入 wght/opsz 字轴）；
-  /// 关闭后回退到手写的常规 TextTheme。
-  static const String _keyEmphasizedTypography = 'emphasized_typography';
-
-  Future<bool> getEmphasizedTypographyEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyEmphasizedTypography) ?? true;
-  }
-
-  Future<void> setEmphasizedTypographyEnabled(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyEmphasizedTypography, value);
   }
 
   Future<String> getDefaultQuality() async {
@@ -226,16 +172,6 @@ class SettingsRepository {
     await prefs.setInt(_keyCacheSize, sizeMb);
   }
 
-  Future<bool> getAutoPlay() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyAutoPlay) ?? true;
-  }
-
-  Future<void> setAutoPlay(bool autoPlay) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyAutoPlay, autoPlay);
-  }
-
   /// 新版本提醒开关（默认开启）。关闭后启动时不再查询 Release。
   Future<bool> getUpdateReminderEnabled() async {
     final prefs = await SharedPreferences.getInstance();
@@ -280,16 +216,6 @@ class SettingsRepository {
     await prefs.setString(_keyUpdateLastNotifiedVersion, version);
   }
 
-  Future<bool> getShowLyrics() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyShowLyrics) ?? true;
-  }
-
-  Future<void> setShowLyrics(bool showLyrics) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyShowLyrics, showLyrics);
-  }
-
   Future<bool> getAutoReceiveVip() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_keyAutoReceiveVip) ?? true;
@@ -298,40 +224,6 @@ class SettingsRepository {
   Future<void> setAutoReceiveVip(bool autoReceive) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyAutoReceiveVip, autoReceive);
-  }
-
-  /// MV 画中画：按 Home 自动进入画中画是否开启（默认关闭）。
-  Future<bool> getAutoPipEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyAutoPip) ?? false;
-  }
-
-  Future<void> setAutoPipEnabled(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyAutoPip, value);
-  }
-
-  /// MV 弹幕开关。默认关闭 —— 与酷狗官方 App 的 MV 弹幕默认行为一致。
-  Future<bool> getMvDanmakuEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyMvDanmakuEnabled) ?? false;
-  }
-
-  Future<void> setMvDanmakuEnabled(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyMvDanmakuEnabled, value);
-  }
-
-  /// MV 弹幕总透明度（PiliPlus `danmakuOpacity` 的对应物）。
-  /// 合法区间 [0.1, 1.0]，越界读回/写入一律钳制。
-  Future<double> getMvDanmakuOpacity() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(_keyMvDanmakuOpacity)?.clamp(0.1, 1.0) ?? 1.0;
-  }
-
-  Future<void> setMvDanmakuOpacity(double value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keyMvDanmakuOpacity, value.clamp(0.1, 1.0));
   }
 
   /// 上传听歌时长（听歌等级累计上报）开关，默认关闭。
@@ -365,86 +257,15 @@ class SettingsRepository {
     await prefs.setInt(_keyLyricTimeOffset, clamped);
   }
 
-  // ===== 桌面歌词配置 =====
-
-  Future<double> getDesktopLyricFontSize() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble('settings_dl_font_size') ?? 18.0;
-  }
-
-  Future<void> setDesktopLyricFontSize(double size) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('settings_dl_font_size', size);
-  }
-
-  Future<bool> getDesktopLyricDoubleLine() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('settings_dl_double_line') ?? false;
-  }
-
-  Future<void> setDesktopLyricDoubleLine(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('settings_dl_double_line', v);
-  }
-
-  Future<int> getDesktopLyricOpacity() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('settings_dl_opacity') ?? 80;
-  }
-
-  Future<void> setDesktopLyricOpacity(int v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('settings_dl_opacity', v);
-  }
-
-  Future<int> getDesktopLyricGradientStart() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('settings_dl_grad_start') ?? 0xFF00E5FF;
-  }
-
-  Future<void> setDesktopLyricGradientStart(int v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('settings_dl_grad_start', v);
-  }
-
-  Future<int> getDesktopLyricGradientEnd() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('settings_dl_grad_end') ?? 0xFFFF00FF;
-  }
-
-  Future<void> setDesktopLyricGradientEnd(int v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('settings_dl_grad_end', v);
-  }
-
-  Future<int> getDesktopLyricUnplayedColor() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('settings_dl_unplayed_color') ?? 0xFF666666;
-  }
-
-  Future<void> setDesktopLyricUnplayedColor(int v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('settings_dl_unplayed_color', v);
-  }
-
-  Future<bool> getDesktopLyricLocked() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('settings_dl_locked') ?? false;
-  }
-
-  Future<void> setDesktopLyricLocked(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('settings_dl_locked', v);
-  }
-
   // ===== 实时歌词推送协议 =====
-  // 三种协议（Lyricon / SuperLyric / LyricInfo）三选一 + 关闭，翻译/罗马音等偏好共用。
+  // 协议：关闭 + SuperLyric（词幕渠道已在 lite 精简中移除；
+  // lyric_info 为静默底层恒推，不计入协议选项）。
 
-  /// 当前选中的推送协议：'none' / 'lyricon' / 'super_lyric' / 'lyric_info'。
+  /// 当前选中的推送协议：'none' / 'super_lyric'（lyric_info 为静默底层恒推）。
   Future<String> getLyricPushProtocol() async {
     final prefs = await SharedPreferences.getInstance();
     // MD3Music fork: 默认 lyric_info（Vivo 车载歌词依赖此链路推送整首歌词；
-    // 原默认 none 导致 lyricInfo 不推，原子随身听缺 8/16 能力位、车机无歌词）。
+    // 协议开关只控制展示通道，lyric_info 为静默底层恒推，与 UI 两选项不冲突）。
     return prefs.getString('lyric_push_protocol') ?? 'lyric_info';
   }
 
@@ -485,80 +306,6 @@ class SettingsRepository {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('lyric_push_prefer_translation', v);
   }
-
-  // ===== Lyricon 配置 =====
-
-  Future<bool> getLyriconEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('lyricon_enabled') ?? false;
-  }
-
-  Future<void> setLyriconEnabled(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('lyricon_enabled', v);
-  }
-
-  Future<bool> getLyriconDisplayTranslation() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('lyricon_display_translation') ?? true;
-  }
-
-  Future<void> setLyriconDisplayTranslation(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('lyricon_display_translation', v);
-  }
-
-  Future<bool> getLyriconDisplayRoma() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('lyricon_display_roma') ?? false;
-  }
-
-  Future<void> setLyriconDisplayRoma(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('lyricon_display_roma', v);
-  }
-
-  /// 同时存在翻译和罗马音时是否优先推送翻译。
-  /// 开启后：setSong 时若某行同时携带 translation 和 roma，则丢弃 roma，
-  /// 让 Lyricon 设备只显示翻译。关闭后：二者都推送，由 setDisplayTranslation
-  /// 和 setDisplayRoma 开关分别控制显示。
-  Future<bool> getLyriconPreferTranslation() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('lyricon_prefer_translation') ?? true;
-  }
-
-  Future<void> setLyriconPreferTranslation(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('lyricon_prefer_translation', v);
-  }
-
-  Future<bool> getSuperLyricEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('super_lyric_enabled') ?? false;
-  }
-
-  Future<void> setSuperLyricEnabled(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('super_lyric_enabled', v);
-  }
-
-  /// SuperLyric：同时存在翻译和罗马音时是否优先推送翻译（默认 true）。
-  Future<bool> getSuperLyricPreferTranslation() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('super_lyric_prefer_translation') ?? true;
-  }
-
-  Future<void> setSuperLyricPreferTranslation(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('super_lyric_prefer_translation', v);
-  }
-
-  // ===== 魅族 Flyme 状态栏歌词（已下线）=====
-  // 废弃键保留读取回落：旧版本残留的持久化键不再写入（删 setter），
-  // getter 一律返回默认值，保证历史调用方语义不变。
-  Future<bool> getFlymeStatusBarLyricEnabled() async => false;
-
-  Future<int> getFlymeLyricAdvanceMs() async => 0;
 
   // ===== 蓝牙歌词配置 =====
   // 通过修改 MediaSession 元数据（title 显示歌词，artist 显示「作者 - 标题」），
@@ -630,52 +377,6 @@ class SettingsRepository {
   Future<void> setDepthCoverNeuralInpaint(bool v) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyDepthCoverNeuralInpaint, v);
-  }
-
-  // ===== LyricInfo 歌词转发 =====
-  // 通过 MediaSession 元数据 extras.lyricInfo 发布整首歌词（LRC/ELRC），
-  // 供 ColorOS 桌面歌词 / LyricInfo 模块等第三方系统读取。
-  static const String _keyLyricInfoEnabled = 'settings_lyric_info_enabled';
-
-  Future<bool> getLyricInfoEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyLyricInfoEnabled) ?? false;
-  }
-
-  static const String _keyLyricInfoColorOs = 'settings_lyric_info_coloros';
-
-  /// ColorOS Bridge 兼容模式：lyricInfo JSON 输出 lyric=纯 LRC + rawLyric=ELRC，
-  /// 适配 ColorOS-Live-Lyrics-Bridge 插件（逐字高亮等增强）。默认关闭。
-  Future<bool> getLyricInfoColorOs() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyLyricInfoColorOs) ?? false;
-  }
-
-  Future<void> setLyricInfoColorOs(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyLyricInfoColorOs, v);
-  }
-
-  Future<void> setLyricInfoEnabled(bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyLyricInfoEnabled, v);
-  }
-
-  // ===== 锁屏歌词（已下线）=====
-  // 废弃键保留读取回落：旧版本残留的持久化键不再写入（删 setter），
-  // getter 一律返回默认值，保证历史调用方语义不变。
-  Future<bool> getLockScreenLyricEnabled() async => false;
-
-  // ===== UI 缩放 =====
-
-  Future<double> getUiScale() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(_keyUiScale) ?? 1.0;
-  }
-
-  Future<void> setUiScale(double scale) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keyUiScale, scale);
   }
 
   // ===== 系统音效 =====
@@ -831,128 +532,6 @@ class SettingsRepository {
   Future<void> setKeepScreenOn(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyKeepScreenOn, value);
-  }
-
-  // ===== 音乐频谱环绕显示 =====
-  static const String _keySpectrumEnabled = 'settings_spectrum_enabled';
-  static const String _keySpectrumBandCount = 'settings_spectrum_band_count';
-  static const String _keySpectrumStyle = 'settings_spectrum_style';
-
-  /// 全屏播放器是否显示音乐频谱环绕（圆形旋转封面 + 环形频谱柱），默认 false。
-  Future<bool> getSpectrumEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keySpectrumEnabled) ?? false;
-  }
-
-  Future<void> setSpectrumEnabled(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keySpectrumEnabled, value);
-  }
-
-  /// 频谱柱数量（20~80，默认 40）。
-  Future<int> getSpectrumBandCount() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_keySpectrumBandCount) ?? 40;
-  }
-
-  Future<void> setSpectrumBandCount(int value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_keySpectrumBandCount, value);
-  }
-
-  /// 频谱样式：0=柱状图，1=曲线（默认 0）。
-  Future<int> getSpectrumStyle() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_keySpectrumStyle) ?? 0;
-  }
-
-  Future<void> setSpectrumStyle(int value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_keySpectrumStyle, value);
-  }
-
-  // ── 频谱背景层 ──
-  static const String _keySpectrumBgOpacity = 'settings_spectrum_bg_opacity';
-  static const String _keySpectrumBgHeight = 'settings_spectrum_bg_height';
-
-  /// 频谱背景层透明度（0.1~0.8，默认 0.4）。
-  Future<double> getSpectrumBgOpacity() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(_keySpectrumBgOpacity) ?? 0.4;
-  }
-
-  Future<void> setSpectrumBgOpacity(double value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keySpectrumBgOpacity, value);
-  }
-
-  /// 频谱背景层高度比例（0.2~0.8，默认 0.4，占屏幕高度的比例）。
-  Future<double> getSpectrumBgHeight() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(_keySpectrumBgHeight) ?? 0.4;
-  }
-
-  Future<void> setSpectrumBgHeight(double value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keySpectrumBgHeight, value);
-  }
-
-  // ── 环绕频谱透明度（柱状图 / 曲线，分开记忆） ──
-  static const String _keySpectrumBarOpacity = 'settings_spectrum_bar_opacity';
-  static const String _keySpectrumCurveOpacity =
-      'settings_spectrum_curve_opacity';
-
-  /// 频谱动态取色（独立开关，默认关闭）：开启后 AM 播放器频谱颜色取封面主色
-  /// 与白色 50/50 混合（与歌词动态取色无关）。
-  static const String _keySpectrumDynamicColor =
-      'settings_spectrum_dynamic_color';
-
-  /// 柱状图频谱透明度（0.1~1.0，默认 1.0 不透明）。
-  Future<double> getSpectrumBarOpacity() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(_keySpectrumBarOpacity) ?? 1.0;
-  }
-
-  Future<void> setSpectrumBarOpacity(double value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keySpectrumBarOpacity, value);
-  }
-
-  /// 曲线频谱透明度（0.1~1.0，默认 1.0 不透明）。
-  Future<double> getSpectrumCurveOpacity() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(_keySpectrumCurveOpacity) ?? 1.0;
-  }
-
-  Future<void> setSpectrumCurveOpacity(double value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keySpectrumCurveOpacity, value);
-  }
-
-  /// 频谱动态取色开关（默认开启）。
-  Future<bool> getSpectrumDynamicColor() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keySpectrumDynamicColor) ?? true;
-  }
-
-  Future<void> setSpectrumDynamicColor(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keySpectrumDynamicColor, value);
-  }
-
-  // ===== MiniPlayer 滑动切歌 =====
-  static const String _keyMiniPlayerSwipeSwitch =
-      'settings_mini_player_swipe_switch';
-
-  /// MiniPlayer 是否支持水平滑动切歌，默认开启。
-  Future<bool> getMiniPlayerSwipeSwitchEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyMiniPlayerSwipeSwitch) ?? true;
-  }
-
-  Future<void> setMiniPlayerSwipeSwitchEnabled(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyMiniPlayerSwipeSwitch, value);
   }
 
   // ===== 主页 Tab 配置 =====

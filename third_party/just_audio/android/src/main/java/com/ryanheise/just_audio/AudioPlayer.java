@@ -830,7 +830,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     .setTag(id);
             // MD3Music fork：把 AudioSource.uri tag 里的 title/artist/album/artUri
             // 映射进 MediaItem.mediaMetadata（原实现只 setTag(id)，mediaMetadata 为空），
-            // 使媒体会话（Lyricon autoSync / SystemUI 通知栏）能读到封面 artUri。
+            // 使媒体会话（SystemUI 通知栏 / 外部歌词消费者）能读到封面 artUri。
             applyPlayerTag(mediaItemBuilder, map.get("tag"));
             return new ProgressiveMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers")), buildExtractorsFactory(mapGet(map, "options")))
                     .createMediaSource(mediaItemBuilder.build());
@@ -1130,21 +1130,19 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             // MD3Music fork: 用唯一会话 ID，避免默认空串被 SESSION_ID_TO_SESSION_MAP 判重冲突
             sessionBuilder.setId(sessionId);
             // MD3Music fork: 处理媒体3自定义命令（阶段4，自研交互迁往媒体3）。
-            // 通知栏自定义按钮（桌面歌词/收藏）经 onCustomCommand 到达，转发给 App 处理。
+            // 通知栏自定义按钮（收藏）经 onCustomCommand 到达，转发给 App 处理。
             sessionBuilder.setCallback(new MediaSession.Callback() {
                 @Override
                 public MediaSession.ConnectionResult onConnect(
                         MediaSession session, MediaSession.ControllerInfo controller) {
-                    // MD3Music fork: 让自定义命令（桌面歌词/收藏）对所有 controller 可用，
+                    // MD3Music fork: 让自定义命令（收藏）对所有 controller 可用，
                     // 否则内部媒体通知 controller 的 customLayout 会把它们过滤成禁用/移除，
                     // 通知栏自定义按钮无法渲染（阶段4）。
                     MediaSession.ConnectionResult.AcceptedResultBuilder builder =
                             new MediaSession.ConnectionResult.AcceptedResultBuilder(session);
                     androidx.media3.session.SessionCommands.Builder cmdBuilder =
                             new androidx.media3.session.SessionCommands.Builder();
-                    cmdBuilder.add(CMD_TOGGLE_DESKTOP_LYRIC);
                     cmdBuilder.add(CMD_TOGGLE_FAVORITE);
-                    cmdBuilder.add(CMD_TOGGLE_TRANSLATION);
                     builder.setAvailableSessionCommands(cmdBuilder.build());
                     return builder.build();
                 }
@@ -1197,9 +1195,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     final CustomActionListener listener = sCustomActionListener;
                     if (customCommand != null && listener != null) {
                         String action = customCommand.customAction;
-                        if (CMD_TOGGLE_DESKTOP_LYRIC.customAction.equals(action)) {
-                            listener.onToggleDesktopLyric();
-                        } else if (CMD_TOGGLE_FAVORITE.customAction.equals(action)) {
+                        if (CMD_TOGGLE_FAVORITE.customAction.equals(action)) {
                             listener.onToggleFavorite();
                         }
                     }
@@ -1606,12 +1602,11 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     // ==== MD3Music fork: 媒体3自定义命令（阶段4，自研 action 迁往媒体3） ====
-    // 桌面歌词开关、收藏以 media3 自定义 Command 承载：App 把状态/图标推给
+    // 收藏以 media3 自定义 Command 承载：App 把状态/图标推给
     // setActiveSessionCustomActions，渲染为通知栏按钮；点击经 onCustomCommand 回传 App。
     // 上一首/下一首不再用自定义按钮：改由拦截原生 seekToPrevious/seekToNext 命令
     // （onPlayerCommandRequest）转发 App 队列逻辑，见 buildAndHostMediaSession。
     public interface CustomActionListener {
-        void onToggleDesktopLyric();
         void onToggleFavorite();
         // MD3Music fork（阶段6·修复媒体卡片上一首/下一首）：
         // 原生 PREVIOUS/NEXT 命令拦截后回调，走 App 自有切歌逻辑。
@@ -1622,17 +1617,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     private static volatile CustomActionListener sCustomActionListener;
     // 用 new Bundle() 而非 Bundle.EMPTY：后者要求 API 26+，本项目 minSdk 为 24/25。
-    private static final SessionCommand CMD_TOGGLE_DESKTOP_LYRIC =
-            new SessionCommand("com.md3music.toggle_desktop_lyric", new android.os.Bundle());
     private static final SessionCommand CMD_TOGGLE_FAVORITE =
             new SessionCommand("com.md3music.toggle_favorite", new android.os.Bundle());
-    // MD3Music fork: ColorOS-Live-Lyrics-Bridge 公开翻译切换动作（LYRIC_INFO 协议）。
-    // Bridge 在 SystemUI 侧按该 action 定位 OPlus 锁屏翻译按钮并接管点击；未安装 Bridge
-    // 时点击经 onCustomCommand 到达，default 分支返回 RESULT_SUCCESS 安全忽略。
-    private static final SessionCommand CMD_TOGGLE_TRANSLATION =
-            new SessionCommand(
-                    "io.github.andrealtb.lockscreenlyrics.action.TOGGLE_TRANSLATION",
-                    new android.os.Bundle());
 
     /// 由 App 注册，接收媒体3通知按钮触发的自定义命令。
     public static void setCustomActionListener(CustomActionListener listener) {
@@ -1640,35 +1626,21 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     /// 由 App 在元数据/开关变化时推送媒体3通知栏的自定义按钮（图标按开/关态切换）。
-    /// 阶段6：下一首已改回原生按钮，这里保留收藏/桌面歌词两个固定自定义按钮。
-    /// hasTranslation=true 时追加 ColorOS 翻译切换按钮（仅 Bridge 消费，播放器不处理
-    /// 其回调）；翻译图标缺省用模块自带（未新增 ic_translation）。
+    /// 阶段6：下一首已改回原生按钮，这里保留收藏一个固定自定义按钮。
     public static void setActiveSessionCustomActions(
-            boolean desktopLyricEnabled,
             boolean isFavorited,
-            boolean hasTranslation,
-            int translationIconResId,
-            int desktopLyricOnIcon,
-            int desktopLyricOffIcon,
             int favoriteOnIcon,
             int favoriteOffIcon) {
         AudioPlayer p = sActivePlayer;
         if (p != null) {
-            p.applySessionCustomActions(
-                    desktopLyricEnabled, isFavorited, hasTranslation, translationIconResId,
-                    desktopLyricOnIcon, desktopLyricOffIcon, favoriteOnIcon, favoriteOffIcon);
+            p.applySessionCustomActions(isFavorited, favoriteOnIcon, favoriteOffIcon);
         } else {
             Log.w("AudioFocusFork", "setActiveSessionCustomActions: no active AudioPlayer");
         }
     }
 
     private void applySessionCustomActions(
-            final boolean desktopLyricEnabled,
             final boolean isFavorited,
-            final boolean hasTranslation,
-            final int translationIconResId,
-            final int desktopLyricOnIcon,
-            final int desktopLyricOffIcon,
             final int favoriteOnIcon,
             final int favoriteOffIcon) {
         try {
@@ -1679,28 +1651,14 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 try {
                     // MD3Music fork（阶段6）：下一首改回 media3 原生按钮（自动渲染）。
                     // 收藏放在自定义布局首位，确保 SystemUI 的有限按钮槽位优先显示
-                    // “我喜欢”；翻译仍保留在布局中，供 Bridge 按 command 识别并接管。
-                    java.util.List<CommandButton> layout = new java.util.ArrayList<>(3);
+                    // “我喜欢”。
+                    java.util.List<CommandButton> layout = new java.util.ArrayList<>(1);
                     layout.add(new CommandButton.Builder()
                             .setSessionCommand(CMD_TOGGLE_FAVORITE)
                             .setDisplayName("收藏")
                             .setIconResId(isFavorited ? favoriteOnIcon : favoriteOffIcon)
                             .setEnabled(true)
                             .build());
-                    layout.add(new CommandButton.Builder()
-                            .setSessionCommand(CMD_TOGGLE_DESKTOP_LYRIC)
-                            .setDisplayName("桌面歌词")
-                            .setIconResId(desktopLyricEnabled ? desktopLyricOnIcon : desktopLyricOffIcon)
-                            .setEnabled(true)
-                            .build());
-                    if (hasTranslation) {
-                        layout.add(new CommandButton.Builder()
-                                .setSessionCommand(CMD_TOGGLE_TRANSLATION)
-                                .setDisplayName("歌词翻译")
-                                .setIconResId(translationIconResId)
-                                .setEnabled(true)
-                                .build());
-                    }
                     mediaSession.setCustomLayout(layout);
                     // MD3Music fork: 自定义按钮 layout 变化不会自动重渲染 now playing 通知，
                     // 需让承载服务按最新 layout 强制刷新一次（见 MediaSessionService.refreshNotification）。
@@ -1827,7 +1785,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             MediaMetadata.Builder mb = cur.mediaMetadata.buildUpon();
             if (title != null && !title.isEmpty()) mb.setTitle(title);
             if (artist != null && !artist.isEmpty()) mb.setArtist(artist);
-            // MD3Music fork：注入 artworkUri（Lyricon autoSync / 外部读取封面用），
+            // MD3Music fork：注入 artworkUri（外部歌词消费者读取封面用），
             // 通知栏封面仍用 artworkData（bitmap，稳定，避免 artUri 异步加载闪烁）。
             if (artUri != null && !artUri.isEmpty()) {
                 mb.setArtworkUri(android.net.Uri.parse(artUri));

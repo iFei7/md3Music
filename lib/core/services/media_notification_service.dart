@@ -35,13 +35,7 @@ class MediaNotificationService {
   // 线控耳机媒体键映射的独立播放 / 暂停命令（原生端唤醒播放下发）
   static void Function()? onPlay;
   static void Function()? onPause;
-  // 来自通知栏桌面歌词按钮
-  static void Function()? onToggleDesktopLyric;
   static void Function()? onToggleFavorite;
-  // 来自悬浮窗内按钮：参数为 "lock" / "previous" / "play" / "next" / "settings"
-  static void Function(String)? onDesktopLyricAction;
-  // 来自悬浮窗内修改配置后回传
-  static void Function(Map<dynamic, dynamic>)? onConfigChanged;
   // 来自私人FM桌面小部件的按钮动作
   static void Function()? onWidgetFmPlayPause;
   static void Function()? onWidgetFmToggleFavorite;
@@ -53,8 +47,6 @@ class MediaNotificationService {
   static void Function()? onWidgetFmOpenPlayer;
   // 登录引导卡点击：MainActivity 拉起 app 后转发
   static void Function()? onWidgetFmOpenLogin;
-  // 屏幕亮灭（FloatingLyricService SCREEN_OFF/ON 广播转发）
-  static void Function(bool on)? onScreenStateChanged;
   static final MediaCommandAckRouter _mediaCommandAckRouter =
       MediaCommandAckRouter();
 
@@ -102,26 +94,8 @@ class MediaNotificationService {
           final pos = call.arguments as int?;
           if (pos != null) onSeekTo?.call(pos);
           break;
-        case 'toggleDesktopLyric':
-          onToggleDesktopLyric?.call();
-          break;
         case 'toggleFavorite':
           onToggleFavorite?.call();
-          break;
-        case 'desktopLyricAction':
-          final action = call.arguments as String?;
-          if (action != null) onDesktopLyricAction?.call(action);
-          break;
-        case 'desktopLyricConfigChanged':
-          final config = call.arguments as Map<dynamic, dynamic>?;
-          if (config != null) onConfigChanged?.call(config);
-          break;
-        // 悬浮窗服务转发的屏幕亮灭（熄屏时 Dart tick 门控休眠用）
-        case 'screenStateChanged':
-          final on = call.arguments is Map
-              ? (call.arguments as Map<dynamic, dynamic>)['on'] == true
-              : false;
-          onScreenStateChanged?.call(on);
           break;
         // 私人FM桌面小部件按钮动作
         case 'widgetFmPlayPause':
@@ -158,7 +132,6 @@ class MediaNotificationService {
     required bool isPlaying,
     Duration position = Duration.zero,
     Duration duration = Duration.zero,
-    bool desktopLyricEnabled = false,
     bool isFavorited = false,
   }) async {
     try {
@@ -171,7 +144,6 @@ class MediaNotificationService {
         'isPlaying': isPlaying,
         'position': position.inMilliseconds,
         'duration': duration.inMilliseconds,
-        'desktopLyricEnabled': desktopLyricEnabled,
         'isFavorited': isFavorited,
       });
     } catch (_) {}
@@ -202,63 +174,6 @@ class MediaNotificationService {
     try {
       await _channel.invokeMethod('playerReady');
     } catch (_) {}
-  }
-
-  // 桌面歌词（悬浮窗）相关
-  static Future<bool> hasOverlayPermission() async {
-    try {
-      final r = await _channel.invokeMethod<bool>('hasOverlayPermission');
-      return r ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  static Future<bool> startFloatingLyric({
-    required String lyric,
-    required String title,
-  }) async {
-    try {
-      final r = await _channel.invokeMethod<bool>('startFloatingLyric', {
-        'lyric': lyric,
-        'title': title,
-      });
-      return r ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<bool> updateLyric(String lyric, {String nextLyric = ''}) async {
-    try {
-      final r = await _channel.invokeMethod<bool>('updateLyric', {
-        'lyric': lyric,
-        'nextLyric': nextLyric,
-      });
-      return r ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  static Future<bool> updateTitle(String title) async {
-    try {
-      final r = await _channel.invokeMethod<bool>('updateTitle', {
-        'title': title,
-      });
-      return r ?? false;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  static Future<bool> stopFloatingLyric() async {
-    try {
-      final r = await _channel.invokeMethod<bool>('stopFloatingLyric');
-      return r ?? false;
-    } catch (e) {
-      return false;
-    }
   }
 
   // 蓝牙歌词兼容通道仍保留，但原生端不再改写共享 MediaSession 的 TITLE/ARTIST，
