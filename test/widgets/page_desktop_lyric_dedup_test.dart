@@ -36,7 +36,6 @@ void main() {
     tester.view.devicePixelRatio = 1;
     SharedPreferences.setMockInitialValues({
       'settings_restore_memory': false,
-      'settings_spectrum_dynamic_color': false,
     });
     installFakeSecureStorage();
 

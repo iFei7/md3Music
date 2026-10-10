@@ -461,7 +461,7 @@ class _SearchPageState extends State<SearchPage>
                 return SongListItem(
                   song: results[index],
                   showDuration: false,
-                  trailingActions: SongTrailingActions.detailAndMv,
+                  trailingActions: SongTrailingActions.detail,
                   onTap: () {
                     context.read<PlayerProvider>().playOnlinePlaylist(
                       results,
@@ -529,7 +529,7 @@ class _SearchPageState extends State<SearchPage>
                 return SongListItem(
                   song: song,
                   showDuration: false,
-                  trailingActions: SongTrailingActions.detailAndMv,
+                  trailingActions: SongTrailingActions.detail,
                   // 保留命中的歌词片段作为副标题（primary 强调）。
                   subtitleOverride: Text(
                     snippet.isNotEmpty ? snippet : song.artist,

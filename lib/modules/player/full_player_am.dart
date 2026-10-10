@@ -1,20 +1,14 @@
-import 'dart:io' show Platform;
-import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:m3e_core/m3e_core.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/layout/responsive_layout.dart';
-import '../../core/services/audio_service.dart';
 import '../../core/services/desktop_lyric_service.dart';
-import '../../core/services/dynamic_cover_service.dart';
 import '../../core/services/equalizer_service.dart';
 import '../../core/services/media_notification_service.dart';
-import '../../core/services/spectrum_service.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../main.dart';
@@ -31,7 +25,6 @@ import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
 import '../settings/equalizer_settings_page.dart';
 import '../sound/sounds_page.dart';
-import 'mv_player_page.dart';
 import 'sleep_timer_sheet.dart';
 import 'song_info_page.dart';
 import 'am_transport_controls.dart';
@@ -50,12 +43,9 @@ import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import '../../widgets/ai_recommend_sheet.dart';
 import '../../widgets/menu_action_cell.dart';
-import '../../widgets/dynamic_cover_view.dart';
 import '../../widgets/player_artwork_image.dart';
 import '../../widgets/player_seek_bar.dart';
 import '../../widgets/player_tab_strip.dart';
-import '../../widgets/spectrum_artwork.dart';
-import '../../widgets/spectrum_background.dart';
 import '../../utils/landscape_immersive.dart';
 import '../../widgets/player_playlist_view.dart';
 import '../../widgets/playback_status_feedback.dart';
@@ -170,10 +160,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   bool get _isDragOverlay =>
       ModalRoute.of(context) == null && playerDragActive.value;
 
-  /// 封面是否为圆形（旋转圆盘）：仅在开启频谱且样式为柱状(0)/曲线(1)时成立，
-  /// 其余情况为圆角方形。圆盘时横屏/平板标题居中，方形时左对齐（见改版计划）。
-  bool get _isDiscCover => _spectrumEnabled && _spectrumStyle < 2;
-
   /// 是否已修改过系统栏（沉浸模式）。
   /// 覆盖层（非路由）场景从未修改，dispose 时无需恢复系统栏。
   bool _systemUiModified = false;
@@ -195,16 +181,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   bool _zenMode = false;
   // 长按封面进入 Zen 模式开关（设置→播放，默认开启；关闭后禁用长按）
   bool _zenLongPressEnabled = true;
-  // 专辑动态封面开关（设置页「播放页样式」与播放页「界面设置」共用；默认开启）
-  bool _dynamicCoverEnabled = true;
-
-  /// 播放页「界面设置」里「当前歌曲动态封面」的展示值（null = 检测中）
-  ///
-  /// 刻意**不在 dispose() 里销毁**：二级菜单挂在根 Navigator 上，可能比本 State
-  /// 活得更久（如车机模式切换导致播放器被销毁时菜单仍开着），销毁后菜单关闭时
-  /// `removeListener` 会命中「used after being disposed」断言。不销毁则菜单关闭后
-  /// notifier 与监听者一起变成垃圾被回收。
-  final ValueNotifier<String?> _dyCoverStatus = ValueNotifier<String?>(null);
   late final AnimationController _zenController;
   late final Animation<double> _zenAnimation;
 
@@ -234,37 +210,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
 
   // 进度条拖动状态：记录拖动前是否正在播放，拖动结束后恢复
   bool _wasPlayingBeforeDrag = false;
-
-  // ── 音乐频谱环绕显示 ──
-  bool _spectrumEnabled = false;
-  bool _spectrumStarted = false;
-  // 频谱样式：0=柱状图(环绕)，1=曲线(环绕)，2=背景层(条形)
-  int _spectrumStyle = 0;
-  // 频谱背景层参数（仅 style=2 时使用）
-  double _spectrumBgOpacity = 0.4;
-  double _spectrumBgHeight = 0.4;
-  // 环绕频谱透明度（style 0/1 分开记忆，默认不透明）
-  double _spectrumBarOpacity = 1.0;
-  double _spectrumCurveOpacity = 1.0;
-  // 偏好读取前先关闭取色，避免启动期多发一次封面请求；读取后恢复用户设置。
-  bool _spectrumDynamicColor = false;
-
-  /// 频谱颜色：独立开关「频谱动态取色」开启且已提取到封面主色时，
-  /// 用 50% 白 + 50% 取色混合（与歌词动态取色相同的兜底：抬升明度避免深色）；
-  /// 否则用 AM 风格白色（动态取色仅 AM 播放器生效）。
-  Color get _spectrumColor {
-    final accent = _lyricAccentColor;
-    if (_spectrumDynamicColor && accent != null) {
-      final mixed = Color.lerp(Colors.white, accent, 0.5)!;
-      final hsl = HSLColor.fromColor(mixed);
-      return hsl.withLightness(math.max(hsl.lightness, 0.78)).toColor();
-    }
-    return Colors.white;
-  }
-
-  /// 当前频谱透明度（按样式分开记忆）
-  double get _spectrumOpacity =>
-      _spectrumStyle == 1 ? _spectrumCurveOpacity : _spectrumBarOpacity;
 
   @override
   void initState() {
@@ -316,9 +261,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
         _fetchLyrics(song);
       }
       context.read<PlayerProvider>().addListener(_onPlayerSongChanged);
-      _loadSpectrumSetting();
       _loadZenPressSetting();
-      _loadDynamicCoverSetting();
     });
   }
 
@@ -327,156 +270,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     final enabled = await SettingsRepository().getZenCoverLongPress();
     if (!mounted) return;
     setState(() => _zenLongPressEnabled = enabled);
-  }
-
-  /// 从设置加载「专辑动态封面」开关（默认开启）。
-  Future<void> _loadDynamicCoverSetting() async {
-    final enabled = await SettingsRepository().getDynamicAlbumCover();
-    if (!mounted || enabled == _dynamicCoverEnabled) return;
-    setState(() => _dynamicCoverEnabled = enabled);
-  }
-
-  /// 刷新「界面设置」菜单里的动态封面开关与当前歌曲状态。
-  ///
-  /// 顺带重读开关值（用户可能刚在设置页改过），保证菜单与设置一致；
-  /// 状态优先用 [DynamicCoverService.lastKnownResult] 即时展示，
-  /// 未探测过才发一次请求，失败时显示「未获取到」而不是「无」。
-  Future<void> _refreshDyCoverMenuState() async {
-    final player = context.read<PlayerProvider>();
-    final song = player.currentSong;
-    final isOnline = song is Song && song.isOnline;
-    final albumAudioId = (song is Song ? song.albumAudioId : null) ?? '';
-
-    await _loadDynamicCoverSetting();
-    if (!mounted) return;
-
-    if (!isOnline || albumAudioId.isEmpty) {
-      _dyCoverStatus.value = dyCoverStatusText(
-        isOnline: false,
-        albumAudioId: '',
-        known: null,
-      );
-      return;
-    }
-
-    final known = DynamicCoverService.instance.lastKnownResult(albumAudioId);
-    if (known != null) {
-      _dyCoverStatus.value = dyCoverStatusText(
-        isOnline: true,
-        albumAudioId: albumAudioId,
-        known: known,
-      );
-      return;
-    }
-
-    _dyCoverStatus.value = dyCoverStatusText(
-      isOnline: true,
-      albumAudioId: albumAudioId,
-      known: null,
-      probing: true,
-    );
-    await DynamicCoverService.instance.hasDynamicCover(albumAudioId);
-    if (!mounted) return;
-    _dyCoverStatus.value = dyCoverStatusText(
-      isOnline: true,
-      albumAudioId: albumAudioId,
-      known: DynamicCoverService.instance.lastKnownResult(albumAudioId),
-    );
-  }
-
-  /// 从设置加载频谱开关状态
-  Future<void> _loadSpectrumSetting() async {
-    final enabled = await SettingsRepository().getSpectrumEnabled();
-    final bandCount = await SettingsRepository().getSpectrumBandCount();
-    final style = await SettingsRepository().getSpectrumStyle();
-    final bgOpacity = await SettingsRepository().getSpectrumBgOpacity();
-    final bgHeight = await SettingsRepository().getSpectrumBgHeight();
-    final barOpacity = await SettingsRepository().getSpectrumBarOpacity();
-    final curveOpacity = await SettingsRepository().getSpectrumCurveOpacity();
-    final dynamicColor = await SettingsRepository().getSpectrumDynamicColor();
-    if (!mounted) return;
-    SpectrumService.instance.bandCount = bandCount;
-    setState(() {
-      _spectrumEnabled = enabled;
-      _spectrumStyle = style;
-      _spectrumBgOpacity = bgOpacity;
-      _spectrumBgHeight = bgHeight;
-      _spectrumBarOpacity = barOpacity;
-      _spectrumCurveOpacity = curveOpacity;
-      _spectrumDynamicColor = dynamicColor;
-    });
-    if (enabled) {
-      SpectrumService.instance.simulatedNotifier.addListener(
-        _onSpectrumSimulated,
-      );
-      if (_isDragOverlay) {
-        // 拖拽覆盖层（非路由）：只显示频谱 UI、不启动服务。
-        // 覆盖层销毁时会 dispose 并调用 _stopSpectrum（全局 stop），
-        // 若此处启动会与接管路由的频谱冲突，导致频谱卡住/失效
-        return;
-      }
-      if (Platform.isAndroid) {
-        await Permission.microphone.request();
-      }
-      final isPlaying = context.read<PlayerProvider>().isPlaying;
-      await _tryStartSpectrum(isPlaying: isPlaying);
-    }
-    // 频谱动态取色开启时补提取当前歌曲封面主色（歌词开关可能未开）
-    if (dynamicColor && _lyricAccentColor == null && mounted) {
-      final song = context.read<PlayerProvider>().currentSong;
-      if (song != null) _updateLyricAccent(song.artworkUri);
-    }
-  }
-
-  Future<void> _tryStartSpectrum({bool isPlaying = false}) async {
-    if (!Platform.isAndroid) return;
-    if (_spectrumStarted) return;
-    // 未在播放时不启动（PCM 截取在 AudioSink 层，播放才会产生数据）
-    if (!isPlaying) return;
-    final sessionId = AudioService().androidAudioSessionId ?? 0;
-    final ok = await SpectrumService.instance.start(sessionId);
-    if (ok) {
-      _spectrumStarted = true;
-    }
-  }
-
-  Future<void> _stopSpectrum() async {
-    if (!_spectrumStarted) return;
-    _spectrumStarted = false;
-    await SpectrumService.instance.stop();
-  }
-
-  Future<void> _toggleSpectrum() async {
-    HapticFeedback.lightImpact();
-    final newEnabled = !_spectrumEnabled;
-    setState(() => _spectrumEnabled = newEnabled);
-    await SettingsRepository().setSpectrumEnabled(newEnabled);
-    if (newEnabled) {
-      if (Platform.isAndroid) {
-        final status = await Permission.microphone.request();
-        if (!status.isGranted && mounted) {
-          showToast('未授予录音权限，将使用模拟频谱模式', long: true);
-        }
-      }
-      final isPlaying = context.read<PlayerProvider>().isPlaying;
-      await _tryStartSpectrum(isPlaying: isPlaying);
-      SpectrumService.instance.simulatedNotifier.addListener(
-        _onSpectrumSimulated,
-      );
-    } else {
-      SpectrumService.instance.simulatedNotifier.removeListener(
-        _onSpectrumSimulated,
-      );
-      await _stopSpectrum();
-    }
-  }
-
-  void _onSpectrumSimulated() {
-    if (!mounted) return;
-    if (SpectrumService.instance.simulatedNotifier.value) {
-      showToast('设备不支持实时频谱，已切换到模拟模式', long: true);
-      setState(() {});
-    }
   }
 
   /// 重算并应用当前 tab 结构：
@@ -573,9 +366,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     // 切歌可能在本地/在线之间切换 → 评论 tab 有无随之变化；
     // 设置页改「关闭本地音乐评论区」也会经 PlayerProvider 通知走到这里。
     _syncTabLayout();
-    // 设置页可能改过动态封面开关 → 切歌时同步一次（幂等，值未变不触发重建）
-    // ignore: discarded_futures
-    _loadDynamicCoverSetting();
     final player = context.read<PlayerProvider>();
     final song = player.currentSong;
     if (song != null && song.id != _lastSongId) {
@@ -611,11 +401,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
       }
       if (song.id == _lastSongId) _lastLyricMetadataKey = metadataKey;
     }
-    // 频谱启停
-    if (_spectrumEnabled && player.isPlaying && !_spectrumStarted) {
-      _tryStartSpectrum(isPlaying: true);
-    }
-    SpectrumService.instance.setPlaying(player.isPlaying);
     // 切歌重建会经 AnnotatedRegion 重新调用 setSystemUIOverlayStyle，
     // 在 Android 上把 Zen/横屏沉浸的状态栏重新唤出；本帧结束后再隐藏一次。
     if (_zenMode || _landscapeImmersiveNeeded()) {
@@ -686,11 +471,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     _artworkFadeController.dispose();
     _zenController.dispose();
     _tabController.dispose();
-    // 退出播放器时停止频谱采集
-    SpectrumService.instance.simulatedNotifier.removeListener(
-      _onSpectrumSimulated,
-    );
-    _stopSpectrum();
     // 播放器卸载：若仍在 Zen 中，清除全局标志，避免主界面 _SystemUiUpdater 被永久短路
     if (_zenMode) kPlayerZenImmersiveActive.value = false;
     kPlayerLandscapeImmersiveActive.value = false;
@@ -898,15 +678,14 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     );
   }
 
-  /// 切歌时异步提取专辑封面主色，供歌词「动态字体颜色」与频谱动态取色混色使用。
+  /// 切歌时异步提取专辑封面主色，供歌词「动态字体颜色」使用。
   ///
   /// 复用流光背景的提取思路（PaletteGenerator + 过滤 + 饱和度归一化）。
   /// 提取完成后若已切到别的歌（url 变化）则丢弃结果。
   Future<void> _updateLyricAccent(String? url) async {
-    // 仅歌词动态取色或频谱动态取色任一开启时才需要提取（默认关闭，避免每次
+    // 仅歌词动态取色开启时才需要提取（默认关闭，避免每次
     // 进播放器都多一次封面下载 + 解码 + PaletteGenerator 分析的无谓开销）
-    if (!LyricPreferences.instance.useDynamicLyricColor &&
-        !_spectrumDynamicColor) {
+    if (!LyricPreferences.instance.useDynamicLyricColor) {
       return;
     }
     if (url == _lastAccentUrl) return;
@@ -920,8 +699,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   /// 开关时，立即为当前歌曲补提取封面主色（首次打开时 _fetchLyrics 的提取
   /// 因开关关闭已被跳过）。
   void _onLyricPrefsChanged() {
-    if ((LyricPreferences.instance.useDynamicLyricColor ||
-            _spectrumDynamicColor) &&
+    if (LyricPreferences.instance.useDynamicLyricColor &&
         _lyricAccentColor == null &&
         mounted) {
       final song = context.read<PlayerProvider>().currentSong;
@@ -1048,27 +826,15 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     return !_parsedLyrics.any((line) => line.hasWordTiming);
   }
 
-  /// 构建横屏布局的封面内容：style 0/1 用 SpectrumArtwork（白色），style 2 用原封面
+  /// 构建横屏布局的封面内容
   Widget _buildLandscapeArtworkContent(
     PlayerProvider playerProvider,
     dynamic currentSong,
     ColorScheme colorScheme,
   ) {
-    if (_spectrumEnabled && _spectrumStyle < 2) {
-      return SpectrumArtwork(
-        artworkUri: currentSong.artworkUri,
-        fallbackFilePath: currentSong.localPath,
-        isPlaying: playerProvider.isPlaying,
-        bandCount: SpectrumService.instance.bandCount,
-        style: _spectrumStyle,
-        barColor: _spectrumColor,
-        opacity: _spectrumOpacity,
-      );
-    }
     return Selector<PlayerProvider, (String?, String?)>(
       selector: (_, p) => (p.currentSong?.artworkUri, p.currentSong?.localPath),
-      builder: (context, data, __) => _buildArtworkWithDynamicCover(
-        currentSong,
+      builder: (context, data, __) => _buildArtwork(
         colorScheme,
         // 必须用内层 Selector 的快照值，不能读 currentSong：同一首歌的封面
         // 稍后被富化补齐时 songId 不变、外层 Selector 不重建，闭包里的
@@ -1114,8 +880,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
           child: FadeTransition(
             opacity: _artworkFadeAnimation,
             // 3D 深度封面宿主：开关关闭/生成未完成时内部回退为平面封面，
-            // 保留 AM 风格的白底占位与淡入效果；与动态封面互斥由
-            // _buildArtworkWithDynamicCover 的分流保证（有动态封面时不会走到这里）。
+            // 保留 AM 风格的白底占位与淡入效果。
             child: DepthCoverHost(
               artworkUri: artworkUrl,
               fallbackFilePath: fallbackFilePath,
@@ -1130,18 +895,17 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     );
   }
 
-  /// AM 播放器封面统一入口：静态封面 + 动态封面叠加。
+  /// AM 播放器封面统一入口：静态封面（含 3D 深度封面）。
   ///
   /// 3 处封面渲染点（横屏左栏、竖屏封面 tab 展开/非展开）都调用本函数，
-  /// 保证行为一致。`isPlaying` 由 [DynamicCoverView] 自己订阅，故此处不传。
+  /// 保证行为一致。
   ///
   /// [artworkUri] / [fallbackFilePath] 必须由调用方传入**它原本使用的来源**：
   /// 横屏左栏走内层 `Selector` 的 `(artworkUri, localPath)` 快照值，另外两处
   /// 直接用 `currentSong` 的字段。若统一改成读 `currentSong`，遇到「同一首歌的
   /// 封面稍后被富化补齐」（songId 不变 → 外层 Selector 不重建 → 闭包持有过期
   /// 实例）时封面会刷不新。
-  Widget _buildArtworkWithDynamicCover(
-    dynamic currentSong,
+  Widget _buildArtwork(
     ColorScheme colorScheme, {
     required String? artworkUri,
     required String? fallbackFilePath,
@@ -1158,8 +922,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
             iconSize: iconSize,
             fallbackFilePath: fallbackFilePath,
           ),
-          if (currentSong is Song && currentSong.isOnline)
-            DynamicCoverView(song: currentSong, enabled: _dynamicCoverEnabled),
         ],
       ),
     );
@@ -1670,14 +1432,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
               ),
             // 3. 半透明蒙版 rgba(0,0,0,0.35)
             _buildDarkOverlay(),
-            // 3.5 频谱背景层：style=2 时显示底部条形频谱图（播放时淡入、暂停时淡出）
-            if (_spectrumEnabled && _spectrumStyle == 2)
-              SpectrumBackground(
-                color: _spectrumColor,
-                opacity: _spectrumBgOpacity,
-                heightRatio: _spectrumBgHeight,
-                visible: playerProvider.isPlaying,
-              ),
             // 4. 主体内容（保留原有 compact/landscape/expanded 三套布局）
             ResponsiveLayout(
               compact: (_) => _buildCompactLayout(
@@ -1940,14 +1694,10 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                         : availableHeight)
                                     .clamp(120.0, 300.0);
                             return Align(
-                              alignment: _isDiscCover
-                                  ? Alignment.center
-                                  : Alignment.centerLeft,
+                              alignment: Alignment.centerLeft,
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: _isDiscCover
-                                    ? CrossAxisAlignment.center
-                                    : CrossAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   SizedBox(
                                     width: size,
@@ -1978,14 +1728,9 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                           : _onTopBarDragCancel,
                                       child: _wrapArtworkZenPress(
                                         child: AnimatedScale(
-                                          // 频谱模式（style 0/1 圆形旋转封面）不需要封面的放大缩小动画
-                                          scale:
-                                              _spectrumEnabled &&
-                                                  _spectrumStyle < 2
+                                          scale: playerProvider.isPlaying
                                               ? 1.0
-                                              : (playerProvider.isPlaying
-                                                    ? 1.0
-                                                    : 0.85),
+                                              : 0.85,
                                           // 缩放锚点=左下角：暂停缩小时封面左缘、下缘保持不动，
                                           // 只向右上收。故标题块恒按布局盒 size 左对齐即与封面
                                           // 可见左缘对齐，无需随 scale 改宽/位移，消除标题跳动。
@@ -2007,8 +1752,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                   // 歌名 / 艺人·专辑：三种横屏形态（手机横屏、平板竖屏、
                                   // 平板横屏）都固定在封面正下方，不再随 tab 变化。
                                   // 标题块宽度=封面布局盒 size，左边缘与专辑封面左边缘对齐。
-                                  // 圆盘封面（频谱 0/1）居中标题以贴合圆盘圆心：线条文本对
-                                  // 圆形封面无法 stretch 出可靠左缘，只对方角封面左对齐才成立。
                                   //
                                   // 封面 AnimatedScale 已锚定左下角，暂停缩小时左缘不动，
                                   // 故此处恒用 size 取宽 + stretch 即与可见封面左缘对齐，
@@ -2019,9 +1762,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                       playerProvider,
                                       currentSong,
                                       isExpanded: true,
-                                      alignment: _isDiscCover
-                                          ? CrossAxisAlignment.center
-                                          : CrossAxisAlignment.stretch,
+                                      alignment: CrossAxisAlignment.stretch,
                                     ),
                                   ),
                                 ],
@@ -2183,14 +1924,10 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                   ),
                                 );
                             return Align(
-                              alignment: _isDiscCover
-                                  ? Alignment.center
-                                  : Alignment.centerLeft,
+                              alignment: Alignment.centerLeft,
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: _isDiscCover
-                                    ? CrossAxisAlignment.center
-                                    : CrossAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   ConstrainedBox(
                                     constraints: BoxConstraints(
@@ -2223,14 +1960,9 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                             : _onTopBarDragCancel,
                                         child: _wrapArtworkZenPress(
                                           child: AnimatedScale(
-                                            // 频谱模式（style 0/1 圆形旋转封面）不需要封面的放大缩小动画
-                                            scale:
-                                                _spectrumEnabled &&
-                                                    _spectrumStyle < 2
+                                            scale: playerProvider.isPlaying
                                                 ? 1.0
-                                                : (playerProvider.isPlaying
-                                                      ? 1.0
-                                                      : 0.85),
+                                                : 0.85,
                                             // 缩放锚点=左下角：暂停缩小时封面左缘不动，
                                             // 标题恒按 maxSize 左对齐即与封面可见左缘对齐。
                                             alignment: Alignment.bottomLeft,
@@ -2261,9 +1993,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                                       playerProvider,
                                       currentSong,
                                       isExpanded: true,
-                                      alignment: _isDiscCover
-                                          ? CrossAxisAlignment.center
-                                          : CrossAxisAlignment.stretch,
+                                      alignment: CrossAxisAlignment.stretch,
                                     ),
                                   ),
                                 ],
@@ -2519,31 +2249,15 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                         child: AspectRatio(
                           aspectRatio: 1,
                           child: AnimatedScale(
-                            // 频谱模式（style 0/1 圆形旋转封面）不需要封面的放大缩小动画
-                            scale: _spectrumEnabled && _spectrumStyle < 2
-                                ? 1.0
-                                : (playerProvider.isPlaying ? 1.0 : 0.85),
+                            scale: playerProvider.isPlaying ? 1.0 : 0.85,
                             duration: const Duration(milliseconds: 500),
                             curve: Curves.easeOutBack,
-                            // 频谱模式：style 0/1 白色圆形旋转封面 + 环形频谱
-                            child: _spectrumEnabled && _spectrumStyle < 2
-                                ? SpectrumArtwork(
-                                    artworkUri: currentSong.artworkUri,
-                                    fallbackFilePath: currentSong.localPath,
-                                    isPlaying: playerProvider.isPlaying,
-                                    bandCount:
-                                        SpectrumService.instance.bandCount,
-                                    style: _spectrumStyle,
-                                    barColor: _spectrumColor,
-                                    opacity: _spectrumOpacity,
-                                  )
-                                : _buildArtworkWithDynamicCover(
-                                    currentSong,
-                                    colorScheme,
-                                    artworkUri: currentSong.artworkUri,
-                                    fallbackFilePath: currentSong.localPath,
-                                    iconSize: iconSize,
-                                  ),
+                            child: _buildArtwork(
+                              colorScheme,
+                              artworkUri: currentSong.artworkUri,
+                              fallbackFilePath: currentSong.localPath,
+                              iconSize: iconSize,
+                            ),
                           ),
                         ),
                       ),
@@ -2556,23 +2270,12 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
             Expanded(
               child: AspectRatio(
                 aspectRatio: 1,
-                child: _spectrumEnabled && _spectrumStyle < 2
-                    ? SpectrumArtwork(
-                        artworkUri: currentSong.artworkUri,
-                        fallbackFilePath: currentSong.localPath,
-                        isPlaying: playerProvider.isPlaying,
-                        bandCount: SpectrumService.instance.bandCount,
-                        style: _spectrumStyle,
-                        barColor: _spectrumColor,
-                        opacity: _spectrumOpacity,
-                      )
-                    : _buildArtworkWithDynamicCover(
-                        currentSong,
-                        colorScheme,
-                        artworkUri: currentSong.artworkUri,
-                        fallbackFilePath: currentSong.localPath,
-                        iconSize: iconSize,
-                      ),
+                child: _buildArtwork(
+                  colorScheme,
+                  artworkUri: currentSong.artworkUri,
+                  fallbackFilePath: currentSong.localPath,
+                  iconSize: iconSize,
+                ),
               ),
             ),
           SizedBox(height: textSpacing),
@@ -3340,20 +3043,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 查看 MV：仅在线歌曲显示（原顶栏按钮收纳到菜单，置顶）
-                if (song.isOnline == true)
-                  ListTile(
-                    leading: const Icon(Icons.music_video_outlined),
-                    title: const Text('查看 MV'),
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _pageNavigator(rootContext)?.push(
-                        MaterialPageRoute(
-                          builder: (_) => MvPlayerPage(song: song),
-                        ),
-                      );
-                    },
-                  ),
                 ListTile(
                   leading: const Icon(Icons.album),
                   title: Text(
@@ -3499,9 +3188,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    // 打开二级菜单前刷新动态封面开关与当前歌曲状态
-                    // ignore: discarded_futures
-                    _refreshDyCoverMenuState();
                     _showMoreSettingsSheet(rootContext);
                   },
                 ),
@@ -3513,7 +3199,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     );
   }
 
-  /// 界面设置：二级菜单弹层（歌词类型 / 歌词显示设置 / 评论设置 / 音乐频谱）。
+  /// 界面设置：二级菜单弹层（歌词类型 / 歌词显示设置 / 评论设置 / 3D 封面）。
   void _showMoreSettingsSheet(BuildContext rootContext) {
     showM3EModalBottomSheet(
       context: rootContext,
@@ -3592,53 +3278,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                       },
                     );
                   },
-                ),
-                // 音乐频谱环绕：仅 Android 显示
-                if (Platform.isAndroid)
-                  SwitchListTile(
-                    title: const Text('音乐频谱环绕'),
-                    subtitle: Text(
-                      _spectrumEnabled
-                          ? SpectrumService.instance.isSimulated
-                                ? '已开启 · 模拟模式（设备不支持实时频谱）'
-                                : '已开启 · 实时频谱'
-                          : '封面裁圆旋转，频谱环绕跳动',
-                    ),
-                    value: _spectrumEnabled,
-                    onChanged: (v) {
-                      Navigator.pop(sheetContext);
-                      _toggleSpectrum();
-                    },
-                  ),
-                // 专辑动态封面：开关（与设置页「播放页样式」联动，关闭即时生效）
-                // + 当前歌曲是否有动态封面的状态
-                ValueListenableBuilder<String?>(
-                  valueListenable: _dyCoverStatus,
-                  builder: (context, status, _) => Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SwitchListTile(
-                        title: const Text('专辑动态封面'),
-                        subtitle: const Text('封面播放专辑动态封面短视频'),
-                        value: _dynamicCoverEnabled,
-                        onChanged: (v) {
-                          HapticFeedback.lightImpact();
-                          setState(() => _dynamicCoverEnabled = v);
-                          // ignore: discarded_futures
-                          SettingsRepository().setDynamicAlbumCover(v);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.album_outlined),
-                        title: const Text('当前歌曲动态封面'),
-                        trailing: Text(
-                          status ?? '检测中…',
-                          style: Theme.of(sheetContext).textTheme.bodyMedium
-                              ?.copyWith(color: colorScheme.primary),
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
                 // 3D 封面：与设置页开关同源（写入后 DepthCoverHost 即时响应）
                 StatefulBuilder(

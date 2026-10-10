@@ -2,11 +2,9 @@ package com.md3music.md3music
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PictureInPictureParams
 import android.content.ComponentName
 import android.content.Intent
 import android.content.Context
-import android.content.res.Configuration
 import android.content.pm.PackageManager
 import android.annotation.TargetApi
 import android.net.Uri
@@ -20,7 +18,6 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Log
-import android.util.Rational
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -38,7 +35,6 @@ class MainActivity : FlutterActivity() {
     private val BACKGROUND_PICKER_CHANNEL = "com.md3music.md3music/background_picker"
     private val MEDIA_STORE_CHANNEL = "com.md3music.md3music/media_store"
     private val RECOGNITION_CHANNEL = "com.md3music.md3music/floating_recognition"
-    private val PIP_CHANNEL = "com.md3music.md3music/pip"
     private val TASK_CHANNEL = "com.md3music.md3music/task"
     private var pendingDesktopLyricAction: String? = null
     private var folderPickerResult: MethodChannel.Result? = null
@@ -46,8 +42,6 @@ class MainActivity : FlutterActivity() {
     private var backgroundPickerResult: MethodChannel.Result? = null
     // 悬浮窗识曲 channel：MediaProjection 授权结果等原生→Dart 回调
     private var recognitionChannel: MethodChannel? = null
-    // MV 画中画 channel：原生→Dart 回调 onPipModeChanged
-    private var pipChannel: MethodChannel? = null
     // 首次帧监听只注册一次（引擎复用路径 configureFlutterEngine 会再次执行）
     private var firstFrameListener: io.flutter.embedding.engine.renderer.FlutterUiDisplayListener? = null
 
@@ -62,14 +56,6 @@ class MainActivity : FlutterActivity() {
         private var cachedChannel: MethodChannel? = null
         // KugouApiService 由应用进程持有。Activity 重建/退后台不能关停仍服务后台播放的 API。
         @Volatile private var kugouApiService: KugouApiService? = null
-        // 频谱插件引用，Activity 销毁时释放 Visualizer
-        @Volatile private var spectrumPlugin: SpectrumPlugin? = null
-
-        // MV 画中画：Dart 端标记视频是否播放中（按 Home 自动进入画中画用）
-        @Volatile private var pipVideoActive = false
-        // MV 视频宽高比（宽/高），用于画中画窗口比例
-        @Volatile private var pipAspectRatio: Rational = Rational(16, 9)
-
         // 悬浮窗启动结果回填的超时兜底：正常 onCreate 秒级完成；个别 ROM 若因故
         // 未触发 onCreate，在此按当前状态结算，避免 Dart 端 startFloatingLyric 永久挂起。
         private const val FLOATING_START_TIMEOUT_MS = 5000L
@@ -86,7 +72,6 @@ class MainActivity : FlutterActivity() {
         internal fun registerPlaybackPlugins(context: Context, engine: FlutterEngine) {
             if (customPluginsEngine === engine) return
 
-            runCatching { spectrumPlugin?.cleanup() }
             runCatching { equalizerPlugin?.cleanup() }
             customPluginsEngine = engine
 
@@ -96,7 +81,6 @@ class MainActivity : FlutterActivity() {
             }
             // 蝰蛇母带通道：将母带设置与十段均衡器增益发送到 just_audio 处理链。
             ViperDspPlugin().register(engine)
-            spectrumPlugin = SpectrumPlugin().also { it.register(engine) }
             ExternalEditorPlugin(context).register(engine)
             DiagnosticLogPlugin().register(engine)
             AutomixAnalysisPlugin().register(engine)
@@ -105,9 +89,7 @@ class MainActivity : FlutterActivity() {
         @Synchronized
         internal fun unregisterPlaybackPlugins(engine: FlutterEngine) {
             if (customPluginsEngine !== engine) return
-            runCatching { spectrumPlugin?.cleanup() }
             runCatching { equalizerPlugin?.cleanup() }
-            spectrumPlugin = null
             equalizerPlugin = null
             customPluginsEngine = null
         }
@@ -958,40 +940,6 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        // 注册 MV 画中画 MethodChannel：Dart 端进入画中画 / 标记视频播放中
-        // （API 26+ 才支持，低版本由 Dart 端隐藏入口）
-        val pipChannel = MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            PIP_CHANNEL
-        )
-        this.pipChannel = pipChannel
-        pipChannel.setMethodCallHandler { call, result ->
-            when (call.method) {
-                "isPipSupported" -> {
-                    result.success(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                }
-                "enterPip" -> {
-                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                        result.error("UNSUPPORTED", "仅支持 Android 8.0 及以上", null)
-                    } else {
-                        enterPipMode()
-                        result.success(true)
-                    }
-                }
-                "setVideoActive" -> {
-                    val active = call.argument<Boolean>("active") ?: false
-                    val width = call.argument<Number>("width")?.toInt()
-                    val height = call.argument<Number>("height")?.toInt()
-                    if (width != null && height != null && width > 0 && height > 0) {
-                        pipAspectRatio = Rational(width, height)
-                    }
-                    pipVideoActive = active
-                    result.success(true)
-                }
-                else -> result.notImplemented()
-            }
-        }
-
         // 注册原生震动通道：绕过 HyperOS 丢弃的 View.performHapticFeedback，
         // 用 VibratorManager + VibrationEffect.createPredefined 直写马达。
         // 同时实现 m3e_core 的 m3e_haptics/haptics channel（type: dragTexture/
@@ -1091,39 +1039,6 @@ class MainActivity : FlutterActivity() {
                 VibrationEffect.createOneShot(25, VibrationEffect.DEFAULT_AMPLITUDE)
             else ->
                 VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK)
-        }
-    }
-
-    /// 以当前保存的视频宽高比进入画中画（API 26+）。
-    private fun enterPipMode() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        if (isInPictureInPictureMode) return
-        val params = PictureInPictureParams.Builder()
-            .setAspectRatio(pipAspectRatio)
-            .build()
-        enterPictureInPictureMode(params)
-    }
-
-    /// 画中画模式切换回调：通知 Dart 端切换到纯视频布局 / 恢复完整页面。
-    override fun onPictureInPictureModeChanged(
-        isInPictureInPictureMode: Boolean,
-        newConfig: Configuration
-    ) {
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        try {
-            pipChannel?.invokeMethod("onPipModeChanged", isInPictureInPictureMode)
-        } catch (_: Exception) {
-            // Flutter 引擎可能尚未就绪，忽略
-        }
-    }
-
-    /// 用户按 Home 离开当前页面：视频播放中自动进入画中画（MV 播放场景）。
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            pipVideoActive && !isInPictureInPictureMode
-        ) {
-            enterPipMode()
         }
     }
 
@@ -1258,13 +1173,9 @@ class MainActivity : FlutterActivity() {
         }
         firstFrameListener?.let { flutterEngine.renderer.removeIsDisplayingFlutterUiListener(it) }
         firstFrameListener = null
-        // 释放 Visualizer，保留引擎插件引用，供后续 Activity 继续使用和清理。
-        try { spectrumPlugin?.cleanup() } catch (_: Throwable) {}
         cachedEngine = null
         cachedChannel = null
         recognitionChannel = null
-        pipChannel = null
-        pipVideoActive = false
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

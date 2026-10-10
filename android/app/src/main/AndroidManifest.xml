@@ -30,8 +30,6 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <!-- 均衡器功能需要此权限 -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <!-- 频谱可视化：部分 ROM（如 HyperOS）要求此权限才能使用 Visualizer -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <application
         android:label="MD3Music"
         android:name="${applicationName}"

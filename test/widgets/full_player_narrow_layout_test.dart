@@ -25,11 +25,8 @@ import 'package:md3music/widgets/player_tab_strip.dart';
 import 'package:md3music/widgets/md3e_transport_row.dart';
 import 'package:md3music/widgets/playback_status_feedback.dart';
 import 'package:md3music/widgets/apple_lyrics/layout/lyric_preferences.dart';
-import 'package:md3music/widgets/dynamic_cover_view.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:video_player/video_player.dart';
-import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import '../support/controlled_audio_service.dart';
 
@@ -50,66 +47,6 @@ Song _song({
   albumAudioId: albumAudioId,
   isOnline: true,
 );
-
-class _FailingVideoPlayerPlatform extends VideoPlayerPlatform {
-  int createCount = 0;
-  int disposeCount = 0;
-  int _nextId = 0;
-  final Map<int, StreamController<VideoEvent>> _events = {};
-
-  @override
-  Future<int?> createWithOptions(VideoCreationOptions options) async {
-    final id = _nextId++;
-    createCount++;
-    late final StreamController<VideoEvent> events;
-    events = StreamController<VideoEvent>(
-      onListen: () => events.addError(
-        services.PlatformException(
-          code: 'injected-cover-init-failure',
-          message: 'injected dynamic cover initialization failure',
-        ),
-      ),
-    );
-    _events[id] = events;
-    return id;
-  }
-
-  @override
-  Stream<VideoEvent> videoEventsFor(int playerId) => _events[playerId]!.stream;
-
-  @override
-  Future<void> init() async {}
-
-  @override
-  Future<void> setMixWithOthers(bool mixWithOthers) async {}
-
-  @override
-  Future<void> setLooping(int playerId, bool looping) async {}
-
-  @override
-  Future<void> setVolume(int playerId, double volume) async {}
-
-  @override
-  Future<void> play(int playerId) async {}
-
-  @override
-  Future<void> pause(int playerId) async {}
-
-  @override
-  Future<void> seekTo(int playerId, Duration position) async {}
-
-  @override
-  Future<Duration> getPosition(int playerId) async => Duration.zero;
-
-  @override
-  Future<void> dispose(int playerId) async {
-    disposeCount++;
-    await _events.remove(playerId)?.close();
-  }
-
-  @override
-  Widget buildView(int playerId) => const SizedBox.expand();
-}
 
 class _ThrowingLyricProvider extends KugouProvider {
   _ThrowingLyricProvider() : super(registerDeviceOnStart: false);
@@ -426,9 +363,7 @@ void main() {
         final failingCacheManager = _FailingArtworkCacheManager();
         tester.view.physicalSize = const Size(360, 800);
         tester.view.devicePixelRatio = 1;
-        SharedPreferences.setMockInitialValues({
-          'settings_spectrum_dynamic_color': false,
-        });
+        SharedPreferences.setMockInitialValues({});
         _mockPlatformChannels();
         final lyricPreferences = LyricPreferences.instance;
         final originalDynamicLyricColor = lyricPreferences.useDynamicLyricColor;
@@ -528,116 +463,4 @@ void main() {
     }
   }
 
-  testWidgets('全屏页切歌与后台恢复时动态封面失败资源均释放', (tester) async {
-    final originalPhysicalSize = tester.view.physicalSize;
-    final originalDevicePixelRatio = tester.view.devicePixelRatio;
-    tester.view.physicalSize = const Size(360, 800);
-    tester.view.devicePixelRatio = 1;
-    SharedPreferences.setMockInitialValues({});
-    _mockPlatformChannels();
-    KugouProvider.restoreLyric = (_) async => const KugouLyric(
-      content: '[00:00.00]test lyric',
-      decodedContent: '[00:00.00]test lyric',
-    );
-    final originalPlatform = VideoPlayerPlatform.instance;
-    final videoPlatform = _FailingVideoPlayerPlatform();
-    VideoPlayerPlatform.instance = videoPlatform;
-    final audio = ControlledAudioService();
-    AudioServiceLoader.setTestOverride(() async => audio);
-    DynamicCoverView.resolveLocalPath = (_) async => 'C:/fake/dynamic.mp4';
-    final kugou = KugouProvider(registerDeviceOnStart: false);
-    PlayerProvider? player;
-    try {
-      await tester.runAsync(() async {
-        player = PlayerProvider();
-        await player!.audioReady.timeout(const Duration(seconds: 10));
-        final loading = player!.playPlaylist([
-          _song(id: 'cover-first', albumAudioId: 'dynamic-first'),
-        ], 0);
-        await audio.waitForPlaylistLoads(1);
-        await audio.completeSourceLoad(0);
-        await loading;
-      });
-
-      await tester.pumpWidget(
-        _host(
-          player!,
-          kugou,
-          Builder(
-            builder: (context) => Scaffold(
-              body: Center(
-                child: ElevatedButton(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const FullPlayer(dockMode: true),
-                    ),
-                  ),
-                  child: const Text('打开全屏'),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-
-      for (var cycle = 1; cycle <= 100; cycle++) {
-        final createsBeforeCycle = videoPlatform.createCount;
-        await tester.tap(find.text('打开全屏'));
-        await tester.pumpAndSettle();
-        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-        await tester.pump();
-        expect(find.byType(VideoPlayer), findsNothing);
-        expect(videoPlatform.createCount, greaterThan(createsBeforeCycle));
-        expect(videoPlatform.disposeCount, videoPlatform.createCount);
-
-        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-        await tester.pump();
-        tester.binding.handleAppLifecycleStateChanged(
-          AppLifecycleState.resumed,
-        );
-        await tester.pumpAndSettle();
-        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-        await tester.pump();
-        expect(videoPlatform.disposeCount, videoPlatform.createCount);
-
-        await tester.runAsync(() async {
-          final loading = player!.playPlaylist([
-            _song(
-              id: 'cover-cycle-$cycle',
-              albumAudioId: 'dynamic-cycle-$cycle',
-            ),
-          ], 0);
-          await audio.waitForPlaylistLoads(cycle + 1);
-          await audio.completeSourceLoad(cycle);
-          await loading;
-        });
-        await tester.pumpAndSettle();
-        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-        await tester.pump();
-        expect(find.byType(VideoPlayer), findsNothing);
-        expect(
-          videoPlatform.createCount,
-          greaterThanOrEqualTo(createsBeforeCycle + 2),
-        );
-        expect(videoPlatform.disposeCount, videoPlatform.createCount);
-
-        tester.state<NavigatorState>(find.byType(Navigator).first).pop();
-        await tester.pumpAndSettle();
-        expect(videoPlatform.disposeCount, videoPlatform.createCount);
-        expect(tester.takeException(), isNull);
-      }
-    } finally {
-      await tester.pumpWidget(const SizedBox.shrink());
-      player?.dispose();
-      kugou.dispose();
-      await tester.runAsync(audio.dispose);
-      await tester.runAsync(() => HistoryRepository().flush());
-      AudioServiceLoader.setTestOverride(null);
-      DynamicCoverView.resolveLocalPath = null;
-      KugouProvider.restoreLyric = null;
-      VideoPlayerPlatform.instance = originalPlatform;
-      tester.view.physicalSize = originalPhysicalSize;
-      tester.view.devicePixelRatio = originalDevicePixelRatio;
-    }
-  });
 }

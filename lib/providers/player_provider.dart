@@ -32,7 +32,6 @@ import '../core/services/wakelock_service.dart';
 import '../core/services/media_store_service.dart';
 import '../data/models/song.dart';
 import '../modules/player/comments_view.dart';
-import '../modules/player/mv_player_page.dart';
 import '../core/utils/app_toast.dart';
 import '../core/utils/local_lyric_loader.dart';
 import '../data/repositories/history_repository.dart';
@@ -5482,7 +5481,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     _updateNotification();
   }
 
-  /// 手动选歌无法播放时，弹出提示对话框（提供查看 MV 和评论的入口）。
+  /// 手动选歌无法播放时，弹出提示对话框（提供查看评论的入口）。
   /// 通过 [appNavigatorKey] 获取全局 context，不依赖具体 widget 重建。
   void _showUnplayableSongDialog(Song song) {
     final ctx = appNavigatorKey.currentContext;
@@ -5496,16 +5495,6 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           TextButton(
             onPressed: () => Navigator.pop(dialogCtx),
             child: const Text('关闭'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(dialogCtx);
-              Navigator.push(
-                ctx,
-                MaterialPageRoute(builder: (_) => MvPlayerPage(song: song)),
-              );
-            },
-            child: const Text('去看MV'),
           ),
           // 与列表长按菜单同一谓词：本地歌曲开启「关闭本地音乐评论区」时不提供入口
           if (showsCommentsFor(song))

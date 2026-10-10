@@ -4,8 +4,8 @@ import 'package:flutter/foundation.dart';
 
 /// 播放页共享的 60fps 帧驱动。
 ///
-/// **为什么需要它**：歌词（AppleLyricsView 省电模式限帧）与封面旋转/频谱
-///（SpectrumArtwork）原本各自持有一个独立的 16ms [Timer]，两者启动时刻随机、
+/// **为什么需要它**：歌词（AppleLyricsView 省电模式限帧）与封面旋转
+/// 原本各自持有一个独立的 16ms [Timer]，两者启动时刻随机、
 /// 相位错开 → 每 8.3ms 就有一方 `scheduleFrame`，在 120Hz 屏上整页实测
 /// 115~120fps（功耗近似翻倍），而**单个组件都只要求 60fps**。
 ///

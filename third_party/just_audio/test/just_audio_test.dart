@@ -401,7 +401,7 @@ void runTests() {
     final player = AudioPlayer();
     /*final duration =*/ await player.setUrl('https://foo.foo/foo.mp3');
     const period = Duration(milliseconds: 250);
-    const position1 = period;
+    final position1 = period;
     final position2 = position1 + period;
     const speed1 = 0.75;
     const speed2 = 1.5;

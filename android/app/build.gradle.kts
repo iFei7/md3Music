@@ -144,7 +144,7 @@ dependencies {
 }
 
 // MD3Music fork: 全局强制 media3 版本与本地 just_audio fork 的 exoplayer 源码一致（1.4.1）。
-// video_player 等库声明更高版本（1.9.2），若不强制会出现重复类（本地源码 vs maven 1.9.2）。
+// 个别媒体库会声明更高版本，若不强制会出现重复类（本地源码 vs maven）。
 // media3-exoplayer 的 maven 版本全局排除——由 just_audio fork 内的本地源码提供。
 configurations.all {
     exclude(group = "androidx.media3", module = "media3-exoplayer")

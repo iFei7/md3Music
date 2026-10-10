@@ -370,7 +370,7 @@ class _AppViewState extends State<_AppView> {
                   // push 出来的所有二级页面，放进任何路由内部都覆盖不到。
                   // 未开启车机模式（或当前页面声明抑制）时本组件原样返回 child，
                   // 布局与改动前完全一致。
-                  // material_ui 兼容桥：chewie / dynamic_color / cached_network_image 等第三方包
+                  // material_ui 兼容桥：dynamic_color / cached_network_image 等第三方包
                   // 仍导入 package:flutter/material.dart，其 Theme.of(context) 取不到本项目的
                   // material_ui 主题。本桥把 ThemeData / MaterialLocalizations 提供给它们。
                   // 官方定位为过渡工具，待依赖全部迁移到 material_ui 后移除。

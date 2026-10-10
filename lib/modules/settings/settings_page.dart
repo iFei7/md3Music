@@ -27,7 +27,6 @@ import '../../core/services/listen_report_service.dart';
 import '../../core/services/lyricon_provider_service.dart';
 import '../../core/services/media_notification_service.dart';
 import '../../core/services/media_store_service.dart';
-import '../../core/services/spectrum_service.dart';
 import '../../core/services/startup_auto_play.dart';
 import '../../core/services/wakelock_service.dart';
 import '../../core/services/diagnostic_exporter.dart';
@@ -138,9 +137,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _lyricPushPreferTranslation = true;
   // 长按封面进入/退出 Zen 模式开关（默认开启）
   bool _zenCoverLongPress = true;
-  // 专辑动态封面开关（主开关默认开启；移动网络子开关默认关闭）
-  bool _dynamicAlbumCover = true;
-  bool _dynamicAlbumCoverOnMobile = false;
   // 全屏播放器横屏自动隐藏系统栏开关（默认开启）
   bool _landscapeImmersiveEnabled = true;
   // 音质降级提示开关（默认关闭）：所选音质不可用自动降级时弹出提示
@@ -225,12 +221,6 @@ class _SettingsPageState extends State<SettingsPage>
   // 播放时保持屏幕常亮开关
   bool _keepScreenOn = false;
 
-  /// MV 弹幕开关（设置页与播放页浮层按钮共用同一个持久化 key）。
-  bool _mvDanmakuEnabled = false;
-
-  /// MV 弹幕透明度（0.1–1.0）。用状态字段而非 FutureBuilder：
-  /// FutureBuilder 每次 setState 都会新建 Future → 拖动时值会被旧快照覆盖（回弹）。
-  double _mvDanmakuOpacity = 1.0;
   // 忽略音频焦点开关（默认开启：允许与其他应用同时播放音频）
   bool _ignoreAudioFocus = true;
   // 音频焦点中断策略（默认：保持播放）
@@ -262,20 +252,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _useTextShadow = false;
   // 文字阴影磅数（阴影模糊半径）
   double _textShadowBlur = AppTheme.defaultTextShadowBlur;
-  // 音乐频谱环绕显示开关（默认关闭，仅 Android 生效）
-  bool _spectrumEnabled = false;
-  // 频谱柱数量（20~80，默认 40）
-  int _spectrumBandCount = 40;
-  // 频谱样式：0=柱状图(环绕)，1=曲线(环绕)，2=背景层(条形)
-  int _spectrumStyle = 0;
-  // 频谱背景层参数（仅 style=2 时使用）
-  double _spectrumBgOpacity = 0.4;
-  double _spectrumBgHeight = 0.4;
-  // 环绕频谱透明度（style 0/1 分开记忆，默认不透明）
-  double _spectrumBarOpacity = 1.0;
-  double _spectrumCurveOpacity = 1.0;
-  // 频谱动态取色独立开关（默认开启）：AM 播放器频谱颜色取封面主色 50/50 混合
-  bool _spectrumDynamicColor = true;
   // 设置搜索：输入框控制器 + 当前查询词
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
@@ -454,17 +430,6 @@ class _SettingsPageState extends State<SettingsPage>
     final ignoreAudioFocus = await _settingsRepository.getIgnoreAudioFocus();
     final audioFocusInterruptionMode = await _settingsRepository
         .getAudioFocusInterruptionMode();
-    final spectrumEnabled = await _settingsRepository.getSpectrumEnabled();
-    final spectrumBandCount = await _settingsRepository.getSpectrumBandCount();
-    final spectrumStyle = await _settingsRepository.getSpectrumStyle();
-    final spectrumBgOpacity = await _settingsRepository.getSpectrumBgOpacity();
-    final spectrumBgHeight = await _settingsRepository.getSpectrumBgHeight();
-    final spectrumBarOpacity = await _settingsRepository
-        .getSpectrumBarOpacity();
-    final spectrumCurveOpacity = await _settingsRepository
-        .getSpectrumCurveOpacity();
-    final spectrumDynamicColor = await _settingsRepository
-        .getSpectrumDynamicColor();
     final miniPlayerSwipeSwitch = await _settingsRepository
         .getMiniPlayerSwipeSwitchEnabled();
     final sortCollectedByLatestClick = await _settingsRepository
@@ -472,9 +437,6 @@ class _SettingsPageState extends State<SettingsPage>
     final uploadListeningDuration = await _settingsRepository
         .getUploadListeningDuration();
     final zenCoverLongPress = await _settingsRepository.getZenCoverLongPress();
-    final dynamicAlbumCover = await _settingsRepository.getDynamicAlbumCover();
-    final dynamicAlbumCoverOnMobile = await _settingsRepository
-        .getDynamicAlbumCoverOnMobile();
     final landscapeImmersiveEnabled = await _settingsRepository
         .getLandscapeImmersiveEnabled();
     final showQualityDowngradeToast = await _settingsRepository
@@ -489,8 +451,6 @@ class _SettingsPageState extends State<SettingsPage>
         .getStartupAutoPlayOpenPage();
     final closeLocalMusicComments = await _settingsRepository
         .getCloseLocalMusicComments();
-    final mvDanmakuEnabled = await _settingsRepository.getMvDanmakuEnabled();
-    final mvDanmakuOpacity = await _settingsRepository.getMvDanmakuOpacity();
     final updateReminderEnabled = await _settingsRepository
         .getUpdateReminderEnabled();
     final legacyAppIconEnabled = await _settingsRepository
@@ -559,8 +519,6 @@ class _SettingsPageState extends State<SettingsPage>
       _ignoreAudioFocus = ignoreAudioFocus;
       _audioFocusInterruptionMode = audioFocusInterruptionMode;
       _zenCoverLongPress = zenCoverLongPress;
-      _dynamicAlbumCover = dynamicAlbumCover;
-      _dynamicAlbumCoverOnMobile = dynamicAlbumCoverOnMobile;
       _landscapeImmersiveEnabled = landscapeImmersiveEnabled;
       _showQualityDowngradeToast = showQualityDowngradeToast;
       _restoreMemoryEnabled = restoreMemoryEnabled;
@@ -568,21 +526,11 @@ class _SettingsPageState extends State<SettingsPage>
       _startupAutoPlaySource = startupAutoPlaySource;
       _startupAutoPlayOpenPage = startupAutoPlayOpenPage;
       _closeLocalMusicComments = closeLocalMusicComments;
-      _mvDanmakuEnabled = mvDanmakuEnabled;
-      _mvDanmakuOpacity = mvDanmakuOpacity;
       // 启动时把音量均衡设置同步给播放器（当前曲目若已加载会自动重算）
       AudioService().setVolumeNormalization(
         enabled: volumeNormalizationEnabled,
         referenceLufs: volumeNormalizationLufs,
       );
-      _spectrumEnabled = spectrumEnabled;
-      _spectrumBandCount = spectrumBandCount;
-      _spectrumStyle = spectrumStyle;
-      _spectrumBgOpacity = spectrumBgOpacity;
-      _spectrumBgHeight = spectrumBgHeight;
-      _spectrumBarOpacity = spectrumBarOpacity;
-      _spectrumCurveOpacity = spectrumCurveOpacity;
-      _spectrumDynamicColor = spectrumDynamicColor;
       _miniPlayerSwipeSwitch = miniPlayerSwipeSwitch;
       _sortCollectedByLatestClick = sortCollectedByLatestClick;
     });
@@ -967,7 +915,7 @@ class _SettingsPageState extends State<SettingsPage>
         SettingsSubpage(
           title: '封面与动态',
           icon: Icons.album_outlined,
-          description: '专辑动态封面、移动网络加载与 3D 深度封面',
+          description: '歌词双击跳转与 3D 深度封面',
           builder: _buildCoverDynamicSubpage,
         ),
         SettingsSubpage(
@@ -975,12 +923,6 @@ class _SettingsPageState extends State<SettingsPage>
           icon: Icons.auto_awesome_outlined,
           description: '对唱优化、动态颜色、模糊、辉光与省电模式',
           builder: _buildLyricEffectSubpage,
-        ),
-        SettingsSubpage(
-          title: '音乐频谱',
-          icon: Icons.graphic_eq,
-          description: '频谱样式、柱数量、取色与各层透明度',
-          builder: _buildSpectrumSubpage,
         ),
         SettingsSubpage(
           title: '播放页背景',
@@ -1034,10 +976,10 @@ class _SettingsPageState extends State<SettingsPage>
           builder: _buildPlaybackBehaviorSubpage,
         ),
         SettingsSubpage(
-          title: '屏幕与视频',
-          icon: Icons.movie_outlined,
-          description: '屏幕常亮、横屏沉浸、MV 画中画与弹幕',
-          builder: _buildScreenVideoSubpage,
+          title: '屏幕与显示',
+          icon: Icons.display_settings_outlined,
+          description: 'Zen 长按、横屏沉浸与屏幕常亮',
+          builder: _buildScreenDisplaySubpage,
         ),
         SettingsSubpage(
           title: '列表与交互',
@@ -2471,7 +2413,7 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 「封面与动态」三级子页：歌词双击跳转 + 专辑动态封面 + 3D 深度封面。
+  /// 「封面与动态」三级子页：歌词双击跳转 + 3D 深度封面。
   Widget _buildCoverDynamicSubpage(ColorScheme colorScheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2486,34 +2428,6 @@ class _SettingsPageState extends State<SettingsPage>
             setState(() => _lyricDoubleTapToJump = v);
             context.read<ThemeProvider>().setLyricDoubleTapToJump(v);
           },
-        ),
-        // 全屏播放器专辑封面播放专辑动态封面短视频（MD/AM 两种风格通用）
-        // search: 动态封面 专辑封面 短视频 全屏播放器 封面动画
-        SwitchListTile(
-          title: const Text('专辑动态封面'),
-          subtitle: const Text('全屏播放器封面播放专辑动态封面短视频'),
-          value: _dynamicAlbumCover,
-          onChanged: (value) {
-            HapticFeedback.lightImpact();
-            setState(() => _dynamicAlbumCover = value);
-            _settingsRepository.setDynamicAlbumCover(value);
-          },
-        ),
-        // 动态封面单首约 9.5MB，默认仅 Wi-Fi 自动加载；开启后移动网络也会加载
-        // search: 动态封面 移动网络 流量 蜂窝 wifi
-        SwitchListTile(
-          title: const Text('移动网络下加载动态封面'),
-          subtitle: const Text('动态封面单首约 9.5MB，开启后移动网络也会加载'),
-          value: _dynamicAlbumCoverOnMobile,
-          // 主开关关闭时禁用子开关（此 Flutter 版本的 SwitchListTile 无 enabled
-          // 参数，故用 null onChanged 实现等价禁用外观与交互）
-          onChanged: _dynamicAlbumCover
-              ? (value) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _dynamicAlbumCoverOnMobile = value);
-                  _settingsRepository.setDynamicAlbumCoverOnMobile(value);
-                }
-              : null,
         ),
         // 3D 封面（深度视差）：仅 depth3d 全量包启用；standard 包整体隐藏。
         // 开启后陀螺仪驱动封面深度视差（模型内置，亦可导入更新）
@@ -2775,190 +2689,6 @@ class _SettingsPageState extends State<SettingsPage>
             ),
             trailing: Text('${_amPlayerBlur.round()}'),
           ),
-      ],
-    );
-  }
-
-  /// 「音乐频谱」三级子页：环绕开关 + 样式 + 柱数量 + 取色 + 各透明度/高度。
-  Widget _buildSpectrumSubpage(ColorScheme colorScheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Gap(AppSpacing.sm),
-        // 音乐频谱环绕：仅在 Android 生效；其他平台开关置灰
-        // search: 频谱 环绕 可视化
-        SwitchListTile(
-          title: const Text('音乐频谱环绕'),
-          // 平台不支持导致开关置灰时才提示，支持时无需额外说明
-          subtitle: Platform.isAndroid ? null : const Text('仅 Android 设备支持'),
-          value: _spectrumEnabled,
-          onChanged: Platform.isAndroid
-              ? (v) {
-                  HapticFeedback.lightImpact();
-                  setState(() => _spectrumEnabled = v);
-                  _settingsRepository.setSpectrumEnabled(v);
-                }
-              : null,
-        ),
-        // 频谱样式切换（3选1）：柱状图(环绕) / 曲线(环绕) / 背景层(条形)。
-        // 先定样式，再调该样式下的参数。
-        if (_spectrumEnabled && Platform.isAndroid)
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.lg,
-              vertical: AppSpacing.xs,
-            ),
-            child: Row(
-              children: [
-                const Text('频谱样式'),
-                const Gap(AppSpacing.lg),
-                Expanded(
-                  child: M3EToggleButtonGroup(
-                    actions: const [
-                      M3EToggleButtonGroupAction(label: Text('柱状图')),
-                      M3EToggleButtonGroupAction(label: Text('曲线')),
-                      M3EToggleButtonGroupAction(label: Text('背景层')),
-                    ],
-                    selectedIndex: _spectrumStyle,
-                    onSelectedIndexChanged: (index) {
-                      if (index == null) return;
-                      HapticFeedback.lightImpact();
-                      setState(() => _spectrumStyle = index);
-                      _settingsRepository.setSpectrumStyle(index);
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        // 频谱柱数量滑块：仅开关开启且 Android 时显示
-        if (_spectrumEnabled && Platform.isAndroid)
-          // search: 频谱
-          ListTile(
-            title: const Text('频谱柱数量'),
-            subtitle: M3ESlider(
-              value: _spectrumBandCount.toDouble(),
-              min: 20,
-              max: 80,
-              // 频谱柱数量不显示节点
-              label: '$_spectrumBandCount 根',
-              onChanged: (v) {
-                setState(() => _spectrumBandCount = v.round());
-              },
-              onChangeEnd: (v) {
-                final count = v.round();
-                _settingsRepository.setSpectrumBandCount(count);
-                SpectrumService.instance.bandCount = count;
-              },
-            ),
-            trailing: _statusText('$_spectrumBandCount 根'),
-          ),
-        // 频谱动态取色：AM 播放器频谱颜色取封面主色（50% 白 + 50% 取色混合）
-        if (_spectrumEnabled && Platform.isAndroid)
-          // search: 频谱 取色
-          SwitchListTile(
-            title: const Text('频谱动态取色'),
-            value: _spectrumDynamicColor,
-            onChanged: (v) {
-              HapticFeedback.selectionClick();
-              setState(() => _spectrumDynamicColor = v);
-              _settingsRepository.setSpectrumDynamicColor(v);
-            },
-          ),
-        // 频谱透明度滑块：按当前样式显示对应项（三个分开记忆）
-        if (_spectrumEnabled && Platform.isAndroid)
-          // style 0：柱状图透明度；style 1：曲线透明度
-          if (_spectrumStyle == 0)
-            // search: 频谱 透明度
-            ListTile(
-              title: const Text('频谱柱状图透明度'),
-              subtitle: M3ESlider(
-                decoration: const M3ESliderDecoration(
-                  haptic: M3EHapticFeedback.medium,
-                ),
-                value: _spectrumBarOpacity,
-                min: 0.1,
-                max: 1.0,
-                divisions: 9,
-                label: '${(_spectrumBarOpacity * 100).round()}%',
-                onChanged: (v) {
-                  setState(() => _spectrumBarOpacity = v);
-                },
-                onChangeEnd: (v) {
-                  _settingsRepository.setSpectrumBarOpacity(v);
-                },
-              ),
-              trailing: _statusText('${(_spectrumBarOpacity * 100).round()}%'),
-            )
-          else if (_spectrumStyle == 1)
-            // search: 频谱 透明度
-            ListTile(
-              title: const Text('频谱曲线透明度'),
-              subtitle: M3ESlider(
-                decoration: const M3ESliderDecoration(
-                  haptic: M3EHapticFeedback.medium,
-                ),
-                value: _spectrumCurveOpacity,
-                min: 0.1,
-                max: 1.0,
-                divisions: 9,
-                label: '${(_spectrumCurveOpacity * 100).round()}%',
-                onChanged: (v) {
-                  setState(() => _spectrumCurveOpacity = v);
-                },
-                onChangeEnd: (v) {
-                  _settingsRepository.setSpectrumCurveOpacity(v);
-                },
-              ),
-              trailing: _statusText(
-                '${(_spectrumCurveOpacity * 100).round()}%',
-              ),
-            ),
-        // 背景层参数：仅 style=2 时显示
-        if (_spectrumEnabled && _spectrumStyle == 2 && Platform.isAndroid) ...[
-          // search: 频谱 透明度
-          ListTile(
-            title: const Text('频谱背景透明度'),
-            subtitle: M3ESlider(
-              decoration: const M3ESliderDecoration(
-                haptic: M3EHapticFeedback.medium,
-              ),
-              value: _spectrumBgOpacity,
-              min: 0.1,
-              max: 0.8,
-              divisions: 14,
-              label: '${(_spectrumBgOpacity * 100).round()}%',
-              onChanged: (v) {
-                setState(() => _spectrumBgOpacity = v);
-              },
-              onChangeEnd: (v) {
-                _settingsRepository.setSpectrumBgOpacity(v);
-              },
-            ),
-            trailing: _statusText('${(_spectrumBgOpacity * 100).round()}%'),
-          ),
-          // search: 频谱 高度
-          ListTile(
-            title: const Text('频谱背景高度'),
-            subtitle: M3ESlider(
-              decoration: const M3ESliderDecoration(
-                haptic: M3EHapticFeedback.medium,
-              ),
-              value: _spectrumBgHeight,
-              min: 0.2,
-              max: 0.8,
-              divisions: 12,
-              label: '${(_spectrumBgHeight * 100).round()}%',
-              onChanged: (v) {
-                setState(() => _spectrumBgHeight = v);
-              },
-              onChangeEnd: (v) {
-                _settingsRepository.setSpectrumBgHeight(v);
-              },
-            ),
-            trailing: _statusText('${(_spectrumBgHeight * 100).round()}%'),
-          ),
-        ],
       ],
     );
   }
@@ -3614,8 +3344,8 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 「屏幕与视频」三级子页：Zen 长按、横屏沉浸、常亮、MV 画中画与弹幕。
-  Widget _buildScreenVideoSubpage(ColorScheme colorScheme) {
+  /// 「屏幕与显示」三级子页：Zen 长按、横屏沉浸、常亮。
+  Widget _buildScreenDisplaySubpage(ColorScheme colorScheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -3656,61 +3386,6 @@ class _SettingsPageState extends State<SettingsPage>
             WakelockService.instance.setSettingEnabled(value);
           },
         ),
-        // MV 画中画：按 Home 自动进入（手动按钮始终可用）
-        FutureBuilder<bool>(
-          future: SettingsRepository().getAutoPipEnabled(),
-          builder: (context, snapshot) {
-            final enabled = snapshot.data ?? false;
-            // search: 画中画 pip 悬浮
-            return SwitchListTile(
-              secondary: Icon(
-                Icons.picture_in_picture_alt,
-                color: colorScheme.primary,
-              ),
-              title: const Text('播放 MV 时自动画中画'),
-              value: enabled,
-              onChanged: (v) async {
-                HapticFeedback.lightImpact();
-                await SettingsRepository().setAutoPipEnabled(v);
-                setState(() {});
-              },
-            );
-          },
-        ),
-        // MV 弹幕：控制是否在 MV 播放页叠加弹幕层
-        // search: MV 弹幕 弹幕 视频 滚动
-        SwitchListTile(
-          secondary: Icon(Icons.subtitles_outlined, color: colorScheme.primary),
-          title: const Text('显示 MV 弹幕'),
-          subtitle: const Text('在 MV 播放页叠加弹幕'),
-          value: _mvDanmakuEnabled,
-          onChanged: (v) async {
-            HapticFeedback.lightImpact();
-            setState(() => _mvDanmakuEnabled = v);
-            await _settingsRepository.setMvDanmakuEnabled(v);
-          },
-        ),
-        // MV 弹幕透明度：弹幕关闭时不显示（无可调对象）
-        if (_mvDanmakuEnabled)
-          // search: 弹幕透明度 弹幕 浓度
-          ListTile(
-            leading: Icon(Icons.opacity_outlined, color: colorScheme.primary),
-            title: const Text('弹幕透明度'),
-            subtitle: M3ESlider(
-              decoration: const M3ESliderDecoration(
-                haptic: M3EHapticFeedback.medium,
-              ),
-              value: _mvDanmakuOpacity,
-              min: 0.1,
-              max: 1.0,
-              divisions: 9,
-              label: '${(_mvDanmakuOpacity * 100).round()}%',
-              // 拖动只改本地状态；松手才落盘，避免拖动过程中反复写 SharedPreferences
-              onChanged: (v) => setState(() => _mvDanmakuOpacity = v),
-              onChangeEnd: (v) => _settingsRepository.setMvDanmakuOpacity(v),
-            ),
-            trailing: _statusText('${(_mvDanmakuOpacity * 100).round()}%'),
-          ),
       ],
     );
   }

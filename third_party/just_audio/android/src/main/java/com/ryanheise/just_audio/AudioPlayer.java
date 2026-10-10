@@ -1003,7 +1003,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private void ensurePlayerInitialized() {
         if (player == null) {
             // MD3Music fork: 子类化 DefaultRenderersFactory 并 override buildAudioSink()，
-            // 注入频谱 PCM 捕获层（SpectrumPcmTap）与音量均衡装饰器。
+            // 注入音量均衡装饰器。
             // 注意：本机 Media3 为 1.4.1，buildAudioSink 签名只有 3 个参数（无 enableOffload）。
             var drf = new DefaultRenderersFactory(context) {
                 @Override
@@ -1013,15 +1013,13 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     // 见 DefaultRenderersFactory:640-646），仅追加蝰蛇母带处理链。
                     // float 输出在本 fork 恒为关闭（drf.setEnableAudioFloatOutput(false)），
                     // 处理链输入恒为 16bit PCM；链位于 silence-skip/sonic 之前。
-                    AudioSink defaultSink = new DefaultAudioSink.Builder(ctx)
+                    return new DefaultAudioSink.Builder(ctx)
                             .setEnableFloatOutput(enableFloatOutput)
                             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                             .setAudioProcessorChain(
                                     new DefaultAudioSink.DefaultAudioProcessorChain(
                                             new ViperMasterProcessor()))
                             .build();
-                    // MD3Music fork: 频谱 PCM 捕获层（截取解码后、混音前的原始 PCM）。
-                    return new SpectrumPcmTap(defaultSink, ctx);
                 }
 
                 /** 供扩展渲染器（libflac，P0-5）复用同一 sink 构建逻辑。 */
