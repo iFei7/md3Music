@@ -166,8 +166,8 @@ class FloatingLyricService : Service() {
         viewAdded = true
         // 通知 MainActivity 回填 startFloatingLyric 的真实结果（悬浮窗已成功 addView）
         MainActivity.completeFloatingStart(true)
-        // 熄屏感知：动态注册 SCREEN_OFF/ON（照搬锁屏歌词接收器模式），
-        // 转发到 Dart 做 tick 门控（熄屏且未开锁屏歌词时休眠省电）
+        // 熄屏感知：动态注册 SCREEN_OFF/ON，
+        // 转发到 Dart 做 tick 门控（熄屏时休眠省电）
         try {
             screenReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {

@@ -69,8 +69,6 @@ const List<({String label, String category, String subpage, String aliases})>
   (label: '解锁桌面歌词', category: '歌词', subpage: '设备歌词', aliases: '桌面歌词 桌面'),
   (label: '蓝牙歌词', category: '歌词', subpage: '设备歌词', aliases: '蓝牙'),
   (label: '压缩封面图', category: '歌词', subpage: '设备歌词', aliases: '蓝牙 封面 压缩'),
-  (label: '锁屏歌词（实验性）', category: '歌词', subpage: '设备歌词', aliases: '锁屏'),
-  (label: '状态栏歌词', category: '歌词', subpage: '设备歌词', aliases: '魅族 flyme 状态栏'),
   (label: '设备歌词', category: '歌词', subpage: '设备歌词', aliases: ''),
   (label: '网络音质', category: '播放', subpage: '音质与输出', aliases: '音质 清晰度 wifi 移动'),
   (label: '自动领取VIP', category: '播放', subpage: '音质与输出', aliases: 'vip 会员 自动领取'),

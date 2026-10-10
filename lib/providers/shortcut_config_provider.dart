@@ -20,8 +20,7 @@ class DesktopShortcutItem {
 }
 
 /// 候选桌面快捷方式：复用主页 Tab 功能页。
-/// 排除 launchpad（导航中枢，非功能页）、user（个人中心）、
-/// settings（配置页，已可从「我的」进入）。
+/// 排除 user（个人中心）、settings（配置页，已可从「我的」进入）。
 /// 默认启用项（favorites/recognition/search）排在前面，保持旧行为。
 const List<DesktopShortcutItem> kDesktopShortcutCandidates = [
   DesktopShortcutItem(

@@ -247,9 +247,6 @@ Future<void> _restoreLyricPushPref() async {
     // 每个键的回落默认值仍由 SettingsRepository 各 getter 负责，语义不变。
     final timeOffsetFuture = settings.getLyricTimeOffset();
     final btLyricEnabledFuture = settings.getBluetoothLyricEnabled();
-    final lockScreenLyricEnabledFuture = settings.getLockScreenLyricEnabled();
-    final flymeAdvanceFuture = settings.getFlymeLyricAdvanceMs();
-    final flymeLyricEnabledFuture = settings.getFlymeStatusBarLyricEnabled();
     final protocolFuture = settings.getLyricPushProtocol();
     final translationFuture = settings.getLyricPushTranslation();
     final romaFuture = settings.getLyricPushRoma();
@@ -261,24 +258,6 @@ Future<void> _restoreLyricPushPref() async {
     // 蓝牙歌词（独立开关）
     final btLyricEnabled = await btLyricEnabledFuture;
     await DesktopLyricService.instance.setBluetoothLyricEnabled(btLyricEnabled);
-
-    // 锁屏歌词（独立开关）：开启后歌词服务定时器运行以推送整首歌词
-    // （样式全部跟随 AM 歌词偏好，与播放页 Zen 沉浸模式一致）
-    final lockScreenLyricEnabled = await lockScreenLyricEnabledFuture;
-    // ignore: discarded_futures
-    DesktopLyricService.instance.setLockScreenLyricEnabled(
-      lockScreenLyricEnabled,
-    );
-
-    // 魅族 Flyme 状态栏歌词（独立开关）：冷启动/后台唤醒后无需进设置页即可继续推送
-    // 顺序有讲究：先灌提前量再开开关。开启会立刻回灌当前行，
-    // 若此时提前量还是 0，第一行就按未提前的时间轴显示，要等到下次翻行才对。
-    final flymeAdvance = await flymeAdvanceFuture;
-    // ignore: discarded_futures
-    DesktopLyricService.instance.setFlymeAdvanceMs(flymeAdvance);
-    final flymeLyricEnabled = await flymeLyricEnabledFuture;
-    // ignore: discarded_futures
-    DesktopLyricService.instance.setFlymeStatusBarLyricEnabled(flymeLyricEnabled);
 
     // 实时歌词推送协议
     final protocol = await protocolFuture;

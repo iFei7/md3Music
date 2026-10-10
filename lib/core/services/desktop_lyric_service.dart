@@ -15,10 +15,8 @@ import '../../providers/lyric_request_lifecycle.dart';
 import '../../providers/theme_provider.dart';
 import '../../core/layout/ui_density.dart';
 import '../../core/utils/app_toast.dart';
-import '../../core/utils/artwork_color_extractor.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
-import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../services/kugou_api/lyric_lookup_result.dart';
@@ -52,32 +50,6 @@ List<LyricLine> _parseInIsolate((String, String?, String?) input) {
   );
 }
 
-/// 锁屏歌词轻量进度节流：整包推送会重置基线；播放状态变化立即推送，
-/// 常规进度最多每 500ms 一次。
-class LockScreenProgressPushGate {
-  int _lastPushMs = 0;
-  bool? _lastIsPlaying;
-
-  void markFullPush({required int nowMs, required bool isPlaying}) {
-    _lastPushMs = nowMs;
-    _lastIsPlaying = isPlaying;
-  }
-
-  void reset() {
-    _lastPushMs = 0;
-    _lastIsPlaying = null;
-  }
-
-  bool shouldPush({required int nowMs, required bool isPlaying}) {
-    if (_lastIsPlaying == isPlaying && nowMs - _lastPushMs < 500) {
-      return false;
-    }
-    _lastPushMs = nowMs;
-    _lastIsPlaying = isPlaying;
-    return true;
-  }
-}
-
 /// 桌面歌词服务：管理开关、解析歌词（KRC/LRC/纯文本）、按播放位置同步到原生悬浮窗。
 ///
 /// **关键修复**：之前用 `displayLyric`（KRC 优先）+ LRC 正则解析，导致 KRC 文本
@@ -89,10 +61,7 @@ class LockScreenProgressPushGate {
 /// LRC/纯文本无字时间戳时 words 为空，原生侧走整行渐变色（保持原行为）。
 class DesktopLyricService {
   static final DesktopLyricService instance = DesktopLyricService._();
-  DesktopLyricService._() {
-    // AM 歌词偏好变化（字号/行距/字重/字体/副行/动态取色）→ 锁屏歌词跟随重推
-    LyricPreferences.instance.addListener(_onLyricPrefsChangedForLockScreen);
-  }
+  DesktopLyricService._();
 
   PlayerProvider? _player;
   KugouProvider? _kugou;
@@ -121,23 +90,6 @@ class DesktopLyricService {
   bool _lyricInfoColorOs = false;
   bool get lyricInfoColorOs => _lyricInfoColorOs;
 
-  // 锁屏歌词开关：独立于悬浮窗/蓝牙歌词/LyricInfo。开启时定时器运行，
-  // 推送整首歌词到原生 LockScreenLyricActivity（锁屏全屏滚动歌词列表，
-  // 与 AM 播放页 Zen 沉浸模式视觉对齐；样式全部跟随 AM 歌词偏好）。
-  bool _lockScreenLyricEnabled = false;
-  bool get lockScreenLyricEnabled => _lockScreenLyricEnabled;
-
-  // 锁屏歌词推送状态（新协议：全量数据 + 轻量进度分离）
-  // - 全量脏标记：切歌 / 歌词加载完成 / AM 歌词偏好变化时置位，下个推送点整包重推
-  bool _lockFullDirty = false;
-  // - 无歌词列表时的占位文本（歌词加载中.../暂无歌词/歌词加载失败）
-  String _lockPlaceholder = '';
-  // - 进度节流：上次轻量进度推送时刻与播放态（播放态翻转时立即推）
-  final LockScreenProgressPushGate _lockProgressPushGate =
-      LockScreenProgressPushGate();
-  // - 封面主色提取令牌：切歌自增，异步结果回来时校验避免串歌
-  int _lockAccentToken = 0;
-
   // SuperLyric 歌词推送开关：基于 Binder 的系统级实时歌词 API。
   // 复用本服务的定时器与歌词解析管线，在切歌 / 歌词行变化时推送当前行
   // （text/words/翻译/副歌词 + title/artist）；播放/暂停由 SuperLyric 自动
@@ -145,32 +97,6 @@ class DesktopLyricService {
   bool _superLyricEnabled = false;
   bool get superLyricEnabled => _superLyricEnabled;
 
-  // 魅族 Flyme 状态栏歌词：复用本服务的定时器与解析管线，仅在 LRC 行切换时把当前行
-  // 文本推给原生，由原生贴到 Media3 媒体通知的 tickerText 上（Flyme 私有 flag 渲染）。
-  // 只发行级文本，绝不下发 KRC 字级时间戳 —— notify() 有系统级限流，逐字刷会被封闭。
-  bool _flymeStatusBarLyricEnabled = false;
-  bool get flymeStatusBarLyricEnabled => _flymeStatusBarLyricEnabled;
-
-  /// 魅族状态栏歌词「提前量」（ms，>=0）：用「播放位置 + 提前量」来选行，
-  /// 让这一路比音频略早翻行。
-  ///
-  /// 为什么需要：状态栏歌词是"通知驱动"的，一条歌词从 Dart 决定翻行到真正画出来，
-  /// 要经过 MethodChannel → notify() → SystemUI 取通知并重绘，这段延迟在 100ms 量级
-  /// 且不在我们掌控内；再叠加 LRC 时间戳普遍标在"字已出声"之后，合起来就是
-  /// 肉眼看到的"唱出来了字才出现"。提前量用来把这段固定损耗抵掉。
-  ///
-  /// 为什么单独一套索引/迟滞/Timer，而不是改 _currentLineIndex 或 posMs：
-  /// 那个索引与迟滞时间戳是悬浮窗、蓝牙、SuperLyric、锁屏等所有通道共用的，
-  /// 改它会把这些通道一起提前；而 posMs 还喂给 _pushLyric(positionMs:) 和进度节流。
-  int _flymeAdvanceMs = 0;
-  int get flymeAdvanceMs => _flymeAdvanceMs;
-  int _flymeLineIndex = -1;
-  Timer? _flymeLineTimer;
-  DateTime? _flymeLastSwitchAt;
-
-  /// 上一次观测到的播放位置（ms），-1 表示尚未采样。
-  /// 只用来判定"位置真的往回走了"，见 [_tickFlymeAdvance]。
-  int _flymePrevPosMs = -1;
   // 共用偏好（设置页三种推送协议共用一份）：
   // - 翻译歌词开关：是否推送翻译（影响 SuperLyric 与 LyricInfo）
   bool _pushTranslation = true;
@@ -203,7 +129,7 @@ class DesktopLyricService {
   String? _lyricFailedKey;
   int _lyricFailCount = 0;
   DateTime? _lyricNextRetryAt;
-  // 屏幕亮灭（FloatingLyricService SCREEN_OFF/ON 转发）：熄屏且未开锁屏歌词时 tick 休眠
+  // 屏幕亮灭（FloatingLyricService SCREEN_OFF/ON 转发）：熄屏时 tick 休眠
   bool _screenOn = true;
 
   // 当前配置缓存
@@ -410,7 +336,6 @@ class DesktopLyricService {
     _enabled = false;
     _updateTicker();
     _cancelLineTimer();
-    _cancelFlymeLineTimer();
     try {
       await MediaNotificationService.stopFloatingLyric();
     } catch (_) {}
@@ -473,47 +398,6 @@ class DesktopLyricService {
     _notify();
   }
 
-  /// 魅族 Flyme 状态栏歌词开关。开启后立即回灌当前行，避免要等到下一句才显示；
-  /// 关闭时推一次空串，让原生摘掉 ticker 并清掉那两个 Flyme flag。
-  Future<void> setFlymeStatusBarLyricEnabled(bool enabled) async {
-    if (_flymeStatusBarLyricEnabled == enabled) return;
-    _flymeStatusBarLyricEnabled = enabled;
-    _bindProvidersFromContext();
-    _updateTicker();
-    try {
-      await _flymeChannel.invokeMethod(
-          'setFlymeStatusBarLyricEnabled', {'enabled': enabled});
-    } catch (_) {}
-    if (enabled) {
-      // 回灌走"提前量之后"的时间轴，否则刚打开时显示的还是原始时间轴的那一行，
-      // 要等到下一次翻行才看得出提前效果。索引先归零，避免被去重吞掉。
-      _flymeLineIndex = -1;
-      _flymeLastSwitchAt = null;
-      _flymePrevPosMs = -1;
-      final p = _player;
-      if (p != null && _lines.isNotEmpty) {
-        _tickFlymeAdvance(p.position.inMilliseconds);
-      } else if (_currentLineIndex >= 0 && _currentLineIndex < _lines.length) {
-        await _pushFlymeLine(_lines[_currentLineIndex].text);
-      }
-    } else {
-      await _pushFlymeLine('');
-      _cancelFlymeLineTimer();
-      _flymeLineIndex = -1;
-      _flymeLastSwitchAt = null;
-      _flymePrevPosMs = -1;
-    }
-    _notify();
-  }
-
-  /// 只发行级纯文本。原生侧对空串做清空处理。
-  Future<void> _pushFlymeLine(String text) async {
-    try {
-      await _flymeChannel
-          .invokeMethod('updateFlymeStatusBarLyric', {'lyric': text.trim()});
-    } catch (_) {}
-  }
-
   /// SuperLyric 歌词推送开关：独立于悬浮窗/蓝牙歌词/LyricInfo。
   /// 开启后定时器运行以在切歌/行变化时推送当前行；关闭时推一次空歌词清空。
   Future<void> setSuperLyricEnabled(bool enabled) async {
@@ -535,137 +419,6 @@ class DesktopLyricService {
     _notify();
   }
 
-  /// 锁屏歌词开关：独立于悬浮窗/蓝牙歌词/LyricInfo/SuperLyric。
-  /// 开启后定时器运行，推送整首歌词与样式到原生锁屏歌词界面
-  /// （LockScreenLyricActivity，锁屏全屏滚动歌词列表）；关闭时关闭该界面。
-  Future<void> setLockScreenLyricEnabled(bool enabled) async {
-    if (_lockScreenLyricEnabled == enabled) return;
-    _lockScreenLyricEnabled = enabled;
-    _bindProvidersFromContext();
-    _updateTicker();
-    if (enabled) {
-      // 启用时重置切歌检测状态，让下个 tick 立即拉取歌词并推送
-      _currentSongId = null;
-      _lines = const [];
-      _currentLineIndex = -1;
-      _awaitingLyric = false;
-      // 锁屏推送状态全部重置，下个 tick 整包重推
-      _lockFullDirty = true;
-      _lockPlaceholder = '';
-      _lockProgressPushGate.reset();
-      _lockAccentToken++;
-      // 通知原生端开关已开启（原生端后续由 ACTION_SCREEN_OFF 广播拉起界面）
-      try {
-        await MediaNotificationService.showLockScreenLyric();
-      } catch (_) {}
-    } else {
-      // 关闭时关闭锁屏歌词界面
-      try {
-        await MediaNotificationService.hideLockScreenLyric();
-      } catch (_) {}
-    }
-    _notify();
-  }
-
-  /// AM 歌词偏好变化回调：锁屏歌词样式全部跟随 AM 歌词设置
-  /// （字号/行距/字重/字体来源/副行模式/动态取色），偏好一变即整包重推，
-  /// 锁屏显示中调整播放页歌词设置即时生效。
-  void _onLyricPrefsChangedForLockScreen() {
-    if (!_lockScreenLyricEnabled) return;
-    _lockFullDirty = true;
-    _pushLockScreenFullData();
-  }
-
-  /// 推送整首歌词 + 样式到原生锁屏界面（切歌 / 歌词就绪 / 偏好变化时调用）。
-  ///
-  /// 样式字段取自 [LyricPreferences]（与 AM 播放页 Zen 沉浸模式同源）；
-  /// 推送后重置进度节流基线，并异步提取封面主色用于当前行混色。
-  void _pushLockScreenFullData() {
-    if (!_lockScreenLyricEnabled) return;
-    _lockFullDirty = false;
-    final prefs = LyricPreferences.instance;
-    final player = _player;
-    final song = player?.currentSong;
-    final displayRoma = prefs.displayMode == LyricDisplayMode.roma;
-    final lines = <Map<String, Object?>>[
-      for (final line in _lines)
-        {
-          'text': line.text,
-          'start': line.startTime,
-          'duration': line.duration,
-          'words': line.words.map((w) => w.text).toList(),
-          'wordStarts': line.words.map((w) => w.startTime).toList(),
-          'wordDurations': line.words.map((w) => w.duration).toList(),
-          'sub': displayRoma ? line.roma : line.translation,
-        },
-    ];
-    MediaNotificationService.updateLockScreenLyricData(
-      lines: lines,
-      placeholder: _lockPlaceholder,
-      currentPositionMs: player?.position.inMilliseconds ?? 0,
-      durationMs: player?.duration?.inMilliseconds ?? 0,
-      isPlaying: player?.isPlaying ?? false,
-      title: song?.displayName ?? '',
-      artist: song?.artist ?? '',
-      artUrl: song?.artworkUri,
-      fallbackFilePath: song?.localPath,
-      fontSize: prefs.fontSize,
-      fontWeight: prefs.fontWeightValue,
-      lineHeightMultiplier: prefs.lineHeightMultiplier,
-      fontSource: prefs.fontSource.index,
-      customFontPath: prefs.customFontPath,
-      showTranslation: prefs.showTranslation,
-      displayMode: prefs.displayMode.index,
-      useDynamicColor: prefs.useDynamicLyricColor,
-    );
-    _lockProgressPushGate.markFullPush(
-      nowMs: DateTime.now().millisecondsSinceEpoch,
-      isPlaying: player?.isPlaying ?? false,
-    );
-    _pushLockScreenAccent(song?.artworkUri, prefs.useDynamicLyricColor);
-  }
-
-  /// 异步提取封面主色并推送到原生锁屏界面（当前行「85% 白 + 15% 主色」混色）。
-  ///
-  /// 动态取色关闭或无封面时推 0（原生侧用纯白）。提取结果带令牌校验，
-  /// 切歌后回来的旧结果直接丢弃。
-  void _pushLockScreenAccent(String? artUrl, bool useDynamic) {
-    final token = ++_lockAccentToken;
-    if (!useDynamic || artUrl == null || artUrl.isEmpty) {
-      MediaNotificationService.updateLockScreenAccent(0);
-      return;
-    }
-    ArtworkColorExtractor.extract(artUrl)
-        .then((color) {
-          if (token != _lockAccentToken || !_lockScreenLyricEnabled) return;
-          MediaNotificationService.updateLockScreenAccent(
-            color?.toARGB32() ?? 0,
-          );
-        })
-        .catchError((_) {});
-  }
-
-  /// 锁屏歌词每 tick 推送入口：全量脏 → 整包重推；否则 500ms 节流轻量进度。
-  void _pushLockScreenTick() {
-    if (!_lockScreenLyricEnabled) return;
-    if (_lockFullDirty) {
-      _pushLockScreenFullData();
-      return;
-    }
-    final player = _player;
-    if (player == null) return;
-    if (player.currentSong == null) return;
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final isPlaying = player.isPlaying;
-    if (_lockProgressPushGate.shouldPush(nowMs: nowMs, isPlaying: isPlaying)) {
-      MediaNotificationService.updateLockScreenProgress(
-        currentPositionMs: player.position.inMilliseconds,
-        durationMs: player.duration?.inMilliseconds ?? 0,
-        isPlaying: isPlaying,
-      );
-    }
-  }
-
   /// 歌曲元数据（标题/歌手/封面）变化后，让各推送渠道立即刷新。
   ///
   /// 场景：元数据占位值（「未知歌曲」）先随起播推出去，后续若发生元数据
@@ -675,10 +428,9 @@ class DesktopLyricService {
   /// 因此这里在元数据变化时**显式**补推一次，而不是放宽各渠道的去重键：
   /// 去重本意是防高频 tick 重复推送，放宽会破坏该保护。
   ///
-  /// 覆盖三条「不重推就永远停在占位标题」的渠道：
+  /// 覆盖两条「不重推就永远停在占位标题」的渠道：
   /// - SuperLyric：重推当前行（含 title/artist）
   /// - LyricInfo：复位 once-per-song 标志后重建整首 JSON（含 songName）
-  /// - 锁屏歌词：整包重推（含 title/artist）
   /// 注：Lyricon 由 `PlayerProvider._handleLyriconSongChange` 的元数据签名处理。
   Future<void> notifySongMetadataChanged() async {
     if (_superLyricEnabled) {
@@ -691,9 +443,6 @@ class DesktopLyricService {
     if (_lyricInfoEnabled) {
       _lyricInfoPushed = false;
       _maybePushLyricInfo();
-    }
-    if (_lockScreenLyricEnabled) {
-      _pushLockScreenFullData();
     }
   }
 
@@ -727,14 +476,12 @@ class DesktopLyricService {
     }
   }
 
-  /// 定时器是否需要运行：悬浮窗、蓝牙歌词、LyricInfo、SuperLyric 或锁屏歌词任一开启即需运行
+  /// 定时器是否需要运行：悬浮窗、蓝牙歌词、LyricInfo 或 SuperLyric 任一开启即需运行
   bool _shouldTick() =>
       _enabled ||
       _bluetoothLyricEnabled ||
       _lyricInfoEnabled ||
-      _superLyricEnabled ||
-      _flymeStatusBarLyricEnabled ||
-      _lockScreenLyricEnabled;
+      _superLyricEnabled;
 
   /// 根据开关状态启停定时器（250ms tick：逐行歌词足够检测切行）
   void _updateTicker() {
@@ -773,75 +520,6 @@ class DesktopLyricService {
   void _cancelLineTimer() {
     _lineTimer?.cancel();
     _lineTimer = null;
-  }
-
-  /// 设置状态栏歌词提前量（ms）。改完立刻按新值重算当前该显示哪一行，
-  /// 并把提前量回灌原生 —— 否则要等到下一行才生效。
-  Future<void> setFlymeAdvanceMs(int ms) async {
-    final v = ms < 0 ? 0 : (ms > 600 ? 600 : ms);
-    if (_flymeAdvanceMs == v) return;
-    _flymeAdvanceMs = v;
-    _notify();
-    if (!_flymeStatusBarLyricEnabled) return;
-    final player = _player;
-    if (player == null || _lines.isEmpty) return;
-    _flymeLastSwitchAt = null; // 手动调档视为用户意图，不该被迟滞挡住
-    // 索引也要归零：调小提前量会让目标行倒退，而正常翻行是禁止倒退的（见
-    // _tickFlymeAdvance），不归零就会卡在调整前的那一句。
-    _flymeLineIndex = -1;
-    _tickFlymeAdvance(player.position.inMilliseconds);
-  }
-
-  /// 用「位置 + 提前量」选行并推送。独立于共享的 `_currentLineIndex` 提交路径，
-  /// 所以其它歌词通道仍严格按原始时间轴走。
-  ///
-  /// 只允许索引前进：状态栏是一条只往未来走的时间轴，而真机日志实测位置源抖动
-  /// 会让行号在相邻两行间来回跳。原来只有 300ms 迟滞，它只是把回跳推迟、隔几百
-  /// 毫秒放行一次，结果是"刚换到下一句又翻回上一句"——用户看到的正是同一句反复
-  /// 滚动。改成禁止倒退后抖动被彻底挡住；位置真实回退（拖进度条/重播）仍要跟上，
-  /// 故以「比上一次采样早 1.5s 以上」作为真回退的判据（抖动幅度远小于一个行间隔）。
-  void _tickFlymeAdvance(int posMs) {
-    final idx = _findLineIndex(posMs + _flymeAdvanceMs);
-    final rewound = _flymePrevPosMs - posMs > 1500;
-    _flymePrevPosMs = posMs;
-    if (idx == _flymeLineIndex) return;
-    if (idx < _flymeLineIndex && !rewound) return;
-    // 前进要迟滞：一次抖动可能连跨两行，或换行恰好撞上 notify 限流窗口。
-    // 真回退例外：它同时绕过后面的索引判定，若此处再被吞掉，_flymePrevPosMs
-    // 已经是回退后的位置，之后再也判不出回退，状态栏会钉在后面那句直到播放追平。
-    final now = DateTime.now();
-    if (!rewound &&
-        _flymeLastSwitchAt != null &&
-        now.difference(_flymeLastSwitchAt!).inMilliseconds < 300) {
-      return;
-    }
-    _flymeLastSwitchAt = now;
-    _flymeLineIndex = idx;
-    _pushFlymeLine(idx >= 0 ? _lines[idx].text : '');
-    _scheduleFlymeBoundary(idx + 1);
-  }
-
-  /// 为"提前后的下一个行边界"安排一次性触发，避免只能等 250ms 轮询兜底。
-  void _scheduleFlymeBoundary(int nextIndex) {
-    _flymeLineTimer?.cancel();
-    _flymeLineTimer = null;
-    final player = _player;
-    if (player == null || !player.isPlaying) return;
-    if (nextIndex >= _lines.length) return;
-    final delayMs =
-        _lines[nextIndex].startTime - _flymeAdvanceMs - player.position.inMilliseconds;
-    if (delayMs <= 0) return; // 已经错过，交给下一次 tick 收敛
-    _flymeLineTimer = Timer(Duration(milliseconds: delayMs), () {
-      final p = _player;
-      if (p != null && _flymeStatusBarLyricEnabled) {
-        _tickFlymeAdvance(p.position.inMilliseconds);
-      }
-    });
-  }
-
-  void _cancelFlymeLineTimer() {
-    _flymeLineTimer?.cancel();
-    _flymeLineTimer = null;
   }
 
   // 上一次下发给原生的「显示大小」档位，用于过滤 ThemeProvider 的其他通知
@@ -923,9 +601,6 @@ class DesktopLyricService {
   static const _superLyricChannel = MethodChannel(
     'com.md3music.md3music/super_lyric',
   );
-  // 通道名与原生 FlymeLyricBridge.CHANNEL_NAME 必须逐字一致
-  static const _flymeChannel =
-      MethodChannel('com.md3music.md3music/flyme_status_bar_lyric');
 
   void _syncCurrentFromPlayer() {
     if (_player == null) return;
@@ -966,11 +641,10 @@ class DesktopLyricService {
 
   void _onTick() {
     if (!_shouldTick()) return;
-    // 熄屏且未开锁屏歌词：悬浮窗不可见，tick 纯耗电，直接休眠
+    // 熄屏时悬浮窗不可见，tick 纯耗电，直接休眠
     // （点亮屏幕时由 screenStateChanged 回调补一拍对齐漂移）
-    if (!_screenOn && !_lockScreenLyricEnabled) {
+    if (!_screenOn) {
       _cancelLineTimer();
-      _cancelFlymeLineTimer();
       return;
     }
     // provider 未绑定时（如 app 启动早期 context 未就绪）尝试重新绑定，
@@ -990,7 +664,6 @@ class DesktopLyricService {
     // 暂停时下一行永不到来：取消预测调度；tick 周期同步降频
     if (!tickPlaying) {
       _cancelLineTimer();
-      _cancelFlymeLineTimer();
     }
     _syncTickInterval(tickPlaying);
     final song = _player!.currentSong;
@@ -999,13 +672,7 @@ class DesktopLyricService {
       _currentSongId = null;
       _lines = const [];
       _currentLineIndex = -1;
-      _flymeLineIndex = -1;
-      _flymeLastSwitchAt = null;
-      _flymePrevPosMs = -1;
       _cancelLineTimer();
-      _cancelFlymeLineTimer();
-      // 锁屏歌词：清空界面，避免残留上一首歌词
-      _markLockLyricLoaded('');
       return;
     }
 
@@ -1029,16 +696,6 @@ class DesktopLyricService {
       if (_superLyricEnabled) {
         _pushSuperLyricLine(null);
       }
-      // 魅族状态栏歌词：切歌时必须立即清空，否则上一首最后一句会一直挂在状态栏，
-      // 直到新歌第一句歌词到来；若新歌没有歌词则永久残留。
-      // 索引与迟滞一起归零：原生按"文本没变就不重发"去重，不清索引的话
-      // 新歌若首句恰好与旧歌末句相同，会被当成重复推送吞掉。
-      if (_flymeStatusBarLyricEnabled) {
-        _pushFlymeLine('');
-      }
-      _flymeLineIndex = -1;
-      _flymeLastSwitchAt = null;
-      _flymePrevPosMs = -1;
       // LyricInfo：切歌时立即移除上一首的 lyricInfo，避免旧歌词短暂匹配到新歌
       if (_lyricInfoEnabled) {
         _lyricInfoPushed = false;
@@ -1047,10 +704,7 @@ class DesktopLyricService {
           sessionGeneration: _sessionGeneration,
         );
       }
-      // 锁屏歌词：切歌时推占位全量数据，避免残留上一首歌词
-      _markLockLyricLoaded('歌词加载中...');
       _cancelLineTimer();
-      _cancelFlymeLineTimer();
       _fetchLyricFor(song);
       return;
     }
@@ -1083,11 +737,6 @@ class DesktopLyricService {
     // Find current line
     if (_lines.isEmpty) return;
     final newIndex = _findLineIndex(posMs);
-
-    // 魅族状态栏歌词：走自己的提前量时间轴，与上面的共享索引互不影响
-    if (_flymeStatusBarLyricEnabled) {
-      _tickFlymeAdvance(posMs);
-    }
 
     // 行变化时推送（逐行模式：每行只在进入时推一次，不高频刷字色）
     if (newIndex != _currentLineIndex) {
@@ -1122,16 +771,12 @@ class DesktopLyricService {
         if (_superLyricEnabled) {
           _pushSuperLyricLine(line);
         }
-        // 魅族状态栏歌词不在此处推：它有自己的提前量与迟滞，见 _tickFlymeAdvance。
         // 预测调度：下一行起始时刻精确触发，切行延迟从最坏 250ms 降到 Timer 精度
         if (newIndex + 1 < _lines.length) {
           _scheduleLineBoundary(newIndex + 1);
         }
       }
     }
-
-    // 锁屏歌词：每 tick 入口（全量脏 → 整包重推；否则 500ms 节流轻量进度）
-    _pushLockScreenTick();
   }
 
   Future<void> _fetchLyricFor(Song song) async {
@@ -1155,7 +800,6 @@ class DesktopLyricService {
             if (!_isCurrentLyricRequest(token, requestedSongId)) return;
             _lines = lines;
             if (_lines.isEmpty) _pushLyric('暂无歌词', '', placeholder: '暂无歌词');
-            _markLockLyricLoaded(_lines.isEmpty ? '暂无歌词' : '');
             return;
           }
         }
@@ -1252,13 +896,11 @@ class DesktopLyricService {
       return false;
     }
     _lines = lines;
-    _markLockLyricLoaded('');
     return true;
   }
 
   void _commitNoLyrics(String songId) {
     _pushLyric('暂无歌词', '', placeholder: '暂无歌词');
-    _markLockLyricLoaded('暂无歌词');
     _lyricFailedKey = songId;
     _lyricFailCount = 0;
     _lyricNextRetryAt = DateTime.now().add(
@@ -1272,7 +914,6 @@ class DesktopLyricService {
     LyricLookupStatus status,
   ) {
     _pushLyric(placeholder, '', placeholder: placeholder);
-    _markLockLyricLoaded(placeholder);
     _lyricFailCount = _lyricFailedKey == songId ? _lyricFailCount + 1 : 1;
     _lyricFailedKey = songId;
     _lyricNextRetryAt = DateTime.now().add(
@@ -1383,17 +1024,6 @@ class DesktopLyricService {
     try {
       await _superLyricChannel.invokeMethod('sendLyric', args);
     } catch (_) {}
-  }
-
-  /// 歌词加载结果已落入 [_lines]：更新锁屏占位状态并立即整包重推。
-  ///
-  /// [placeholder] 非空时无歌词列表、锁屏居中显示占位文本
-  /// （歌词加载中.../暂无歌词/歌词加载失败）；空串表示正常显示列表。
-  void _markLockLyricLoaded(String placeholder) {
-    if (!_lockScreenLyricEnabled) return;
-    _lockPlaceholder = placeholder;
-    _lockFullDirty = true;
-    _pushLockScreenFullData();
   }
 
   /// LyricInfo：歌词就绪后推送一次整首歌词（_lyricInfoPushed 去重，每首歌 1 次）。

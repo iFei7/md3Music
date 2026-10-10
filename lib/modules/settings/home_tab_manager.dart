@@ -7,12 +7,10 @@ import '../../providers/tab_config_provider.dart';
 
 /// 统一的主页 Tab 图标映射。
 ///
-/// 设置页「主页管理」与 LaunchPad 编辑、LaunchPad 网格共用同一份映射，
+/// 设置页「主页管理」与主页 Tab 管理列表共用同一份映射，
 /// 与 app.dart 各 tab 的图标保持一致，避免两处各维护一份而漂移。
 IconData homeTabIcon(String tabId) {
   switch (tabId) {
-    case 'launchpad':
-      return Icons.grid_view;
     case 'discover':
       return Icons.explore;
     case 'library':
@@ -23,8 +21,6 @@ IconData homeTabIcon(String tabId) {
       return Icons.search;
     case 'recognition':
       return Icons.mic;
-    case 'audiobook':
-      return Icons.auto_stories;
     case 'settings':
       return Icons.settings;
     case 'user':
@@ -36,16 +32,16 @@ IconData homeTabIcon(String tabId) {
 
 /// 统一的主页 Tab 管理列表：拖拽排序 + 显示/隐藏（固定到底部导航栏）开关 + 重置。
 ///
-/// 设置页「主页管理」与 LaunchPad 编辑托盘共用这同一套界面与配置逻辑，
-/// 均直接读写 [TabConfigProvider.allTabs]（下标与列表 1:1，无过滤、无下标换算）。
-/// 因两者都 `watch` 同一个 Provider，任一入口修改后另一入口立即刷新；
+/// 设置页「主页管理」共用这套界面与配置逻辑，
+/// 直接读写 [TabConfigProvider.allTabs]（下标与列表 1:1，无过滤、无下标换算）。
+/// 因 watch 同一个 Provider，修改后其它入口立即刷新；
 /// 拖拽排序、显示开关、「必显示」规则与重置行为完全一致。
 class HomeTabManagerList extends StatelessWidget {
-  /// 面板标题（设置页 / LaunchPad 各自的措辞）。
+  /// 面板标题（设置页措辞）。
   final String title;
 
   /// 内嵌于已可滚动的父级（设置页 ListView 内）时为 true：
-  /// 列表 shrinkWrap 且自身不滚动；LaunchPad 底部托盘为 false，列表 Expanded 自行滚动。
+  /// 列表 shrinkWrap 且自身不滚动；全屏承载时为 false，列表 Expanded 自行滚动。
   final bool embedded;
 
   const HomeTabManagerList({

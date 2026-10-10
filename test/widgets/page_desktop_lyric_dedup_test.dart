@@ -80,13 +80,13 @@ void main() {
         _ => null,
       },
     );
-    final lockScreenPayloads = <Map<Object?, Object?>>[];
+    final btLyricPayloads = <Map<Object?, Object?>>[];
     messenger.setMockMethodCallHandler(
       const services.MethodChannel('com.md3music.md3music/floating_lyric'),
       (call) async {
-        if (call.method == 'updateLockScreenLyricData' &&
+        if (call.method == 'updateBluetoothLyric' &&
             call.arguments is Map) {
-          lockScreenPayloads.add(
+          btLyricPayloads.add(
             Map<Object?, Object?>.from(call.arguments as Map),
           );
         }
@@ -159,8 +159,8 @@ void main() {
       );
       expect(adapter.searchRequestCount, 1);
 
-      await desktopLyrics.setLockScreenLyricEnabled(true);
-      // 测试音频替身在 source load 后可能仍为暂停态；锁屏歌词暂停 tick 是 1s。
+      await desktopLyrics.setBluetoothLyricEnabled(true);
+      // 测试音频替身在 source load 后可能仍为暂停态；蓝牙歌词暂停 tick 是 1s。
       await tester.pump(const Duration(milliseconds: 1200));
       expect(adapter.searchRequestCount, 1);
 
@@ -185,22 +185,17 @@ void main() {
         contains('Shared lyric integration line'),
       );
       expect(
-        lockScreenPayloads.any((payload) {
-          final lines = payload['lines'];
-          return lines is List &&
-              lines.any(
-                (line) =>
-                    line is Map &&
-                    line['text'] == 'Shared lyric integration line',
-              );
+        btLyricPayloads.any((payload) {
+          final lyric = payload['lyric'];
+          return lyric == 'Shared lyric integration line';
         }),
         isTrue,
-        reason: '桌面/锁屏服务应提交同一歌词查询的解析结果',
+        reason: '桌面/蓝牙歌词服务应提交同一歌词查询的解析结果',
       );
       expect(adapter.searchRequestCount, 1);
       expect(adapter.lyricRequestCount, 2);
     } finally {
-      await desktopLyrics.setLockScreenLyricEnabled(false);
+      await desktopLyrics.setBluetoothLyricEnabled(false);
       await tester.pumpWidget(const SizedBox.shrink());
       tester.view.physicalSize = originalPhysicalSize;
       tester.view.devicePixelRatio = originalDevicePixelRatio;

@@ -11,6 +11,7 @@ import '../../providers/favorites_provider.dart';
 import '../../providers/kugou_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/scroll_aware_app_bar.dart';
+import '../audiobook/audiobook_page.dart';
 import '../login/login_page.dart';
 import '../settings/settings_page.dart';
 import 'cloud_music_page.dart';
@@ -1058,6 +1059,12 @@ class _UserCenterPageState extends State<UserCenterPage> {
             _actionItem(cs, Icons.shopping_bag_outlined, '已购', () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const PurchasedPage()),
+              );
+            }),
+            // 听书入口：tab 下线后从「我的」进入听书主页
+            _actionItem(cs, Icons.auto_stories, '听书', () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AudiobookPage()),
               );
             }),
             // 可选扩展：私有构建注入的额外操作项（默认无）

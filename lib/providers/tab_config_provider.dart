@@ -37,7 +37,6 @@ class TabItem {
 const List<TabItem> kDefaultTabs = [
   TabItem(id: 'discover', label: '发现'),
   TabItem(id: 'favorites', label: '收藏'),
-  TabItem(id: 'launchpad', label: 'LaunchPad'),
   TabItem(id: 'library', label: '本地音乐'),
   TabItem(id: 'user', label: '我的', isRemovable: false),
 ];
@@ -46,7 +45,6 @@ const List<TabItem> kDefaultTabs = [
 const List<TabItem> kOptionalTabs = [
   TabItem(id: 'search', label: '搜索'),
   TabItem(id: 'recognition', label: '听歌识曲'),
-  TabItem(id: 'audiobook', label: '听书'),
   TabItem(id: 'settings', label: '设置'),
 ];
 
@@ -151,7 +149,7 @@ class TabConfigProvider extends ChangeNotifier {
       _hiddenTabs.remove(tabId);
       // 显示 tab 时同步持久化顺序：_load() 会把持久化 order 中缺失的
       // tab 当作"新增 tab"重新加回隐藏列表，因此必须让 order 包含该 tab，
-      // 否则重启后开关状态被重置（如新增的 audiobook tab）。
+      // 否则重启后开关状态被重置。
       await _repo.setTabOrder(_allTabs.map((t) => t.id).toList());
     } else {
       // 不允许隐藏所有可移除 tab（至少保留一个可见）

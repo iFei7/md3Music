@@ -21,17 +21,4 @@ void main() {
     final lines = await parseLyricOffMainThread(big.toString());
     expect(lines.length, 2000);
   });
-
-  test('锁屏整包推送重置轻量进度的500ms节流基线', () {
-    final gate = LockScreenProgressPushGate();
-    gate.markFullPush(nowMs: 1000, isPlaying: true);
-
-    expect(gate.shouldPush(nowMs: 1499, isPlaying: true), isFalse);
-    expect(gate.shouldPush(nowMs: 1500, isPlaying: true), isTrue);
-    expect(gate.shouldPush(nowMs: 1600, isPlaying: false), isTrue);
-    expect(gate.shouldPush(nowMs: 2099, isPlaying: false), isFalse);
-    expect(gate.shouldPush(nowMs: 2100, isPlaying: false), isTrue);
-    gate.reset();
-    expect(gate.shouldPush(nowMs: 2200, isPlaying: false), isTrue);
-  });
 }

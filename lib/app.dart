@@ -43,7 +43,6 @@ import 'modules/playlist/playlist_page.dart';
 import 'modules/search/search_page.dart';
 import 'modules/settings/settings_page.dart';
 import 'modules/library/library_page.dart';
-import 'modules/launchpad/launchpad_page.dart';
 import 'modules/login/login_page.dart';
 import 'widgets/app_animation.dart';
 import 'modules/onboarding/onboarding_page.dart';
@@ -647,13 +646,6 @@ class _MainLayoutState extends State<_MainLayout>
     // 与外层 AnimatedSwitcher 的左右滑动叠加，形成"内容上浮 → 页面滑入"的层次感。
     Widget page;
     switch (tabId) {
-      case 'launchpad':
-        page = LaunchPadPage(
-          onTabSelected: _switchToTab,
-          onTabEnabled: _enableAndSwitchToTab,
-          onTabOpened: _openTabAsPage,
-        );
-        break;
       case 'discover':
         page = const DiscoverPage();
         break;
@@ -670,9 +662,6 @@ class _MainLayoutState extends State<_MainLayout>
       case 'recognition':
         // Tab 模式：SongRecognitionPage 自包悬浮宿主，一级形态自动退化交由 MiniPlayer 承载
         page = const SongRecognitionPage();
-        break;
-      case 'audiobook':
-        page = const AudiobookPage();
         break;
       case 'settings':
         page = const SettingsPage();
@@ -692,15 +681,6 @@ class _MainLayoutState extends State<_MainLayout>
   NavigationDestination _buildDestination(TabItem tab, int index) {
     final isSelected = index == _selectedIndex;
     switch (tab.id) {
-      case 'launchpad':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.grid_view_outlined,
-            filledIcon: Icons.grid_view,
-          ),
-          label: tab.label,
-        );
       case 'discover':
         return NavigationDestination(
           icon: _AnimatedTabIcon(
@@ -746,15 +726,6 @@ class _MainLayoutState extends State<_MainLayout>
           ),
           label: tab.label,
         );
-      case 'audiobook':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.auto_stories_outlined,
-            filledIcon: Icons.auto_stories,
-          ),
-          label: tab.label,
-        );
       case 'settings':
         return NavigationDestination(
           icon: _AnimatedTabIcon(
@@ -791,12 +762,6 @@ class _MainLayoutState extends State<_MainLayout>
     //（与底部 NavigationBar 一致；仅图标模式下文字被隐藏，label 仍用于无障碍朗读）。
     final label = Text(tab.label);
     switch (tab.id) {
-      case 'launchpad':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.grid_view_outlined),
-          selectedIcon: const Icon(Icons.grid_view),
-          label: label,
-        );
       case 'discover':
         return NavigationRailDestination(
           icon: const Icon(Icons.explore_outlined),
@@ -825,12 +790,6 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationRailDestination(
           icon: const Icon(Icons.mic_none_outlined),
           selectedIcon: const Icon(Icons.mic),
-          label: label,
-        );
-      case 'audiobook':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.auto_stories_outlined),
-          selectedIcon: const Icon(Icons.auto_stories),
           label: label,
         );
       case 'settings':
@@ -856,13 +815,6 @@ class _MainLayoutState extends State<_MainLayout>
 
   NavigationDrawerDestination _buildDrawerDestination(TabItem tab) {
     switch (tab.id) {
-      case 'launchpad':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.grid_view_outlined),
-          selectedIcon: const Icon(Icons.grid_view),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
       case 'discover':
         return NavigationDrawerDestination(
           icon: const Icon(Icons.explore_outlined),
@@ -895,13 +847,6 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationDrawerDestination(
           icon: const Icon(Icons.mic_none_outlined),
           selectedIcon: const Icon(Icons.mic),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'audiobook':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.auto_stories_outlined),
-          selectedIcon: const Icon(Icons.auto_stories),
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
@@ -1054,7 +999,7 @@ class _MainLayoutState extends State<_MainLayout>
   /// 处理 shortcut 入口的 tab 切换请求。
   /// 按 tab id 解析实际索引（tab 可排序/隐藏）：
   /// - tab 可见：切主 tab；
-  /// - tab 被隐藏：以二级页面路由打开（与 LaunchPad 隐藏 tab 点击行为一致）。
+  /// - tab 被隐藏：以二级页面路由打开（与桌面快捷方式隐藏 tab 行为一致）。
   void _handleShortcutTabRequest() {
     final tabId = shortcutTabRequest.value;
     if (tabId == null || tabId.isEmpty) return;
@@ -1112,7 +1057,7 @@ class _MainLayoutState extends State<_MainLayout>
     openFullPlayer(context);
   }
 
-  /// LaunchPad 导航：切换到指定 tab（仅对已可见的 tab 生效）。
+  /// 切换到指定 tab（仅对已可见的 tab 生效）。
   /// 与 onDestinationSelected 相同的守卫：FullPlayer 在栈顶时忽略。
   void _switchToTab(String tabId) {
     if (isFullPlayerOnTop) return;
@@ -1124,22 +1069,7 @@ class _MainLayoutState extends State<_MainLayout>
     });
   }
 
-  /// LaunchPad 长按启用：先启用隐藏的 tab，再切换到该 tab。
-  /// 与 [toggleTabVisibility] 的差异：这是 LaunchPad 专属入口，
-  /// 隐藏 tab 只有在 LaunchPad 中长按才会被启用（点击不启用）。
-  void _enableAndSwitchToTab(String tabId) {
-    if (isFullPlayerOnTop) return;
-    final tabConfig = context.read<TabConfigProvider>();
-    if (tabConfig.hiddenTabs.contains(tabId)) {
-      // toggleTabVisibility 内部先同步更新 hiddenTabs 再异步持久化，
-      // 调用返回后 visibleIndexOf 即可拿到正确索引，无需等待
-      // ignore: discarded_futures
-      tabConfig.toggleTabVisibility(tabId);
-    }
-    _switchToTab(tabId);
-  }
-
-  /// LaunchPad 点击隐藏 tab：以二级页面路由打开对应功能页（不切换主 tab）。
+  /// 点击隐藏 tab 对应的桌面快捷方式：以二级页面路由打开对应功能页（不切换主 tab）。
   void _openTabAsPage(String tabId) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => _pageForTabAsRoute(tabId)),
