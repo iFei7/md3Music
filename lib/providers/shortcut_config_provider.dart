@@ -55,39 +55,9 @@ const List<DesktopShortcutItem> kDesktopShortcutCandidates = [
     iconResource: 'ic_shortcut_fm',
   ),
   DesktopShortcutItem(
-    id: 'coverflow',
-    label: '封面流',
-    iconResource: 'ic_shortcut_coverflow',
-  ),
-  DesktopShortcutItem(
-    id: 'charts',
-    label: '排行榜',
-    iconResource: 'ic_shortcut_charts',
-  ),
-  DesktopShortcutItem(
-    id: 'ip',
-    label: '编辑精选',
-    iconResource: 'ic_shortcut_ip',
-  ),
-  DesktopShortcutItem(
     id: 'audiobook',
     label: '听书',
     iconResource: 'ic_shortcut_audiobook',
-  ),
-  DesktopShortcutItem(
-    id: 'scene',
-    label: '场景音乐',
-    iconResource: 'ic_shortcut_scene',
-  ),
-  DesktopShortcutItem(
-    id: 'channel',
-    label: '频道',
-    iconResource: 'ic_shortcut_channel',
-  ),
-  DesktopShortcutItem(
-    id: 'brush',
-    label: '刷刷',
-    iconResource: 'ic_shortcut_brush',
   ),
 ];
 

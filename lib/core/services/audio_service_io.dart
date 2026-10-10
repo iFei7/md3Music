@@ -170,7 +170,7 @@ const double kCrossfadeCrossoverProgress = 0.5;
 /// 按当前播放进度决定 crossfade 阶段。
 ///
 /// [enabled] 由调用方汇总所有前置条件（设置开关、平台、循环模式、
-/// 是否列表末尾、USB 独占是否开启等）；本函数只负责时间轴上的判断。
+/// 是否列表末尾等）；本函数只负责时间轴上的判断。
 CrossfadePhase decideCrossfadePhase({
   required Duration position,
   required Duration? duration,

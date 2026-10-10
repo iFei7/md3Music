@@ -13,7 +13,6 @@ import '../../widgets/album_card.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/song_list_item.dart';
 import '../album/album_detail_page.dart';
-import '../charts/charts_page.dart';
 import '../player/secondary_mini_player.dart';
 import '../playlist/playlist_page.dart';
 
@@ -226,7 +225,8 @@ class _MusicExploreSectionsState extends State<MusicExploreSections> {
     );
   }
 
-  /// 排行榜：2 列小封面网格，最多 6 个，点击进榜单歌曲页，「›」进排行榜页。
+  /// 排行榜：2 列小封面网格，最多 6 个，点击进榜单歌曲页（排行榜 Tab 已下线，
+  /// 保留区块内直达榜单详情的入口）。
   Widget _buildRankSection() {
     return Selector<KugouProvider, KugouRankList?>(
       selector: (_, kugou) => kugou.rankList,
@@ -236,11 +236,7 @@ class _MusicExploreSectionsState extends State<MusicExploreSections> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _SectionHeader(
-              title: '排行榜',
-              onMore: () => Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => const ChartsPage())),
-            ),
+            const _SectionHeader(title: '排行榜'),
             _CompactAlbumGrid(
               albums: [for (final r in ranks) r.toAlbum()],
               onTap: (i) => Navigator.of(context).push(

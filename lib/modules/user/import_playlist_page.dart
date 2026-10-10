@@ -787,6 +787,8 @@ class _ImageThumb extends StatelessWidget {
             File(file.path),
             width: 72,
             height: 72,
+            // C6: 72x72 缩略图按 2x 采样解码（144px），避免整图解码的内存开销
+            cacheWidth: 144,
             fit: BoxFit.cover,
             errorBuilder: (_, _, _) => Container(
               width: 72,

@@ -20,17 +20,17 @@ void main() {
       ['discover', 'favorites', 'launchpad', 'library', 'user'],
       reason: '默认 Tab 顺序应为 发现/收藏/LaunchPad/本地音乐/我的',
     );
-    // 封面流 / 私人FM 默认关闭，本地音乐默认显示
+    // 私人FM 默认关闭，本地音乐默认显示
     expect(
       provider.hiddenTabs,
-      containsAll(['coverflow', 'fm']),
-      reason: '封面流/私人FM 默认隐藏',
+      containsAll(['fm', 'search']),
+      reason: '私人FM/搜索 默认隐藏',
     );
     expect(provider.hiddenTabs, isNot(contains('library')));
     expect(
       provider.hiddenTabs,
-      containsAll(['search', 'charts', 'recognition']),
-      reason: '搜索/排行榜/听歌识曲仍默认隐藏',
+      containsAll(['recognition', 'audiobook']),
+      reason: '听歌识曲/听书仍默认隐藏',
     );
   });
 
@@ -52,13 +52,13 @@ void main() {
     );
     expect(
       provider.hiddenTabs,
-      containsAll(['coverflow', 'fm']),
-      reason: '重置后封面流/私人FM 默认隐藏',
+      containsAll(['fm', 'search']),
+      reason: '重置后私人FM/搜索 默认隐藏',
     );
     expect(provider.hiddenTabs, isNot(contains('library')));
     expect(
       provider.hiddenTabs,
-      containsAll(['search', 'charts', 'recognition']),
+      containsAll(['recognition', 'audiobook']),
       reason: '重置后其余可选 Tab 默认隐藏',
     );
   });

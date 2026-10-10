@@ -75,23 +75,19 @@ class MainActivity : FlutterActivity() {
         private const val FLOATING_START_TIMEOUT_MS = 5000L
 
         // 记录自定义插件已注册到的引擎：provideFlutterEngine 复用后台（headless）
-        // 引擎时 configureFlutterEngine 会再次执行，若对同一引擎重复注册
-        // UsbAudioPlugin 会注册两个拔插广播接收器（无法 unregister），导致 USB
-        // 事件被处理两次；而新引擎（进程被杀后重建）仍需注册，故按引擎身份判断。
+        // 引擎时 configureFlutterEngine 会再次执行，若对同一引擎重复注册会
+        // 重复注册 MethodChannel handler；而新引擎（进程被杀后重建）仍需注册，
+        // 故按引擎身份判断。
         private var customPluginsEngine: FlutterEngine? = null
         @Volatile private var equalizerPlugin: EqualizerPlugin? = null
-        @Volatile private var usbAudioPlugin: UsbAudioPlugin? = null
-        @Volatile private var directPcmPlugin: DirectPcmPlugin? = null
 
-        /** Activity 与 headless 服务共用自定义播放插件，避免缺 handler 和重复USB接收器。 */
+        /** Activity 与 headless 服务共用自定义播放插件，避免缺 handler 和重复注册。 */
         @Synchronized
         internal fun registerPlaybackPlugins(context: Context, engine: FlutterEngine) {
             if (customPluginsEngine === engine) return
 
             runCatching { spectrumPlugin?.cleanup() }
             runCatching { equalizerPlugin?.cleanup() }
-            runCatching { usbAudioPlugin?.cleanup() }
-            runCatching { directPcmPlugin?.cleanup() }
             customPluginsEngine = engine
 
             EqualizerPlugin().also {
@@ -101,15 +97,6 @@ class MainActivity : FlutterActivity() {
             // 蝰蛇母带通道：将母带设置与十段均衡器增益发送到 just_audio 处理链。
             ViperDspPlugin().register(engine)
             spectrumPlugin = SpectrumPlugin().also { it.register(engine) }
-            UsbAudioPlugin(context).also {
-                it.register(engine)
-                usbAudioPlugin = it
-            }
-            // 系统 Direct PCM 档（走系统 AudioTrack 的 bit-perfect 路径，与 USB 独占互斥）
-            DirectPcmPlugin(context).also {
-                it.register(engine)
-                directPcmPlugin = it
-            }
             ExternalEditorPlugin(context).register(engine)
             DiagnosticLogPlugin().register(engine)
             AutomixAnalysisPlugin().register(engine)
@@ -120,12 +107,8 @@ class MainActivity : FlutterActivity() {
             if (customPluginsEngine !== engine) return
             runCatching { spectrumPlugin?.cleanup() }
             runCatching { equalizerPlugin?.cleanup() }
-            runCatching { usbAudioPlugin?.cleanup() }
-            runCatching { directPcmPlugin?.cleanup() }
             spectrumPlugin = null
             equalizerPlugin = null
-            usbAudioPlugin = null
-            directPcmPlugin = null
             customPluginsEngine = null
         }
 
@@ -192,9 +175,6 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
             // 个别 ROM 可能不支持，忽略即可
         }
-        // 桌面小部件冷启动拉起携带的动作（如登录卡 openLogin → 进登录页）。
-        // 引擎尚未就绪时 Flutter 侧导航尚不可用，invokeMethod 静默失败即降级为打开 app。
-        dispatchWidgetAction(intent?.getStringExtra("widget_action"))
         // 外部调用（文件管理器「用其他应用打开」等）：冷启动入口
         ExternalMediaBridge.onIntent(this, intent)
     }
@@ -203,25 +183,8 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         // 同步更新 intent：配置变更重建等场景下 getIntent() 也能拿到最新外部调用数据
         setIntent(intent)
-        // singleTop 复用实例时（app 已在前台/后台存活），小部件动作走这里
-        dispatchWidgetAction(intent.getStringExtra("widget_action"))
         // 外部调用（文件管理器「用其他应用打开」等）：热启动入口
         ExternalMediaBridge.onIntent(this, intent)
-    }
-
-    /// 把小部件拉起 app 携带的 widget_action 转发给 Flutter。
-    /// 目前仅处理 FM 登录卡的 openLogin（现有 music widget 的 action 仍不处理）。
-    private fun dispatchWidgetAction(action: String?) {
-        if (action != "openLogin") return
-        val engine = FlutterEngineCache.getInstance().get("md3music_engine") ?: return
-        try {
-            MethodChannel(
-                engine.dartExecutor.binaryMessenger,
-                FLOATING_CHANNEL
-            ).invokeMethod("widgetFmOpenLogin", null)
-        } catch (_: Exception) {
-            // 引擎刚创建/未跑 Dart 时转发失败：降级为仅打开 app
-        }
     }
 
     override fun onResume() {

@@ -61,7 +61,7 @@ void main() {
       const baseline = Duration(minutes: 2);
       expect(player.debugFeedPlatformPositionForTest(baseline), isFalse);
 
-      await player.resume(notifyRoom: false);
+      await player.resume();
 
       // 控件可立即反映用户意图，但诊断仍等待平台位置真正增加。
       expect(player.isPlaying, isTrue);

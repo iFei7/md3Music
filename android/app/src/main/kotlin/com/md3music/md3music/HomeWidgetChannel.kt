@@ -23,12 +23,6 @@ internal object HomeWidgetChannel {
                     CoverPlayerWidgetProvider.updateAllWidgets(context, title, artist, isPlaying)
                     result.success(true)
                 }
-                "updateFmWidget" -> {
-                    @Suppress("UNCHECKED_CAST")
-                    val data = call.arguments as? Map<String, Any?> ?: emptyMap()
-                    PersonalFmWidgetProvider.updateAllWidgets(context, data)
-                    result.success(true)
-                }
                 "updateMusicWidgetTheme" -> {
                     @Suppress("UNCHECKED_CAST")
                     val colors = call.arguments as? Map<String, Number> ?: emptyMap()

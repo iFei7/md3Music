@@ -19,10 +19,10 @@ android {
     compileSdk = 36
     ndkVersion = "28.2.13676358"
 
-    // 产品 flavor（3D 深度封面）:
-    //   standard - 不含 3D 封面：无 onnxruntime so、无深度模型资产，体积最小
-    //   depth3d  - 3D 全量包：内置 ONNX Runtime so + Depth Anything V2 模型资产
-    // 两 flavor 共用同一 applicationId/签名，depth3d 包可直接覆盖安装 standard 包。
+    // Lite 分支：保留 flavor 声明以兼容上游 CI/脚本（125 处引用），但 3D 深度封面已下线：
+    //   standard - lite 唯一构建目标（无 ORT so、无深度模型资产）
+    //   depth3d  - 已移除 3D 资产与 ONNX AAR，上游 CI 的 "无 AAR 即跳过" 门控会自动跳过它
+    // 构建：flutter build apk --release --flavor standard --split-per-abi
     flavorDimensions += "feature"
     productFlavors {
         create("standard") {}
@@ -38,8 +38,12 @@ android {
     defaultConfig {
         // CI 的原子随身听兼容包只覆盖 applicationId；namespace、Kotlin 包路径和
         // MethodChannel 名保持不变，避免复制或改写原生代码。
+        // Lite：默认包名加 .lite 后缀与完整版共存安装（FileProvider authority
+        // 走 ${applicationId} 占位符自动跟随；MethodChannel 名/广播 action 为
+        // 独立字符串不受影响）。随身听兼容包仍由 CI 显式覆盖为
+        // com.apple.android.music（伪装包名正是其存在意义，不加后缀）。
         applicationId = providers.gradleProperty("md3ApplicationId")
-            .getOrElse("com.md3music.md3music")
+            .getOrElse("com.md3music.md3music.lite")
         minSdk = flutter.minSdkVersion
         targetSdk = 35
         versionCode = flutter.versionCode
@@ -47,12 +51,14 @@ android {
         // 渲染引擎固定为 skia（EnableImpeller=false，兼容优先）。Flutter 3.44 只认
         // manifest 静态值。仅此一处、无 flavor：保证 split-per-abi 产物名不含引擎标识。
         manifestPlaceholders["enableImpeller"] = "false"
-        // USB 独占输出 C++ 驱动：只编译与 jniLibs 相同的 4 个 ABI
-        externalNativeBuild {
-            cmake {
-                abiFilters("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
-            }
-        }
+        // Lite：只出真实设备 ABI（arm64-v8a / armeabi-v7a）。
+        // x86 / x86_64 仅服务模拟器调试，且 libkugou_server.so 的 x86 两个 so
+        // 合计 10.1MB —— 一并排除，模拟器请改用 arm64 镜像。
+        // ⚠️ ABI 收窄**不能**用 ndk.abiFilters：--split-per-abi 时 Flutter 插件会
+        // 注入 splits.abi（默认含 x86_64），AGP 判定两者冲突直接失败
+        // （"Conflicting configuration: ndk abiFilters cannot be present when
+        //  splits abi filters are set"）。收窄由 CI 传
+        // --target-platform android-arm64,android-arm 负责（决定 splits 与引擎 so）。
     }
 
     // 2026-09-12：加入 libflacJNI.so（P0-5 flac 扩展）后 native libs 被改为 Stored
@@ -97,16 +103,9 @@ android {
         }
     }
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
-
     // MD3Music fork: JVM 单元测试里 android.util.Log 等框架桩默认会抛
-    // "Method i in android.util.Log not mocked"。DirectPcmController 等 fork 侧的
-    // 状态类在测试中需要走 setEnabled（内部会打日志），故开启返回默认值。
+    // "Method i in android.util.Log not mocked"。fork 侧状态类在测试中需要
+    // 走 setEnabled（内部会打日志），故开启返回默认值。
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -136,18 +135,11 @@ dependencies {
     implementation("androidx.media3:media3-common:1.4.1")
     // 2×2 封面小部件：从专辑封面位图提取主色（vibrant/dominant swatch）
     implementation("androidx.palette:palette-ktx:1.0.0")
-    // 3D 深度封面：端上 Depth Anything V2 推理（ONNX Runtime Mobile）
-    // 仅 depth3d flavor 打包（standard 包不含此 so，体积 -13.2MB）
-    // 自编 reduced-ops AAR：官方 libonnxruntime.so 33.0MB → 13.2MB（13,201,664 B），
-    // 只编译两份深度模型实际用到的算子内核；保留 NNAPI EP 符号以匹配官方
-    // libonnxruntime4j_jni.so 的符号引用（该 jni 层原样保留，勿动）；仅 arm64-v8a。
-    // 算子并集 = depth 模型 ∪ MI-GAN Pipeline（52 项注册 / 9 行）；配置与重建流程见
-    // android/app/libs/ort-ops/（REBUILD.md + depth_migan_union_v3.config）。
-    // ⚠️ 内核裁剪后 strings/差分都判不出算子是否可用，唯一判据是真机 createSession
-    //    日志（loadInpaintModel OK）。
-    "depth3dImplementation"(files("libs/onnxruntime-android-1.30.0-custom-v8a.aar"))
+    // Lite：已移除 3D 深度封面（ONNX Runtime AAR + Depth Anything V2 / MI-GAN 模型），
+    // 这里的 depth3dImplementation 依赖与 android/app/libs/onnxruntime-*.aar、
+    // android/app/src/depth3d/ 一并删除，省 42.2MB（13.2MB so + 29MB 模型）。
 
-    // USB 独占数据路径（UsbDither / UsbAudioStream.writeRaw）的 JVM 单元测试
+    // JVM 单元测试
     testImplementation("junit:junit:4.13.2")
 }
 

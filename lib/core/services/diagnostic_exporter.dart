@@ -11,7 +11,6 @@ import 'package:share_plus/share_plus.dart';
 import '../../services/kugou_server.dart';
 import 'diagnostic_logger.dart';
 import 'media_store_service.dart';
-import 'usb_audio_service.dart';
 
 /// 诊断报告构建与导出。
 ///
@@ -37,7 +36,6 @@ class DiagnosticExporter {
     // 1. 先收集原生日志。收集过程产生的 Dart 日志随后一并 flush，避免导出包
     // 缺少最后几行；Android 原生日志使用系统自带 D/I/W/E 等级。
     String androidLogs = '';
-    String usbLogs = '';
     if (!kIsWeb && Platform.isAndroid) {
       try {
         androidLogs =
@@ -45,11 +43,6 @@ class DiagnosticExporter {
             '';
       } catch (e) {
         logger.warning('Android 原生日志导出失败: $e');
-      }
-      try {
-        usbLogs = await UsbAudioService.instance.getUsbLogs();
-      } catch (e) {
-        logger.warning('USB 日志导出失败: $e');
       }
     }
 
@@ -82,13 +75,6 @@ class DiagnosticExporter {
     if (androidLogs.isNotEmpty) {
       File('${workDir.path}/android.log').writeAsStringSync(
         DiagnosticLogger.sanitizeDiagnosticText(androidLogs),
-        flush: true,
-      );
-    }
-    // USB 独占链路内部日志（app 侧内存环形 + native 传输层）。
-    if (usbLogs.isNotEmpty) {
-      File('${workDir.path}/usb.log').writeAsStringSync(
-        DiagnosticLogger.sanitizeDiagnosticText(usbLogs),
         flush: true,
       );
     }
@@ -265,7 +251,6 @@ class DiagnosticExporter {
     }
 
     // Android threadtime：`09-16 12:34:56.789  pid  tid D Tag: message`
-    // USB 环形：`09-16 12:34:56.789 D/Tag: message`
     final nativeMatch = RegExp(
       r'^\d{2}-\d{2} .*?\s([VDIWEF])(?:\s|/)',
     ).firstMatch(line);
@@ -314,7 +299,7 @@ class DiagnosticExporter {
       ..writeln('[说明]')
       ..writeln('本文件由应用内诊断功能自动生成，仅包含设备与运行环境信息。')
       ..writeln('日志级别: DEBUG / INFO / WARNING / ERROR')
-      ..writeln('日志文件: app.log*、android.log、usb.log、log_summary.txt');
+      ..writeln('日志文件: app.log*、android.log、log_summary.txt');
     return buffer.toString();
   }
 

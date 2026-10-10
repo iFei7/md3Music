@@ -18,8 +18,7 @@ import 'package:md3music/providers/theme_provider.dart';
 /// 只覆写播放态相关 getter 的假 provider。
 ///
 /// 测试环境没有音频平台实现，真实 `playPlaylist` 起不了播（`isPlaying` 恒 false），
-/// 故沿用本仓既有做法（见 `test/modules/personal_fm/personal_fm_section_test.dart`
-/// 的 `_FakePlayer`）直接注入播放态。
+/// 故沿用本仓既有做法（自建 `_FakePlayer`）直接注入播放态。
 class _FakePlayer extends PlayerProvider {
   Song? _song;
   bool _playing = false;

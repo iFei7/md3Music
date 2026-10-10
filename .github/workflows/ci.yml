@@ -2,7 +2,7 @@ name: CI Build
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, lite]
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -76,8 +76,87 @@ jobs:
         run: flutter pub get
 
       - name: Flutter analyze
-        continue-on-error: true
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        id: analyze
+        run: |
+          set +e
+          flutter analyze --machine --no-fatal-warnings --no-fatal-infos > /tmp/analyze.json 2>/tmp/analyze.err
+          code=$?
+          set -e
+          export ANALYZE_EXIT=$code
+          python3 - <<'PY'
+          import json, re, os, sys
+          code = int(os.environ.get('ANALYZE_EXIT', '0') or 0)
+          try:
+              raw = open('/tmp/analyze.json', encoding='utf-8', errors='replace').read()
+          except Exception:
+              raw = ''
+          try:
+              err_txt = open('/tmp/analyze.err', encoding='utf-8', errors='replace').read()[-800:]
+          except Exception:
+              err_txt = ''
+          items = []
+          txt = raw.strip()
+          # 形态 1：整体 JSON 数组
+          if txt.startswith('[') or txt.startswith('{'):
+              try:
+                  doc = json.loads(txt)
+                  items = doc if isinstance(doc, list) else [doc]
+              except Exception:
+                  items = []
+          # 形态 2：NDJSON 逐行
+          if not items:
+              for ln in raw.splitlines():
+                  ln = ln.strip()
+                  if ln.startswith('{'):
+                      try:
+                          items.append(json.loads(ln))
+                      except Exception:
+                          pass
+          errs = []
+          warns = []
+          for it in items:
+              if not isinstance(it, dict):
+                  continue
+              sev = str(it.get('severity', '')).upper()
+              loc = it.get('location', {}) if isinstance(it.get('location'), dict) else {}
+              f = str(it.get('file') or loc.get('file') or '?')
+              line = it.get('line') or loc.get('startLine') or 0
+              msg = str(it.get('message') or it.get('description') or '')
+              if 'ERROR' in sev or 'ERROR' in msg[:20]:
+                  errs.append((f, line, msg))
+              elif 'WARNING' in sev:
+                  warns.append((f, line, msg))
+          # 形态 3：纯文本 `error • msg • file:line:col`
+          if not errs and not items:
+              for ln in raw.splitlines():
+                  m = re.match(r'\s*error\s+•\s+(.+?)\s+•\s+(.+?):(\d+):(\d+)\s*•', ln)
+                  if m:
+                      errs.append((m.group(2), int(m.group(3)), m.group(1)))
+          pre = '/home/runner/work/md3Music/md3Music/'
+          def strip(f):
+              return f[len(pre):] if f.startswith(pre) else f
+          if errs:
+              for f, line, msg in errs[:10]:
+                  print(f"::error file={strip(f)},line={line}::{msg[:140]}")
+              if len(errs) > 10:
+                  print(f'::error::ERROR 共 {len(errs)} 个，仅展示前 10')
+              print(f'::error::analyze 门禁：ERROR {len(errs)} 个')
+              sys.exit(1)
+          # 无 ERROR：warning/info 不拦构建（与「error 必须为 0」口径一致）
+          for f, line, msg in warns[:10]:
+              print(f"::warning file={strip(f)},line={line}::{msg[:140]}")
+          if warns:
+              print(f'::notice::无 ERROR；WARNING 共 {len(warns)} 个（不拦构建，后续清理）')
+          else:
+              print(f'::notice::无 ERROR、无 WARNING')
+          # 兜底：无解析结果但退出码非 0 → 可能是分析服务器崩溃，仍判失败
+          if code != 0 and not items:
+              print(f'::error::analyze 退出码 {code} 但未解析到任何诊断（疑似分析服务器异常）')
+              if err_txt:
+                  print(f'::error::stderr 尾部: {err_txt[-400:]}')
+              sys.exit(1)
+          sys.exit(0)
+          PY
 
       # 下载 release keystore（可选，不存在时用 debug keystore 兜底）
       - name: Download release keystore
@@ -125,11 +204,18 @@ jobs:
 
       # 构建 Release APK（按 ABI 拆分）
       # flavor 化之后必须显式 --flavor：定义 productFlavors 后 AGP 不再生成 assembleRelease
+      # --target-platform：Lite 收窄为 arm64/armv7。不加的话 Flutter 插件注入的
+      # splits.abi 会含 x86_64，打出无 libkugou_server.so 的废包（模拟器包已下线）。
+      # --obfuscate：Dart 符号混淆，libapp.so 减小约 1.5-2.5MB；符号表存
+      # build/symbols（随 artifacts 上传），崩溃栈还原时使用。
       - name: Flutter build APK (standard, release, split per ABI)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.apple_only == false }}
         run: |
+          set -o pipefail
           flutter build apk --release --flavor standard --split-per-abi \
-            --dart-define=APP_VERSION=ci-${{ github.sha }}
+            --target-platform android-arm64,android-arm \
+            --obfuscate --split-debug-info=build/symbols \
+            --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_standard.log"
 
       # depth3d flavor：3D 全量包（内置 onnxruntime so + 深度模型），仅 arm64-v8a
       - name: Flutter build APK (depth3d, release, arm64-v8a)
@@ -137,7 +223,8 @@ jobs:
         run: |
           flutter build apk --release --flavor depth3d \
             --dart-define=ENABLE_DEPTH_3D=true --split-per-abi --target-platform android-arm64 \
-            --dart-define=APP_VERSION=ci-${{ github.sha }}
+            --obfuscate --split-debug-info=build/symbols \
+            --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_depth3d.log"
 
       # 原子随身听按包名识别合作应用：额外构建一个 arm64-v8a 兼容包。
       # 只覆盖 applicationId，namespace / Kotlin 包路径 / MethodChannel 均保持原样。
@@ -154,22 +241,45 @@ jobs:
           flutter build apk --release --flavor standard --split-per-abi \
             --target-platform android-arm64 \
             --android-project-arg=md3ApplicationId=com.apple.android.music \
-            --dart-define=APP_VERSION=ci-${{ github.sha }}
+            --obfuscate --split-debug-info=build/symbols \
+            --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_apple.log"
           mv "$standard_apk" "$apk_dir/app-apple-music-arm64-v8a-release.apk"
           if [[ -f "$standard_backup" ]]; then
             mv "$standard_backup" "$standard_apk"
           fi
 
+      # 构建失败时把关键日志行经 ::error:: 写入 check-run annotations：
+      # 注解经 check-runs API 匿名可读（GITHUB_STEP_SUMMARY 不进 API，仅网页展示）
+      - name: Report build diagnostics
+        if: failure()
+        run: |
+          for f in "$RUNNER_TEMP"/build_standard.log "$RUNNER_TEMP"/build_depth3d.log "$RUNNER_TEMP"/build_apple.log; do
+            if [[ -f "$f" ]]; then
+              echo "### $(basename "$f") 关键错误行" >> "$GITHUB_STEP_SUMMARY"
+              {
+                grep -nE "Error detected|FAILURE: Build failed|What went wrong|error:|Error:|failed|Exception" "$f" | head -30 || true
+                echo "---- tail ----"
+                tail -c 2000 "$f"
+              } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+              # 注解（API 可读，每步上限 10 条）
+              grep -E "Error detected|FAILURE: Build failed|What went wrong|error:|Error:" "$f" | head -5 | while IFS= read -r line; do
+                echo "::error::${line:0:400}"
+              done || true
+              # 最后 4 行（含真实失败原因）也作为注解
+              tail -n 4 "$f" | while IFS= read -r line; do
+                echo "::error::${line:0:400}"
+              done
+            fi
+          done
+          exit 0
+
       # ============================================================
-      # 产物改名为发布名（ASCII）
+      # 产物改名为中文（便于区分）
       # ============================================================
       # Flutter CLI 按固定名 app-<abi>-<flavor>-<type>.apk 查找产物（flutter_tools 的
       # gradle.dart listApkPaths），**不能在 Gradle 层改名**，故在构建完成后统一重命名。
-      # ⚠️ GitHub Release 会把 asset 文件名中的非 ASCII 字符规范化为 '.'（下载名由
-      # GitHub 控制，softprops/action-gh-release 只能尽量恢复展示 label，带全角括号
-      # 的文件恢复 label 还会 404 导致整条 job 失败），因此发布名必须使用纯 ASCII。
-      # 中文含义映射见 release notes 的 Downloads 列表。
-      - name: Rename APKs to release-ready names
+      # ⚠️ 命名规则与 scripts/lib/common.ps1 的 Get-ApkDisplayName 必须同步。
+      - name: Rename APKs to Chinese display names
         run: |
           set -euo pipefail
           apk_dir="build/app/outputs/flutter-apk"
@@ -180,7 +290,23 @@ jobs:
           rename_apk() {
             local src="$apk_dir/$1"
             if [[ ! -f "$src" ]]; then return 0; fi
-            mv "$src" "$apk_dir/MD3Music-${ver}-$2-$3.apk"
+            local flavor_cn abi_cn
+            case "$2" in
+              standard)    flavor_cn="标准版" ;;
+              depth3d)     flavor_cn="3D封面版" ;;
+              apple-music) flavor_cn="随身听兼容版" ;;
+              *)           flavor_cn="$2" ;;
+            esac
+            case "$3" in
+              arm64-v8a)   abi_cn="64位" ;;
+              armeabi-v7a) abi_cn="32位" ;;
+              x86_64)      abi_cn="模拟器" ;;
+              *)           abi_cn="$3" ;;
+            esac
+            # 「（推荐）」前缀：面向普通用户的默认下载项（standard + arm64-v8a 的 release 包）
+            local prefix=""
+            if [[ "$2" == "standard" && "$3" == "arm64-v8a" ]]; then prefix="（推荐）"; fi
+            mv "$src" "$apk_dir/${prefix}MD3音乐-${ver}-${flavor_cn}-${abi_cn}.apk"
           }
           rename_apk app-arm64-v8a-standard-release.apk    standard    arm64-v8a
           rename_apk app-armeabi-v7a-standard-release.apk  standard    armeabi-v7a
@@ -207,13 +333,13 @@ jobs:
           done
           aapt2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
           apk_id() { "$aapt2" dump badging "$1" | sed -n "s/^package: name='\([^']*\)'.*/\1/p"; }
-          # 产物已在上一步改为 ASCII 发布名（规则与本文件 Rename 步骤同步）
-          std_apk="$apk_dir/MD3Music-${VER}-standard-arm64-v8a.apk"
-          d3d_apk="$apk_dir/MD3Music-${VER}-depth3d-arm64-v8a.apk"
-          am_apk="$apk_dir/MD3Music-${VER}-apple-music-arm64-v8a.apk"
+          # 产物已在上一步改中文名（规则与 scripts/lib/common.ps1 的 Get-ApkDisplayName 同步）
+          std_apk="$apk_dir/（推荐）MD3音乐-${VER}-标准版-64位.apk"
+          d3d_apk="$apk_dir/MD3音乐-${VER}-3D封面版-64位.apk"
+          am_apk="$apk_dir/MD3音乐-${VER}-随身听兼容版-64位.apk"
           test "$(apk_id "$am_apk")" = "com.apple.android.music"
           if [[ -f "$std_apk" ]]; then
-            test "$(apk_id "$std_apk")" = "com.md3music.md3music"
+            test "$(apk_id "$std_apk")" = "com.md3music.md3music.lite"
             # flavor 隔离：standard 包不得含 ORT so / 深度模型
             if unzip -l "$std_apk" | grep -qE 'libonnxruntime|assets/models/'; then
               echo "::error::standard 包含有 3D 资产（flavor 隔离失效）"
@@ -235,7 +361,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MD3音乐-标准版-64位
-          path: build/app/outputs/flutter-apk/MD3Music-${{ env.VER }}-standard-arm64-v8a.apk
+          path: build/app/outputs/flutter-apk/（推荐）MD3音乐-${{ env.VER }}-标准版-64位.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -244,17 +370,19 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MD3音乐-标准版-32位
-          path: build/app/outputs/flutter-apk/MD3Music-${{ env.VER }}-standard-armeabi-v7a.apk
+          path: build/app/outputs/flutter-apk/MD3音乐-${{ env.VER }}-标准版-32位.apk
           if-no-files-found: error
           retention-days: 7
 
+      # Lite 分支：abiFilters 已收窄为 arm64-v8a / armeabi-v7a（x86 仅服务模拟器，
+      # 其 libkugou_server.so 占 10.1MB）。此步骤保留以兼容上游脚本，产物缺失时不再报错。
       - name: Upload x86_64 standard APK
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.apple_only == false }}
         uses: actions/upload-artifact@v4
         with:
           name: MD3音乐-标准版-模拟器
-          path: build/app/outputs/flutter-apk/MD3Music-${{ env.VER }}-standard-x86_64.apk
-          if-no-files-found: error
+          path: build/app/outputs/flutter-apk/MD3音乐-${{ env.VER }}-标准版-模拟器.apk
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Upload arm64-v8a depth3d APK
@@ -262,7 +390,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MD3音乐-3D封面版-64位
-          path: build/app/outputs/flutter-apk/MD3Music-${{ env.VER }}-depth3d-arm64-v8a.apk
+          path: build/app/outputs/flutter-apk/MD3音乐-${{ env.VER }}-3D封面版-64位.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -270,13 +398,28 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MD3音乐-随身听兼容版-64位
-          path: build/app/outputs/flutter-apk/MD3Music-${{ env.VER }}-apple-music-arm64-v8a.apk
+          path: build/app/outputs/flutter-apk/MD3音乐-${{ env.VER }}-随身听兼容版-64位.apk
           if-no-files-found: error
           retention-days: 7
 
-      # 自动创建 Release 并上传 APK（仅 push 到 main/master 时）
+      # --obfuscate 的 Dart 符号表：崩溃栈还原（flutter symbolize）专用，
+      # 与本次构建的 libapp.so 一一对应，随 artifacts 留档
+      - name: Upload Dart obfuscation symbols
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.apple_only == false }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dart-symbols-${{ env.VER }}-${{ github.sha }}
+          path: build/symbols/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # 自动创建 Release 并上传 APK（仅 push 到 main 时）
+      # master 是上游镜像分支（跟踪 upstream/rust-local-force），推它会产出
+      # 200MB+ 的上游全量包 ci-* release：既污染 lite release 序列，又会被
+      # App 内更新检查误当最新版（ci-<sha> 无法被 parseReleaseVersion 解析）。
+      # 上游用 main 作默认分支，本仓库用 master 作镜像，故此处显式排除。
       - name: Create CI Release
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref_name == 'main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ci-${{ github.sha }}
@@ -289,16 +432,160 @@ jobs:
             **时间:** ${{ github.event.head_commit.timestamp }}
 
             ### 下载
-            - **MD3Music-${{ env.VER }}-standard-arm64-v8a.apk** — （推荐）标准版-64位：大多数现代 Android 设备
-            - **MD3Music-${{ env.VER }}-depth3d-arm64-v8a.apk** — 3D封面版-64位：内置 3D 深度封面（体积更大；无此文件表示本次未构建）
-            - **MD3Music-${{ env.VER }}-standard-armeabi-v7a.apk** — 标准版-32位：较旧的 32 位设备
-            - **MD3Music-${{ env.VER }}-standard-x86_64.apk** — 标准版-模拟器：Android 模拟器
-            - **MD3Music-${{ env.VER }}-apple-music-arm64-v8a.apk** — 随身听兼容版-64位：Vivo 原子随身听兼容包（包名 `com.apple.android.music`，不含 3D 封面）
+            - **（推荐）MD3音乐-${{ env.VER }}-标准版-64位.apk** — 推荐：大多数现代 Android 设备
+            - **MD3音乐-${{ env.VER }}-3D封面版-64位.apk** — 内置 3D 深度封面（体积更大；无此文件表示本次未构建）
+            - **MD3音乐-${{ env.VER }}-标准版-32位.apk** — 较旧的 32 位设备
+            - **MD3音乐-${{ env.VER }}-标准版-模拟器.apk** — Android 模拟器
+            - **MD3音乐-${{ env.VER }}-随身听兼容版-64位.apk** — Vivo 原子随身听兼容包（包名 `com.apple.android.music`，不含 3D 封面）
 
             > 此为 CI 自动构建，非正式发布版本。
           prerelease: true
           generate_release_notes: true
           files: |
-            build/app/outputs/flutter-apk/*MD3Music-*.apk
+            build/app/outputs/flutter-apk/*MD3音乐-*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # lite 分支：构建成功后按 sha 独立发布 Release。
+      # tag 形如 v5.8.1-lite-a081970：带版本号供 App 内自动更新检查比较，
+      # sha 后缀保证每次 push 独立 tag。
+      # 放弃固定 tag 覆盖方案：GitHub 对刚删除 release 的资产名有异步 GC 延迟，
+      # 重传必 422 already_exists；独立 tag 名字永不重复，零清理逻辑。
+      - name: Create lite Release (per-commit)
+        if: github.event_name == 'push' && github.ref_name == 'lite'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA_SHORT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${REPO}"
+          auth="Authorization: Bearer ${GITHUB_TOKEN}"
+          ver="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1)"
+          # tag 形如 v5.8.1-lite-a081970：版本号供客户端比较，sha 后缀保证
+          # 每次 push 独立 tag（GitHub 资产名 GC 延迟会让固定 tag 覆盖方案 422）。
+          # 客户端 parseReleaseVersion 会截断 -lite-<sha> 取到 5.8.1。
+          tag="v${ver}-lite-${SHA_SHORT::7}"
+          stamp="$(date -u +%Y%m%d%H%M%S)"
+
+          rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg stamp "$stamp" \
+            '{tag_name:$tag, target_commitish:$sha, prerelease:true,
+              name:("Lite v" + $ver + " (" + $tag + ")"),
+              body:("Lite 分支 CI 自动构建。\n\n"
+                  + "- 版本: v" + $ver + "\n- 提交: " + $sha + "\n\n"
+                  + "### 下载\n"
+                  + "- **MD3Lite-v" + $ver + "-" + $stamp + "-standard-arm64.apk** — 标准版 64 位（大多数现代设备，推荐）\n"
+                  + "- **MD3Lite-v" + $ver + "-" + $stamp + "-standard-arm32.apk** — 标准版 32 位（较旧设备）\n"
+                  + "- **MD3Lite-v" + $ver + "-" + $stamp + "-apple-music-arm64.apk** — 原子随身听兼容版（包名 com.apple.android.music）")}')
+          rel_out=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" \
+            -d "$rbody" -w $'\n%{http_code}' "$api/releases") || true
+          rl_code="${rel_out##*$'\n'}"; rl_body="${rel_out%$'\n'*}"
+          echo "POST /releases (${tag}) -> HTTP ${rl_code}"
+          if [[ ! "$rl_code" =~ ^2 ]]; then
+            echo "::error::POST /releases ${tag} HTTP ${rl_code} :: ${rl_body:0:280}"
+            exit 22
+          fi
+          rel_id=$(printf '%s' "$rl_body" | jq -r '.id')
+
+          # 自愈清理：删除资产名乱码（GitHub 剥非 ASCII 前缀 MD3.-）的历史 lite release
+          bad=$(curl -sS -H "$auth" "$api/releases?per_page=50" | jq -r '
+            .[] | select((.tag_name | startswith("lite-"))
+                          or (.tag_name | test("^v[0-9].*-lite-")))
+               | select(any(.assets[]; .name | startswith("MD3.")))
+               | "\(.id) \(.tag_name)"' || true)
+          while IFS= read -r line && [[ -n "$line" ]]; do
+            rid="${line%% *}"; rtag="${line#* }"
+            echo "清理乱码 release ${rtag} (#${rid})..."
+            curl -sS -X DELETE -H "$auth" -o /dev/null \
+              -w "  DELETE release -> HTTP %{http_code}\n" "$api/releases/${rid}" || true
+            curl -sS -X DELETE -H "$auth" -o /dev/null \
+              -w "  DELETE tag ref -> HTTP %{http_code}\n" "$api/git/refs/tags/${rtag}" || true
+          done <<< "$bad"
+
+          # 上传全部 APK。
+          # ⚠️ GitHub 会剥掉资产名中的非 ASCII 字符（中文），导致「标准版-64位」与
+          # 「随身听兼容版-64位」规范化后同名（MD3.-5.7.0-.-64.apk）→ 422 already_exists。
+          # 故先复制为 ASCII 安全名再上传。
+          for f in build/app/outputs/flutter-apk/*MD3音乐-*.apk; do
+            base=$(basename "$f")
+            case "$base" in
+              *标准版-64位*)   out="MD3Lite-v${ver}-${stamp}-standard-arm64.apk" ;;
+              *标准版-32位*)   out="MD3Lite-v${ver}-${stamp}-standard-arm32.apk" ;;
+              *随身听兼容版*)  out="MD3Lite-v${ver}-${stamp}-apple-music-arm64.apk" ;;
+              *) echo "  跳过未识别产物: ${base}"; continue ;;
+            esac
+            cp "$f" "$RUNNER_TEMP/${out}"
+            echo "上传 ${base} -> ${out} ($(du -h "$f" | cut -f1))..."
+            ok=""
+            for try in 1 2 3; do
+              uresp=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/octet-stream" \
+                --data-binary "@${RUNNER_TEMP}/${out}" -w $'\n%{http_code}' \
+                "https://uploads.github.com/repos/${REPO}/releases/${rel_id}/assets?name=${out}") || true
+              ucode="${uresp##*$'\n'}"; ubody="${uresp%$'\n'*}"
+              echo "  -> HTTP ${ucode} (try ${try})"
+              if [[ "$ucode" =~ ^2 ]]; then ok=1; break; fi
+              echo "::error::upload ${out} try${try} HTTP ${ucode} :: ${ubody:0:280}"
+              if [[ "$ucode" == "422" ]]; then
+                # 同名资产残留：定位删除后再重试
+                aid=$(curl -sS -H "$auth" "$api/releases/${rel_id}/assets?per_page=100" \
+                  | jq -r --arg n "$out" '.[] | select(.name==$n) | .id' | head -1)
+                if [[ -n "$aid" ]]; then
+                  echo "  清理同名资产 #${aid} ..."
+                  curl -sS -X DELETE -H "$auth" -o /dev/null \
+                    -w "  DELETE asset ${aid} -> HTTP %{http_code}\n" "$api/releases/assets/${aid}" || true
+                fi
+              fi
+              sleep 10
+            done
+            [[ -n "$ok" ]] || { echo "::error::上传 ${out} 三次均失败"; exit 22; }
+            echo "  ✓ ${out}"
+          done
+          echo "✅ Release ${tag} 已发布: https://github.com/${REPO}/releases/tag/${tag}"
+
+  # ============================================================
+  # Dart 单元 / Widget 测试
+  # 独立 job：与 APK 构建并行，不阻塞构建与 Release —— 测试失败时
+  # workflow 结论变红（回归可见），但产物照常发布，避免"因为一个测试
+  # 挂掉而拿不到可安装包"。
+  # ⚠️ bash shell 已自带 -eo pipefail，flutter test 失败会让本步骤失败。
+  # ============================================================
+  dart-tests:
+    name: Dart tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # expanded reporter：失败用例带 文件:行号，便于注解与本地复现
+      - name: Flutter test
+        run: flutter test --reporter expanded 2>&1 | tee "$RUNNER_TEMP/flutter_test.log"
+
+      # 失败时把用例名经 ::error:: 写入 check-run annotations（API 匿名可读，
+      # 与构建诊断同一套通道；GITHUB_STEP_SUMMARY 仅网页可见）
+      - name: Report test failures
+        if: failure()
+        run: |
+          {
+            echo "### flutter test 失败用例"
+            grep -nE "\[E\]" "$RUNNER_TEMP/flutter_test.log" | head -40 || true
+            echo "---- tail ----"
+            tail -c 2000 "$RUNNER_TEMP/flutter_test.log"
+          } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          grep -E "\[E\]" "$RUNNER_TEMP/flutter_test.log" | head -5 | while IFS= read -r line; do
+            echo "::error::${line:0:400}"
+          done || true
+          tail -n 6 "$RUNNER_TEMP/flutter_test.log" | while IFS= read -r line; do
+            echo "::error::${line:0:400}"
+          done
+          exit 0

@@ -15,7 +15,6 @@ import '../../core/services/dynamic_cover_service.dart';
 import '../../core/services/equalizer_service.dart';
 import '../../core/services/media_notification_service.dart';
 import '../../core/services/spectrum_service.dart';
-import '../../core/services/usb_audio_service.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../main.dart';
@@ -30,8 +29,6 @@ import '../../data/repositories/settings_repository.dart';
 import '../../services/depth_cover_service.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
-import '../coverflow/coverflow_page.dart';
-import '../listen_together/widgets/listen_together_pill.dart';
 import '../settings/equalizer_settings_page.dart';
 import '../sound/sounds_page.dart';
 import 'mv_player_page.dart';
@@ -40,7 +37,6 @@ import 'song_info_page.dart';
 import 'am_transport_controls.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/kugou_provider.dart';
-import '../../providers/listen_together_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
@@ -136,6 +132,11 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   // 封面 + 背景淡入淡出动画
   late final AnimationController _artworkFadeController;
   late final Animation<double> _artworkFadeAnimation;
+
+  /// 旧封面/旧背景淡出动画：C8 优化，值恒等于 `1 - _artworkFadeAnimation.value`
+  /// （与旧 AnimatedBuilder 里手算的 oldOpacity 完全一致），供 FadeTransition
+  /// 直接驱动渲染层透明度，避免动画期间每帧重建整个封面子树。
+  late final Animation<double> _artworkFadeReverse;
   String? _previousArtworkUrl;
 
   // 桌面歌词状态监听：长按歌词按钮 toggle 后同步 icon
@@ -290,6 +291,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
       parent: _artworkFadeController,
       curve: Curves.easeInOut,
     );
+    _artworkFadeReverse = ReverseAnimation(_artworkFadeAnimation);
     _artworkFadeController.value = 1.0;
     _zenController = AnimationController(
       duration: const Duration(milliseconds: 400),
@@ -1079,52 +1081,52 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   }
 
   /// 封面淡入淡出（AM 风格：白色占位）
+  ///
+  /// C8 优化：旧实现用 AnimatedBuilder 每帧重建整棵封面子树（含
+  /// PlayerArtworkImage / DepthCoverHost 的 widget 层重建），改为
+  /// FadeTransition 直接驱动 RenderAnimatedOpacity——动画期间零 widget
+  /// 重建，只更新渲染层透明度。透明度取值不变（value / 1-value）、
+  /// 层级不变（旧层在下、新层在上）、端点行为不变（0 与 1 时
+  /// RenderAnimatedOpacity 与 RenderOpacity 一样跳过 saveLayer）。
   Widget _buildCrossfadeArtwork(
     String? artworkUrl,
     ColorScheme colorScheme, {
     double iconSize = 48.0,
     String? fallbackFilePath,
   }) {
-    return AnimatedBuilder(
-      animation: _artworkFadeAnimation,
-      builder: (context, _) {
-        final oldOpacity = 1.0 - _artworkFadeAnimation.value;
-        final newOpacity = _artworkFadeAnimation.value;
-        return Stack(
-          children: [
-            if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
-              Positioned.fill(
-                child: Opacity(
-                  opacity: oldOpacity,
-                  child: PlayerArtworkImage(
-                    artworkUri: _previousArtworkUrl,
-                    fallbackFilePath: fallbackFilePath,
-                    fit: BoxFit.cover,
-                    iconSize: iconSize,
-                    backgroundColor: Colors.white12,
-                    iconColor: Colors.white54,
-                  ),
-                ),
-              ),
-            Positioned.fill(
-              child: Opacity(
-                opacity: newOpacity,
-                // 3D 深度封面宿主：开关关闭/生成未完成时内部回退为平面封面，
-                // 保留 AM 风格的白底占位与淡入效果；与动态封面互斥由
-                // _buildArtworkWithDynamicCover 的分流保证（有动态封面时不会走到这里）。
-                child: DepthCoverHost(
-                  artworkUri: artworkUrl,
-                  fallbackFilePath: fallbackFilePath,
-                  fit: BoxFit.cover,
-                  iconSize: iconSize,
-                  backgroundColor: Colors.white12,
-                  iconColor: Colors.white54,
-                ),
+    return Stack(
+      children: [
+        if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
+          Positioned.fill(
+            child: FadeTransition(
+              opacity: _artworkFadeReverse,
+              child: PlayerArtworkImage(
+                artworkUri: _previousArtworkUrl,
+                fallbackFilePath: fallbackFilePath,
+                fit: BoxFit.cover,
+                iconSize: iconSize,
+                backgroundColor: Colors.white12,
+                iconColor: Colors.white54,
               ),
             ),
-          ],
-        );
-      },
+          ),
+        Positioned.fill(
+          child: FadeTransition(
+            opacity: _artworkFadeAnimation,
+            // 3D 深度封面宿主：开关关闭/生成未完成时内部回退为平面封面，
+            // 保留 AM 风格的白底占位与淡入效果；与动态封面互斥由
+            // _buildArtworkWithDynamicCover 的分流保证（有动态封面时不会走到这里）。
+            child: DepthCoverHost(
+              artworkUri: artworkUrl,
+              fallbackFilePath: fallbackFilePath,
+              fit: BoxFit.cover,
+              iconSize: iconSize,
+              backgroundColor: Colors.white12,
+              iconColor: Colors.white54,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1166,86 +1168,73 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   /// 模糊背景淡入淡出（无 alpha 渐变；渐变移到 AppleLyricsView 歌词界面边界）。
   /// [sigma] 为用户可调模糊强度（0~30），0 时跳过滤镜直接渲染原图。
   /// 仅在动态流光关闭时被调用（调用点有条件判断）。
+  ///
+  /// C8 优化：同 [_buildCrossfadeArtwork]，AnimatedBuilder 换 FadeTransition，
+  /// 动画期间零 widget 重建；透明度取值（value / 1-value）与层级不变。
   Widget _buildCrossfadeBlurredBackground(
     String? artworkUrl, {
     String? fallbackFilePath,
     required double sigma,
   }) {
-    return AnimatedBuilder(
-      animation: _artworkFadeAnimation,
-      builder: (context, _) {
-        final oldOpacity = 1.0 - _artworkFadeAnimation.value;
-        final newOpacity = _artworkFadeAnimation.value;
-        return Stack(
-          children: [
-            if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
-              Positioned.fill(
-                child: Opacity(
-                  opacity: oldOpacity,
-                  child: RepaintBoundary(
-                    // sigma=0（用户调为不模糊）：跳过滤镜，省一层 GPU 合成
-                    child: sigma <= 0
-                        ? PlayerArtworkImage(
-                            artworkUri: _previousArtworkUrl,
-                            fallbackFilePath: fallbackFilePath,
-                            isFill: true,
-                            fit: BoxFit.cover,
-                            backgroundColor: Colors.black,
-                            iconColor: Colors.white24,
-                          )
-                        : ImageFiltered(
-                            // sigma 随设置变化（0~30）；RepaintBoundary 缓存的
-                            // 已模糊栅格只在 sigma 变更时重算一次，切歌动画
-                            // 仍只做 alpha 混合（保持 2026-09-01 性能优化结构）
-                            imageFilter: ImageFilter.blur(
-                              sigmaX: sigma,
-                              sigmaY: sigma,
-                            ),
-                            child: PlayerArtworkImage(
-                              artworkUri: _previousArtworkUrl,
-                              fallbackFilePath: fallbackFilePath,
-                              isFill: true,
-                              fit: BoxFit.cover,
-                              backgroundColor: Colors.black,
-                              iconColor: Colors.white24,
-                            ),
-                          ),
-                  ),
-                ),
-              ),
-            Positioned.fill(
-              child: Opacity(
-                opacity: newOpacity,
-                child: RepaintBoundary(
-                  child: sigma <= 0
-                      ? PlayerArtworkImage(
-                          artworkUri: artworkUrl,
-                          fallbackFilePath: fallbackFilePath,
-                          isFill: true,
-                          fit: BoxFit.cover,
-                          backgroundColor: Colors.black,
-                          iconColor: Colors.white24,
-                        )
-                      : ImageFiltered(
-                          imageFilter: ImageFilter.blur(
-                            sigmaX: sigma,
-                            sigmaY: sigma,
-                          ),
-                          child: PlayerArtworkImage(
-                            artworkUri: artworkUrl,
-                            fallbackFilePath: fallbackFilePath,
-                            isFill: true,
-                            fit: BoxFit.cover,
-                            backgroundColor: Colors.black,
-                            iconColor: Colors.white24,
-                          ),
-                        ),
-                ),
-              ),
+    final Widget oldImage = sigma <= 0
+        ? PlayerArtworkImage(
+            artworkUri: _previousArtworkUrl,
+            fallbackFilePath: fallbackFilePath,
+            isFill: true,
+            fit: BoxFit.cover,
+            backgroundColor: Colors.black,
+            iconColor: Colors.white24,
+          )
+        : ImageFiltered(
+            // sigma 随设置变化（0~30）；RepaintBoundary 缓存的
+            // 已模糊栅格只在 sigma 变更时重算一次，切歌动画
+            // 仍只做 alpha 混合（保持 2026-09-01 性能优化结构）
+            imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            child: PlayerArtworkImage(
+              artworkUri: _previousArtworkUrl,
+              fallbackFilePath: fallbackFilePath,
+              isFill: true,
+              fit: BoxFit.cover,
+              backgroundColor: Colors.black,
+              iconColor: Colors.white24,
             ),
-          ],
-        );
-      },
+          );
+    final Widget newImage = sigma <= 0
+        ? PlayerArtworkImage(
+            artworkUri: artworkUrl,
+            fallbackFilePath: fallbackFilePath,
+            isFill: true,
+            fit: BoxFit.cover,
+            backgroundColor: Colors.black,
+            iconColor: Colors.white24,
+          )
+        : ImageFiltered(
+            imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            child: PlayerArtworkImage(
+              artworkUri: artworkUrl,
+              fallbackFilePath: fallbackFilePath,
+              isFill: true,
+              fit: BoxFit.cover,
+              backgroundColor: Colors.black,
+              iconColor: Colors.white24,
+            ),
+          );
+    return Stack(
+      children: [
+        if (_previousArtworkUrl != null && _previousArtworkUrl!.isNotEmpty)
+          Positioned.fill(
+            child: FadeTransition(
+              opacity: _artworkFadeReverse,
+              child: RepaintBoundary(child: oldImage),
+            ),
+          ),
+        Positioned.fill(
+          child: FadeTransition(
+            opacity: _artworkFadeAnimation,
+            child: RepaintBoundary(child: newImage),
+          ),
+        ),
+      ],
     );
   }
 
@@ -2412,8 +2401,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                 onPressed: _collapseByButton,
               ),
             const Spacer(),
-            // 一起听胶囊：在房间中时显示人数（1/5），点击进入/返回房间页
-            ListenTogetherPill(amStyle: true),
             // AM v2: 顶部栏右侧 FLAC 质量徽章，点击复用 _showQualityDialog，
             // 长按呼出 _showVolumeDialog（与 MD 风格统一）
             _buildQualityPill(playerProvider),
@@ -2716,8 +2703,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
     ColorScheme colorScheme,
   ) {
     final song = playerProvider.currentSong;
-    // 一起听听众端：进度条可拖动，拖动即进入脱离态（本地自由播放），
-    // 恢复跟随走房间页中央按钮 / 广场横幅（见 RoomSession.detachBySeek）。
     return PlayerSeekBar(
       position: position,
       duration: duration,
@@ -2737,9 +2722,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
       },
       onSeekEnd: (value) async {
         AppHaptics.tick();
-        // forceNotify：松手是用户显式动作，远端纠偏的抑制窗口不得吞掉通告
-        // （否则听众的「拖动即脱离」会被静默吞掉并被纠偏拉回）
-        await playerProvider.seek(value, forceNotify: true);
+        await playerProvider.seek(value);
         if (_wasPlayingBeforeDrag) {
           playerProvider.resume();
         }
@@ -3116,9 +3099,6 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
   }
 
   void _showVolumeDialog(PlayerProvider playerProvider) {
-    // 独占开启时控制 USB 独立音量（与设置页同步），否则控制应用音量；带模式标识
-    final usbService = UsbAudioService.instance;
-    final usbEnabled = usbService.lastStatus['enabled'] == true;
     showDialog(
       context: context,
       builder: (context) {
@@ -3132,9 +3112,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
               child: StatefulBuilder(
                 builder: (context, setState) {
-                  final volume = usbEnabled
-                      ? usbService.usbVolumePercent / 100
-                      : playerProvider.volume;
+                  final volume = playerProvider.volume;
                   final percent = (volume * 100).round();
                   final icon = volume <= 0
                       ? Icons.volume_off
@@ -3145,26 +3123,22 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                   return Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // 模式标识：独占状态 / 普通状态
+                      // 模式标识：普通状态
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color:
-                              (usbEnabled ? Colors.green : colorScheme.primary)
-                                  .withValues(alpha: 0.12),
+                          color: colorScheme.primary.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
-                          usbEnabled ? 'USB 独占音量' : '应用音量',
+                          '应用音量',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: usbEnabled
-                                ? Colors.green
-                                : colorScheme.primary,
+                            color: colorScheme.primary,
                           ),
                         ),
                       ),
@@ -3181,12 +3155,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                           hapticConfig: M3EHapticConfig.discrete(),
                         ),
                         onChanged: (value) {
-                          if (usbEnabled) {
-                            // 独占：与设置页「USB 音量」同步
-                            usbService.setUsbVolume(value * 100);
-                          } else {
-                            playerProvider.setVolume(value);
-                          }
+                          playerProvider.setVolume(value);
                           setState(() {});
                         },
                       ),
@@ -3196,7 +3165,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        usbEnabled ? '与设置页「USB 音量」同步' : '普通播放音量（重启后保留）',
+                        '普通播放音量（重启后保留）',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
@@ -3417,7 +3386,7 @@ class _AmStyleFullPlayerState extends State<AmStyleFullPlayer>
                     showAddToPlaylistDialog(rootContext, song);
                   },
                 ),
-                // 歌曲信息：频率/位深/码率/声道 + USB 独占开关（原顶栏按钮收纳到菜单）
+                // 歌曲信息：频率/位深/码率/声道（原顶栏按钮收纳到菜单）
                 ListTile(
                   leading: const Icon(Icons.info_outline),
                   title: const Text('歌曲信息'),

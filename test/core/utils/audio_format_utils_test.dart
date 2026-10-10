@@ -8,7 +8,7 @@ import 'package:md3music/core/utils/audio_format_utils.dart';
 ///
 /// 背景（2026-09-14）：旧实现硬编码 bitsPerSample@34，仅对「RIFF 后紧跟 16 字节
 /// fmt」的规范布局成立；fmt 前有 JUNK/LIST、fmt 为 18/40 字节（EXTENSIBLE）、
-/// 或 IEEE float 的实际产物解析失败 → USB 独占格式链「源文件」行缺位深。
+/// 或 IEEE float 的实际产物解析失败 → 歌曲信息页「源文件」行缺位深。
 void main() {
   Uint8List chunk(String id, List<int> body) {
     final b = BytesBuilder();

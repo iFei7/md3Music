@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../data/repositories/settings_repository.dart';
-import '../../modules/personal_fm/personal_fm_core.dart';
 import '../../providers/kugou_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
@@ -22,23 +21,15 @@ typedef StartupAutoPlayResult = ({bool started, bool openPlayerPage});
 
 /// 启动时自动播放的音源。
 ///
-/// 五个值的 `value` 是写进 SharedPreferences 的稳定字符串，**不要改**
+/// 两个值的 `value` 是写进 SharedPreferences 的稳定字符串，**不要改**
 /// （改了等于把老用户的设置丢弃）；[label] 只用于设置页下拉显示。
 enum StartupAutoPlaySource {
   /// 继续上次播放：唯一不依赖登录、也不依赖网络的音源，故作为默认值。
   resume('resume', '继续上次播放'),
 
   /// 每日推荐（`/everyday/recommend`）。
-  daily('daily', '每日推荐'),
+  daily('daily', '每日推荐');
 
-  /// 私人 FM · 红心（`mode=normal` + `song_pool_id=0`）。
-  fmHeart('fmHeart', '私人FM · 红心'),
-
-  /// 私人 FM · 探索（`mode=normal` + `song_pool_id=2`）。
-  fmExplore('fmExplore', '私人FM · 探索'),
-
-  /// 私人 FM · 小众（`mode=small` + `song_pool_id=1`）。
-  fmNiche('fmNiche', '私人FM · 小众');
 
   const StartupAutoPlaySource(this.value, this.label);
 
@@ -68,20 +59,6 @@ enum StartupAutoPlaySource {
   /// 转成一次 `onLoginRequired` 弹窗。
   bool get needsLogin => this != StartupAutoPlaySource.resume;
 
-  /// 对应 [kFmStations] 的下标；非 FM 音源返回 null。
-  int? get fmStationIndex {
-    switch (this) {
-      case StartupAutoPlaySource.fmHeart:
-        return 0;
-      case StartupAutoPlaySource.fmExplore:
-        return 1;
-      case StartupAutoPlaySource.fmNiche:
-        return 2;
-      case StartupAutoPlaySource.resume:
-      case StartupAutoPlaySource.daily:
-        return null;
-    }
-  }
 }
 
 /// 冷启动自动播放的编排器。
@@ -92,7 +69,7 @@ enum StartupAutoPlaySource {
 ///
 /// **本类不认识导航、也不需要 BuildContext**：只负责「读偏好 → 起播 → 报告
 /// 结果」，推不推播放页由调用方看着 [StartupAutoPlayResult] 决定。这样
-/// 后台唤醒 / 桌面小部件等无 UI 上下文的地方也能复用同一份起播逻辑。
+/// 后台唤醒等无 UI 上下文的地方也能复用同一份起播逻辑。
 ///
 /// 全部失败路径都静默：开机不该被 toast 或弹窗打扰。
 class StartupAutoPlay {
@@ -189,31 +166,10 @@ class StartupAutoPlay {
         final songs = kugou.recommendSongsAsSongs;
         if (songs.isEmpty) return false;
         await player.playOnlinePlaylist(songs, 0);
-      case StartupAutoPlaySource.fmHeart:
-      case StartupAutoPlaySource.fmExplore:
-      case StartupAutoPlaySource.fmNiche:
-        await _playPersonalFm(source.fmStationIndex!, kugou, player);
     }
     // play* 系列对解析失败的处理是「停在原地 + 报 resolveError」而非抛异常，
     // 所以成功与否只能回到播放器身上看：起播后一定有 currentSong。
     return player.currentSong != null;
-  }
-
-  /// 私人 FM 三个档位。
-  ///
-  /// 走 [PersonalFmWidgetActions] 而不是自己拼：它是发现页 FM 区块与桌面小
-  /// 部件共同使用的同一份起播逻辑，内含两件缺了就一定会出事的事——
-  /// `armRefill` 挂上 `onPlaylistEnd` 续播器（否则约 3 首后停住）、以及
-  /// 持久化 FM 会话标记（否则杀后台重进后队列永不补货）。
-  static Future<void> _playPersonalFm(
-    int stationIndex,
-    KugouProvider kugou,
-    PlayerProvider player,
-  ) async {
-    await PersonalFmWidgetActions.loadFm(kugou, kFmStations[stationIndex]);
-    final songs = kugou.personalFmSongs;
-    if (songs.isEmpty) return;
-    await PersonalFmWidgetActions.playSong(kugou, player, stationIndex, songs.first);
   }
 
   /// 仅供测试：重置一次性保护。

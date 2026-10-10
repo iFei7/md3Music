@@ -51,7 +51,7 @@ import java.nio.ByteBuffer;
   @Nullable private byte[] tempBuffer;
   private boolean endOfExtractorInput;
 
-  /** [UsbDiag] v6：构造风暴计数。 */
+  /** 诊断（v6）：构造风暴计数。 */
   private static long diagCtorWindowMs;
   private static int diagCtorCount;
   private static boolean diagCtorStackDumped;
@@ -60,7 +60,7 @@ import java.nio.ByteBuffer;
     if (!FlacLibrary.isAvailable()) {
       throw new FlacDecoderException("Failed to load decoder native libraries.");
     }
-    // [UsbDiag] P0-5 v6：构造风暴定位（pause/play 后 flacDecodeMetadata ~40 次/100ms，
+    // P0-5 v6 诊断：构造风暴定位（pause/play 后 flacDecodeMetadata ~40 次/100ms，
     // 每次重建 native FlacParser 占住线程 —— 疑为暂停延迟来源）。1s 内第 10 次打印一次调用栈。
     long nowMs = System.nanoTime() / 1_000_000L;
     if (nowMs - diagCtorWindowMs > 1000L) { diagCtorWindowMs = nowMs; diagCtorCount = 0; }
@@ -70,7 +70,7 @@ import java.nio.ByteBuffer;
       for (StackTraceElement e : new Throwable().getStackTrace()) {
         sb.append("\n    at ").append(e);
       }
-      android.util.Log.i("UsbDiag", sb.toString());
+      android.util.Log.i("FlacDecoderJni", sb.toString());
     }
     nativeDecoderContext = flacInit();
     if (nativeDecoderContext == 0) {

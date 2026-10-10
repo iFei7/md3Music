@@ -5,7 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import com.ryanheise.just_audio.UsbAudioSinkController
+import com.ryanheise.just_audio.SpectrumPcmTap
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.nio.ByteBuffer
@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicReference
  * **数据源（按优先级仲裁）**：
  * 1. **AudioSink PCM 截取（首选）**：从 fork 的 just_audio 拦截解码后的原始 PCM，
  *    自己算 FFT。数据在 AudioFlinger 混音之前，不受系统媒体音量影响 —— 静音播放
- *    时频谱依然真实跳动（[UsbAudioSinkController.PcmCaptureListener]）。
+ *    时频谱依然真实跳动（[SpectrumPcmTap.PcmCaptureListener]）。
  * 2. **Visualizer（兜底）**：从 AudioFlinger 混音输出采集。静音时无数据，
  *    仅用于 PCM 截取不可用（如非 just_audio 播放路径）的场合。
  * 3. **模拟模式（最终兜底）**：Dart 侧 1.5s 无 FFT 回调自动降级。
@@ -66,7 +66,7 @@ class SpectrumPlugin {
     private val fftReal = FloatArray(FFT_SIZE)
     private val fftImag = FloatArray(FFT_SIZE)
 
-    private val pcmCaptureListener = UsbAudioSinkController.PcmCaptureListener { buffer, encoding, sampleRate, channelCount ->
+    private val pcmCaptureListener = SpectrumPcmTap.PcmCaptureListener { buffer, encoding, sampleRate, channelCount ->
         handlePcm(buffer, encoding, sampleRate, channelCount)
     }
 
@@ -109,7 +109,7 @@ class SpectrumPlugin {
         pcmActive = false
         pcmFilled = 0
         pcmCaptureEnabled = true
-        UsbAudioSinkController.setPcmCaptureListener(pcmCaptureListener)
+        SpectrumPcmTap.setPcmCaptureListener(pcmCaptureListener)
 
         Thread {
             var error: Exception? = null
@@ -342,7 +342,7 @@ class SpectrumPlugin {
         pcmCaptureEnabled = false
         pcmActive = false
         pcmFilled = 0
-        UsbAudioSinkController.setPcmCaptureListener(null)
+        SpectrumPcmTap.setPcmCaptureListener(null)
         stopVisualizer()
     }
 

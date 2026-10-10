@@ -218,16 +218,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private boolean isRebuffering;
   private long lastRebufferRealtimeMs;
   private boolean shouldContinueLoading;
-  /** [UsbDiag] P0-4 观测：播放器级状态快照限频时间戳。 */
+  /** [Diag] P0-4 观测：播放器级状态快照限频时间戳。 */
   private long lastPlayerProbeMs;
-  /** [UsbDiag] P0-5 观测：seek/重选 churn 定位限频时间戳。 */
+  /** [Diag] P0-5 观测：seek/重选 churn 定位限频时间戳。 */
   private long lastSeekProbeMs;
   private long lastReselectProbeMs;
-  /** [UsbDiag] P0-5：disableRenderer churn 计数与一次性堆栈标记。 */
+  /** [Diag] P0-5：disableRenderer churn 计数与一次性堆栈标记。 */
   private int diagDisableCount;
   private long diagDisableWindowStartMs;
   private boolean diagChurnStackDumped;
-  /** [UsbDiag] v7：暂停后快速重启渲染器的定位探针。 */
+  /** [Diag] v7：暂停后快速重启渲染器的定位探针。 */
   private long diagStopRenderersMs;
   private boolean diagQuickStartDumped;
   private @Player.RepeatMode int repeatMode;
@@ -986,10 +986,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
   }
 
   private void startRenderers() throws ExoPlaybackException {
-    // [UsbDiag] P0-4 观测：渲染器被 ExoPlayer 重新调度（配合 sink 侧 handleBuffer 打点，
+    // [Diag] P0-4 观测：渲染器被 ExoPlayer 重新调度（配合 sink 侧 handleBuffer 打点，
     // 区分「未被调度」与「调度了但丢数据」）
     Log.i(TAG, "startRenderers");
-    // [UsbDiag] P0-5 v7：「暂停后立即重启渲染器」定位 —— stopRenderers 后 500ms 内的
+    // [Diag] P0-5 v7：「暂停后立即重启渲染器」定位 —— stopRenderers 后 500ms 内的
     // startRenderers 打印一次调用栈（用户症状：UI 暂停了但音乐继续 ~12s）。
     long diagNowMs = clock.elapsedRealtime();
     long diagDelta = diagStopRenderersMs > 0 ? diagNowMs - diagStopRenderersMs : -1L;
@@ -1029,7 +1029,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   }
 
   private void stopRenderers() throws ExoPlaybackException {
-    // [UsbDiag] P0-4 观测：渲染循环被 ExoPlayer 主动叫停（掉 BUFFERING/暂停/seek 都会走到）
+    // [Diag] P0-4 观测：渲染循环被 ExoPlayer 主动叫停（掉 BUFFERING/暂停/seek 都会走到）
     Log.i(TAG, "stopRenderers");
     diagStopRenderersMs = clock.elapsedRealtime();
     mediaClock.stop();
@@ -1198,7 +1198,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
       playingPeriodHolder.mediaPeriod.maybeThrowPrepareError();
     }
 
-    // [UsbDiag] P0-4 观测：播放器级状态快照（限频 1s）。停喂窗口内看 isLoading /
+    // [Diag] P0-4 观测：播放器级状态快照（限频 1s）。停喂窗口内看 isLoading /
     // shouldContinueLoading / bufferedUs —— 判断是否是「加载器被关闭 → 解码器饿死」，
     // 以及 bufferedUs 是否因 position 冻结而被高估（自锁）。
     long playerProbeNowMs = clock.elapsedRealtime();
@@ -1476,7 +1476,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
       boolean forceDisableRenderers,
       boolean forceBufferingState)
       throws ExoPlaybackException {
-    // [UsbDiag] P0-5 观测：定位「渲染器 100Hz disable/enable churn」的驱动源。
+    // [Diag] P0-5 观测：定位「渲染器 100Hz disable/enable churn」的驱动源。
     // 该分支会 disableRenderer+enableRenderers（→ codec 反复 flush → 解码器永不产出）。
     // 限频 200ms（100Hz 调用下约 5 条/s，足以看出节奏与参数）。
     long seekProbeNowMs = clock.elapsedRealtime();
@@ -1921,7 +1921,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   }
 
   private void disableRenderer(Renderer renderer) throws ExoPlaybackException {
-    // [UsbDiag] P0-5：渲染器高频 disable/enable churn 的**决定性**定位——1s 内第 20 次 disable
+    // [Diag] P0-5：渲染器高频 disable/enable churn 的**决定性**定位——1s 内第 20 次 disable
     // 时打印一次调用栈（只打一次）。停喂链：disable→onDisabled→flushCodec 100Hz→解码器
     // 永处 flush 后过渡态→dequeueInputBufferIndex=-1→永不喂数。
     long diagNowMs = clock.elapsedRealtime();
@@ -1954,7 +1954,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   }
 
   private void reselectTracksInternal() throws ExoPlaybackException {
-    // [UsbDiag] P0-5 观测：轨道重选会 disable/enable 渲染器（同 churn 嫌疑）
+    // [Diag] P0-5 观测：轨道重选会 disable/enable 渲染器（同 churn 嫌疑）
     long reselectProbeNowMs = clock.elapsedRealtime();
     if (reselectProbeNowMs - lastReselectProbeMs >= 200L) {
       lastReselectProbeMs = reselectProbeNowMs;

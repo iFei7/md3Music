@@ -1292,7 +1292,6 @@ void main() {
       await player.completeSeekSession(
         seekSession,
         const Duration(seconds: 42),
-        forceNotify: true,
       );
 
       expect(audio.lastSeekPosition, const Duration(seconds: 42));

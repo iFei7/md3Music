@@ -28,10 +28,10 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final repo = SettingsRepository();
       await repo.setStartupAutoPlayEnabled(true);
-      await repo.setStartupAutoPlaySource('fmNiche');
+      await repo.setStartupAutoPlaySource('daily');
       await repo.setStartupAutoPlayOpenPage(false);
       expect(await repo.getStartupAutoPlayEnabled(), isTrue);
-      expect(await repo.getStartupAutoPlaySource(), 'fmNiche');
+      expect(await repo.getStartupAutoPlaySource(), 'daily');
       expect(await repo.getStartupAutoPlayOpenPage(), isFalse);
     });
 
@@ -72,14 +72,6 @@ void main() {
       }
     });
 
-    test('FM 三档对齐 kFmStations 的下标（红心 0 / 探索 1 / 小众 2）', () {
-      expect(StartupAutoPlaySource.fmHeart.fmStationIndex, 0);
-      expect(StartupAutoPlaySource.fmExplore.fmStationIndex, 1);
-      expect(StartupAutoPlaySource.fmNiche.fmStationIndex, 2);
-      expect(StartupAutoPlaySource.resume.fmStationIndex, isNull);
-      expect(StartupAutoPlaySource.daily.fmStationIndex, isNull);
-    });
-
     test('value 唯一且非空，label 唯一（设置页下拉依赖这两条）', () {
       final values = StartupAutoPlaySource.values.map((e) => e.value).toSet();
       final labels = StartupAutoPlaySource.values.map((e) => e.label).toSet();
@@ -91,8 +83,8 @@ void main() {
       }
     });
 
-    test('共 5 个音源', () {
-      expect(StartupAutoPlaySource.values, hasLength(5));
+    test('共 2 个音源', () {
+      expect(StartupAutoPlaySource.values, hasLength(2));
     });
   });
 
@@ -114,8 +106,7 @@ void main() {
       expect(result.started, isFalse);
       expect(result.openPlayerPage, isFalse);
       expect(player.isPlaying, isFalse);
-      // 音源列表也没被动过（没走 getRecommendDaily / getPersonalFm）
-      expect(kugou.personalFmSongs, isEmpty);
+      // 音源列表也没被动过（没走 getRecommendDaily）
       expect(kugou.recommendSongs, isEmpty);
 
       // 一次性保护：热重载 / 重复首帧回调再来一次同样不参与

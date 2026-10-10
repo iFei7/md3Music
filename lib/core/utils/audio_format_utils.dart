@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 /// 音频格式展示工具：源文件编码名、文件头位深解析、Media3 编码常量与格式化。
 ///
-/// 供 USB 独占格式链（源文件/播放流/DAC 端点）与歌曲信息页共用，保证两处展示一致。
+/// 供歌曲信息页等格式展示处共用，保证各处展示一致。
 class AudioFormatUtils {
   AudioFormatUtils._();
 
@@ -165,7 +165,7 @@ class AudioFormatUtils {
     try {
       Uint8List head;
       // 路径形态兼容：裸路径 / file:// / local://（本地歌曲常用形态，此前不支持导致
-      // USB 独占格式链「源文件」行缺位深 —— 歌曲信息页同参数可解析，两处需一致）
+      // 歌曲信息页「源文件」行缺位深 —— 同参数可解析，两处需一致）
       final localFile = await _resolveLocalFile(localPath ?? '') ??
           await _resolveLocalFile(url ?? '');
       if (localFile != null) {

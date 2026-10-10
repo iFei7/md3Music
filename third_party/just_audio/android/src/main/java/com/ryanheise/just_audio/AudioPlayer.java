@@ -507,9 +507,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     @Override
     public void onPlayerError(PlaybackException error) {
-        // MD3Music fork: 完整异常信息写入 USB 日志环（随诊断 usb.log 导出）。
-        // 仅向 Dart 传 getMessage() 会丢 cause 链/堆栈（如 32bit FLAC code=2
-        // TYPE_UNEXPECTED 无法定位）。截断到 3000 字符防止环形缓冲刷屏。
+        // MD3Music fork: 完整异常信息进 logcat。仅向 Dart 传 getMessage() 会丢
+        // cause 链/堆栈（如 32bit FLAC code=2 TYPE_UNEXPECTED 无法定位）。
         try {
             StringBuilder sb = new StringBuilder();
             sb.append("onPlayerError: ").append(error.getClass().getName())
@@ -526,7 +525,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             String stack = android.util.Log.getStackTraceString(error);
             if (stack.length() > 3000) stack = stack.substring(0, 3000) + "\n…(truncated)";
             sb.append('\n').append(stack);
-            UsbAudioSinkController.logE("ExoPlayerError", sb.toString());
+            android.util.Log.e("ExoPlayerError", sb.toString());
         } catch (Exception ignored) { }
         final Integer httpStatusCode = findHttpStatusCode(error);
         final String errorMessage = httpStatusCode == null
@@ -1004,8 +1003,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private void ensurePlayerInitialized() {
         if (player == null) {
             // MD3Music fork: 子类化 DefaultRenderersFactory 并 override buildAudioSink()，
-            // 注入 USB 独占输出拦截层（UsbAudioSinkController.wrap）。
-            // 包装器始终存在（未开启独占时完全透传），因此运行时开关无需重建 ExoPlayer。
+            // 注入频谱 PCM 捕获层（SpectrumPcmTap）与音量均衡装饰器。
             // 注意：本机 Media3 为 1.4.1，buildAudioSink 签名只有 3 个参数（无 enableOffload）。
             var drf = new DefaultRenderersFactory(context) {
                 @Override
@@ -1022,16 +1020,12 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                                     new DefaultAudioSink.DefaultAudioProcessorChain(
                                             new ViperMasterProcessor()))
                             .build();
-                    // MD3Music fork: 系统 Direct PCM 档的拦截层。必须放在
-                    // UsbAudioSinkController.wrap 之内（即更靠近 delegate），因为
-                    // DirectPcmSink.configure 记录的格式应是 delegate 实际收到的格式；
-                    // 且 DirectPcmController 需要 AudioManager 才能探测原生输出率。
-                    DirectPcmController.attachContext(ctx);
-                    return new DirectPcmSink(UsbAudioSinkController.wrap(defaultSink, ctx));
+                    // MD3Music fork: 频谱 PCM 捕获层（截取解码后、混音前的原始 PCM）。
+                    return new SpectrumPcmTap(defaultSink, ctx);
                 }
 
-                /** 供扩展渲染器（libflac，P0-5）复用同一 USB 拦截 sink 构建逻辑。 */
-                public AudioSink buildUsbAudioSinkForExtension() {
+                /** 供扩展渲染器（libflac，P0-5）复用同一 sink 构建逻辑。 */
+                public AudioSink buildAudioSinkForExtension() {
                     return buildAudioSink(context, false, false);
                 }
             };
@@ -1049,7 +1043,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 // 其余格式仍优先走 MediaCodec（数组序在前 + 能力更高）。
                 boolean flacExtensionAvailable = FlacLibrary.isAvailable();
                 if (flacExtensionAvailable) {
-                    android.util.Log.i("UsbDiag", "flac extension renderer enabled");
+                    android.util.Log.i("AudioPlayer", "flac extension renderer enabled");
                 }
                 int extra = 1 + (flacExtensionAvailable ? 1 : 0);
                 Renderer[] allRenderers = Arrays.copyOf(defaultRenderers, defaultRenderers.length + extra);
@@ -1058,7 +1052,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     allRenderers[defaultRenderers.length + 1] = new LibflacAudioRenderer(
                             eventHandler,
                             audioListener,
-                            drf.buildUsbAudioSinkForExtension());
+                            drf.buildAudioSinkForExtension());
                 }
                 return allRenderers;
             };
@@ -1076,23 +1070,6 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 builder.setLivePlaybackSpeedControl(livePlaybackSpeedControl);
             }
             player = builder.build();
-            // MD3Music fork: 渲染器停喂自愈 —— USB 独占下渲染循环一旦停喂（实测
-            // hbCount 冻结且无错误抛出），USB 队列持续空转无声。从 sink 侧唯一能
-            // 唤醒渲染器的手段是 seek（onPositionReset → 重新预滚）。seek 必须经
-            // 主线程分发（ExoPlayer 线程约定）；STATE_READY 门禁避免在切歌/结束
-            // 过渡期误触发。控制器侧已有 2.5s 阈值 + 8s 冷却 + 3 次上限。
-            UsbAudioSinkController.setStallRecoveryListener(() -> {
-                Handler main = new Handler(Looper.getMainLooper());
-                main.post(() -> {
-                    ExoPlayer p = player;
-                    if (p == null || p.getPlaybackState() != Player.STATE_READY) return;
-                    try {
-                        p.seekTo(Math.max(0, p.getCurrentPosition()));
-                    } catch (RuntimeException e) {
-                        android.util.Log.w("UsbAudioSinkCtrl", "stall recovery seek failed: " + e);
-                    }
-                });
-            });
             // MD3Music fork: 固定 audioSessionId，使 Media3 MediaSession 与 AudioTrack
             // 关联。系统（小米等）按「AudioTrack 的 audioSessionId 是否与 MediaSession
             // 关联」判定播放器可识别性（hasUid）：未关联时独占型中断（如 B 站视频
@@ -2111,7 +2088,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     m.put("channelCount", f.channelCount > 0 ? f.channelCount : 0);
                     m.put("bitrate", f.bitrate > 0 ? f.bitrate : 0);
                     m.put("pcmEncoding", f.pcmEncoding);
-                    // 编码短名（FLAC/MP3/AAC/…），供 USB 独占格式链「源文件」行展示
+                    // 编码短名（FLAC/MP3/AAC/…），供歌曲信息页「源文件」行展示
                     m.put("codec", codecShortName(f.sampleMimeType, f.codecs));
                     Log.i(TAG, "getSourceFormat: rate=" + f.sampleRate + " ch=" + f.channelCount
                             + " bitrate=" + f.bitrate + " pcmEnc=" + f.pcmEncoding

@@ -11,7 +11,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../../core/services/usb_audio_service.dart';
 
 import '../../core/layout/page_title_alignment.dart';
 import '../../core/layout/ui_density.dart';
@@ -50,7 +49,6 @@ import '../../utils/landscape_immersive.dart';
 import '../../widgets/apple_lyrics/layout/lyric_preferences.dart';
 import 'lyric_animation_settings_page.dart';
 import '../../widgets/seed_color_picker.dart';
-import '../../widgets/usb_exclusive_section.dart';
 import '../player/mini_player.dart';
 import '../player/car_mode_layout.dart';
 import '../player/car_mode_panel.dart';
@@ -62,7 +60,6 @@ import 'settings_navigation.dart';
 import 'settings_two_pane.dart';
 import '../../core/layout/adaptive_navigator.dart' show DetailEmptyState;
 import 'home_tab_manager.dart';
-import 'mcp_agent_section.dart';
 import 'settings_search_index.g.dart';
 
 /// CI compile-time version injection via --dart-define=APP_VERSION=X
@@ -139,9 +136,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _lyricPushTranslation = true;
   bool _lyricPushRoma = false;
   bool _lyricPushPreferTranslation = true;
-  // 32bit 播放支持开关（默认关闭）。开启后无损(24/32bit)走高解析 float 输出；
-  // 部分设备 float 播放可能变速/变调，若不适应可在设置里关闭。
-  bool _enable32bitOutput = false;
   // 长按封面进入/退出 Zen 模式开关（默认开启）
   bool _zenCoverLongPress = true;
   // 专辑动态封面开关（主开关默认开启；移动网络子开关默认关闭）
@@ -304,7 +298,6 @@ class _SettingsPageState extends State<SettingsPage>
     _loadLyricPushSettings();
     _loadAndroidSdkVersion();
     _loadFlymeStatusBarLyric();
-    _initEnable32bit();
     LyriconProviderService.instance.addListener(_onLyriconStateChanged);
     // 桌面歌词状态变化（设置页开关 / 播放器长按 / 通知栏按钮）→ 刷新 UI
     DesktopLyricService.instance.addListener(_onDesktopLyricChanged);
@@ -1025,7 +1018,7 @@ class _SettingsPageState extends State<SettingsPage>
         SettingsSubpage(
           title: '音质与输出',
           icon: Icons.high_quality_outlined,
-          description: '网络音质、VIP 领取与 32bit 输出',
+          description: '网络音质与 VIP 领取',
           builder: _buildAudioQualitySubpage,
         ),
         SettingsSubpage(
@@ -1055,14 +1048,6 @@ class _SettingsPageState extends State<SettingsPage>
       ],
     ),
     SettingsCategory(
-      title: 'USB 独占',
-      icon: Icons.usb,
-      description: '独占输出与设备状态',
-      body: (colorScheme) => UsbExclusiveSection(
-        onAutoPause: () => context.read<PlayerProvider>().pause(),
-      ),
-    ),
-    SettingsCategory(
       title: '主页管理',
       icon: Icons.tab_outlined,
       description: '主页标签显示与排序',
@@ -1073,12 +1058,6 @@ class _SettingsPageState extends State<SettingsPage>
       icon: Icons.bolt_outlined,
       description: '应用图标长按快捷入口',
       body: _buildDesktopShortcutSection,
-    ),
-    SettingsCategory(
-      title: 'AI 代理',
-      icon: Icons.smart_toy_outlined,
-      description: 'MCP 接口、访问令牌与只读模式',
-      body: _buildAiAgentSection,
     ),
     SettingsCategory(
       title: '缓存与数据',
@@ -3170,7 +3149,7 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
-  /// 「音质与输出」三级子页：网络音质（WiFi / 移动）+ VIP 领取 + 32bit + 降级提示。
+  /// 「音质与输出」三级子页：网络音质（WiFi / 移动）+ VIP 领取 + 降级提示。
   Widget _buildAudioQualitySubpage(ColorScheme colorScheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3225,14 +3204,6 @@ class _SettingsPageState extends State<SettingsPage>
             });
             _settingsRepository.setAutoReceiveVip(value);
           },
-        ),
-        // search: 32bit 无损 高解析 音质 float
-        SwitchListTile(
-          title: const Text('32bit 播放支持'),
-          // 只保留可能出问题的风险提醒，实现细节说明删除
-          subtitle: const Text('部分设备开启后可能出现变调/变速'),
-          value: _enable32bitOutput,
-          onChanged: (value) => _setEnable32bitOutput(value),
         ),
         // search: 音质 降级 提示 toast vip 网络限制
         SwitchListTile(
@@ -3419,7 +3390,7 @@ class _SettingsPageState extends State<SettingsPage>
         ),
         // 以下两项是上面那个开关的从属项：关着时它们没有意义，直接隐藏
         if (_startupAutoPlayEnabled) ...[
-          // search: 播放内容 音源 每日推荐 私人FM 红心 探索 小众 继续上次 续播 电台
+          // search: 播放内容 音源 每日推荐 继续上次 续播
           ListTile(
             title: const Text('播放内容'),
             subtitle: M3EDropdownMenu<String>(
@@ -3809,27 +3780,7 @@ class _SettingsPageState extends State<SettingsPage>
     return const _DesktopShortcutPanel();
   }
 
-  /// AI 代理接口（MCP）section：外部 AI 客户端经 MCP 调用播放器的全部设置。
-  /// 独立一栏而非并入「缓存与数据」：能力面与风险面都独立，需要单独可见/可控。
-  Widget _buildAiAgentSection(ColorScheme colorScheme) {
-    // search-item: AI 代理接口 | AI 代理 mcp 大模型 智能体 claude 调用
-    return const McpAgentSection();
-  }
-
   /// 本地持久化音频管理 section 未包含在公开版本中。
-
-  /// 恢复 32bit 播放开关并同步到字段（从 UsbAudioService 缓存读取，已持久化+下发原生）。
-  Future<void> _initEnable32bit() async {
-    await UsbAudioService.instance.initEnable32bit();
-    if (!mounted) return;
-    setState(() => _enable32bitOutput = UsbAudioService.instance.enable32bit);
-  }
-
-  Future<void> _setEnable32bitOutput(bool value) async {
-    HapticFeedback.lightImpact();
-    setState(() => _enable32bitOutput = value);
-    await UsbAudioService.instance.setEnable32bit(value);
-  }
 
   /// 询问是否重启本地 API 服务器，确认后重启并更新端口展示。
   Future<void> _confirmRestartServer() async {
@@ -4445,9 +4396,6 @@ IconData _tabIconForId(String tabId) {
       return Icons.grid_view;
     case 'discover':
       return Icons.explore;
-    case 'coverflow':
-      // 与主页 tab 图标保持一致（见 app.dart 的 coverflow case）
-      return Icons.album;
     case 'library':
       return Icons.library_music;
     case 'favorites':
@@ -4456,23 +4404,10 @@ IconData _tabIconForId(String tabId) {
       return Icons.radio;
     case 'search':
       return Icons.search;
-    case 'charts':
-      return Icons.leaderboard;
-    case 'ip':
-      return Icons.edit_note;
     case 'recognition':
       return Icons.mic;
     case 'audiobook':
       return Icons.auto_stories;
-    case 'scene':
-      // 与主页 tab 图标保持一致（见 app.dart 的 scene case）
-      return Icons.landscape;
-    case 'channel':
-      // 与主页 tab 图标保持一致（见 app.dart 的 channel case）
-      return Icons.dynamic_feed;
-    case 'brush':
-      // 与主页 tab 图标保持一致（见 app.dart 的 brush case）
-      return Icons.swipe;
     case 'settings':
       // 与主页 tab 图标保持一致（见 app.dart 的 settings case）
       return Icons.settings;

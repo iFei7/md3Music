@@ -32,8 +32,6 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- 频谱可视化：部分 ROM（如 HyperOS）要求此权限才能使用 Visualizer -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <!-- USB 独占输出：声明 USB Host 能力（非必需，无 USB 口的设备也可安装） -->
-    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <application
         android:label="MD3Music"
         android:name="${applicationName}"
@@ -179,25 +177,6 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/music_widget_info" />
-        </receiver>
-        <!-- 桌面私人FM小组件 -->
-        <receiver
-            android:name=".PersonalFmWidgetProvider"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.md3music.md3music.ACTION_FM_UPDATE_WIDGET" />
-                <action android:name="com.md3music.md3music.ACTION_FM_COVER_READY" />
-                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_OPEN_LOGIN" />
-                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_PLAY_PAUSE" />
-                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_TOGGLE_FAVORITE" />
-                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_SELECT_STATION" />
-                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_OPEN_TRACK" />
-                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_OPEN_PLAYER" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/personal_fm_widget_info" />
         </receiver>
         <!-- 2×2 封面播放器小组件 -->
         <receiver

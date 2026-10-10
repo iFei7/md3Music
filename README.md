@@ -2,8 +2,6 @@
 
 <div align="center">
 
-<img src="assets/images/app_icon.png" width="128" alt="MD3Music 应用图标" />
-
 <p><strong>A modern Material 3 music player built with Flutter &amp; Rust.</strong><br />
 一个以 Material 3 与 Apple Music 风格体验为核心的 Android 音乐客户端。</p>
 
