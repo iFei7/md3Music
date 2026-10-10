@@ -14,7 +14,6 @@ import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/scroll_aware_app_bar.dart';
 import '../../widgets/song_list_item.dart';
 import 'home_discover_refill.dart';
-import '../player/secondary_mini_player.dart';
 import '../recognition/song_recognition_page.dart';
 import '../search/search_page.dart';
 
@@ -521,68 +520,66 @@ class _DailyRecommendDetailPageState extends State<_DailyRecommendDetailPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('每日推荐')),
-      body: SecondaryMiniPlayerHost(
-        child: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : Selector<KugouProvider, List<KugouSongDetail>>(
-              selector: (_, kugou) => kugou.recommendSongs,
-              builder: (context, recommendSongs, _) {
-                final songs = recommendSongs.map((e) => e.toSong()).toList();
-                if (songs.isEmpty) return const Center(child: Text('暂无数据'));
-                return Column(
-                  children: [
-                    // 播放全部：把当日的 30 首当一张歌单从头连播。
-                    // 形态与专辑/歌单/听书详情页的主行动按钮一致
-                    // （FilledButton.icon + play_arrow）。
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.lg,
-                        AppSpacing.lg,
+      body: _isLoading
+        ? const Center(child: M3ELoadingIndicator())
+        : Selector<KugouProvider, List<KugouSongDetail>>(
+            selector: (_, kugou) => kugou.recommendSongs,
+            builder: (context, recommendSongs, _) {
+              final songs = recommendSongs.map((e) => e.toSong()).toList();
+              if (songs.isEmpty) return const Center(child: Text('暂无数据'));
+              return Column(
+                children: [
+                  // 播放全部：把当日的 30 首当一张歌单从头连播。
+                  // 形态与专辑/歌单/听书详情页的主行动按钮一致
+                  // （FilledButton.icon + play_arrow）。
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.lg,
+                      AppSpacing.lg,
+                      AppSpacing.lg,
+                      AppSpacing.sm,
+                    ),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: () => context
+                            .read<PlayerProvider>()
+                            .playOnlinePlaylist(songs, 0),
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('播放全部'),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.builder(
+                      padding: EdgeInsets.fromLTRB(
                         AppSpacing.lg,
                         AppSpacing.sm,
+                        AppSpacing.lg,
+                        AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
                       ),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: () => context
-                              .read<PlayerProvider>()
-                              .playOnlinePlaylist(songs, 0),
-                          icon: const Icon(Icons.play_arrow),
-                          label: const Text('播放全部'),
-                        ),
-                      ),
+                      itemCount: songs.length,
+                      itemBuilder: (context, index) {
+                        final song = songs[index];
+                        return SongListItem(
+                          song: song,
+                          // 每日推荐：右侧仅收藏按钮（见改版计划二）。
+                          trailingActions: SongTrailingActions.favoriteOnly,
+                          onTap: () {
+                            context.read<PlayerProvider>().playOnlinePlaylist(
+                              songs,
+                              index,
+                            );
+                          },
+                          onMoreTap: () {},
+                        );
+                      },
                     ),
-                    Expanded(
-                      child: ListView.builder(
-                        padding: EdgeInsets.fromLTRB(
-                          AppSpacing.lg,
-                          AppSpacing.sm,
-                          AppSpacing.lg,
-                          AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
-                        ),
-                        itemCount: songs.length,
-                        itemBuilder: (context, index) {
-                          final song = songs[index];
-                          return SongListItem(
-                            song: song,
-                            // 每日推荐：右侧仅收藏按钮（见改版计划二）。
-                            trailingActions: SongTrailingActions.favoriteOnly,
-                            onTap: () {
-                              context.read<PlayerProvider>().playOnlinePlaylist(
-                                songs,
-                                index,
-                              );
-                            },
-                            onMoreTap: () {},
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-      ),
+                  ),
+                ],
+              );
+            },
+          ),
     );
   }
 }
@@ -770,64 +767,62 @@ class _HomeDiscoverDetailPageState extends State<_HomeDiscoverDetailPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('刷歌推荐')),
-      body: SecondaryMiniPlayerHost(
-        child: _isLoading
-            ? const Center(child: M3ELoadingIndicator())
-            : Selector<KugouProvider, List<KugouSongDetail>>(
-                selector: (_, kugou) => kugou.homeDiscoverSongs,
-                builder: (context, details, _) {
-                  final songs = details.map((e) => e.toSong()).toList();
-                  if (songs.isEmpty) return const Center(child: Text('暂无数据'));
-                  return Column(
-                    children: [
-                      // 播放全部：与每日推荐详情页同形态（FilledButton.icon +
-                      // play_arrow），点它也走 _play(0)，同样会装上补货器。
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(
-                          AppSpacing.lg,
-                          AppSpacing.lg,
-                          AppSpacing.lg,
-                          AppSpacing.sm,
-                        ),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: () => _play(0),
-                            icon: const Icon(Icons.play_arrow),
-                            label: const Text('播放全部'),
-                          ),
-                        ),
+      body: _isLoading
+        ? const Center(child: M3ELoadingIndicator())
+        : Selector<KugouProvider, List<KugouSongDetail>>(
+            selector: (_, kugou) => kugou.homeDiscoverSongs,
+            builder: (context, details, _) {
+              final songs = details.map((e) => e.toSong()).toList();
+              if (songs.isEmpty) return const Center(child: Text('暂无数据'));
+              return Column(
+                children: [
+                  // 播放全部：与每日推荐详情页同形态（FilledButton.icon +
+                  // play_arrow），点它也走 _play(0)，同样会装上补货器。
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.lg,
+                      AppSpacing.lg,
+                      AppSpacing.lg,
+                      AppSpacing.sm,
+                    ),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: () => _play(0),
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('播放全部'),
                       ),
-                      Expanded(
-                        child: ListView.builder(
-                          controller: _scrollController,
-                          padding: EdgeInsets.fromLTRB(
-                            AppSpacing.lg,
-                            AppSpacing.sm,
-                            AppSpacing.lg,
-                            AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
-                          ),
-                          // +1 是底部哨兵行，兼作翻页指示与"没有更多"的落点。
-                          itemCount: songs.length + 1,
-                          itemBuilder: (context, index) {
-                            if (index == songs.length) {
-                              return _buildListFooter(context);
-                            }
-                            return SongListItem(
-                              song: songs[index],
-                              // 与卡片一致：右侧仅收藏按钮。
-                              trailingActions: SongTrailingActions.favoriteOnly,
-                              onTap: () => _play(index),
-                              onMoreTap: () {},
-                            );
-                          },
-                        ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.builder(
+                      controller: _scrollController,
+                      padding: EdgeInsets.fromLTRB(
+                        AppSpacing.lg,
+                        AppSpacing.sm,
+                        AppSpacing.lg,
+                        AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
                       ),
-                    ],
-                  );
-                },
-              ),
-      ),
+                      // +1 是底部哨兵行，兼作翻页指示与"没有更多"的落点。
+                      itemCount: songs.length + 1,
+                      itemBuilder: (context, index) {
+                        if (index == songs.length) {
+                          return _buildListFooter(context);
+                        }
+                        return SongListItem(
+                          song: songs[index],
+                          // 与卡片一致：右侧仅收藏按钮。
+                          trailingActions: SongTrailingActions.favoriteOnly,
+                          onTap: () => _play(index),
+                          onMoreTap: () {},
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
     );
   }
 }

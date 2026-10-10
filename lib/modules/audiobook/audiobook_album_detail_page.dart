@@ -11,7 +11,6 @@ import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/m3e_sort_sheet.dart';
 import '../../widgets/smart_artwork_image.dart';
 import '../../widgets/song_list_item.dart';
-import '../player/secondary_mini_player.dart';
 
 /// 听书专辑详情页：专辑信息 + 简介 + 章节列表（可播放）。
 ///
@@ -372,166 +371,164 @@ class _AudiobookAlbumDetailPageState extends State<AudiobookAlbumDetailPage> {
     final displaySongs = _displaySongs;
 
     return Scaffold(
-      body: SecondaryMiniPlayerHost(
-        child: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : Column(
-              children: [
-                // 加载失败顶部 banner：专辑元数据仍可看
-                if (_error != null)
-                  _buildErrorBanner(context, cs, tt),
-                Expanded(
-                  child: CustomScrollView(
-                    controller: _scrollController,
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    slivers: [
-                      _buildSliverAppBar(cs, tt, useBackgroundImage),
-                      // 简介（默认折叠，带动画）
-                      if (intro != null)
-                        SliverToBoxAdapter(
-                          child: _buildIntroCard(context, cs, tt, intro),
-                        ),
-                      // 章节搜索栏
-                      if (_isSearching)
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                            child: TextField(
-                              controller: _searchController,
-                              focusNode: _searchFocusNode,
-                              decoration: InputDecoration(
-                                hintText: '搜索章节...',
-                                prefixIcon: const Icon(Icons.search),
-                                suffixIcon: _searchQuery.isNotEmpty
-                                    ? IconButton(
-                                        icon: const Icon(Icons.clear),
-                                        onPressed: () {
-                                          _searchController.clear();
-                                          setState(() {
-                                            _searchQuery = '';
-                                            _invalidateDisplaySongs();
-                                          });
-                                        },
-                                      )
-                                    : null,
-                                filled: true,
-                                fillColor: cs.surfaceContainerHighest
-                                    .withValues(alpha: 0.5),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(28),
-                                  borderSide: BorderSide.none,
-                                ),
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 12,
-                                ),
-                              ),
-                              onChanged: (value) {
-                                setState(() {
-                                  _searchQuery = value;
-                                  _invalidateDisplaySongs();
-                                });
-                              },
-                            ),
-                          ),
-                        ),
-                      // 播放全部 + 随机播放
+      body: _isLoading
+        ? const Center(child: M3ELoadingIndicator())
+        : Column(
+            children: [
+              // 加载失败顶部 banner：专辑元数据仍可看
+              if (_error != null)
+                _buildErrorBanner(context, cs, tt),
+              Expanded(
+                child: CustomScrollView(
+                  controller: _scrollController,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    _buildSliverAppBar(cs, tt, useBackgroundImage),
+                    // 简介（默认折叠，带动画）
+                    if (intro != null)
+                      SliverToBoxAdapter(
+                        child: _buildIntroCard(context, cs, tt, intro),
+                      ),
+                    // 章节搜索栏
+                    if (_isSearching)
                       SliverToBoxAdapter(
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: FilledButton.icon(
-                                  onPressed: _playableSongs.isEmpty
-                                      ? null
-                                      : _playAll,
-                                  icon: const Icon(Icons.play_arrow),
-                                  label: Text(
-                                    _playableSongs.isEmpty
-                                        ? '暂无免费章节'
-                                        : '播放全部 (${_playableSongs.length})',
-                                  ),
-                                ),
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: TextField(
+                            controller: _searchController,
+                            focusNode: _searchFocusNode,
+                            decoration: InputDecoration(
+                              hintText: '搜索章节...',
+                              prefixIcon: const Icon(Icons.search),
+                              suffixIcon: _searchQuery.isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.clear),
+                                      onPressed: () {
+                                        _searchController.clear();
+                                        setState(() {
+                                          _searchQuery = '';
+                                          _invalidateDisplaySongs();
+                                        });
+                                      },
+                                    )
+                                  : null,
+                              filled: true,
+                              fillColor: cs.surfaceContainerHighest
+                                  .withValues(alpha: 0.5),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(28),
+                                borderSide: BorderSide.none,
                               ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  onPressed: _playableSongs.isEmpty
-                                      ? null
-                                      : _playShuffle,
-                                  icon: const Icon(Icons.shuffle),
-                                  label: const Text('随机播放'),
-                                ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
                               ),
-                            ],
+                            ),
+                            onChanged: (value) {
+                              setState(() {
+                                _searchQuery = value;
+                                _invalidateDisplaySongs();
+                              });
+                            },
                           ),
                         ),
                       ),
-                      const SliverToBoxAdapter(child: Divider(height: 1)),
-                      // 章节列表
-                      if (displaySongs.isEmpty)
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.all(40),
-                            child: Center(
-                              child: Column(
-                                children: [
-                                  Icon(
-                                    Icons.headphones_outlined,
-                                    size: 48,
-                                    color: cs.onSurfaceVariant
-                                        .withValues(alpha: 0.5),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    _searchQuery.isNotEmpty
-                                        ? '没有找到相关章节'
-                                        : '暂无章节',
-                                    style: tt.titleMedium?.copyWith(
-                                      color: cs.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
+                    // 播放全部 + 随机播放
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: _playableSongs.isEmpty
+                                    ? null
+                                    : _playAll,
+                                icon: const Icon(Icons.play_arrow),
+                                label: Text(
+                                  _playableSongs.isEmpty
+                                      ? '暂无免费章节'
+                                      : '播放全部 (${_playableSongs.length})',
+                                ),
                               ),
                             ),
-                          ),
-                        )
-                      else
-                        SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) {
-                              final song = displaySongs[index];
-                              final isHighlighted =
-                                  _highlightSongId == song.id;
-                              return AnimatedContainer(
-                                duration: const Duration(milliseconds: 300),
-                                color: isHighlighted
-                                    ? cs.primaryContainer.withValues(alpha: 0.35)
-                                    : Colors.transparent,
-                                child: SongListItem(
-                                  song: song,
-                                  onTap: () => _playChapterAt(index),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _playableSongs.isEmpty
+                                    ? null
+                                    : _playShuffle,
+                                icon: const Icon(Icons.shuffle),
+                                label: const Text('随机播放'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SliverToBoxAdapter(child: Divider(height: 1)),
+                    // 章节列表
+                    if (displaySongs.isEmpty)
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.all(40),
+                          child: Center(
+                            child: Column(
+                              children: [
+                                Icon(
+                                  Icons.headphones_outlined,
+                                  size: 48,
+                                  color: cs.onSurfaceVariant
+                                      .withValues(alpha: 0.5),
                                 ),
-                              );
-                            },
-                            childCount: displaySongs.length,
+                                const SizedBox(height: 12),
+                                Text(
+                                  _searchQuery.isNotEmpty
+                                      ? '没有找到相关章节'
+                                      : '暂无章节',
+                                  style: tt.titleMedium?.copyWith(
+                                    color: cs.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                        // 加载更多 footer（滚动到底自动翻页）
-                        if (_audios.isNotEmpty)
-                          SliverToBoxAdapter(
-                            child: _buildLoadMoreFooter(),
-                          ),
-                    ],
-                  ),
+                      )
+                    else
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final song = displaySongs[index];
+                            final isHighlighted =
+                                _highlightSongId == song.id;
+                            return AnimatedContainer(
+                              duration: const Duration(milliseconds: 300),
+                              color: isHighlighted
+                                  ? cs.primaryContainer.withValues(alpha: 0.35)
+                                  : Colors.transparent,
+                              child: SongListItem(
+                                song: song,
+                                onTap: () => _playChapterAt(index),
+                              ),
+                            );
+                          },
+                          childCount: displaySongs.length,
+                        ),
+                      ),
+                      // 加载更多 footer（滚动到底自动翻页）
+                      if (_audios.isNotEmpty)
+                        SliverToBoxAdapter(
+                          child: _buildLoadMoreFooter(),
+                        ),
+                  ],
                 ),
-              ],
-            ),
-      ),
+              ),
+            ],
+          ),
     );
   }
 

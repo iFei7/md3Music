@@ -53,40 +53,6 @@ bool isPadLayout(BuildContext context) {
 /// `_MainLayout` 监听它触发整棵子树重建（与 `kCoverFlowImmersive` 同模式）。
 final ValueNotifier<bool> kDesktopModeEnabled = ValueNotifier<bool>(false);
 
-/// 播放器形态总开关（SecondaryMiniPlayerHost 渲染悬浮条还是底部常驻条）。
-///
-/// 默认关闭（底部常驻形态）。开启后**主页与二级页面**均使用悬浮播放条；关闭后
-/// 统一改用底部常驻播放条（主页由 shell 承载，二级页面由宿主补上同一条）。
-///
-/// 与 [kDesktopModeEnabled] 同为"外壳/播放栏形态"开关，放同一处便于查找。
-/// 宿主用 [ValueListenableBuilder] 直接订阅即可即时生效，无需整棵子树重建。
-final ValueNotifier<bool> kSecondaryPlayerEnabled = ValueNotifier<bool>(false);
-
-/// 悬浮播放器折叠态（圆盘）的停靠位。
-enum SecondaryPlayerDockSide {
-  left,
-  center,
-  right;
-
-  /// 从持久化原始字符串解析；非法/为空返回 null（调用方回退默认值）。
-  static SecondaryPlayerDockSide? tryParse(String? raw) {
-    if (raw == null) return null;
-    for (final v in values) {
-      if (v.name == raw) return v;
-    }
-    return null;
-  }
-}
-
-/// 悬浮播放器折叠态圆盘的水平停靠位。
-///
-/// 拖拽松手吸附后写入并持久化；未持久化过时由启动装载按设备形态给默认值
-/// （手机 [SecondaryPlayerDockSide.center]、Pad [SecondaryPlayerDockSide.right]）。
-/// 全局通知器而非实例状态：每个页面的悬浮播放器各有独立 State，
-/// 停靠位必须跨页面一致。
-final ValueNotifier<SecondaryPlayerDockSide> kSecondaryPlayerDock =
-    ValueNotifier<SecondaryPlayerDockSide>(SecondaryPlayerDockSide.center);
-
 /// 是否使用「桌面音乐软件式」外壳（侧栏 + 顶部工具栏 + 中央内容 + 全宽底部
 /// 播放栏）。
 ///
@@ -228,8 +194,9 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
         MediaQuery.orientationOf(context) == Orientation.landscape;
 
     // 竖屏且底部导航栏可见时，body 之下还压着 NavigationBar：告知子树
-    //（MiniPlayer）无需再为屏幕底部留白、也无需加宽左右内边距。横屏走侧栏、
-    // 或导航栏被隐藏（沉浸浏览）时，body 的最底部就是屏幕最底部，需要防护。
+    // 无需再为屏幕底部留白、也无需加宽左右内边距。横屏走侧栏、
+    // 或导航栏被隐藏（玻璃 Dock 悬浮 / 沉浸浏览）时，body 的最底部就是
+    // 屏幕最底部，需要防护。
     final hasBottomChrome = !isLandscape && !widget.hideNavigation;
 
     // 横屏（手机/平板）使用侧边导航栏，导航项垂直居中；

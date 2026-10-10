@@ -10,7 +10,6 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/song_list_item.dart';
 import '../album/album_detail_page.dart';
-import '../player/secondary_mini_player.dart';
 
 /// 「已购」页：单曲 / 专辑两个 Tab。
 ///
@@ -271,7 +270,7 @@ class _PurchasedPageState extends State<PurchasedPage> {
           ),
         ),
       ),
-      body: SecondaryMiniPlayerHost(child: _buildBody(cs)),
+      body: _buildBody(cs),
     );
   }
 

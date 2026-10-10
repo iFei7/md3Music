@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import '../../data/repositories/history_repository.dart';
 import '../../providers/player_provider.dart';
 import '../../widgets/song_list_item.dart';
-import '../player/secondary_mini_player.dart';
 
 /// 听歌排行页面（本地实现）
 ///
@@ -73,25 +72,23 @@ class _ListenRankingPageState extends State<ListenRankingPage> {
           ),
         ),
       ),
-      body: SecondaryMiniPlayerHost(
-        child: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : _rankedSongs.isEmpty
-              ? _buildEmpty(cs)
-              : Column(
-                  children: [
-                    _buildHeader(cs),
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: _rankedSongs.length,
-                        itemBuilder: (context, index) {
-                          return _buildRankingItem(context, index, cs);
-                        },
-                      ),
+      body: _isLoading
+        ? const Center(child: M3ELoadingIndicator())
+        : _rankedSongs.isEmpty
+            ? _buildEmpty(cs)
+            : Column(
+                children: [
+                  _buildHeader(cs),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: _rankedSongs.length,
+                      itemBuilder: (context, index) {
+                        return _buildRankingItem(context, index, cs);
+                      },
                     ),
-                  ],
-                ),
-      ),
+                  ),
+                ],
+              ),
     );
   }
 

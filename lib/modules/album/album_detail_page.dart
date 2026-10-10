@@ -18,7 +18,6 @@ import '../../widgets/keyboard_expand_sheet.dart';
 import '../../widgets/m3e_sort_sheet.dart';
 import '../../widgets/playlist_comments_view.dart';
 import '../../widgets/song_list_item.dart';
-import '../player/secondary_mini_player.dart';
 
 class AlbumDetailPage extends StatefulWidget {
   final Album album;
@@ -438,399 +437,397 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     final description = _albumDetail?.description;
 
     return Scaffold(
-      body: SecondaryMiniPlayerHost(
-        child: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : _error != null
-              ? _buildError(context, colorScheme)
-              : Column(
-                  children: [
-                    Expanded(
-                      child: CustomScrollView(
-                        controller: _scrollController,
-                        slivers: [
-                          SliverAppBar(
-                            expandedHeight: 280,
-                            pinned: true,
-                            // 背景图模式：顶栏恒透明——flexibleSpace 是普通 Stack
-                            // （非 FlexibleSpaceBar，折叠时不产生视差位移，壁纸层顶部
-                            // 固定裁剪），任意滚动位置壁纸都与主体背景对齐、不透 UI；
-                            // 非背景图：上划渐变到 surface（遮住列表不穿透）
-                            backgroundColor: useBackgroundImage
-                                ? Colors.transparent
-                                : Color.lerp(
-                                    Colors.transparent,
-                                    colorScheme.surface,
-                                    (_scrollOffset - (280 - kToolbarHeight))
-                                        .clamp(0.0, 60.0) / 60,
-                                  )!,
-                            surfaceTintColor: Colors.transparent,
-                            scrolledUnderElevation: 0,
-                            actions: [
-                              if (_songs.isNotEmpty)
-                                IconButton(
-                                  icon: Icon(_isSearching ? Icons.close : Icons.search),
-                                  onPressed: _toggleSearch,
-                                ),
-                              if (_songs.isNotEmpty)
-                                IconButton(
-                                  icon: const Icon(Icons.comment_outlined),
-                                  onPressed: () => _showCommentsSheet(context),
-                                  tooltip: '评论',
-                                ),
-                              if (_songs.isNotEmpty)
-                                IconButton(
-                                  icon: const Icon(Icons.my_location),
-                                  onPressed: _scrollToPlayingSong,
-                                  tooltip: '定位正在播放',
-                                ),
-                              if (_songs.isNotEmpty)
-                                M3ESortButton<_SortBy>(
-                                  tooltip: '排序',
-                                  current: _sortBy,
-                                  options: const [
-                                    (value: _SortBy.time, label: '添加时间'),
-                                    (value: _SortBy.title, label: '歌曲名称'),
-                                    (value: _SortBy.duration, label: '时长'),
-                                  ],
-                                  onPicked: (value, repeated) {
-                                    setState(() {
-                                      if (repeated) {
-                                        // 再次点当前项 → 翻转升/降序
-                                        _sortAscending = !_sortAscending;
-                                      } else {
-                                        _sortBy = value;
-                                        _sortAscending = value == _SortBy.time ? false : true;
-                                      }
-                                      _invalidateDisplaySongs();
-                                    });
-                                  },
-                                ),
-                            ],
-                            title: Opacity(
-                              opacity: ((_scrollOffset - (280 - kToolbarHeight)) / 60.0)
-                                  .clamp(0.0, 1.0),
-                              child: Text(
-                                displayAlbum.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+      body: _isLoading
+        ? const Center(child: M3ELoadingIndicator())
+        : _error != null
+            ? _buildError(context, colorScheme)
+            : Column(
+                children: [
+                  Expanded(
+                    child: CustomScrollView(
+                      controller: _scrollController,
+                      slivers: [
+                        SliverAppBar(
+                          expandedHeight: 280,
+                          pinned: true,
+                          // 背景图模式：顶栏恒透明——flexibleSpace 是普通 Stack
+                          // （非 FlexibleSpaceBar，折叠时不产生视差位移，壁纸层顶部
+                          // 固定裁剪），任意滚动位置壁纸都与主体背景对齐、不透 UI；
+                          // 非背景图：上划渐变到 surface（遮住列表不穿透）
+                          backgroundColor: useBackgroundImage
+                              ? Colors.transparent
+                              : Color.lerp(
+                                  Colors.transparent,
+                                  colorScheme.surface,
+                                  (_scrollOffset - (280 - kToolbarHeight))
+                                      .clamp(0.0, 60.0) / 60,
+                                )!,
+                          surfaceTintColor: Colors.transparent,
+                          scrolledUnderElevation: 0,
+                          actions: [
+                            if (_songs.isNotEmpty)
+                              IconButton(
+                                icon: Icon(_isSearching ? Icons.close : Icons.search),
+                                onPressed: _toggleSearch,
                               ),
+                            if (_songs.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.comment_outlined),
+                                onPressed: () => _showCommentsSheet(context),
+                                tooltip: '评论',
+                              ),
+                            if (_songs.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.my_location),
+                                onPressed: _scrollToPlayingSong,
+                                tooltip: '定位正在播放',
+                              ),
+                            if (_songs.isNotEmpty)
+                              M3ESortButton<_SortBy>(
+                                tooltip: '排序',
+                                current: _sortBy,
+                                options: const [
+                                  (value: _SortBy.time, label: '添加时间'),
+                                  (value: _SortBy.title, label: '歌曲名称'),
+                                  (value: _SortBy.duration, label: '时长'),
+                                ],
+                                onPicked: (value, repeated) {
+                                  setState(() {
+                                    if (repeated) {
+                                      // 再次点当前项 → 翻转升/降序
+                                      _sortAscending = !_sortAscending;
+                                    } else {
+                                      _sortBy = value;
+                                      _sortAscending = value == _SortBy.time ? false : true;
+                                    }
+                                    _invalidateDisplaySongs();
+                                  });
+                                },
+                              ),
+                          ],
+                          title: Opacity(
+                            opacity: ((_scrollOffset - (280 - kToolbarHeight)) / 60.0)
+                                .clamp(0.0, 1.0),
+                            child: Text(
+                              displayAlbum.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
                             ),
-                            flexibleSpace: ClipRect(
-                              child: LayoutBuilder(
-                                builder: (context, constraints) {
-                                  // 折叠时 flexibleSpace 高度从 224px 缩到 0：
-                                  // 封面随可用高度平滑缩放（140 → 0）而非固定
-                                  // 140 被视口上边界截断，避免 RenderFlex
-                                  // overflow；可用高度不足以容纳封面+文字时
-                                  // 文字淡出。与歌单页（playlist_page.dart）
-                                  // 的防溢出方案保持一致。
-                                  final safeTop = MediaQuery.paddingOf(context).top;
-                                  final availH = (constraints.maxHeight - 64 - safeTop)
-                                      .clamp(0.0, constraints.maxHeight);
-                                  final coverSize = availH.clamp(0.0, 140.0);
-                                  // 标题透明度连续映射：可用高度充足时全显示，
-                                  // 折叠到阈值以下时淡出，实现平滑过渡。
-                                  final textOpacity = ((availH - 100) / 22).clamp(0.0, 1.0);
-                                  return Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      if (useBackgroundImage)
-                                        const WallpaperHeaderBackground(),
-                                      Container(
-                                        decoration: BoxDecoration(
-                                          gradient: LinearGradient(
-                                            begin: Alignment.topCenter,
-                                            end: Alignment.bottomCenter,
-                                            colors: [
-                                              // 开启壁纸时主题色渐变半透明叠加在壁纸上，
-                                              // 渐变可见且壁纸透出；未开启时实色渐变
-                                              useBackgroundImage
-                                                  ? colorScheme.primaryContainer
-                                                      .withValues(alpha: 0.35)
-                                                  : colorScheme.primaryContainer,
-                                              // 底部渐变到透明：启用全局背景图（页面背景透明）时，
-                                              // 若此处仍是实色 surface 会与下方背景图形成接缝穿帮。
-                                              colorScheme.surface.withValues(alpha: 0),
-                                            ],
-                                          ),
+                          ),
+                          flexibleSpace: ClipRect(
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                // 折叠时 flexibleSpace 高度从 224px 缩到 0：
+                                // 封面随可用高度平滑缩放（140 → 0）而非固定
+                                // 140 被视口上边界截断，避免 RenderFlex
+                                // overflow；可用高度不足以容纳封面+文字时
+                                // 文字淡出。与歌单页（playlist_page.dart）
+                                // 的防溢出方案保持一致。
+                                final safeTop = MediaQuery.paddingOf(context).top;
+                                final availH = (constraints.maxHeight - 64 - safeTop)
+                                    .clamp(0.0, constraints.maxHeight);
+                                final coverSize = availH.clamp(0.0, 140.0);
+                                // 标题透明度连续映射：可用高度充足时全显示，
+                                // 折叠到阈值以下时淡出，实现平滑过渡。
+                                final textOpacity = ((availH - 100) / 22).clamp(0.0, 1.0);
+                                return Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    if (useBackgroundImage)
+                                      const WallpaperHeaderBackground(),
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            // 开启壁纸时主题色渐变半透明叠加在壁纸上，
+                                            // 渐变可见且壁纸透出；未开启时实色渐变
+                                            useBackgroundImage
+                                                ? colorScheme.primaryContainer
+                                                    .withValues(alpha: 0.35)
+                                                : colorScheme.primaryContainer,
+                                            // 底部渐变到透明：启用全局背景图（页面背景透明）时，
+                                            // 若此处仍是实色 surface 会与下方背景图形成接缝穿帮。
+                                            colorScheme.surface.withValues(alpha: 0),
+                                          ],
                                         ),
-                                        child: SafeArea(
-                                          child: Padding(
-                                            padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.xxxl, AppSpacing.xl, AppSpacing.lg),
-                                            child: Row(
-                                              crossAxisAlignment: CrossAxisAlignment.end,
-                                              children: [
-                                                ClipRRect(
-                                                  borderRadius: AppRadius.mdAll,
-                                                  child: SizedBox(
-                                                    width: coverSize,
-                                                    height: coverSize,
-                                                    child: displayAlbum.artworkUri != null
-                                                        ? CachedNetworkImage(
-                                                            imageUrl: displayAlbum.artworkUri!,
-                                                            memCacheWidth: 420,
-                                                            memCacheHeight: 420,
-                                                            fit: BoxFit.cover,
-                                                            placeholder: (_, _) => Container(
-                                                              color: colorScheme.surfaceContainerHighest,
-                                                              child: Icon(Icons.album, size: 48, color: colorScheme.onSurfaceVariant),
-                                                            ),
-                                                            errorWidget: (_, _, _) => Container(
-                                                              color: colorScheme.surfaceContainerHighest,
-                                                              child: Icon(Icons.album, size: 48, color: colorScheme.onSurfaceVariant),
-                                                            ),
-                                                          )
-                                                        : Container(
+                                      ),
+                                      child: SafeArea(
+                                        child: Padding(
+                                          padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.xxxl, AppSpacing.xl, AppSpacing.lg),
+                                          child: Row(
+                                            crossAxisAlignment: CrossAxisAlignment.end,
+                                            children: [
+                                              ClipRRect(
+                                                borderRadius: AppRadius.mdAll,
+                                                child: SizedBox(
+                                                  width: coverSize,
+                                                  height: coverSize,
+                                                  child: displayAlbum.artworkUri != null
+                                                      ? CachedNetworkImage(
+                                                          imageUrl: displayAlbum.artworkUri!,
+                                                          memCacheWidth: 420,
+                                                          memCacheHeight: 420,
+                                                          fit: BoxFit.cover,
+                                                          placeholder: (_, _) => Container(
                                                             color: colorScheme.surfaceContainerHighest,
                                                             child: Icon(Icons.album, size: 48, color: colorScheme.onSurfaceVariant),
                                                           ),
-                                                  ),
+                                                          errorWidget: (_, _, _) => Container(
+                                                            color: colorScheme.surfaceContainerHighest,
+                                                            child: Icon(Icons.album, size: 48, color: colorScheme.onSurfaceVariant),
+                                                          ),
+                                                        )
+                                                      : Container(
+                                                          color: colorScheme.surfaceContainerHighest,
+                                                          child: Icon(Icons.album, size: 48, color: colorScheme.onSurfaceVariant),
+                                                        ),
                                                 ),
-                                                const SizedBox(width: 20),
-                                                Expanded(
-                                                  // 文字区可视高度随 availH 收缩：超出部分由
-                                                  // ClipRect 裁掉并配合淡出，折叠过程中不触发
-                                                  // RenderFlex overflow（黄条）。
-                                                  child: SizedBox(
-                                                    height: availH,
-                                                    child: Align(
-                                                      alignment: Alignment.bottomLeft,
-                                                      child: ClipRect(
-                                                        child: Opacity(
-                                                          opacity: textOpacity,
-                                                          child: Column(
-                                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                                            mainAxisSize: MainAxisSize.min,
-                                                            children: [
-                                                              Text(
-                                                                displayAlbum.name,
-                                                                maxLines: 2,
-                                                                overflow: TextOverflow.ellipsis,
-                                                                style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
-                                                              ),
-                                                              if (displayAlbum.artist.isNotEmpty) ...[
-                                                                const Gap(AppSpacing.xs),
-                                                                Text(
-                                                                  displayAlbum.artist,
-                                                                  style: textTheme.bodyMedium?.copyWith(color: colorScheme.onSurfaceVariant),
-                                                                ),
-                                                              ],
+                                              ),
+                                              const SizedBox(width: 20),
+                                              Expanded(
+                                                // 文字区可视高度随 availH 收缩：超出部分由
+                                                // ClipRect 裁掉并配合淡出，折叠过程中不触发
+                                                // RenderFlex overflow（黄条）。
+                                                child: SizedBox(
+                                                  height: availH,
+                                                  child: Align(
+                                                    alignment: Alignment.bottomLeft,
+                                                    child: ClipRect(
+                                                      child: Opacity(
+                                                        opacity: textOpacity,
+                                                        child: Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          mainAxisSize: MainAxisSize.min,
+                                                          children: [
+                                                            Text(
+                                                              displayAlbum.name,
+                                                              maxLines: 2,
+                                                              overflow: TextOverflow.ellipsis,
+                                                              style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+                                                            ),
+                                                            if (displayAlbum.artist.isNotEmpty) ...[
                                                               const Gap(AppSpacing.xs),
                                                               Text(
-                                                                '${_songs.length} 首歌曲',
-                                                                style: textTheme.labelMedium?.copyWith(color: colorScheme.onSurfaceVariant),
+                                                                displayAlbum.artist,
+                                                                style: textTheme.bodyMedium?.copyWith(color: colorScheme.onSurfaceVariant),
                                                               ),
                                                             ],
-                                                          ),
+                                                            const Gap(AppSpacing.xs),
+                                                            Text(
+                                                              '${_songs.length} 首歌曲',
+                                                              style: textTheme.labelMedium?.copyWith(color: colorScheme.onSurfaceVariant),
+                                                            ),
+                                                          ],
                                                         ),
                                                       ),
                                                     ),
                                                   ),
                                                 ),
-                                              ],
-                                            ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+                      ),
+                        // 专辑介绍
+                        if (description != null && description.isNotEmpty)
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.none),
+                              child: GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _isDescriptionExpanded = !_isDescriptionExpanded;
+                                  });
+                                },
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(AppSpacing.md),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                                    borderRadius: AppRadius.mdAll,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(Icons.info_outline, size: 16, color: colorScheme.onSurfaceVariant),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            '专辑介绍',
+                                            style: textTheme.labelLarge?.copyWith(color: colorScheme.onSurfaceVariant),
+                                          ),
+                                          const Spacer(),
+                                          AnimatedRotation(
+                                            turns: _isDescriptionExpanded ? 0.5 : 0,
+                                            duration: const Duration(milliseconds: 200),
+                                            child: Icon(Icons.keyboard_arrow_down, size: 20, color: colorScheme.onSurfaceVariant),
+                                          ),
+                                        ],
+                                      ),
+                                      const Gap(AppSpacing.sm),
+                                      AnimatedSize(
+                                        duration: const Duration(milliseconds: 250),
+                                        curve: Curves.easeInOut,
+                                        alignment: Alignment.topCenter,
+                                        clipBehavior: Clip.hardEdge,
+                                        child: Text(
+                                          description,
+                                          maxLines: _isDescriptionExpanded ? null : 2,
+                                          overflow: _isDescriptionExpanded ? null : TextOverflow.ellipsis,
+                                          style: textTheme.bodyMedium?.copyWith(
+                                            color: colorScheme.onSurfaceVariant,
+                                            height: 1.5,
                                           ),
                                         ),
                                       ),
                                     ],
-                                  );
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        // 搜索栏
+                        if (_isSearching)
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.none),
+                              child: TextField(
+                                controller: _searchController,
+                                focusNode: _searchFocusNode,
+                                decoration: InputDecoration(
+                                  hintText: '搜索专辑内的歌曲...',
+                                  prefixIcon: const Icon(Icons.search),
+                                  suffixIcon: _searchQuery.isNotEmpty
+                                      ? IconButton(
+                                          icon: const Icon(Icons.clear),
+                                          onPressed: () {
+                                            _searchController.clear();
+                                            setState(() {
+                                              _searchQuery = '';
+                                              _invalidateDisplaySongs();
+                                            });
+                                          },
+                                        )
+                                      : null,
+                                  filled: true,
+                                  fillColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                                  border: OutlineInputBorder(
+                                    borderRadius: AppRadius.xlAll,
+                                    borderSide: BorderSide.none,
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
+                                ),
+                                onChanged: (value) {
+                                  setState(() {
+                                    _searchQuery = value;
+                                    _invalidateDisplaySongs();
+                                  });
                                 },
                               ),
                             ),
+                          ),
+                        // 播放按钮 + 收藏红心
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: FilledButton.icon(
+                                    onPressed: () {
+                                      final songs = _displaySongs;
+                                      if (songs.isNotEmpty) {
+                                        context.read<PlayerProvider>().playOnlinePlaylist(songs, 0);
+                                      }
+                                    },
+                                    icon: const Icon(Icons.play_arrow),
+                                    label: Text(
+                                      '播放全部${_isSearching && _searchQuery.isNotEmpty ? ' (${_displaySongs.length})' : ''}',
+                                    ),
+                                  ),
+                                ),
+                                const Gap(AppSpacing.md),
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      final songs = _displaySongs;
+                                      if (songs.isNotEmpty) {
+                                        final shuffled = List<Song>.from(songs)..shuffle();
+                                        context.read<PlayerProvider>().playOnlinePlaylist(shuffled, 0);
+                                      }
+                                    },
+                                    icon: const Icon(Icons.shuffle),
+                                    label: const Text('随机播放'),
+                                  ),
+                                ),
+                                const Gap(AppSpacing.md),
+                                IconButton.filledTonal(
+                                  onPressed: _isCollected ? _uncollectAlbum : _collectAlbum,
+                                  icon: Icon(
+                                    _isCollected ? Icons.favorite : Icons.favorite_border,
+                                    color: _isCollected ? colorScheme.error : null,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                          // 专辑介绍
-                          if (description != null && description.isNotEmpty)
-                            SliverToBoxAdapter(
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.none),
-                                child: GestureDetector(
+                        // 歌曲列表
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) {
+                              final song = _displaySongs[index];
+                              final isHighlighted = _highlightSongId == song.id;
+                              return AnimatedContainer(
+                                duration: const Duration(milliseconds: 300),
+                                color: isHighlighted
+                                    ? colorScheme.primaryContainer.withValues(alpha: 0.5)
+                                    : Colors.transparent,
+                                child: SongListItem(
+                                  song: song,
                                   onTap: () {
-                                    setState(() {
-                                      _isDescriptionExpanded = !_isDescriptionExpanded;
-                                    });
+                                    context.read<PlayerProvider>().playOnlinePlaylist(_displaySongs, index);
                                   },
-                                  child: Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.all(AppSpacing.md),
-                                    decoration: BoxDecoration(
-                                      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                                      borderRadius: AppRadius.mdAll,
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Icon(Icons.info_outline, size: 16, color: colorScheme.onSurfaceVariant),
-                                            const SizedBox(width: 6),
-                                            Text(
-                                              '专辑介绍',
-                                              style: textTheme.labelLarge?.copyWith(color: colorScheme.onSurfaceVariant),
-                                            ),
-                                            const Spacer(),
-                                            AnimatedRotation(
-                                              turns: _isDescriptionExpanded ? 0.5 : 0,
-                                              duration: const Duration(milliseconds: 200),
-                                              child: Icon(Icons.keyboard_arrow_down, size: 20, color: colorScheme.onSurfaceVariant),
-                                            ),
-                                          ],
-                                        ),
-                                        const Gap(AppSpacing.sm),
-                                        AnimatedSize(
-                                          duration: const Duration(milliseconds: 250),
-                                          curve: Curves.easeInOut,
-                                          alignment: Alignment.topCenter,
-                                          clipBehavior: Clip.hardEdge,
-                                          child: Text(
-                                            description,
-                                            maxLines: _isDescriptionExpanded ? null : 2,
-                                            overflow: _isDescriptionExpanded ? null : TextOverflow.ellipsis,
-                                            style: textTheme.bodyMedium?.copyWith(
-                                              color: colorScheme.onSurfaceVariant,
-                                              height: 1.5,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
+                                  onMoreTap: () {},
                                 ),
-                              ),
-                            ),
-                          // 搜索栏
-                          if (_isSearching)
-                            SliverToBoxAdapter(
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.none),
-                                child: TextField(
-                                  controller: _searchController,
-                                  focusNode: _searchFocusNode,
-                                  decoration: InputDecoration(
-                                    hintText: '搜索专辑内的歌曲...',
-                                    prefixIcon: const Icon(Icons.search),
-                                    suffixIcon: _searchQuery.isNotEmpty
-                                        ? IconButton(
-                                            icon: const Icon(Icons.clear),
-                                            onPressed: () {
-                                              _searchController.clear();
-                                              setState(() {
-                                                _searchQuery = '';
-                                                _invalidateDisplaySongs();
-                                              });
-                                            },
-                                          )
-                                        : null,
-                                    filled: true,
-                                    fillColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                                    border: OutlineInputBorder(
-                                      borderRadius: AppRadius.xlAll,
-                                      borderSide: BorderSide.none,
-                                    ),
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
-                                  ),
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _searchQuery = value;
-                                      _invalidateDisplaySongs();
-                                    });
-                                  },
-                                ),
-                              ),
-                            ),
-                          // 播放按钮 + 收藏红心
+                              );
+                            },
+                            childCount: _displaySongs.length,
+                          ),
+                        ),
+                        // 搜索无结果
+                        if (_isSearching && _displaySongs.isEmpty && _songs.isNotEmpty)
                           SliverToBoxAdapter(
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
-                              child: Row(
+                              padding: const EdgeInsets.all(AppSpacing.xxl),
+                              child: Column(
                                 children: [
-                                  Expanded(
-                                    child: FilledButton.icon(
-                                      onPressed: () {
-                                        final songs = _displaySongs;
-                                        if (songs.isNotEmpty) {
-                                          context.read<PlayerProvider>().playOnlinePlaylist(songs, 0);
-                                        }
-                                      },
-                                      icon: const Icon(Icons.play_arrow),
-                                      label: Text(
-                                        '播放全部${_isSearching && _searchQuery.isNotEmpty ? ' (${_displaySongs.length})' : ''}',
-                                      ),
-                                    ),
-                                  ),
-                                  const Gap(AppSpacing.md),
-                                  Expanded(
-                                    child: OutlinedButton.icon(
-                                      onPressed: () {
-                                        final songs = _displaySongs;
-                                        if (songs.isNotEmpty) {
-                                          final shuffled = List<Song>.from(songs)..shuffle();
-                                          context.read<PlayerProvider>().playOnlinePlaylist(shuffled, 0);
-                                        }
-                                      },
-                                      icon: const Icon(Icons.shuffle),
-                                      label: const Text('随机播放'),
-                                    ),
-                                  ),
-                                  const Gap(AppSpacing.md),
-                                  IconButton.filledTonal(
-                                    onPressed: _isCollected ? _uncollectAlbum : _collectAlbum,
-                                    icon: Icon(
-                                      _isCollected ? Icons.favorite : Icons.favorite_border,
-                                      color: _isCollected ? colorScheme.error : null,
-                                    ),
+                                  Icon(Icons.search_off, size: 48, color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),
+                                  const Gap(AppSpacing.sm),
+                                  Text(
+                                    '没有找到「$_searchQuery」相关的歌曲',
+                                    style: textTheme.bodyMedium?.copyWith(color: colorScheme.onSurfaceVariant),
                                   ),
                                 ],
                               ),
                             ),
                           ),
-                          // 歌曲列表
-                          SliverList(
-                            delegate: SliverChildBuilderDelegate(
-                              (context, index) {
-                                final song = _displaySongs[index];
-                                final isHighlighted = _highlightSongId == song.id;
-                                return AnimatedContainer(
-                                  duration: const Duration(milliseconds: 300),
-                                  color: isHighlighted
-                                      ? colorScheme.primaryContainer.withValues(alpha: 0.5)
-                                      : Colors.transparent,
-                                  child: SongListItem(
-                                    song: song,
-                                    onTap: () {
-                                      context.read<PlayerProvider>().playOnlinePlaylist(_displaySongs, index);
-                                    },
-                                    onMoreTap: () {},
-                                  ),
-                                );
-                              },
-                              childCount: _displaySongs.length,
-                            ),
-                          ),
-                          // 搜索无结果
-                          if (_isSearching && _displaySongs.isEmpty && _songs.isNotEmpty)
-                            SliverToBoxAdapter(
-                              child: Padding(
-                                padding: const EdgeInsets.all(AppSpacing.xxl),
-                                child: Column(
-                                  children: [
-                                    Icon(Icons.search_off, size: 48, color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),
-                                    const Gap(AppSpacing.sm),
-                                    Text(
-                                      '没有找到「$_searchQuery」相关的歌曲',
-                                      style: textTheme.bodyMedium?.copyWith(color: colorScheme.onSurfaceVariant),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
+                      ],
                     ),
-                  ],
-                ),
-      ),
+                  ),
+                ],
+              ),
     );
   }
 

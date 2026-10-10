@@ -6,7 +6,6 @@ import '../../data/models/song.dart';
 import '../../data/repositories/history_repository.dart';
 import '../../providers/player_provider.dart';
 import '../../widgets/song_list_item.dart';
-import '../player/secondary_mini_player.dart';
 
 class PlayHistoryPage extends StatefulWidget {
   /// 可选扩展：对显示列表应用变换（默认关闭，由私有构建注入，用于筛选等）。
@@ -171,41 +170,39 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
                   ),
               ],
       ),
-      body: SecondaryMiniPlayerHost(
-        child: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : _songs.isEmpty
-          ? _buildEmpty()
-          : Column(
-              children: [
-                _buildHeader(displaySongs),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: displaySongs.length,
-                    itemBuilder: (context, index) {
-                      final song = displaySongs[index];
-                      return SongListItem(
-                        song: song,
-                        isSelectMode: _editMode,
-                        isSelected: _selectedIds.contains(song.id),
-                        onSelectToggle: () => _toggleSelect(song.id),
-                        onLongPress: _editMode
-                            ? null
-                            : () => _enterEditMode(song.id),
-                        onTap: () {
-                          context.read<PlayerProvider>().playOnlinePlaylist(
-                            displaySongs,
-                            index,
-                          );
-                        },
-                        onMoreTap: () {},
-                      );
-                    },
-                  ),
+      body: _isLoading
+        ? const Center(child: M3ELoadingIndicator())
+        : _songs.isEmpty
+        ? _buildEmpty()
+        : Column(
+            children: [
+              _buildHeader(displaySongs),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: displaySongs.length,
+                  itemBuilder: (context, index) {
+                    final song = displaySongs[index];
+                    return SongListItem(
+                      song: song,
+                      isSelectMode: _editMode,
+                      isSelected: _selectedIds.contains(song.id),
+                      onSelectToggle: () => _toggleSelect(song.id),
+                      onLongPress: _editMode
+                          ? null
+                          : () => _enterEditMode(song.id),
+                      onTap: () {
+                        context.read<PlayerProvider>().playOnlinePlaylist(
+                          displaySongs,
+                          index,
+                        );
+                      },
+                      onMoreTap: () {},
+                    );
+                  },
                 ),
-              ],
-            ),
-        ),
+              ),
+            ],
+          ),
         );
       },
     );

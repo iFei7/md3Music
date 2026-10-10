@@ -33,11 +33,13 @@ class TabItem {
   int get hashCode => id.hashCode;
 }
 
-/// 默认 Tab 定义（与 app.dart _MainLayout._pages 顺序对应）。
+/// 默认 Tab 定义（lite 版：主页 / 收藏 / 我的，顺序与底部玻璃 Dock 一致）。
+///
+/// library（本地音乐）已从 tab 链移除：入口收敛到收藏页「本地」tab 与
+/// 桌面快捷方式（`_pageForTabAsRoute` 的 library 路由仍保留）。
 const List<TabItem> kDefaultTabs = [
-  TabItem(id: 'discover', label: '发现'),
+  TabItem(id: 'discover', label: '主页'),
   TabItem(id: 'favorites', label: '收藏'),
-  TabItem(id: 'library', label: '本地音乐'),
   TabItem(id: 'user', label: '我的', isRemovable: false),
 ];
 
@@ -84,13 +86,16 @@ class TabConfigProvider extends ChangeNotifier {
 
       // 0d5851d 将收藏移入默认 Tab，但旧版本已经把 favorites 持久化在
       // 隐藏集合中；同时本地音乐的默认显示状态也曾在多个版本间切换。
-      // 只执行一次迁移，恢复这两个默认入口，同时保留用户后续的手动配置。
-      const tabConfigMigrationVersion = 1;
+      // v1：恢复这两个默认入口，同时保留用户后续的手动配置。
+      // v2（玻璃 Dock 改版）：tab 链收敛为 主页/收藏/我的，library 从
+      // 主页 tab 迁出（隐藏），入口收敛到收藏页「本地」tab 与快捷方式。
+      const tabConfigMigrationVersion = 2;
       if (await _repo.getTabConfigMigrationVersion() <
           tabConfigMigrationVersion) {
-        _hiddenTabs
-          ..remove('favorites')
-          ..remove('library');
+        if (await _repo.getTabConfigMigrationVersion() < 1) {
+          _hiddenTabs..remove('favorites')..remove('library');
+        }
+        _hiddenTabs.add('library');
         await _repo.setHiddenTabs(_hiddenTabs);
         await _repo.setTabConfigMigrationVersion(tabConfigMigrationVersion);
       }

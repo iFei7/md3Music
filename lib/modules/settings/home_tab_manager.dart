@@ -12,9 +12,7 @@ import '../../providers/tab_config_provider.dart';
 IconData homeTabIcon(String tabId) {
   switch (tabId) {
     case 'discover':
-      return Icons.explore;
-    case 'library':
-      return Icons.library_music;
+      return Icons.home;
     case 'favorites':
       return Icons.favorite;
     case 'search':

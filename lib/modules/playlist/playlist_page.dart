@@ -22,7 +22,6 @@ import '../../widgets/song_list_item.dart';
 import '../../widgets/m3e_sort_sheet.dart';
 import '../../widgets/playlist_comments_view.dart';
 import '../../widgets/keyboard_expand_sheet.dart';
-import '../player/secondary_mini_player.dart';
 import 'playlist_songs_loader.dart';
 
 class PlaylistPage extends StatefulWidget {
@@ -923,8 +922,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
             if (!didPop && _isMultiSelectMode) _exitMultiSelectMode();
           },
           child: Scaffold(
-            body: SecondaryMiniPlayerHost(
-              child: Column(
+            body: Column(
               children: [
                 if (_isLoading)
                   const Expanded(child: Center(child: M3ELoadingIndicator()))
@@ -1267,7 +1265,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 ],
               ],
             ),
-              ),
           ),
         );
       },

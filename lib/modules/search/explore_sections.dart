@@ -13,7 +13,6 @@ import '../../widgets/album_card.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/song_list_item.dart';
 import '../album/album_detail_page.dart';
-import '../player/secondary_mini_player.dart';
 import '../playlist/playlist_page.dart';
 
 /// 音乐探索内容模块（改版计划一：从发现页迁移到搜索空白态）。
@@ -362,55 +361,53 @@ class _RankDetailPageState extends State<RankDetailPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(widget.rankName)),
-      body: SecondaryMiniPlayerHost(
-        child: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : Selector<KugouProvider, List<KugouSongDetail>>(
-              selector: (_, kugou) => kugou.rankSongs,
-              builder: (context, songs, _) {
-                if (songs.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text('暂无数据'),
-                        ElevatedButton(
-                          onPressed: () async {
-                            setState(() => _isLoading = true);
-                            await context.read<KugouProvider>().getRankSongs(
-                              rankId: widget.rankId,
-                              forceRefresh: true,
-                            );
-                            if (mounted) setState(() => _isLoading = false);
-                          },
-                          child: const Text('重试'),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                return ListView.builder(
-                  padding: EdgeInsets.fromLTRB(
-                    AppSpacing.lg, AppSpacing.lg, AppSpacing.lg,
-                    AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
+      body: _isLoading
+        ? const Center(child: M3ELoadingIndicator())
+        : Selector<KugouProvider, List<KugouSongDetail>>(
+            selector: (_, kugou) => kugou.rankSongs,
+            builder: (context, songs, _) {
+              if (songs.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text('暂无数据'),
+                      ElevatedButton(
+                        onPressed: () async {
+                          setState(() => _isLoading = true);
+                          await context.read<KugouProvider>().getRankSongs(
+                            rankId: widget.rankId,
+                            forceRefresh: true,
+                          );
+                          if (mounted) setState(() => _isLoading = false);
+                        },
+                        child: const Text('重试'),
+                      ),
+                    ],
                   ),
-                  itemCount: songs.length,
-                  itemBuilder: (context, i) {
-                    final song = songs[i].toSong();
-                    return SongListItem(
-                      song: song,
-                      onTap: () =>
-                          context.read<PlayerProvider>().playOnlinePlaylist(
-                            songs.map((e) => e.toSong()).toList(),
-                            i,
-                          ),
-                      onMoreTap: () {},
-                    );
-                  },
                 );
-              },
-            ),
-      ),
+              }
+              return ListView.builder(
+                padding: EdgeInsets.fromLTRB(
+                  AppSpacing.lg, AppSpacing.lg, AppSpacing.lg,
+                  AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
+                ),
+                itemCount: songs.length,
+                itemBuilder: (context, i) {
+                  final song = songs[i].toSong();
+                  return SongListItem(
+                    song: song,
+                    onTap: () =>
+                        context.read<PlayerProvider>().playOnlinePlaylist(
+                          songs.map((e) => e.toSong()).toList(),
+                          i,
+                        ),
+                    onMoreTap: () {},
+                  );
+                },
+              );
+            },
+          ),
     );
   }
 }

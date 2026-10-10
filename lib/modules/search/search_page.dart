@@ -22,7 +22,6 @@ import '../../widgets/song_list_item.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
 import '../playlist/playlist_page.dart';
-import '../player/secondary_mini_player.dart';
 import 'explore_sections.dart';
 
 class SearchPage extends StatefulWidget {
@@ -167,161 +166,159 @@ class _SearchPageState extends State<SearchPage>
     }
 
     return Scaffold(
-      body: SecondaryMiniPlayerHost(
-        child: NestedScrollView(
-          headerSliverBuilder: (context, innerBoxIsScrolled) {
-            return [
-              SliverAppBar(
-                floating: true,
-                pinned: true,
-                // 有壁纸时顶栏全透明，flexibleSpace 独立加载同一张背景图
-                // （topCenter 对齐与页面主体背景视觉连续）；列表滚到顶栏下时
-                // 被这张背景图盖住（不透底下 UI）；无壁纸时不透明 surface
-                backgroundColor: useBackgroundImage
-                    ? Colors.transparent
-                    : colorScheme.surface,
-                    flexibleSpace: useBackgroundImage
-                        ? ClipRect(
-                            child: Builder(builder: (context) {
-                              // 与页面主体共用同一背景图解码结果（同 cacheWidth →
-                              // ImageCache 同 key），避免各自解码
-                              final size = MediaQuery.sizeOf(context);
-                              final cacheWidth = (size.width *
-                                          MediaQuery.devicePixelRatioOf(context))
-                                      .round()
-                                      .clamp(540, 1440);
-                              final tp = context.watch<ThemeProvider>();
-                              // 顶栏区域用全屏尺寸 + 全屏 cover 渲染背景图，再
-                              // topCenter 裁剪显示顶部：缩放比例与主体背景完全一致，
-                              // 否则窄区域内单独 cover 会放大错位
-                              return OverflowBox(
-                                alignment: Alignment.topCenter,
-                                minWidth: size.width,
-                                maxWidth: size.width,
-                                minHeight: size.height,
-                                maxHeight: size.height,
-                                child: SizedBox(
-                                  width: size.width,
-                                  height: size.height,
-                                  // 与 AppBackground 同层结构：surface 打底 +
-                                  // 模糊（backgroundBlur）+ 透明度（backgroundOpacity），
-                                  // 顶栏背景跟随主体模糊/透明度改动
-                                  child: Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      ColoredBox(
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.surface,
-                                      ),
-                                      Opacity(
-                                        opacity: tp.backgroundOpacity,
-                                        child: ImageFiltered(
-                                          imageFilter: ui.ImageFilter.blur(
-                                            sigmaX: tp.backgroundBlur,
-                                            sigmaY: tp.backgroundBlur,
+      body: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) {
+          return [
+            SliverAppBar(
+              floating: true,
+              pinned: true,
+              // 有壁纸时顶栏全透明，flexibleSpace 独立加载同一张背景图
+              // （topCenter 对齐与页面主体背景视觉连续）；列表滚到顶栏下时
+              // 被这张背景图盖住（不透底下 UI）；无壁纸时不透明 surface
+              backgroundColor: useBackgroundImage
+                  ? Colors.transparent
+                  : colorScheme.surface,
+                  flexibleSpace: useBackgroundImage
+                      ? ClipRect(
+                          child: Builder(builder: (context) {
+                            // 与页面主体共用同一背景图解码结果（同 cacheWidth →
+                            // ImageCache 同 key），避免各自解码
+                            final size = MediaQuery.sizeOf(context);
+                            final cacheWidth = (size.width *
+                                        MediaQuery.devicePixelRatioOf(context))
+                                    .round()
+                                    .clamp(540, 1440);
+                            final tp = context.watch<ThemeProvider>();
+                            // 顶栏区域用全屏尺寸 + 全屏 cover 渲染背景图，再
+                            // topCenter 裁剪显示顶部：缩放比例与主体背景完全一致，
+                            // 否则窄区域内单独 cover 会放大错位
+                            return OverflowBox(
+                              alignment: Alignment.topCenter,
+                              minWidth: size.width,
+                              maxWidth: size.width,
+                              minHeight: size.height,
+                              maxHeight: size.height,
+                              child: SizedBox(
+                                width: size.width,
+                                height: size.height,
+                                // 与 AppBackground 同层结构：surface 打底 +
+                                // 模糊（backgroundBlur）+ 透明度（backgroundOpacity），
+                                // 顶栏背景跟随主体模糊/透明度改动
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    ColoredBox(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.surface,
+                                    ),
+                                    Opacity(
+                                      opacity: tp.backgroundOpacity,
+                                      child: ImageFiltered(
+                                        imageFilter: ui.ImageFilter.blur(
+                                          sigmaX: tp.backgroundBlur,
+                                          sigmaY: tp.backgroundBlur,
+                                        ),
+                                        child: Image(
+                                          image: backgroundImageProvider(
+                                            tp,
+                                            cacheWidth: cacheWidth,
                                           ),
-                                          child: Image(
-                                            image: backgroundImageProvider(
-                                              tp,
-                                              cacheWidth: cacheWidth,
-                                            ),
-                                            fit: BoxFit.cover,
-                                            gaplessPlayback: true,
-                                          ),
+                                          fit: BoxFit.cover,
+                                          gaplessPlayback: true,
                                         ),
                                       ),
-                                    ],
-                                  ),
+                                    ),
+                                  ],
                                 ),
-                              );
-                            }),
-                          )
-                        : null,
-                    surfaceTintColor: Colors.transparent,
-                    title: SizedBox(
-                      height: 40,
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          hintText: '搜索歌曲、歌手、专辑',
-                          hintStyle: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: colorScheme.onSurfaceVariant),
-                          prefixIcon: Icon(
-                            Icons.search,
-                            size: 20,
-                            color: colorScheme.onSurfaceVariant,
-                          ),
-                          suffixIcon: _searchController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: Icon(
-                                    Icons.clear,
-                                    size: 18,
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    setState(() {
-                                      _query = '';
-                                      _hasSearched = false;
-                                    });
-                                  },
-                                )
-                              : null,
-                          filled: true,
-                          fillColor: colorScheme.surfaceContainerHighest,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            borderSide: BorderSide.none,
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: AppSpacing.none,
-                          ),
-                          isDense: true,
-                        ),
-                        textInputAction: TextInputAction.search,
-                        onSubmitted: _performSearch,
-                        onChanged: (value) {
-                          setState(() {});
-                          if (value.trim().isNotEmpty) {
-                            context.read<KugouProvider>().getSearchSuggest(
-                              value.trim(),
+                              ),
                             );
-                          }
-                        },
+                          }),
+                        )
+                      : null,
+                  surfaceTintColor: Colors.transparent,
+                  title: SizedBox(
+                    height: 40,
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        hintText: '搜索歌曲、歌手、专辑',
+                        hintStyle: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(color: colorScheme.onSurfaceVariant),
+                        prefixIcon: Icon(
+                          Icons.search,
+                          size: 20,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                        suffixIcon: _searchController.text.isNotEmpty
+                            ? IconButton(
+                                icon: Icon(
+                                  Icons.clear,
+                                  size: 18,
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                                onPressed: () {
+                                  _searchController.clear();
+                                  setState(() {
+                                    _query = '';
+                                    _hasSearched = false;
+                                  });
+                                },
+                              )
+                            : null,
+                        filled: true,
+                        fillColor: colorScheme.surfaceContainerHighest,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          vertical: AppSpacing.none,
+                        ),
+                        isDense: true,
                       ),
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: _performSearch,
+                      onChanged: (value) {
+                        setState(() {});
+                        if (value.trim().isNotEmpty) {
+                          context.read<KugouProvider>().getSearchSuggest(
+                            value.trim(),
+                          );
+                        }
+                      },
                     ),
                   ),
-                  if (_hasSearched)
-                    SliverPersistentHeader(
-                      pinned: true,
-                      delegate: _TabBarDelegate(
-                        tabBar: TabBar(
-                          controller: _tabController,
-                          tabs: const [
-                            Tab(text: '歌曲'),
-                            Tab(text: '专辑'),
-                            Tab(text: '歌手'),
-                            Tab(text: '歌单'),
-                            Tab(text: '云盘'),
-                            Tab(text: '歌词'),
-                          ],
-                        ),
-                        useBackgroundImage: useBackgroundImage,
-                        backgroundOpacity: themeProvider.backgroundOpacity,
-                        backgroundBlur: themeProvider.backgroundBlur,
-                        backgroundImage: tabBarBackgroundImage,
+                ),
+                if (_hasSearched)
+                  SliverPersistentHeader(
+                    pinned: true,
+                    delegate: _TabBarDelegate(
+                      tabBar: TabBar(
+                        controller: _tabController,
+                        tabs: const [
+                          Tab(text: '歌曲'),
+                          Tab(text: '专辑'),
+                          Tab(text: '歌手'),
+                          Tab(text: '歌单'),
+                          Tab(text: '云盘'),
+                          Tab(text: '歌词'),
+                        ],
                       ),
+                      useBackgroundImage: useBackgroundImage,
+                      backgroundOpacity: themeProvider.backgroundOpacity,
+                      backgroundBlur: themeProvider.backgroundBlur,
+                      backgroundImage: tabBarBackgroundImage,
                     ),
-                ];
-              },
-              body: _hasSearched
-                  ? _buildSearchResults()
-                  : _searchController.text.trim().isNotEmpty
-                  ? _buildSuggestions()
-                  : _buildEmptyState(),
-            ),
-      ),
+                  ),
+              ];
+            },
+            body: _hasSearched
+                ? _buildSearchResults()
+                : _searchController.text.trim().isNotEmpty
+                ? _buildSuggestions()
+                : _buildEmptyState(),
+          ),
     );
   }
 

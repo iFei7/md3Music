@@ -21,6 +21,7 @@ import '../../providers/playlist_collection_notifier.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../artist/artist_detail_page.dart';
+import '../library/library_page.dart' show LibraryMusicPanel;
 import '../playlist/playlist_page.dart';
 import '../playlist/playlist_songs_loader.dart';
 import 'import_playlist_page.dart';
@@ -117,7 +118,8 @@ class _FavoritesPageState extends State<FavoritesPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    // 4 tab：歌单 / 专辑 / 歌手 / 本地（本地音乐面板嵌入，见 LibraryMusicPanel）
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(_onTabChanged);
     // 立即探测一次网络 + 每 30 秒兜底探测（dio 拦截器会同步更新
     // KugouApiClient.networkReachable，banner 自动跟随）。
@@ -980,6 +982,11 @@ class _FavoritesPageState extends State<FavoritesPage>
               ),
               Tab(height: 52, icon: Icon(Icons.album, size: 18), text: '专辑'),
               Tab(height: 52, icon: Icon(Icons.person, size: 18), text: '歌手'),
+              Tab(
+                height: 52,
+                icon: Icon(Icons.library_music, size: 18),
+                text: '本地',
+              ),
             ],
           ),
         ),
@@ -1003,6 +1010,7 @@ class _FavoritesPageState extends State<FavoritesPage>
                   _buildPlaylistsTab(),
                   _buildAlbumsTab(),
                   _buildArtistsTab(),
+                  const LibraryMusicPanel(),
                 ],
               ),
             ),

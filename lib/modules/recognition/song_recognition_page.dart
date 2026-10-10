@@ -11,7 +11,6 @@ import 'package:record/record.dart';
 
 import '../../core/utils/app_toast.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
-import '../player/secondary_mini_player.dart';
 import 'floating_recognition_service.dart';
 import 'recognition_utils.dart';
 
@@ -325,9 +324,7 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       ),
       // 悬浮播放器宿主统一承载：二级形态渲染悬浮条，一级 Tab 形态自动退化
       // 交由主脚手架底部常驻 MiniPlayer（复用 isSecondaryRoutePage 路由栈判据）
-      body: SecondaryMiniPlayerHost(
-        child: _buildRecognitionBody(colorScheme, textTheme),
-      ),
+      body: _buildRecognitionBody(colorScheme, textTheme),
     );
   }
 

@@ -11,7 +11,6 @@ import 'core/layout/desktop_shell.dart';
 import 'core/layout/responsive_layout.dart';
 import 'core/layout/ui_density.dart';
 import 'core/services/external_media_intent_service.dart';
-import 'core/services/lyricon_provider_service.dart';
 import 'core/services/startup_auto_play.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/motion_constants.dart';
@@ -35,10 +34,9 @@ import 'modules/user/favorites_page.dart';
 
 import 'modules/player/full_player.dart';
 import 'modules/player/full_player_route.dart';
-import 'modules/player/mini_player.dart';
+import 'modules/player/glass_dock_player.dart';
 import 'modules/player/player_drag_overlay.dart';
 import 'modules/player/car_mode_panel.dart';
-import 'modules/player/secondary_mini_player.dart';
 import 'modules/playlist/playlist_page.dart';
 import 'modules/search/search_page.dart';
 import 'modules/settings/settings_page.dart';
@@ -317,9 +315,6 @@ class _AppViewState extends State<_AppView> {
   @override
   Widget build(BuildContext context) {
     final themeProvider = context.watch<ThemeProvider>();
-    // 当前生效的 fontFamily：system 模式为 null（让 Flutter 走系统字体链），
-    // bundled/custom 模式为对应字体名。加载失败时降级为 null。
-    final fontFamily = themeProvider.effectiveFontFamily;
 
     return MaterialApp(
       title: 'MD3Music',
@@ -327,14 +322,12 @@ class _AppViewState extends State<_AppView> {
       // 同时传 theme 和 darkTheme，并根据 ThemeProvider.effectiveSeedColor
       // 动态生成（支持「莫奈色」开关切换系统主色）。
       // darkTheme 额外接收 useOledBlack 开关，开启时 surface 系列覆盖为纯黑。
-      // fontFamily 透传给 ThemeData，影响所有 Material Widget 的默认字体。
-      // 启用自定义背景图时，通过 _applyBackgroundOverrides 把主要表面改为透明，
+      // fontFamily 传 null（系统字体直通）；启用自定义背景图时，通过
+      // _applyBackgroundOverrides 把主要表面改为透明，
       // 让底层 AppBackgroundLayer 的模糊背景图透出。
       theme: _applyBackgroundOverrides(
         AppTheme.lightThemeFromSeed(
           themeProvider.effectiveSeedColor,
-          fontFamily: fontFamily,
-          emphasized: themeProvider.emphasizedTypographyEnabled,
           labelBehavior: themeProvider.navLabelBehavior,
         ),
         themeProvider,
@@ -343,8 +336,6 @@ class _AppViewState extends State<_AppView> {
         AppTheme.darkThemeFromSeed(
           themeProvider.effectiveSeedColor,
           useOledBlack: themeProvider.useOledBlack,
-          fontFamily: fontFamily,
-          emphasized: themeProvider.emphasizedTypographyEnabled,
           labelBehavior: themeProvider.navLabelBehavior,
         ),
         themeProvider,
@@ -352,11 +343,10 @@ class _AppViewState extends State<_AppView> {
       themeMode: themeProvider.themeMode,
       // 根据主题设置系统导航栏颜色
       builder: (context, child) {
-        // 全局「显示大小」：整个 App 唯一的缩放点，页面侧一律直接写 dp。
-        // 包在最外层，所以背景层、Navigator（全部路由）、Overlay（对话框 /
-        // 底部弹层 / 菜单）、DLNA 与拖拽覆盖层都在作用域内。
+        // 全局「显示大小」已移除，档位恒为默认 1.0（DisplayScaleScope 保留，
+        // 页面侧的 dp 缩放查询路径不变）。
         return DisplayScaleScope(
-          scale: context.watch<ThemeProvider>().displayScale,
+          scale: kDefaultDisplayScale,
           child: SafeInsetsGuard(
             child: _SystemUiUpdater(
               child: Stack(
@@ -585,6 +575,8 @@ class _SystemUiUpdaterState extends State<_SystemUiUpdater>
     // 不再用 SystemUiMode.manual + systemNavigationBarColor：targetSdk 35 起
     // Android 15+ 强制 edge-to-edge 并忽略该颜色，manual 只会造成新旧系统
     // 表现不一致。
+    // 底部留白消费：悬浮玻璃 Dock 经 SafeArea(bottom:true) 自行消费系统
+    // inset，页面内容由 _buildBody 注入的底部预留 padding 让位。
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setSystemUIOverlayStyle(
       SystemUiOverlayStyle(
@@ -616,13 +608,26 @@ class _MainLayoutState extends State<_MainLayout>
   int _selectedIndex = 0;
   int _previousSelectedIndex = 0;
 
+  /// Dock 导航展开态：页面滚动超阈值坍缩（24dp 滞回），切 tab / 点击坍缩
+  /// 圆时展开。用 ValueNotifier 驱动，只让 Dock 的导航部分重建。
+  final ValueNotifier<bool> _navExpanded = ValueNotifier<bool>(true);
+
+  /// 同向滚动累计位移；反向时清零，实现阈值滞回，防抖动。
+  double _navScrollAccum = 0.0;
+  int _navAccumSign = 0;
+
+  /// 触发导航坍缩/展开的累计滚动阈值（dp），与旧悬浮播放器一致。
+  static const double _kNavCollapseThreshold = 24.0;
+
+  /// 竖屏下为 Dock 预留的内容底部空间（Dock 高 52 + 底部留白 12 + 缓冲）。
+  static const double _kDockReservedBottom = 80.0;
+
   /// 桌面外壳句柄：横屏平板布局下由根 [PopScope] 调用其 [DesktopShellState.maybePop]
   /// 先回退当前 Tab 的中央内容栈（见横屏平板重设计计划 4.4 / 六）。
   final GlobalKey<DesktopShellState> _desktopShellKey =
       GlobalKey<DesktopShellState>();
 
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
-  bool _lyriconFailDialogShown = false;
 
 
   /// 二次返回退出：首次返回后置位，3 秒内再次返回触发真正退出。
@@ -649,18 +654,15 @@ class _MainLayoutState extends State<_MainLayout>
       case 'discover':
         page = const DiscoverPage();
         break;
-      case 'library':
-        page = const LibraryPage();
-        break;
       case 'favorites':
         page = const FavoritesPage();
         break;
       case 'search':
-        // Tab 模式：SearchPage 自包悬浮宿主，一级形态自动退化交由 MiniPlayer 承载
+        // Tab 模式：SearchPage 自包悬浮宿主，播放控制由底部玻璃 Dock 承载
         page = const SearchPage();
         break;
       case 'recognition':
-        // Tab 模式：SongRecognitionPage 自包悬浮宿主，一级形态自动退化交由 MiniPlayer 承载
+        // Tab 模式：SongRecognitionPage 自包悬浮宿主，播放控制由底部玻璃 Dock 承载
         page = const SongRecognitionPage();
         break;
       case 'settings':
@@ -685,8 +687,8 @@ class _MainLayoutState extends State<_MainLayout>
         return NavigationDestination(
           icon: _AnimatedTabIcon(
             selected: isSelected,
-            outlinedIcon: Icons.explore_outlined,
-            filledIcon: Icons.explore,
+            outlinedIcon: Icons.home_outlined,
+            filledIcon: Icons.home,
           ),
           label: tab.label,
         );
@@ -764,8 +766,8 @@ class _MainLayoutState extends State<_MainLayout>
     switch (tab.id) {
       case 'discover':
         return NavigationRailDestination(
-          icon: const Icon(Icons.explore_outlined),
-          selectedIcon: const Icon(Icons.explore),
+          icon: const Icon(Icons.home_outlined),
+          selectedIcon: const Icon(Icons.home),
           label: label,
         );
       case 'library':
@@ -817,8 +819,8 @@ class _MainLayoutState extends State<_MainLayout>
     switch (tab.id) {
       case 'discover':
         return NavigationDrawerDestination(
-          icon: const Icon(Icons.explore_outlined),
-          selectedIcon: const Icon(Icons.explore),
+          icon: const Icon(Icons.home_outlined),
+          selectedIcon: const Icon(Icons.home),
           // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
           label: const Text(''),
         );
@@ -926,26 +928,13 @@ class _MainLayoutState extends State<_MainLayout>
     // 载入前默认 false（常规响应式布局），载入/切换后触发整棵子树重建。
     kDesktopModeEnabled.addListener(_onDesktopModeChanged);
     unawaited(_loadDesktopModeEnabled());
-    // 悬浮播放器总开关：启动时载入持久化值（宿主自己订阅，无需本 State 监听）。
-    unawaited(_loadSecondaryPlayerEnabled());
-    // 悬浮播放器停靠位：启动时载入持久化值；未设置过则按设备形态取默认。
-    unawaited(_loadSecondaryPlayerDock());
-    // 监听词幕连接失败（原生侧多次重试后 connect_failed）→ 弹窗提示
-    LyriconProviderService.instance.addListener(_onLyriconStateChanged);
-    // 冷启动前若已连接失败（如后台唤醒时），进入主页后立即补弹一次
-    if (LyriconProviderService.instance.connectFailed) {
-      _lyriconFailDialogShown = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showLyriconConnectFailedDialog();
-      });
-    }
   }
 
   @override
   void dispose() {
     _exitResetTimer?.cancel();
     _exitController.dispose();
-    LyriconProviderService.instance.removeListener(_onLyriconStateChanged);
+    _navExpanded.dispose();
     kDesktopModeEnabled.removeListener(_onDesktopModeChanged);
     shortcutTabRequest.removeListener(_handleShortcutTabRequest);
     externalMediaRequest.removeListener(_handleExternalMediaRequest);
@@ -960,32 +949,6 @@ class _MainLayoutState extends State<_MainLayout>
     // 仅在与当前值不同时赋值，避免无谓通知；赋值会触发 _onDesktopModeChanged。
     if (kDesktopModeEnabled.value != enabled) {
       kDesktopModeEnabled.value = enabled;
-    }
-  }
-
-  /// 启动时从持久化载入悬浮播放器开关，写入全局 [kSecondaryPlayerEnabled]。
-  ///
-  /// 无需监听运行时变更：SecondaryMiniPlayerHost 自己用 ValueListenableBuilder
-  /// 订阅，设置页切换后各页宿主即时重建，不依赖本 State。
-  Future<void> _loadSecondaryPlayerEnabled() async {
-    final enabled = await SettingsRepository().getSecondaryPlayerEnabled();
-    if (!mounted) return;
-    if (kSecondaryPlayerEnabled.value != enabled) {
-      kSecondaryPlayerEnabled.value = enabled;
-    }
-  }
-
-  /// 启动时载入悬浮播放器停靠位；未持久化过则按设备形态取默认
-  /// （手机 center、Pad right，与产品约定一致）。
-  Future<void> _loadSecondaryPlayerDock() async {
-    final raw = await SettingsRepository().getSecondaryPlayerDockRaw();
-    if (!mounted) return;
-    final side = SecondaryPlayerDockSide.tryParse(raw) ??
-        (isPadLayout(context)
-            ? SecondaryPlayerDockSide.right
-            : SecondaryPlayerDockSide.center);
-    if (kSecondaryPlayerDock.value != side) {
-      kSecondaryPlayerDock.value = side;
     }
   }
 
@@ -1059,14 +1022,42 @@ class _MainLayoutState extends State<_MainLayout>
 
   /// 切换到指定 tab（仅对已可见的 tab 生效）。
   /// 与 onDestinationSelected 相同的守卫：FullPlayer 在栈顶时忽略。
+  /// tab 切换同时自动展开 Dock 导航。
   void _switchToTab(String tabId) {
     if (isFullPlayerOnTop) return;
     final index = context.read<TabConfigProvider>().visibleIndexOf(tabId);
     if (index < 0) return;
+    _expandNav();
     setState(() {
       _previousSelectedIndex = _selectedIndex;
       _selectedIndex = index;
     });
+  }
+
+  /// 展开 Dock 导航（切 tab / 快捷方式入口时）。
+  void _expandNav() {
+    if (!_navExpanded.value) _navExpanded.value = true;
+  }
+
+  /// 页面滚动驱动 Dock 导航展开/坍缩（24dp 同向累计滞回，防抖动）。
+  bool _onDockScrollNotification(ScrollNotification n) {
+    if (n is ScrollUpdateNotification) {
+      final d = n.scrollDelta ?? 0.0;
+      if (d == 0) return false;
+      final sign = d > 0 ? 1 : -1;
+      if (sign != _navAccumSign) {
+        _navScrollAccum = 0.0;
+        _navAccumSign = sign;
+      }
+      _navScrollAccum += d;
+      if (_navScrollAccum > _kNavCollapseThreshold && _navExpanded.value) {
+        _navExpanded.value = false; // 向下浏览 → 坍缩
+      } else if (_navScrollAccum < -_kNavCollapseThreshold &&
+          !_navExpanded.value) {
+        _navExpanded.value = true; // 向上浏览 → 展开
+      }
+    }
+    return false;
   }
 
   /// 点击隐藏 tab 对应的桌面快捷方式：以二级页面路由打开对应功能页（不切换主 tab）。
@@ -1078,15 +1069,9 @@ class _MainLayoutState extends State<_MainLayout>
 
   /// tabId → 可作为二级路由打开的页面（复用主 tab 页面，去掉主 tab 专属参数）。
   ///
-  /// 二级路由页统一挂悬浮播放器（[SecondaryMiniPlayerHost]）：
-  /// - 二级路由（`route.isFirst == false`）→ 宿主渲染悬浮播放栏；
-  /// - 页面若自身已包 [SecondaryMiniPlayerHost]（如 DiscoverPage），
-  ///   内层宿主检测到外层作用域后自动退化透传，不会双份；
-  /// - 设置页除外：不挂播放栏，保持纯设置界面。
-  ///
-  /// 一级 tab 形态由 [_MainLayout] 底部常驻 [MiniPlayer] 承载（见 [_buildBody]）；
-  /// 悬浮 vs 常驻的判定复用标题对齐同一路由栈判据（见
-  /// `page_title_alignment.dart` 的 `isSecondaryRoutePage`）。
+  /// 旧版在此挂悬浮播放器宿主（SecondaryMiniPlayerHost，已随玻璃 Dock 改版
+  /// 移除）：播放控制现由底部玻璃 Dock 常驻承载，二级路由页不再单独挂播放条。
+  /// library 路由保留：tab 链已移除，但桌面快捷方式仍经此路由打开本地音乐页。
   Widget _pageForTabAsRoute(String tabId) {
     final Widget page;
     switch (tabId) {
@@ -1114,56 +1099,7 @@ class _MainLayoutState extends State<_MainLayout>
       default:
         page = const SizedBox.shrink();
     }
-    // 设置页不挂播放栏，其余二级路由页统一挂悬浮播放器宿主。
-    if (tabId == 'settings') return page;
-    return SecondaryMiniPlayerHost(child: page);
-  }
-
-  /// 词幕连接失败（原生侧重试耗尽 → connect_failed）回调：弹窗提示用户。
-  /// 只在失败标记置位时触发一次，弹窗期间忽略重复事件。
-  void _onLyriconStateChanged() {
-    if (!LyriconProviderService.instance.connectFailed) return;
-    if (_lyriconFailDialogShown) return;
-    _lyriconFailDialogShown = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _showLyriconConnectFailedDialog();
-    });
-  }
-
-  /// 词幕连接失败提示弹窗（用根 Navigator 的 context，任何页面都能弹出）。
-  Future<void> _showLyriconConnectFailedDialog() async {
-    final ctx = appNavigatorKey.currentContext;
-    if (ctx == null) {
-      _lyriconFailDialogShown = false;
-      return;
-    }
-    await showDialog<void>(
-      context: ctx,
-      barrierDismissible: false,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Text('词幕连接失败'),
-        content: const Text('多次尝试连接词幕服务失败，请确认已开启词幕（Lyricon），检查设备上的词幕服务是否正常运行后重试。'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              LyriconProviderService.instance.connectFailed = false;
-              Navigator.of(dialogCtx).pop();
-            },
-            child: const Text('知道了'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.of(dialogCtx).pop();
-              // 重新启用触发原生侧重新注册，重试逻辑在原生端（AudioPlaybackService）
-              // ignore: discarded_futures
-              LyriconProviderService.instance.setEnabled(true);
-            },
-            child: const Text('重试'),
-          ),
-        ],
-      ),
-    );
-    _lyriconFailDialogShown = false;
+    return page;
   }
 
   void _showLoginRequiredDialog() {
@@ -1222,7 +1158,7 @@ class _MainLayoutState extends State<_MainLayout>
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
-        // 上滑拖拽展开中：返回键先收起覆盖层，回到 MiniPlayer
+        // 上滑拖拽展开中：返回键先收起覆盖层，回到玻璃 Dock / 播放条
         if (playerDragActive.value) {
           playerDragActive.value = false;
           playerExpansion.value = 0.0;
@@ -1275,6 +1211,7 @@ class _MainLayoutState extends State<_MainLayout>
                   ),
                   onDestinationSelected: (index) {
                     if (isFullPlayerOnTop) return;
+                    _expandNav();
                     setState(() {
                       _previousSelectedIndex = _selectedIndex;
                       _selectedIndex = index;
@@ -1286,12 +1223,18 @@ class _MainLayoutState extends State<_MainLayout>
               railDestinations: railDestinations,
               drawerDestinations: drawerDestinations,
               selectedIndex: _selectedIndex,
+              // 竖屏：底部 NavigationBar 由悬浮玻璃 Dock 取代（hideNavigation
+              // 只隐藏原生导航，Dock 在 _buildBody 的 Stack 里渲染）；
+              // 横屏：保留 NavigationRail，Dock 退化为右下播放器圆钮。
+              hideNavigation:
+                  MediaQuery.orientationOf(context) == Orientation.portrait,
               onDestinationSelected: (index) {
                 // 守卫：FullPlayer 在栈顶时（展开进度 > 0.5），忽略 tab 切换，
                 // 避免与 FullPlayer 动画叠加导致状态混乱。
                 if (isFullPlayerOnTop) {
                   return;
                 }
+                _expandNav();
                 setState(() {
                   _previousSelectedIndex = _selectedIndex;
                   _selectedIndex = index;
@@ -1321,10 +1264,10 @@ class _MainLayoutState extends State<_MainLayout>
     final safeIndex = _selectedIndex.clamp(0, visibleTabs.length - 1);
     final currentTab = visibleTabs[safeIndex];
 
-    // 主页（一级页面）与二级页面统一由悬浮播放器承载：整段 body 包进宿主后，
-    // 开关开启时底部常驻 MiniPlayer 隐藏（下方 builder），避免两套播放器并存。
-    return SecondaryMiniPlayerHost(
-      child: Column(
+    // 页面内容：滚动通知驱动 Dock 导航展开/坍缩；竖屏为 Dock 预留底部空间
+    //（注入 MediaQuery 底部 padding，列表 / SafeArea 自动让位，无需逐页改）。
+    final mq = MediaQuery.of(context);
+    Widget content = Column(
       children: [
         // 本地 API 服务器启动失败提示：在线内容全部不可用，但页面本身仍能渲染
         // 成空列表/转圈，用户无从判断原因。这里把状态显式摆到所有 tab 顶部。
@@ -1391,16 +1334,46 @@ class _MainLayoutState extends State<_MainLayout>
             ),
           ),
         ),
-        ValueListenableBuilder<bool>(
-          valueListenable: kSecondaryPlayerEnabled,
-          builder: (context, playerEnabled, _) => playerEnabled
-              // 悬浮播放器接管：主页同样由悬浮条承载（页面主体已被
-              // SecondaryMiniPlayerHost 包裹），隐藏底部常驻条避免两套并存。
-              ? const SizedBox.shrink()
-              : const MiniPlayer(),
+      ],
+    );
+
+    if (!isLandscape) {
+      content = MediaQuery(
+        data: mq.copyWith(
+          padding: mq.padding.copyWith(
+            bottom: mq.padding.bottom + _kDockReservedBottom,
+          ),
+        ),
+        child: content,
+      );
+    }
+
+    // 悬浮玻璃 Dock：竖屏底部居中（导航胶囊 + 播放器圆钮）；
+    // 横屏（NavigationRail）退化为右下播放器圆钮，导航交给侧栏。
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: NotificationListener<ScrollNotification>(
+            onNotification: _onDockScrollNotification,
+            child: content,
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: GlassDockPlayer(
+            key: const ValueKey('glass_dock'),
+            selectedTabId: currentTab.id,
+            onSelectTab: _switchToTab,
+            navExpanded: _navExpanded,
+            onNavExpandedChanged: (expanded) {
+              if (expanded) _expandNav();
+            },
+            playerOnly: isLandscape,
+          ),
         ),
       ],
-      ),
     );
   }
 

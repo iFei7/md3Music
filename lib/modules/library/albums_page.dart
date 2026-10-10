@@ -11,7 +11,6 @@ import '../../providers/player_provider.dart';
 import '../../widgets/album_card.dart';
 import '../../widgets/app_animation.dart';
 import '../../widgets/song_list_item.dart';
-import '../player/secondary_mini_player.dart';
 
 class AlbumsPage extends StatefulWidget {
   final List<Album> albums;
@@ -167,60 +166,58 @@ class AlbumSongsPage extends StatelessWidget {
               ),
         ),
       ),
-      body: SecondaryMiniPlayerHost(
-        child: songs.isEmpty
-          ? Center(
-              child: Text(
-                '此专辑暂无歌曲',
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-            )
-          : Column(
-              children: [
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(
-                    children: [
-                      Text(
-                        '${songs.length} 首歌曲',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color:
-                                  Theme.of(context).colorScheme.onSurfaceVariant,
-                            ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.shuffle),
-                        tooltip: '随机播放',
-                        onPressed: () {
-                          final shuffled = List<Song>.from(songs)..shuffle();
-                          context.read<PlayerProvider>().playPlaylist(shuffled, 0);
-                        },
-                      ),
-                    ],
+      body: songs.isEmpty
+        ? Center(
+            child: Text(
+              '此专辑暂无歌曲',
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
-                ),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: songs.length,
-                    itemBuilder: (context, index) {
-                      return SongListItem(
-                        song: songs[index],
-                        onTap: () {
-                          context
-                              .read<PlayerProvider>()
-                              .playPlaylist(songs, index);
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ],
             ),
-      ),
+          )
+        : Column(
+            children: [
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    Text(
+                      '${songs.length} 首歌曲',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.shuffle),
+                      tooltip: '随机播放',
+                      onPressed: () {
+                        final shuffled = List<Song>.from(songs)..shuffle();
+                        context.read<PlayerProvider>().playPlaylist(shuffled, 0);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: songs.length,
+                  itemBuilder: (context, index) {
+                    return SongListItem(
+                      song: songs[index],
+                      onTap: () {
+                        context
+                            .read<PlayerProvider>()
+                            .playPlaylist(songs, index);
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
     );
   }
 }

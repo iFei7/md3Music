@@ -16,7 +16,6 @@ import '../../providers/player_provider.dart';
 import '../../services/kugou_api/cloud_song_mapper.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../widgets/song_list_item.dart';
-import '../player/secondary_mini_player.dart';
 
 class CloudMusicPage extends StatefulWidget {
   const CloudMusicPage({super.key});
@@ -562,61 +561,59 @@ class _CloudMusicPageState extends State<CloudMusicPage> {
                 ),
               ],
       ),
-      body: SecondaryMiniPlayerHost(
-        child: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : _error != null
-              ? _buildError()
-              : _songs.isEmpty
-                  ? Md3PullToRefresh(
-                      onRefresh: () => _loadCloudSongs(showLoading: false),
-                      child: ListView(
-                        children: [_buildEmpty()],
-                      ),
-                    )
-                  : Md3PullToRefresh(
-                      onRefresh: () => _loadCloudSongs(showLoading: false),
-                      child: Column(
-                        children: [
-                          if (!_isSelectMode) _buildHeader(),
-                          if (!_isSelectMode) _buildSearchBar(),
-                          Expanded(
-                            child: _filteredSongs.isEmpty
-                                ? _buildNoMatch()
-                                : ListView.builder(
-                                    itemCount: _filteredSongs.length,
-                                    itemBuilder: (context, index) {
-                                      final song = _filteredSongs[index];
-                                      return SongListItem(
-                                        song: song,
-                                        onTap: () {
-                                          context
-                                              .read<PlayerProvider>()
-                                              .playCloudPlaylist(
-                                                _filteredSongs,
-                                                index,
-                                              );
-                                        },
-                                        onMoreTap: _isSelectMode
-                                            ? null
-                                            : () => _showSongMoreMenu(song),
-                                        isSelectMode: _isSelectMode,
-                                        isSelected:
-                                            _selectedIndices.contains(index),
-                                        onSelectToggle: () =>
-                                            _toggleSelect(index),
-                                        onLongPress: _isSelectMode
-                                            ? _toggleSelectAll
-                                            : null,
-                                      );
-                                    },
-                                  ),
-                          ),
-                          if (_isSelectMode) _buildSelectActionBar(),
-                        ],
-                      ),
+      body: _isLoading
+        ? const Center(child: M3ELoadingIndicator())
+        : _error != null
+            ? _buildError()
+            : _songs.isEmpty
+                ? Md3PullToRefresh(
+                    onRefresh: () => _loadCloudSongs(showLoading: false),
+                    child: ListView(
+                      children: [_buildEmpty()],
                     ),
-      ),
+                  )
+                : Md3PullToRefresh(
+                    onRefresh: () => _loadCloudSongs(showLoading: false),
+                    child: Column(
+                      children: [
+                        if (!_isSelectMode) _buildHeader(),
+                        if (!_isSelectMode) _buildSearchBar(),
+                        Expanded(
+                          child: _filteredSongs.isEmpty
+                              ? _buildNoMatch()
+                              : ListView.builder(
+                                  itemCount: _filteredSongs.length,
+                                  itemBuilder: (context, index) {
+                                    final song = _filteredSongs[index];
+                                    return SongListItem(
+                                      song: song,
+                                      onTap: () {
+                                        context
+                                            .read<PlayerProvider>()
+                                            .playCloudPlaylist(
+                                              _filteredSongs,
+                                              index,
+                                            );
+                                      },
+                                      onMoreTap: _isSelectMode
+                                          ? null
+                                          : () => _showSongMoreMenu(song),
+                                      isSelectMode: _isSelectMode,
+                                      isSelected:
+                                          _selectedIndices.contains(index),
+                                      onSelectToggle: () =>
+                                          _toggleSelect(index),
+                                      onLongPress: _isSelectMode
+                                          ? _toggleSelectAll
+                                          : null,
+                                    );
+                                  },
+                                ),
+                        ),
+                        if (_isSelectMode) _buildSelectActionBar(),
+                      ],
+                    ),
+                  ),
     );
   }
 
