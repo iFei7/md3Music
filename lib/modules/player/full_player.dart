@@ -1157,6 +1157,8 @@ class _FullPlayerState extends State<FullPlayer>
                 iconSize: iconSize,
                 backgroundColor: colorScheme.surfaceContainerHighest,
                 iconColor: colorScheme.onSurfaceVariant,
+                // 全屏大封面（~300dp）按 512px 解码，控制 RGBA 内存
+                decodeCap: 512,
               ),
             ),
           ),

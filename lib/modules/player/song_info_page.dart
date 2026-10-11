@@ -203,7 +203,12 @@ class _SongInfoPageState extends State<SongInfoPage> {
               width: 64,
               height: 64,
               child: artUrl != null
-                  ? PlayerArtworkImage(artworkUri: artUrl, isFill: true)
+                  ? PlayerArtworkImage(
+                      artworkUri: artUrl,
+                      isFill: true,
+                      // 64dp 封面按 192px 解码（3x 屏保真），避免全尺寸解码
+                      decodeCap: 192,
+                    )
                   : Container(
                       color: colorScheme.surfaceContainerHighest,
                       child: const Icon(Icons.music_note, size: 28),

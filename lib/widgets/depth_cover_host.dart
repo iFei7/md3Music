@@ -326,6 +326,8 @@ class _DepthCoverHostState extends State<DepthCoverHost>
         iconSize: widget.iconSize,
         backgroundColor: widget.backgroundColor,
         iconColor: widget.iconColor,
+        // DepthCoverHost 仅用于全屏大封面（~300dp），按 512px 解码
+        decodeCap: 512,
       );
     }
     if (!_ringVisible || _ringCtrl == null) return cover;
@@ -358,6 +360,8 @@ class _DepthCoverHostState extends State<DepthCoverHost>
         iconSize: widget.iconSize,
         backgroundColor: widget.backgroundColor,
         iconColor: widget.iconColor,
+        // DepthCoverHost 仅用于全屏大封面（~300dp），按 512px 解码
+        decodeCap: 512,
       );
     }
     return _buildCover();

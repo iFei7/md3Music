@@ -37,6 +37,18 @@ class PlayerArtworkImage extends StatefulWidget {
   /// icon 颜色
   final Color? iconColor;
 
+  /// 解码上限像素边长（null 时行为完全不变，向后兼容）。
+  ///
+  /// 设置后三条解码路径均按像素口径约束解码尺寸：
+  /// - [Image.memory]/[Image.file] → `cacheWidth`
+  /// - [CachedNetworkImage] → `memCacheWidth`
+  ///
+  /// 仅约束宽度边，解码器按原图宽高比等比缩放（专辑封面多为正方形，
+  /// 宽度约束即等效约束全边）。解码上限应取消费点物理像素的下一档
+  /// 2 的幂（如 40dp 圆钮 → 128），可把单张封面的解码内存从
+  /// 1000×1000（RGBA 约 4MB）降到 128×128（约 64KB）。
+  final int? decodeCap;
+
   const PlayerArtworkImage({
     super.key,
     required this.artworkUri,
@@ -46,6 +58,7 @@ class PlayerArtworkImage extends StatefulWidget {
     this.iconSize,
     this.backgroundColor,
     this.iconColor,
+    this.decodeCap,
   });
 
   @override
@@ -105,6 +118,7 @@ class _PlayerArtworkImageState extends State<PlayerArtworkImage> {
       if (_embeddedBytes != null) {
         return Image.memory(
           _embeddedBytes!,
+          cacheWidth: widget.decodeCap,
           width: widget.isFill ? double.infinity : null,
           height: widget.isFill ? double.infinity : null,
           fit: widget.fit,
@@ -122,6 +136,7 @@ class _PlayerArtworkImageState extends State<PlayerArtworkImage> {
       if (_embeddedBytes != null) {
         return Image.memory(
           _embeddedBytes!,
+          cacheWidth: widget.decodeCap,
           width: widget.isFill ? double.infinity : null,
           height: widget.isFill ? double.infinity : null,
           fit: widget.fit,
@@ -136,6 +151,7 @@ class _PlayerArtworkImageState extends State<PlayerArtworkImage> {
       if (file.existsSync()) {
         return Image.file(
           file,
+          cacheWidth: widget.decodeCap,
           width: widget.isFill ? double.infinity : null,
           height: widget.isFill ? double.infinity : null,
           fit: widget.fit,
@@ -147,7 +163,11 @@ class _PlayerArtworkImageState extends State<PlayerArtworkImage> {
         _loadEmbedded(widget.fallbackFilePath!);
       }
       if (_embeddedBytes != null) {
-        return Image.memory(_embeddedBytes!, fit: widget.fit);
+        return Image.memory(
+          _embeddedBytes!,
+          cacheWidth: widget.decodeCap,
+          fit: widget.fit,
+        );
       }
       return _placeholder(bg, icon, iSize);
     }
@@ -162,6 +182,7 @@ class _PlayerArtworkImageState extends State<PlayerArtworkImage> {
         if (_embeddedBytes != null) {
           return Image.memory(
             _embeddedBytes!,
+            cacheWidth: widget.decodeCap,
             width: widget.isFill ? double.infinity : null,
             height: widget.isFill ? double.infinity : null,
             fit: widget.fit,
@@ -176,6 +197,7 @@ class _PlayerArtworkImageState extends State<PlayerArtworkImage> {
     if (uri.startsWith('http://') || uri.startsWith('https://')) {
       return CachedNetworkImage(
         imageUrl: uri,
+        memCacheWidth: widget.decodeCap,
         width: widget.isFill ? double.infinity : null,
         height: widget.isFill ? double.infinity : null,
         fit: widget.fit,

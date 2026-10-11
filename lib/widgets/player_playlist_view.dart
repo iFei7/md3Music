@@ -569,6 +569,8 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
           fit: BoxFit.cover,
           backgroundColor: colors.artworkBg,
           iconColor: colors.artworkIcon,
+          // 44dp 列表行封面按 128px 解码，长列表显著降低解码内存
+          decodeCap: 128,
         ),
       ),
     );

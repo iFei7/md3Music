@@ -80,6 +80,12 @@ Future<void> _main() async {
 /// 私有入口在此基础上安装扩展钩子后 runApp。
 Future<(bool, bool, bool)> runBootstrap() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // lite 低内存目标：收紧全局图像缓存上限（默认 1000 张 / 100MiB 偏大）。
+  // 需在 ensureInitialized 之后（binding 就绪）设置；配合 PlayerArtworkImage
+  // 的 decodeCap 解码上限，缓存条目本身已是小尺寸解码图，200 张 / 48MB
+  // 对音乐 App 的封面量级绰绰有余，超限按 LRU 淘汰。
+  PaintingBinding.instance.imageCache.maximumSize = 200;
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 48 << 20; // 48 MiB
   final startupClock = Stopwatch()..start();
   void markStartup(String phase) {
     final elapsedMs = startupClock.elapsedMilliseconds;
