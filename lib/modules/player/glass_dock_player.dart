@@ -5,14 +5,17 @@ import 'package:provider/provider.dart';
 import '../../core/services/player_frame_driver.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../core/widgets/liquid_glass_container.dart';
-import '../../providers/car_mode_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/tab_config_provider.dart';
 import '../../widgets/player_artwork_image.dart';
 import '../../widgets/playing_spectrum_indicator.dart';
 import 'full_player_route.dart';
 
-/// Dock 导航项定义（lite 版固定三项：主页 / 收藏 / 我的）。
+/// Dock 导航项图标 / 回退文案定义（按 tab id 查表）。
+///
+/// 图标映射与 app.dart `_buildDestination`、home_tab_manager.dart
+/// `homeTabIcon` 保持一致；label 以 [TabConfigProvider] 为准，
+/// [fallbackLabel] 仅在未知 tab id 时兜底。
 class _DockTab {
   final String id;
   final IconData outlined;
@@ -22,18 +25,31 @@ class _DockTab {
   const _DockTab(this.id, this.outlined, this.filled, this.fallbackLabel);
 }
 
-const List<_DockTab> _kDockTabs = [
-  _DockTab('discover', Icons.home_outlined, Icons.home, '主页'),
-  _DockTab('favorites', Icons.favorite_outline, Icons.favorite, '收藏'),
-  _DockTab('user', Icons.person_outlined, Icons.person, '我的'),
-];
+const Map<String, _DockTab> _kDockTabById = {
+  'discover': _DockTab('discover', Icons.home_outlined, Icons.home, '主页'),
+  'favorites': _DockTab('favorites', Icons.favorite_outline, Icons.favorite, '收藏'),
+  'user': _DockTab('user', Icons.person_outlined, Icons.person, '我的'),
+  'search': _DockTab('search', Icons.search_outlined, Icons.search, '搜索'),
+  'recognition': _DockTab('recognition', Icons.mic_none_outlined, Icons.mic, '听歌识曲'),
+  'settings': _DockTab('settings', Icons.settings_outlined, Icons.settings, '设置'),
+};
+
+_DockTab _dockTabFor(String id) => _kDockTabById[id] ??
+    const _DockTab('unknown', Icons.circle_outlined, Icons.circle, '标签页');
 
 /// 底部悬浮玻璃 Dock：导航胶囊 + 常驻播放器圆钮。
 ///
 /// 状态机（全部收敛型动画，无 repeat 连续动画）：
-/// - **导航**：展开（玻璃胶囊三导航项）↔ 坍缩（单个 home 玻璃圆）。
+/// - **导航**：展开（玻璃胶囊导航项）↔ 坍缩（单个当前 tab 玻璃圆）。
+///   导航项完全跟随 [TabConfigProvider.visibleTabs]（顺序 + 显隐 + label，
+///   即设置→主页管理的配置实时生效，低频 watch 不进 positionNotifier
+///   高频通道）；图标按 id 查 `_kDockTabById`（与 app.dart 一致）；
+///   坍缩圆显示当前选中且可见 tab 的图标（选中 filled / 回退 outlined），
+///   selectedTabId 不在 visibleTabs 时回退第一个可见 tab；
 ///   展开态由外部（`_MainLayout`）持有并通过 [navExpanded] 注入——
 ///   页面滚动超过滞回阈值坍缩、切 tab / 点坍缩圆展开；
+///   项宽随项数自适应（≤4 项 44dp，更多时按 320dp 最小屏预算压缩，
+///   见 `_buildNavPill`），保证「导航胶囊 + 播放器球」组合不超宽；
 /// - **播放器圆钮**：点击在「圆钮 ↔ 控制小胶囊」间收敛形变（AnimatedSize）；
 ///   圆钮外周进度环订阅 [PlayerProvider.positionNotifier]（~200ms 高频通道，
 ///   禁 context.watch），中央为当前歌曲的**圆形封面缩略图**：播放中叠加
@@ -44,11 +60,7 @@ const List<_DockTab> _kDockTabs = [
 ///   右侧悬浮播放器，位置恒定不互换；互斥展开（导航胶囊与播放器胶囊
 ///   同时最多一个展开，另一个坍缩为球）；已移除向上按钮——点封面 / 歌名
 ///   进入完整播放页（胶囊内左侧含 36dp 圆形封面缩略图，同源可点击）；
-/// - **隐藏**：完整播放页展开（playerExpansion > 0.5）或车机模式时整体移除，
-///   不产帧。
-///
-/// 宽屏（NavigationRail 布局）传 [playerOnly] = true：只渲染播放器圆钮，
-/// 浮于右下，导航交给侧栏。
+/// - **隐藏**：完整播放页展开（playerExpansion > 0.5）时整体移除，不产帧。
 class GlassDockPlayer extends StatefulWidget {
   const GlassDockPlayer({
     super.key,
@@ -56,10 +68,9 @@ class GlassDockPlayer extends StatefulWidget {
     required this.onSelectTab,
     required this.navExpanded,
     required this.onNavExpandedChanged,
-    this.playerOnly = false,
   });
 
-  /// 当前选中的 tab id（discover / favorites / user 等）。
+  /// 当前选中的 tab id（discover / favorites / user / search 等）。
   final String selectedTabId;
 
   /// 点击导航项回调（tabId）。
@@ -68,11 +79,8 @@ class GlassDockPlayer extends StatefulWidget {
   /// 导航展开态（由 _MainLayout 持有的 ValueNotifier，滚动滞回驱动）。
   final ValueListenable<bool> navExpanded;
 
-  /// 用户点击坍缩态 home 圆请求展开导航。
+  /// 用户点击坍缩态导航圆请求展开导航。
   final ValueChanged<bool> onNavExpandedChanged;
-
-  /// 宽屏模式：只渲染播放器圆钮（浮于右下）。
-  final bool playerOnly;
 
   @override
   State<GlassDockPlayer> createState() => _GlassDockPlayerState();
@@ -137,15 +145,14 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
 
   @override
   Widget build(BuildContext context) {
-    // 车机模式：播放器常驻侧边面板，任何界面都不显示 Dock（沿用既有规则）。
-    if (context.watch<CarModeProvider>().enabled) {
-      return const SizedBox.shrink();
-    }
-
     final player = context.watch<PlayerProvider>();
     final song = player.currentSong;
     final isPlaying = player.isPlaying;
     final duration = player.duration;
+
+    // 主页管理配置（显隐/排序/label）：低频 watch——设置页改动即时反映
+    // 到 Dock；不进 positionNotifier 高频通道。
+    final tabConfig = context.watch<TabConfigProvider>();
 
     // 完整播放页展开时整体隐藏（>0.5 直接移除，不产帧）。
     return ValueListenableBuilder<double>(
@@ -159,47 +166,39 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
       },
       child: SafeArea(
         top: false,
-        child: widget.playerOnly
-            ? Align(
-                alignment: Alignment.bottomRight,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(0, 0, 16, 16),
-                  child: _buildPlayerButton(player, song, isPlaying, duration),
-                ),
-              )
-            : Align(
-                alignment: Alignment.bottomCenter,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  // 宽度防御：播放器按钮用 Flexible（loose）吃剩余宽度，
-                  // 极限屏宽下歌名区先压缩，整体任何状态不超屏宽。
-                  // 布局恒定：左 = 悬浮导航、右 = 悬浮播放器；互斥展开
-                  // 保证「导航胶囊 + 播放器球」「导航球 + 播放器胶囊」
-                  // 两种组合在 320dp 屏均不超宽。
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildNavPart(),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: _buildPlayerButton(
-                          player,
-                          song,
-                          isPlaying,
-                          duration,
-                        ),
-                      ),
-                    ],
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            // 宽度防御：播放器按钮用 Flexible（loose）吃剩余宽度，
+            // 极限屏宽下歌名区先压缩，整体任何状态不超屏宽。
+            // 布局恒定：左 = 悬浮导航、右 = 悬浮播放器；互斥展开
+            // 保证「导航胶囊 + 播放器球」「导航球 + 播放器胶囊」
+            // 两种组合在 320dp 屏均不超宽。
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildNavPart(tabConfig),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: _buildPlayerButton(
+                    player,
+                    song,
+                    isPlaying,
+                    duration,
                   ),
                 ),
-              ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
 
   // —— 导航部分 ——
 
-  Widget _buildNavPart() {
+  Widget _buildNavPart(TabConfigProvider tabConfig) {
     return ValueListenableBuilder<bool>(
       valueListenable: widget.navExpanded,
       builder: (context, expanded, _) => AnimatedSize(
@@ -208,30 +207,42 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
         // 左缘锚定：导航恒在行首（屏左），坍缩 ↔ 展开时左缘不动、
         // 向右生长，不会顶出屏幕左缘。
         alignment: Alignment.centerLeft,
-        child: expanded ? _buildNavPill() : _buildNavCollapsed(),
+        child: expanded
+            ? _buildNavPill(tabConfig)
+            : _buildNavCollapsed(tabConfig),
       ),
     );
   }
 
-  /// 展开态：玻璃胶囊内的导航项。
-  Widget _buildNavPill() {
-    final tabConfig = context.read<TabConfigProvider>();
+  /// 展开态：玻璃胶囊内的导航项（渲染 [TabConfigProvider.visibleTabs]，
+  /// 顺序 / 显隐 / label 全跟随主页管理配置）。
+  ///
+  /// 项宽自适应（溢出复核，320dp 最小屏）：可用宽 320 − 左右外边距 32
+  /// = 288；预留播放器球 52 + 间距 8 → 导航胶囊预算 228；再扣胶囊水平
+  /// padding 8 → 导航项总预算 220。导航项本身 icon-only（44×44 图标块 +
+  /// 左右各 1dp 外边距 = 46dp 足额占用）：
+  /// - ≤4 项：4×46=184 ≤ 220，项宽足额 44dp；
+  /// - 5 项：项宽 42（footprint 44）→ 5×44+8=228，228+8+52=288 恰好满宽；
+  /// - 6 项：项宽 34（footprint 36）→ 6×36+8=224，224+8+52=284 < 288。
+  /// 宽于 320dp 的屏幕项宽不受影响（仍 44dp）。
+  Widget _buildNavPill(TabConfigProvider tabConfig) {
+    final tabs = tabConfig.visibleTabs;
+    final count = tabs.length;
+    final itemWidth = count <= 4
+        ? 44.0
+        : ((220.0 / count) - 2).floorToDouble().clamp(28.0, 44.0);
     return LiquidGlassContainer(
       shape: GlassShape.pill,
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (final tab in _kDockTabs)
+          for (final tab in tabs)
             _DockNavItem(
-              tab: tab,
-              label: tabConfig
-                      .allTabs
-                      .where((t) => t.id == tab.id)
-                      .firstOrNull
-                      ?.label ??
-                  tab.fallbackLabel,
+              tab: _dockTabFor(tab.id),
+              label: tab.label,
               selected: widget.selectedTabId == tab.id,
+              width: itemWidth,
               onTap: () {
                 AppHaptics.tick();
                 widget.onSelectTab(tab.id);
@@ -242,8 +253,20 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     );
   }
 
-  /// 坍缩态：单个 home 玻璃圆（点击展开导航）。
-  Widget _buildNavCollapsed() {
+  /// 坍缩态：单个当前 tab 玻璃圆（点击展开导航，展开逻辑不变）。
+  ///
+  /// 显示「当前选中且可见」的 tab 图标（选中 filled + primary）；
+  /// selectedTabId 不在 visibleTabs 中时回退第一个可见 tab（outlined +
+  /// onSurfaceVariant，该 tab 并非选中态）。
+  Widget _buildNavCollapsed(TabConfigProvider tabConfig) {
+    final visible = tabConfig.visibleTabs;
+    final selectedVisible = visible.any((t) => t.id == widget.selectedTabId);
+    final dockTab = _dockTabFor(
+      selectedVisible
+          ? widget.selectedTabId
+          : (visible.firstOrNull?.id ?? 'discover'),
+    );
+    final cs = Theme.of(context).colorScheme;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
@@ -256,11 +279,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
           width: _kButtonSize,
           height: _kButtonSize,
           child: Icon(
-            widget.selectedTabId == 'discover' ? Icons.home : Icons.home_outlined,
+            selectedVisible ? dockTab.filled : dockTab.outlined,
             size: 24,
-            color: widget.selectedTabId == 'discover'
-                ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.onSurfaceVariant,
+            color: selectedVisible ? cs.primary : cs.onSurfaceVariant,
           ),
         ),
       ),
@@ -506,19 +527,25 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   }
 }
 
-/// Dock 导航项：激活时 filled 图标 + secondaryContainer 圆形底
-///（AnimatedContainer 收敛动画）。
+/// Dock 导航项：icon-only（label 仅用于无障碍朗读），激活时 filled 图标 +
+/// secondaryContainer 圆形底（AnimatedContainer 收敛动画）。
+/// [width] 随可见 tab 数自适应（见 `_buildNavPill` 的溢出复核）。
 class _DockNavItem extends StatelessWidget {
   const _DockNavItem({
     required this.tab,
     required this.label,
     required this.selected,
+    required this.width,
     required this.onTap,
   });
 
   final _DockTab tab;
   final String label;
   final bool selected;
+
+  /// 图标块宽度（dp），左右各另有 1dp 外边距。
+  final double width;
+
   final VoidCallback onTap;
 
   @override
@@ -534,7 +561,7 @@ class _DockNavItem extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
-          width: 44,
+          width: width,
           height: 44,
           margin: const EdgeInsets.symmetric(horizontal: 1),
           decoration: selected
