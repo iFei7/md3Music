@@ -1387,20 +1387,50 @@ class _FullPlayerState extends State<FullPlayer>
     double iconSize = 48.0,
     required bool isPlaying,
   }) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 静态封面（原有淡入淡出逻辑保持不变）
-          _buildCrossfadeArtwork(
-            currentSong.artworkUri,
-            colorScheme,
-            iconSize: iconSize,
-            fallbackFilePath: currentSong.localPath,
+    // 复刻 Sonify ShadowImage：大封面静态阴影 + 1px 白 10% 内描边。
+    // 阴影挂在最外层 DecoratedBox 一次（交叉淡化的双层封面都在内层 ClipRRect
+    // 之下，不会重复投影）；描边走 foregroundDecoration 画在封面之上，
+    // 否则会被不透明封面盖住。全部为静态绘制，无动画、无滤镜层。
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 封面恒为 AspectRatio 1 正方形，边长取有界宽度；offset 随尺寸缩放
+        // （Sonify: offset dy = 0.08 × h，blur 24dp 等效 blurRadius 24）。
+        final side = constraints.hasBoundedWidth ? constraints.maxWidth : 0.0;
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                // 封面不透明（PlayerArtworkImage 有 surfaceContainerHighest 底色），
+                // 阴影才能在浅色页面上显影。
+                color: Colors.black.withValues(alpha: 0.23),
+                blurRadius: 24,
+                offset: Offset(0, side * 0.08),
+              ),
+            ],
           ),
-        ],
-      ),
+          foregroundDecoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            // 内描边：沿 ClipRRect 同圆角，白色 10% 勾勒轮廓（简化 Sonify 两道 outline）。
+            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // 静态封面（原有淡入淡出逻辑保持不变）
+                _buildCrossfadeArtwork(
+                  currentSong.artworkUri,
+                  colorScheme,
+                  iconSize: iconSize,
+                  fallbackFilePath: currentSong.localPath,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1676,9 +1706,7 @@ class _FullPlayerState extends State<FullPlayer>
                 playerProvider.shuffleEnabled,
                 playerProvider.loopMode,
               ),
-              color: _isDefaultPlayMode(playerProvider)
-                  ? colorScheme.onSurfaceVariant
-                  : colorScheme.primary,
+              active: !_isDefaultPlayMode(playerProvider),
               onTap: () {
                 AppHaptics.tick();
                 playerProvider.cyclePlayMode();
@@ -1715,9 +1743,7 @@ class _FullPlayerState extends State<FullPlayer>
             alignment: Alignment.centerRight,
             child: _buildEdgeAction(
               icon: isFavorited ? Icons.favorite : Icons.favorite_border,
-              color: isFavorited
-                  ? colorScheme.error
-                  : colorScheme.onSurfaceVariant,
+              active: isFavorited,
               onTap: song == null
                   ? null
                   : () {
@@ -1745,14 +1771,20 @@ class _FullPlayerState extends State<FullPlayer>
     );
   }
 
-  /// 传输行两端的次要动作：48dp 圆形触达区，无容器背景。
+  /// 传输行两端的次要动作：48dp 圆形触达区。
+  /// 复刻 Sonify 激活态胶囊：[active]（播放模式非默认 / 已收藏）时叠加
+  /// 40dp secondaryContainer 圆底 + onSecondaryContainer 图标；
+  /// 未激活无底、onSurfaceVariant 图标。
+  /// TweenAnimationBuilder 单值 t∈[0,1] 驱动底色与图标色同时插值，
+  /// 220ms easeOutCubic 一次性收敛，无 repeat 循环；重绘限于本 48dp 圆内。
   /// 不挂 Tooltip：长按只执行长按动作（如收藏长按开 AI 推荐），不弹按钮说明。
   Widget _buildEdgeAction({
     required IconData icon,
-    required Color color,
+    required bool active,
     VoidCallback? onTap,
     VoidCallback? onLongPress,
   }) {
+    final cs = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -1760,7 +1792,36 @@ class _FullPlayerState extends State<FullPlayer>
       child: SizedBox(
         width: 48,
         height: 48,
-        child: Center(child: Icon(icon, size: 24, color: color)),
+        child: Center(
+          child: TweenAnimationBuilder<double>(
+            // begin 与 end 同步初值：首次构建直接落在当前激活态，不播入场动画；
+            // 之后 active 翻转时框架自动从当前值向新 end 收敛。
+            tween: Tween(begin: active ? 1.0 : 0.0, end: active ? 1.0 : 0.0),
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            builder: (context, t, _) {
+              return Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Color.lerp(Colors.transparent, cs.secondaryContainer, t),
+                ),
+                child: Center(
+                  child: Icon(
+                    icon,
+                    size: 24,
+                    color: Color.lerp(
+                      cs.onSurfaceVariant,
+                      cs.onSecondaryContainer,
+                      t,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
       ),
     );
   }
