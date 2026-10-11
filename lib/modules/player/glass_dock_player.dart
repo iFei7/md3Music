@@ -46,6 +46,8 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 ///   · 点坍缩导航圆 / 切 tab / 播放器工具收起 → 导航展开；
 ///   · 播放器工具展开（点播放器圆钮）→ 导航坍缩让位；
 ///   · 导航展开 → 播放器工具收起（listener 双向闭环，无双坍缩驻留）。
+///   合法组合仅 [导航胶囊 + 播放器球] 与 [导航球 + 播放器胶囊] 两种；
+///   现为纯点击驱动（点导航坍缩圆 / 切 tab / 点播放器圆钮），无滚动驱动。
 /// - **导航**：展开（玻璃胶囊导航项）↔ 坍缩（单个当前 tab 玻璃圆）。
 ///   导航项完全跟随 [TabConfigProvider.visibleTabs]（顺序 + 显隐 + label，
 ///   即设置→主页管理的配置实时生效，低频 watch 不进 positionNotifier
@@ -142,6 +144,16 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     super.dispose();
   }
 
+  /// 反向闭环：导航展开 ⇒ 播放器工具强制收起（维持单展开不变量）。
+  /// 两种驱动路径的命中情况：
+  /// - 点播放器圆钮展开（[_toggleControls] 置 _controlsExpanded = true 后
+  ///   回调 onNavExpandedChanged(false)）：_collapseNav() 使 nav 变为
+  ///   false，本 listener 触发时 navExpanded.value 为 false，条件不成立，
+  ///   走 no-op，播放器胶囊得以保留 ✓；
+  /// - 点导航坍缩圆展开导航（onNavExpandedChanged(true)）：nav 变为 true，
+  ///   若播放器胶囊仍展开则强制收起，恢复「恰好一个展开」——这是期望
+  ///   行为，不可删除。
+  /// 两条路径均不会反向再改导航值，故无乒乓竞态。
   void _onNavExpandedChanged() {
     if (widget.navExpanded.value && _controlsExpanded) {
       setState(() => _controlsExpanded = false);
@@ -157,8 +169,11 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   ///   无乒乓竞态。
   void _toggleControls() {
     AppHaptics.click();
-    setState(() => _controlsExpanded = !_controlsExpanded);
-    widget.onNavExpandedChanged(_controlsExpanded);
+    final next = !_controlsExpanded;
+    setState(() => _controlsExpanded = next);
+    // 回调语义是「导航是否展开」，与播放器自身状态相反：
+    // 播放器展开 → 导航让位坍缩；播放器收起 → 导航恢复展开。
+    widget.onNavExpandedChanged(!next);
   }
 
   @override
