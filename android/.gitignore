@@ -10,3 +10,8 @@ key.properties
 **/keystore.properties
 **/*.keystore
 **/*.jks
+
+# 例外：lite 分支内置固定签名密钥（CI 兜底用，根治覆盖安装签名冲突）。
+# 安全取舍：密码随 workflow 明文（md3lite），仅适用于个人/公开分发场景；
+# 正式分发仍应改用 'keystore' release + GitHub Secrets（优先级更高）。
+!keystore/*.keystore

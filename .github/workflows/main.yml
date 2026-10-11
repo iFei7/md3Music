@@ -189,8 +189,15 @@ jobs:
 
       # ============================================================
       # 5. 下载持久化 release keystore
-      #    从 'keystore' release 下载 release.keystore，
-      #    并生成 keystore.properties（密码用 GitHub Secrets）
+      #    从 'keystore' release 下载 release.keystore 并生成
+      #    keystore.properties（密码用 GitHub Secrets）。
+      #    优先级：keystore release + GitHub Secrets > 仓库内置固定
+      #    keystore > debug 签名。内置兜底 keystore
+      #    （android/keystore/lite-release.keystore，密码 md3lite，别名 lite）
+      #    随公开仓库分发：目的是让所有 run 的产物签名一致、可互相覆盖
+      #    安装（此前每个 runner 各自生成新 debug keystore，导致覆盖安装报
+      #    签名冲突）。安全取舍：仅适用于个人/公开分发场景；正式分发仍应
+      #    创建 'keystore' release 并配置 ANDROID_KEYSTORE_* Secrets。
       # ============================================================
       - name: Download release keystore
         id: keystore
@@ -200,35 +207,46 @@ jobs:
           echo "Downloading release.keystore from 'keystore' release..."
           if ! curl -fL --retry 3 -o /tmp/release.keystore \
               "https://github.com/${GITHUB_REPOSITORY}/releases/download/keystore/release.keystore"; then
+            # 404 回退：改用入库的固定签名密钥（仍走 keystore.properties 机制，
+            # 与 build.gradle.kts 的 release 签名配置对接），不再退回 debug 签名。
             echo ""
-            echo "============================================================"
-            echo "WARN: keystore release 不存在，使用 debug keystore 兜底"
-            echo ""
-            echo "首次启用持久签名需要："
-            echo "  1. 在本地生成 release.keystore"
-            echo "  2. 创建一个名为 'keystore' 的 release："
-            echo "     https://github.com/${GITHUB_REPOSITORY}/releases/new?tag=keystore"
-            echo "  3. 把 release.keystore 作为资产上传"
-            echo "  4. 重新触发本 workflow"
-            echo "============================================================"
-            echo "keystore_available=false" >> "$GITHUB_OUTPUT"
+            echo "keystore release 不存在，使用仓库内置固定 keystore 兜底"
+            if [ ! -f android/keystore/lite-release.keystore ]; then
+              echo "::error::内置 keystore 缺失：android/keystore/lite-release.keystore"
+              exit 1
+            fi
+            cp android/keystore/lite-release.keystore android/app/release.keystore
+            echo "keystore_available=true" >> "$GITHUB_OUTPUT"
+            echo "keystore_source=bundled" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           cp /tmp/release.keystore android/app/release.keystore
           rm /tmp/release.keystore
           ls -lh android/app/release.keystore
           echo "keystore_available=true" >> "$GITHUB_OUTPUT"
+          echo "keystore_source=release" >> "$GITHUB_OUTPUT"
 
       - name: Generate keystore.properties (for CI)
         if: steps.keystore.outputs.keystore_available == 'true'
         run: |
           set -e
-          cat > android/keystore.properties <<EOF
+          if [ "${{ steps.keystore.outputs.keystore_source }}" = "bundled" ]; then
+            # 内置 keystore 的密码/别名固定（md3lite/lite），与 Secrets 无关
+            cat > android/keystore.properties <<EOF
+          storePassword=md3lite
+          keyPassword=md3lite
+          keyAlias=lite
+          storeFile=release.keystore
+          EOF
+          else
+            # 真实 release keystore：密码走 GitHub Secrets
+            cat > android/keystore.properties <<EOF
           storePassword=${KEYSTORE_PASSWORD:-android}
           keyPassword=${KEY_PASSWORD:-android}
           keyAlias=${KEY_ALIAS:-androiddebugkey}
           storeFile=release.keystore
           EOF
+          fi
           echo "keystore.properties:"
           cat android/keystore.properties
         env:

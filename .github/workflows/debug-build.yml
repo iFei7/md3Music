@@ -82,6 +82,31 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
+      # ============================================================
+      # 签名兜底：与 ci.yml / main.yml 同一套固定 keystore 机制，保证本
+      # 工作流产物与 CI/Release 产物签名一致、可互相覆盖安装。
+      # 优先级说明：本工作流直接使用仓库内置固定 keystore（release 构建
+      # 走 keystore.properties 后签名一致；debug 构建仍走 AGP debug 签名）。
+      # 内置 keystore（android/keystore/lite-release.keystore，密码 md3lite，
+      # 别名 lite）随公开仓库分发，仅适用于个人分发场景；正式分发仍应使用
+      # 'keystore' release + GitHub Secrets（见 ci.yml / main.yml 的完整链路）。
+      # ============================================================
+      - name: Setup bundled signing keystore
+        run: |
+          set -e
+          if [ ! -f android/keystore/lite-release.keystore ]; then
+            echo "::error::内置 keystore 缺失：android/keystore/lite-release.keystore"
+            exit 1
+          fi
+          cp android/keystore/lite-release.keystore android/app/release.keystore
+          cat > android/keystore.properties <<EOF
+          storePassword=md3lite
+          keyPassword=md3lite
+          keyAlias=lite
+          storeFile=release.keystore
+          EOF
+          echo "签名兜底就绪：内置固定 keystore（alias=lite）"
+
       # Flutter 构建 APK
       - name: Flutter pub get
         run: flutter pub get
