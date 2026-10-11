@@ -125,7 +125,7 @@ class AdaptiveNav {
 
 /// 双栏 Master-Detail 容器：左侧主列表 + 可拖拽分隔条 + 右侧详情面板。
 ///
-/// [detailKey]/[detailObservers] 由外壳（[DesktopShell]）注入，使工具栏返回键
+/// [detailKey]/[detailObservers] 由外部外壳注入，使工具栏返回键
 /// 与系统返回能作用于详情面板栈；未注入时内部自建 key（独立使用场景）。
 class DesktopTwoPane extends StatefulWidget {
   const DesktopTwoPane({

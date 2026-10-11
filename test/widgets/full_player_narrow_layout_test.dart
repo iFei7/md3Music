@@ -132,7 +132,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   for (final (name, page) in <(String, Widget Function())>[
-    ('MD3', () => const FullPlayer(dockMode: true)),
+    ('MD3', () => const FullPlayer()),
   ]) {
     for (final (layout, viewport, textScale) in <(String, Size, double)>[
       ('窄屏2倍字', const Size(320, 640), 2),
@@ -177,7 +177,7 @@ void main() {
                     context,
                   ).copyWith(textScaler: TextScaler.linear(textScale)),
                   child: viewport.width > viewport.height
-                      ? const FullPlayer(dockMode: false)
+                      ? const FullPlayer()
                       : page(),
                 ),
               ),
@@ -249,7 +249,7 @@ void main() {
   }
 
   for (final (name, page) in <(String, Widget Function())>[
-    ('MD3', () => const FullPlayer(dockMode: true)),
+    ('MD3', () => const FullPlayer()),
   ]) {
     testWidgets('$name 歌词请求异常后播放页仍可操作', (tester) async {
       final originalPhysicalSize = tester.view.physicalSize;
@@ -325,7 +325,7 @@ void main() {
   }
 
   for (final (name, page) in <(String, Widget Function())>[
-    ('MD3', () => const FullPlayer(dockMode: true)),
+    ('MD3', () => const FullPlayer()),
   ]) {
     for (final (source, artworkUri) in <(String, String)>[
       ('本地封面文件缺失', 'file:///md3music_test_missing/cover.jpg'),

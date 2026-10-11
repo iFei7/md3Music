@@ -13,10 +13,6 @@ class ThemeProvider extends ChangeNotifier {
   static const String _oledBlackKey = 'use_oled_black';
   // 底部导航栏文字显示行为：始终显示 / 仅当前页 / 始终不显示
   static const String _navLabelBehaviorKey = 'nav_label_behavior';
-  static const String _artistPhotoBgKey = 'use_artist_photo_background';
-  static const String _artistPhotoIntervalKey = 'artist_photo_interval';
-  static const String _artistPhotoOpacityKey = 'artist_photo_opacity';
-  static const String _lyricDoubleTapToJumpKey = 'lyric_double_tap_to_jump';
   // 自定义背景图片（全局界面背景）
   static const String backgroundImageEnabledPreferenceKey =
       'use_background_image';
@@ -43,11 +39,6 @@ class ThemeProvider extends ChangeNotifier {
   // 底部导航栏文字显示行为（默认始终不显示）
   NavigationDestinationLabelBehavior _navLabelBehavior =
       NavigationDestinationLabelBehavior.alwaysHide;
-  bool _useArtistPhotoBackground = false;
-  int _artistPhotoInterval = 15;
-  double _artistPhotoOpacity = 0.55;
-  // AM 风格播放器歌词双击跳转开关（默认关闭，开启后需双击歌词才能跳转位置）
-  bool _lyricDoubleTapToJump = false;
   // 自定义背景图片（全局界面背景）；默认开启，未选择图片时回落到内置默认壁纸
   bool _useBackgroundImage = true;
   String? _backgroundImagePath;
@@ -71,10 +62,6 @@ class ThemeProvider extends ChangeNotifier {
   Color? get manualSeedColor => _manualSeedColor;
   bool get useOledBlack => _useOledBlack;
   NavigationDestinationLabelBehavior get navLabelBehavior => _navLabelBehavior;
-  bool get useArtistPhotoBackground => _useArtistPhotoBackground;
-  int get artistPhotoInterval => _artistPhotoInterval;
-  double get artistPhotoOpacity => _artistPhotoOpacity;
-  bool get lyricDoubleTapToJump => _lyricDoubleTapToJump;
   bool get useBackgroundImage => _useBackgroundImage;
   String? get backgroundImagePath => _backgroundImagePath;
   double get backgroundBlur => _backgroundBlur;
@@ -120,8 +107,6 @@ class ThemeProvider extends ChangeNotifier {
     _loadManualSeedColor();
     _loadOledBlack();
     _loadNavLabelBehavior();
-    _loadArtistPhotoBackground();
-    _loadLyricDoubleTapToJump();
     _loadBackgroundImage();
   }
 
@@ -236,62 +221,6 @@ class ThemeProvider extends ChangeNotifier {
     if (_coverSeedColor == color) return;
     _coverSeedColor = color;
     notifyListeners();
-  }
-
-  /// 加载「歌词双击跳转」开关持久化值，默认关闭。
-  Future<void> _loadLyricDoubleTapToJump() async {
-    final prefs = await SharedPreferences.getInstance();
-    _lyricDoubleTapToJump = prefs.getBool(_lyricDoubleTapToJumpKey) ?? false;
-    notifyListeners();
-  }
-
-  /// 切换「歌词双击跳转」开关。
-  /// - 开启：需双击歌词行才能跳转播放位置
-  /// - 关闭：单击即可跳转（默认行为）
-  Future<void> setLyricDoubleTapToJump(bool enabled) async {
-    if (_lyricDoubleTapToJump == enabled) return;
-    _lyricDoubleTapToJump = enabled;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_lyricDoubleTapToJumpKey, enabled);
-  }
-
-  /// 加载「歌手写真背景轮播」开关 + 轮播间隔持久化值，默认关闭 / 15 秒。
-  Future<void> _loadArtistPhotoBackground() async {
-    final prefs = await SharedPreferences.getInstance();
-    _useArtistPhotoBackground = prefs.getBool(_artistPhotoBgKey) ?? false;
-    _artistPhotoInterval = prefs.getInt(_artistPhotoIntervalKey) ?? 15;
-    _artistPhotoOpacity = prefs.getDouble(_artistPhotoOpacityKey) ?? 0.55;
-    notifyListeners();
-  }
-
-  /// 切换「歌手写真背景轮播」开关（仅 MD3 风格播放页生效）。
-  Future<void> setUseArtistPhotoBackground(bool enabled) async {
-    if (_useArtistPhotoBackground == enabled) return;
-    _useArtistPhotoBackground = enabled;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_artistPhotoBgKey, enabled);
-  }
-
-  /// 设置写真轮播间隔（秒），限定 5~60。
-  Future<void> setArtistPhotoInterval(int seconds) async {
-    final clamped = seconds.clamp(5, 60);
-    if (_artistPhotoInterval == clamped) return;
-    _artistPhotoInterval = clamped;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_artistPhotoIntervalKey, clamped);
-  }
-
-  /// 设置写真背景遮罩透明度（0.0=全透看不清文字 ~ 1.0=全遮看不到写真），限定 0.0~0.95。
-  Future<void> setArtistPhotoOpacity(double opacity) async {
-    final clamped = opacity.clamp(0.0, 0.95);
-    if (_artistPhotoOpacity == clamped) return;
-    _artistPhotoOpacity = clamped;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_artistPhotoOpacityKey, clamped);
   }
 
   /// 加载用户手动选择的种子色持久化值。

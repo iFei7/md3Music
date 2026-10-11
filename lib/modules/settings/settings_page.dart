@@ -13,7 +13,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/layout/page_title_alignment.dart';
-import '../../core/layout/ui_density.dart';
 import '../../core/services/audio_service_io.dart';
 import '../../core/services/volume_normalization_service.dart';
 import '../../core/services/background_image_loader.dart';
@@ -31,7 +30,6 @@ import '../../core/services/diagnostic_exporter.dart';
 import '../../core/layout/responsive_layout.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/theme/motion_constants.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../onboarding/onboarding_page.dart';
 import '../onboarding/user_agreement_page.dart';
@@ -41,13 +39,8 @@ import '../../providers/player_provider.dart';
 import '../../providers/shortcut_config_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../services/kugou_server.dart';
-import '../../services/depth_cover_service.dart';
-import '../../core/services/depth_cover_feature.dart';
 import '../../utils/landscape_immersive.dart';
 import '../../widgets/seed_color_picker.dart';
-import '../player/car_mode_layout.dart';
-import '../player/car_mode_panel.dart';
-import '../../providers/car_mode_provider.dart';
 import '../sound/sounds_page.dart';
 import 'equalizer_settings_page.dart';
 import 'settings_group_heading.dart';
@@ -82,7 +75,7 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage>
-    with SingleTickerProviderStateMixin, CarModePanelSuppressor<SettingsPage> {
+    with SingleTickerProviderStateMixin {
   final SettingsRepository _settingsRepository = SettingsRepository();
   static const MethodChannel _appIconChannel = MethodChannel(
     'com.md3music.md3music/app_icon',
@@ -109,9 +102,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _useDynamicColor = false;
   // 封面动态取色开关（与系统主题色独立、可叠加；开启时封面优先）
   bool _useCoverSeedColor = false;
-  bool _useArtistPhotoBackground = false;
-  int _artistPhotoInterval = 15;
-  double _artistPhotoOpacity = 0.55;
   String _appVersion = '';
   // 实时歌词推送协议选择（关闭 + SuperLyric）
   String _lyricPushProtocol = 'none';
@@ -144,14 +134,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _bluetoothLyricEnabled = false;
   // 蓝牙歌词封面压缩开关：默认关闭（不压缩，保持原始封面质量）
   bool _bluetoothLyricCompressArt = false;
-  // 3D 封面（深度视差）总开关：默认关闭（模型需在设置页导入）
-  bool _depthCoverEnabled = false;
-  // 3D 封面视差强度：背景层最大平移像素，0 = 不动
-  double _depthCoverStrength = 9.0;
-  // 3D 封面 AI 背景修补（MI-GAN 神经细化）：默认开启，关闭则仅用金字塔修补
-  bool _depthCoverNeuralInpaint = true;
-  // 深度图缓存占用（字节，仅统计可重建的分层/深度图）
-  int _depthCacheBytes = 0;
 
   // 禁用本应用挂载的 Android 系统音效链，避免与手机厂商音效叠加后播放音乐炸音
   bool _disableSystemAudioEffects = false;
@@ -179,10 +161,6 @@ class _SettingsPageState extends State<SettingsPage>
   // 「关闭本地音乐评论区」开关（默认开启）：开启后本地歌曲不显示评论 tab，
   // 也不提供「看评论」入口
   bool _closeLocalMusicComments = true;
-  // 歌词双击跳转开关（默认关闭，开启后需双击歌词才能跳转位置）
-  bool _lyricDoubleTapToJump = false;
-  // 桌面布局（侧栏 + 顶部工具栏）总开关：默认关闭，开启后无论横竖屏都用桌面外壳
-  bool _desktopModeEnabled = false;
   // 自定义背景图片（全局界面背景）；默认关闭，未选择图片时回落到内置默认壁纸
   bool _useBackgroundImage = false;
   String? _backgroundImagePath;
@@ -201,8 +179,6 @@ class _SettingsPageState extends State<SettingsPage>
   @override
   void initState() {
     super.initState();
-    // 本页不显示车机模式常驻播放器面板
-    suppressCarModePanel();
     // 页面切换过渡控制器：fade 0→1。切换流程 = 先 reverse 淡出旧页 →
     // 完成回调中切换内容 → 再 forward 淡入新页（严格串行，不重叠）。
     // 每段 120ms（总 ~240ms），过渡轻快。
@@ -221,7 +197,6 @@ class _SettingsPageState extends State<SettingsPage>
   void dispose() {
     _sectionTransition.dispose();
     _searchController.dispose();
-    releaseCarModePanel();
     super.dispose();
   }
 
@@ -268,16 +243,6 @@ class _SettingsPageState extends State<SettingsPage>
     final useDynamicColor = context.read<ThemeProvider>().useDynamicColor;
     // 从 ThemeProvider 同步「封面动态取色」开关状态
     final useCoverSeedColor = context.read<ThemeProvider>().useCoverSeedColor;
-    final lyricDoubleTapToJump = context
-        .read<ThemeProvider>()
-        .lyricDoubleTapToJump;
-    final useArtistPhotoBackground = context
-        .read<ThemeProvider>()
-        .useArtistPhotoBackground;
-    final artistPhotoInterval = context
-        .read<ThemeProvider>()
-        .artistPhotoInterval;
-    final artistPhotoOpacity = context.read<ThemeProvider>().artistPhotoOpacity;
     // 从 ThemeProvider 同步自定义背景图片配置
     final useBackgroundImage = context.read<ThemeProvider>().useBackgroundImage;
     final backgroundImagePath = context
@@ -294,16 +259,6 @@ class _SettingsPageState extends State<SettingsPage>
     // 读取蓝牙歌词封面压缩开关
     final bluetoothLyricCompressArt = await _settingsRepository
         .getBluetoothLyricCompressArt();
-    // 读取 3D 封面（深度视差）总开关
-    final depthCoverEnabled = await _settingsRepository.getDepthCoverEnabled();
-    final depthCoverStrength = await _settingsRepository
-        .getDepthCoverStrength();
-    // 读取 3D 封面 AI 背景修补开关（MI-GAN 神经细化）
-    final depthCoverNeuralInpaint = await _settingsRepository
-        .getDepthCoverNeuralInpaint();
-    // 读取 3D 封面深度图缓存占用
-    final depthCacheBytes = await DepthCoverService.instance.cache
-        .cacheSizeBytes();
     final disableSystemAudioEffects = await _settingsRepository
         .getDisableSystemAudioEffects();
     final pauseFadeEnabled = await _settingsRepository.getPauseFadeEnabled();
@@ -343,8 +298,6 @@ class _SettingsPageState extends State<SettingsPage>
         .getLegacyAppIconEnabled();
     final pendingUpdateVersion = await _settingsRepository
         .getUpdateLastNotifiedVersion();
-    final desktopModeEnabled = await _settingsRepository
-        .getDesktopModeEnabled();
     final viperMasterEnabled = await _settingsRepository
         .getViperMasterEnabled();
     final viperTapeQualityEnabled = await _settingsRepository
@@ -360,13 +313,8 @@ class _SettingsPageState extends State<SettingsPage>
       _updateReminderEnabled = updateReminderEnabled;
       _legacyAppIconEnabled = legacyAppIconEnabled;
       _pendingUpdateVersion = pendingUpdateVersion;
-      _desktopModeEnabled = desktopModeEnabled;
       _useDynamicColor = useDynamicColor;
       _useCoverSeedColor = useCoverSeedColor;
-      _lyricDoubleTapToJump = lyricDoubleTapToJump;
-      _useArtistPhotoBackground = useArtistPhotoBackground;
-      _artistPhotoInterval = artistPhotoInterval;
-      _artistPhotoOpacity = artistPhotoOpacity;
       _useBackgroundImage = useBackgroundImage;
       _backgroundImagePath = backgroundImagePath;
       _backgroundBlur = backgroundBlur;
@@ -376,12 +324,6 @@ class _SettingsPageState extends State<SettingsPage>
       _textShadowBlur = textShadowBlur;
       _bluetoothLyricEnabled = bluetoothLyricEnabled;
       _bluetoothLyricCompressArt = bluetoothLyricCompressArt;
-      _depthCoverEnabled = depthCoverEnabled;
-      _depthCoverStrength = depthCoverStrength;
-      _depthCoverNeuralInpaint = depthCoverNeuralInpaint;
-      _depthCacheBytes = depthCacheBytes;
-      // 同步全局开关信号（播放页若在场即时响应；播放页 host 首次加载也读它）
-      DepthCoverService.enabledSignal.value = depthCoverEnabled;
       _disableSystemAudioEffects = disableSystemAudioEffects;
       _pauseFadeEnabled = pauseFadeEnabled;
       _crossfadeEnabled = crossfadeEnabled;
@@ -458,32 +400,6 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
-  /// 清理 3D 封面深度图缓存（确认后执行；模型文件不受影响）。
-  Future<void> _clearDepthCache() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('清理深度图缓存'),
-        content: const Text('将删除所有 3D 封面的分层/深度图缓存，\n各封面下次打开时会自动重新生成。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('清理'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    await DepthCoverService.instance.cache.clearCache();
-    if (!mounted) return;
-    setState(() => _depthCacheBytes = 0);
-    showToast('深度图缓存已清理');
-  }
-
   Future<void> _loadVersion() async {
     try {
       final info = await PackageInfo.fromPlatform();
@@ -548,7 +464,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool get _useTwoPane => settingsUseTwoPaneLayout(
     padLayout: isPadLayout(context),
     width: MediaQuery.sizeOf(context).width,
-    desktopLayout: isDesktopLayout(context),
   );
 
   /// 层级切换过渡包裹：淡出旧层 → 切内容 → 淡入新层（方向 _navForward）。
@@ -565,7 +480,7 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 单列 body（手机 / 窄屏 / 桌面外壳）：与改造前完全一致。
+  /// 单列 body（手机 / 窄屏）：与改造前完全一致。
   Widget _buildSinglePaneBody(
     ColorScheme colorScheme,
     SettingsLevel level,
@@ -753,32 +668,12 @@ class _SettingsPageState extends State<SettingsPage>
           builder: _buildThemeSubpage,
         ),
         SettingsSubpage(
-          title: '车机模式',
-          icon: Icons.directions_car_outlined,
-          description: '常驻播放器面板、面板尺寸与停靠位置',
-          builder: _buildCarModeSubpage,
-        ),
-        SettingsSubpage(
           title: '界面背景',
           icon: Icons.wallpaper_outlined,
           description: '自定义背景图、模糊与文字可读性',
           builder: _buildBackgroundSubpage,
         ),
       ],
-    ),
-    SettingsCategory(
-      title: '播放页样式',
-      icon: Icons.music_note_outlined,
-      description: '播放页风格与视觉效果',
-      subpages: [
-        SettingsSubpage(
-          title: '封面与动态',
-          icon: Icons.album_outlined,
-          description: '歌词双击跳转与 3D 深度封面',
-          builder: _buildCoverDynamicSubpage,
-        ),
-      ],
-      body: _buildPlayerBackgroundSubpage,
     ),
     SettingsCategory(
       title: '歌词',
@@ -1347,217 +1242,6 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 「车机模式」三级子页：总开关 + 自动检测 + 面板宽/高 + Dock 避让 + 面板位置。
-  Widget _buildCarModeSubpage(ColorScheme colorScheme) {
-    final carMode = context.watch<CarModeProvider>();
-    // 滑条下限随布局切换：底部（竖屏/近方屏车机）10%，侧边 20%。
-    // 显示值同样按布局夹取：侧边布局下存量 0.12 若直接喂给滑条会触发
-    // value < min 断言。
-    final sliderMinRatio = carMode.useBottomLayout
-        ? kCarModePanelMinRatioBottom
-        : kCarModePanelMinRatio;
-    final ratioPercent =
-        (carMode.panelRatio.clamp(sliderMinRatio, kCarModePanelMaxRatio) * 100)
-            .round();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Gap(AppSpacing.sm),
-        // 独立总开关：默认关闭。开启后任何界面（设置页 / 登录页 / 引导页 /
-        // 用户协议页除外）常驻一块播放器面板，且不再显示 MiniPlayer。
-        // 这是**强制开启**开关：无论屏幕类型都启用。
-        // search: 车机 车载 常驻 面板 大屏 副屏 副驾 miniplayer 迷你条
-        SwitchListTile(
-          title: const Text('车机模式'),
-          subtitle: const Text('任何界面常驻播放器面板，不再显示 MiniPlayer'),
-          value: carMode.enabled,
-          onChanged: (value) {
-            HapticFeedback.lightImpact();
-            context.read<CarModeProvider>().setEnabled(value);
-          },
-        ),
-        // 自动检测开关：独立于上面的强制开关。开启后按屏幕长比自动判断，
-        // 命中车机屏（短边/长边 ≥ 0.55，常见 16:9 车机即满足）即自动启用。
-        // search: 车机 车载 自动 检测 屏幕 分辨率 识别 竖屏 方屏
-        SwitchListTile(
-          title: const Text('检测到车机屏幕时自动开启'),
-          subtitle: const Text('匹配竖屏或方屏车机等车载屏幕时自动启用车机模式'),
-          value: carMode.autoScreenEnabled,
-          onChanged: (value) {
-            HapticFeedback.lightImpact();
-            context.read<CarModeProvider>().setAutoScreenEnabled(value);
-          },
-        ),
-        _buildGroupLabel(
-          carMode.useBottomLayout ? '面板高度' : '面板宽度',
-          colorScheme,
-          first: true,
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 标题随布局切换：侧边 =「面板宽度」（横贯左侧/右侧、只调宽），
-              // 底部 =「面板高度」（横贯全宽、只调高）。两者共用同一个占比值
-              // （panelRatio），通过 resolveCarModePanelWidth / Height 换算成
-              // 不同的物理尺寸。search: 面板宽度 面板高度 车机 底部
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      carMode.useBottomLayout ? '面板高度' : '面板宽度',
-                      style: Theme.of(context).textTheme.bodyLarge,
-                    ),
-                  ),
-                  Text(
-                    '$ratioPercent%',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              // 滑条始终显示（两布局共用），拖动只改内存，松手落盘。
-              M3ESlider(
-                decoration: const M3ESliderDecoration(
-                  // 显式给 hapticConfig：M3ESlider 在 divisions == null 时默认取
-                  // M3EHapticConfig.continuous()（10ms 最小间隔 + 2% 阈值），
-                  // 拖动中会以最高约 100 次/秒走 MethodChannel 触发 vibrate，
-                  // 真机上马达饱和 + 通道洪泛。
-                  haptic: M3EHapticFeedback.medium,
-                  hapticConfig: M3EHapticConfig.discrete(),
-                ),
-                value:
-                    carMode.panelRatio.clamp(
-                      sliderMinRatio,
-                      kCarModePanelMaxRatio,
-                    ) *
-                    100,
-                // 底部布局（竖屏/近方屏车机）下限 10%，侧边保持 20%。
-                min: sliderMinRatio * 100,
-                max: kCarModePanelMaxRatio * 100,
-                // 不传 divisions = 无级调节（M3ESlider.divisions 为 int?），
-                // 有档位吸附会破坏「无级」手感。
-                label: '$ratioPercent%',
-                // 拖动中只改内存（persist: false），松手才落盘。
-                // 注意：divisions == null 时 M3ESlider 的 onChangeEnd 可能在
-                // 按下超过 100ms 后被 tap-cancel 提前触发一次。
-                // 这里提前落盘的只是一个 double，
-                // 不影响手感，真正的终值会在拖动结束时再落一次。
-                onChanged: (value) => context
-                    .read<CarModeProvider>()
-                    .setPanelRatio(value / 100, persist: false),
-                onChangeEnd: (value) =>
-                    context.read<CarModeProvider>().setPanelRatio(value / 100),
-              ),
-            ],
-          ),
-        ),
-        // Dock 避让高度校准：仅底部布局（面板贴屏幕下缘）有意义 —— 车联
-        // dock 栏是系统悬浮窗、不产生 WindowInsets，SafeArea 挡不住，只能
-        // 由用户按 dock 实际高度校准（见 kCarModeBottomDockClearance 注释）。
-        // search-item: dock 避让高度 | 车机 车联 dock 避让 底部 空隙 高度
-        if (carMode.useBottomLayout) ...[
-          _buildGroupLabel('Dock 避让高度', colorScheme),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '底部面板与屏幕下缘留出的空隙，用于避开车联 dock 栏；0 为不避让',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Expanded(
-                      child: M3ESlider(
-                        decoration: const M3ESliderDecoration(
-                          haptic: M3EHapticFeedback.medium,
-                          hapticConfig: M3EHapticConfig.discrete(),
-                        ),
-                        value: carMode.dockClearanceDp,
-                        min: 0,
-                        max: kCarModeDockClearanceMax,
-                        // 1dp 一档：整数值好读好记，档位 haptic 也与
-                        // M3EHapticConfig.discrete() 匹配。
-                        divisions: kCarModeDockClearanceMax.round(),
-                        label: '${carMode.dockClearanceDp.round()}dp',
-                        onChanged: (value) => context
-                            .read<CarModeProvider>()
-                            .setDockClearance(value, persist: false),
-                        onChangeEnd: (value) => context
-                            .read<CarModeProvider>()
-                            .setDockClearance(value),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 72,
-                      child: Text(
-                        carMode.dockClearanceDp <= 0
-                            ? '不避让'
-                            : '${carMode.dockClearanceDp.round()}dp',
-                        textAlign: TextAlign.end,
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-        // 面板位置仅在侧边布局下有意义（底部布局面板横贯全宽）。
-        if (!carMode.useBottomLayout) _buildGroupLabel('面板位置', colorScheme),
-        if (!carMode.useBottomLayout)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-            // search-item: 面板位置 | 车机 面板 左侧 右侧 停靠 位置
-            child: M3EToggleButtonGroup(
-              actions: const [
-                M3EToggleButtonGroupAction(
-                  label: Text('左侧'),
-                  icon: Icon(Icons.align_horizontal_left),
-                ),
-                M3EToggleButtonGroupAction(
-                  label: Text('右侧'),
-                  icon: Icon(Icons.align_horizontal_right),
-                ),
-              ],
-              selectedIndex: carMode.panelSide == CarModePanelSide.left ? 0 : 1,
-              onSelectedIndexChanged: (index) {
-                if (index == null || !carMode.active) return;
-                HapticFeedback.lightImpact();
-                context.read<CarModeProvider>().setPanelSide(
-                  index == 0 ? CarModePanelSide.left : CarModePanelSide.right,
-                );
-              },
-            ),
-          ),
-        if (!carMode.active)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg,
-              AppSpacing.xs,
-              AppSpacing.lg,
-              AppSpacing.lg,
-            ),
-            child: Text(
-              '开启车机模式或检测到车机屏幕后生效',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-          )
-        else
-          const Gap(AppSpacing.lg),
-      ],
-    );
-  }
-
   /// 「主题与配色」三级子页：明暗模式 + 主题色来源。
   Widget _buildThemeSubpage(ColorScheme colorScheme) {
     final themeProvider = context.read<ThemeProvider>();
@@ -1677,7 +1361,7 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 「导航与布局」三级子页：底部导航栏标签行为 + 桌面布局外壳。
+  /// 「导航与布局」三级子页：底部导航栏标签行为。
   Widget _buildShellLayoutSubpage(ColorScheme colorScheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1717,21 +1401,6 @@ class _SettingsPageState extends State<SettingsPage>
               );
             },
           ),
-        ),
-        // ⑤ 桌面布局：侧栏 + 顶部工具栏外壳总开关（默认关，开启后横竖屏皆用）
-        _buildGroupLabel('桌面布局', colorScheme),
-        // search: 桌面布局 侧栏 大屏 平板 横屏 双栏 工具栏 desktop
-        SwitchListTile(
-          title: const Text('桌面布局'),
-          subtitle: const Text('开启后无论横屏竖屏都使用侧栏 + 顶部工具栏界面'),
-          value: _desktopModeEnabled,
-          onChanged: (value) {
-            HapticFeedback.lightImpact();
-            setState(() => _desktopModeEnabled = value);
-            _settingsRepository.setDesktopModeEnabled(value);
-            // 立即切换外壳：驱动全局判定源，触发主布局重建。
-            kDesktopModeEnabled.value = value;
-          },
         ),
       ],
     );
@@ -2006,167 +1675,6 @@ class _SettingsPageState extends State<SettingsPage>
     await themeProvider.setBackgroundImagePath(null);
     await themeProvider.setUseBackgroundImage(true);
     showToast('已清除背景图片，使用默认壁纸', long: true);
-  }
-
-  /// 「封面与动态」三级子页：歌词双击跳转 + 3D 深度封面。
-  Widget _buildCoverDynamicSubpage(ColorScheme colorScheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Gap(AppSpacing.sm),
-        // search: 双击 跳转
-        SwitchListTile(
-          title: const Text('歌词双击跳转'),
-          value: _lyricDoubleTapToJump,
-          onChanged: (v) {
-            HapticFeedback.lightImpact();
-            setState(() => _lyricDoubleTapToJump = v);
-            context.read<ThemeProvider>().setLyricDoubleTapToJump(v);
-          },
-        ),
-        // 3D 封面（深度视差）：仅 depth3d 全量包启用；standard 包整体隐藏。
-        // 开启后陀螺仪驱动封面深度视差（模型内置，亦可导入更新）
-        if (kDepthCoverAvailable) ...[
-          // search: 3D 封面;深度;视差;立体;封面
-          SwitchListTile(
-            title: const Text('3D 封面'),
-            value: _depthCoverEnabled,
-            onChanged: (value) async {
-              HapticFeedback.lightImpact();
-              setState(() => _depthCoverEnabled = value);
-              await _settingsRepository.setDepthCoverEnabled(value);
-              DepthCoverService.enabledSignal.value = value;
-            },
-          ),
-          // 开关关闭时隐藏以下三项（强度 / 导入模型 / 清理缓存）
-          if (_depthCoverEnabled) ...[
-            // search: 3D 封面 强度;视差 灵敏度;陀螺仪 灵敏度;深度 幅度
-            ListTile(
-              title: const Text('3D 封面强度'),
-              subtitle: M3ESlider(
-                decoration: const M3ESliderDecoration(
-                  haptic: M3EHapticFeedback.medium,
-                  hapticConfig: M3EHapticConfig.discrete(),
-                ),
-                value: _depthCoverStrength,
-                min: 0,
-                max: 40,
-                label: '${_depthCoverStrength.round()}',
-                onChanged: (value) {
-                  setState(() => _depthCoverStrength = value);
-                  unawaited(_settingsRepository.setDepthCoverStrength(value));
-                },
-              ),
-            ),
-            // search: 3D 封面 AI 修补;背景 修补;神经网络;模型 修补;智能 填充
-            SwitchListTile(
-              title: const Text('AI 背景修补'),
-              subtitle: const Text('神经网络细化背景填充质量，关闭后用快速算法'),
-              value: _depthCoverNeuralInpaint,
-              onChanged: (value) async {
-                HapticFeedback.lightImpact();
-                setState(() => _depthCoverNeuralInpaint = value);
-                await _settingsRepository.setDepthCoverNeuralInpaint(value);
-                // 关闭→开启切换后，清缓存让新封面用神经修补重新生成
-                if (value) {
-                  await DepthCoverService.instance.cache.clearCache();
-                  if (mounted) {
-                    setState(() => _depthCacheBytes = 0);
-                  }
-                }
-              },
-            ),
-            // search: 3D 封面 缓存;清理 缓存;深度 缓存
-            ListTile(
-              title: const Text('清理深度图缓存'),
-              subtitle: Text(
-                '当前占用 ${(_depthCacheBytes / 1048576).toStringAsFixed(1)} MB',
-              ),
-              onTap: _depthCacheBytes > 0 ? _clearDepthCache : null,
-            ),
-          ],
-        ],
-      ],
-    );
-  }
-
-  /// 「播放页背景」三级子页：MD3 写真背景轮播。
-  Widget _buildPlayerBackgroundSubpage(ColorScheme colorScheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Gap(AppSpacing.sm),
-        // search: 写真 背景 轮播
-        SwitchListTile(
-          title: const Text('歌手写真背景轮播'),
-          value: _useArtistPhotoBackground,
-          onChanged: (v) {
-            HapticFeedback.lightImpact();
-            setState(() => _useArtistPhotoBackground = v);
-            context.read<ThemeProvider>().setUseArtistPhotoBackground(v);
-          },
-        ),
-        if (_useArtistPhotoBackground)
-          // search: 写真 轮播 间隔
-          // 原 trailing 的紧凑 DropdownButton 换成字段式 M3EDropdownMenu：
-          // 控件下沉到 subtitle，与下方「写真背景透明度」的 subtitle 控件行
-          // 保持同一节奏（行高、左右留白、取值文本尺寸均靠拢该行）。
-          ListTile(
-            title: const Text('轮播间隔'),
-            subtitle: M3EDropdownMenu<int>(
-              items: [
-                for (final s in const [5, 10, 15, 20, 30, 45, 60])
-                  M3EDropdownItem(
-                    label: '$s 秒',
-                    value: s,
-                    selected: _artistPhotoInterval == s,
-                  ),
-              ],
-              singleSelect: true,
-              showChipAnimation: false,
-              fieldStyle: M3EDropdownFieldStyle(
-                hintText: '选择轮播间隔',
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md,
-                  vertical: AppSpacing.sm,
-                ),
-                selectedTextStyle: Theme.of(context).textTheme.bodyMedium,
-              ),
-              onSelectionChanged: (selected) {
-                // 单选下再次点击已选中项会被取消选中：强制重建以恢复原值
-                if (selected.isEmpty) {
-                  setState(() {});
-                  return;
-                }
-                final v = selected.first.value;
-                if (v == _artistPhotoInterval) return;
-                setState(() => _artistPhotoInterval = v);
-                context.read<ThemeProvider>().setArtistPhotoInterval(v);
-              },
-            ),
-          ),
-        if (_useArtistPhotoBackground)
-          // search: 写真 透明度
-          ListTile(
-            title: const Text('写真背景透明度'),
-            subtitle: M3ESlider(
-              decoration: const M3ESliderDecoration(
-                haptic: M3EHapticFeedback.medium,
-              ),
-              value: _artistPhotoOpacity,
-              min: 0.0,
-              max: 0.95,
-              divisions: 19,
-              label: '${(_artistPhotoOpacity * 100).round()}%',
-              onChanged: (v) {
-                setState(() => _artistPhotoOpacity = v);
-                context.read<ThemeProvider>().setArtistPhotoOpacity(v);
-              },
-            ),
-            trailing: _statusText('${(_artistPhotoOpacity * 100).round()}%'),
-          ),
-      ],
-    );
   }
 
   /// 弹出 8 色预设种子色选择面板。

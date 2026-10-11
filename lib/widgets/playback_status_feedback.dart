@@ -6,9 +6,7 @@ import 'playback_status_feedback_state.dart';
 
 /// 播放加载/失败状态的轻量提示；取消和重试始终作用于当前播放请求。
 class PlaybackStatusFeedback extends StatelessWidget {
-  final bool amStyle;
-
-  const PlaybackStatusFeedback({super.key, this.amStyle = false});
+  const PlaybackStatusFeedback({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -40,10 +38,8 @@ class PlaybackStatusFeedback extends StatelessWidget {
     }
 
     final scheme = Theme.of(context).colorScheme;
-    final foreground = amStyle ? Colors.white : scheme.error;
-    final background = amStyle
-        ? Colors.white.withValues(alpha: 0.08)
-        : scheme.errorContainer;
+    final foreground = scheme.error;
+    final background = scheme.errorContainer;
 
     return Container(
       width: double.infinity,

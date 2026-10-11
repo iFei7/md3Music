@@ -18,8 +18,6 @@ class LyricsView extends StatefulWidget {
   /// 对 [positionListenable] 的位置做二次校正（如在线歌词时间偏移），可为 null。
   final Duration Function(Duration)? adaptPosition;
   final ValueChanged<Duration> onSeek;
-  /// 是否启用双击跳转（开启后单击不跳转，双击才跳转）
-  final bool doubleTapToJump;
 
   const LyricsView({
     super.key,
@@ -29,7 +27,6 @@ class LyricsView extends StatefulWidget {
     required this.onSeek,
     this.positionListenable,
     this.adaptPosition,
-    this.doubleTapToJump = false,
   });
 
   @override
@@ -584,12 +581,7 @@ class LyricsViewState extends State<LyricsView> {
                 final auxiliaryFontSize = _auxiliaryFontSize(fontSize);
 
                 return GestureDetector(
-                  onTap: widget.doubleTapToJump
-                      ? null
-                      : () => _onLineTap(index),
-                  onDoubleTap: widget.doubleTapToJump
-                      ? () => _onLineTap(index)
-                      : null,
+                  onTap: () => _onLineTap(index),
                   child: Container(
                     // 行高随换行自适应（1 行或 2 行），不再裁切长歌词
                     height: _lineHeights[index],

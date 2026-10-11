@@ -62,17 +62,6 @@ void main() {
     test('手机横屏宽 869（非 Pad 设备）= 单列', () {
       expect(settingsUseTwoPaneLayout(padLayout: false, width: 869), isFalse);
     });
-
-    test('桌面外壳（计划 4.4 A 类）= 单列', () {
-      expect(
-        settingsUseTwoPaneLayout(
-          padLayout: true,
-          width: 1365,
-          desktopLayout: true,
-        ),
-        isFalse,
-      );
-    });
   });
 
   group('SettingsCategory', () {

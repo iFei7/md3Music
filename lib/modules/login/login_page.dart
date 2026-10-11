@@ -6,7 +6,6 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/kugou_provider.dart';
-import '../player/car_mode_panel.dart';
 import '../../services/kugou_api/kugou_models.dart';
 
 class LoginPage extends StatefulWidget {
@@ -16,8 +15,7 @@ class LoginPage extends StatefulWidget {
   State<LoginPage> createState() => _LoginPageState();
 }
 
-class _LoginPageState extends State<LoginPage>
-    with CarModePanelSuppressor<LoginPage> {
+class _LoginPageState extends State<LoginPage> {
   Timer? _checkTimer;
   String _statusText = '正在生成二维码...';
   bool _isChecking = false;
@@ -38,8 +36,6 @@ class _LoginPageState extends State<LoginPage>
   @override
   void initState() {
     super.initState();
-    // 本页不显示车机模式常驻播放器面板
-    suppressCarModePanel();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initLogin();
     });
@@ -51,7 +47,6 @@ class _LoginPageState extends State<LoginPage>
     _countdownTimer?.cancel();
     _phoneCtrl.dispose();
     _codeCtrl.dispose();
-    releaseCarModePanel();
     super.dispose();
   }
 

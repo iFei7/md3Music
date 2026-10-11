@@ -3,8 +3,6 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:m3e_core/m3e_core.dart';
 
-import '../../core/layout/adaptive_navigator.dart';
-import '../../core/layout/responsive_layout.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_background.dart';
@@ -1950,24 +1948,15 @@ class _SimilarPlaylistsViewState extends State<_SimilarPlaylistsView> {
           subtitle: pl.songCount > 0 ? Text('${pl.songCount} 首歌曲') : null,
           onTap: () {
             final target = pl.toPlaylist();
-            if (isDesktopLayout(context)) {
-              // 桌面双栏：在详情 pane 内前进到相似歌单，浏览器式前进/后退接管；
-              // 不在 pane 作用域时 openDetail 自动回落为中央 Navigator push。
-              AdaptiveNav.openDetail(
-                context,
-                (_) => PlaylistPage(playlist: target),
-              );
-            } else {
-              // 手机：保留「替换当前歌单」语义，避免相似歌单链式堆栈。
-              // 先取 navigator 再 pop，避免 pop 后使用已销毁的 context。
-              final navigator = Navigator.of(context);
-              navigator.pop();
-              navigator.push(
-                MaterialPageRoute(
-                  builder: (_) => PlaylistPage(playlist: target),
-                ),
-              );
-            }
+            // 保留「替换当前歌单」语义，避免相似歌单链式堆栈。
+            // 先取 navigator 再 pop，避免 pop 后使用已销毁的 context。
+            final navigator = Navigator.of(context);
+            navigator.pop();
+            navigator.push(
+              MaterialPageRoute(
+                builder: (_) => PlaylistPage(playlist: target),
+              ),
+            );
           },
         );
       },

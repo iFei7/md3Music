@@ -42,29 +42,6 @@ bool isPadLayout(BuildContext context) {
   }
 }
 
-/// 桌面外壳（侧栏 + 顶部工具栏）总开关。
-///
-/// 由设置页「桌面布局」开关驱动、启动时从 `SettingsRepository.getDesktopModeEnabled`
-/// 载入。**默认 false**：无论横竖屏都走常规响应式布局（[ResponsiveScaffold]）；
-/// 用户手动开启后，无论横屏还是竖屏都强制使用桌面外壳。
-///
-/// 用全局 [ValueNotifier] 而非 Provider：因 [isDesktopLayout] 也会在返回键回调等
-/// 非 build 上下文里被调用（`context.watch` 会抛异常），值型订阅更安全；顶层
-/// `_MainLayout` 监听它触发整棵子树重建（与 `kCoverFlowImmersive` 同模式）。
-final ValueNotifier<bool> kDesktopModeEnabled = ValueNotifier<bool>(false);
-
-/// 是否使用「桌面音乐软件式」外壳（侧栏 + 顶部工具栏 + 中央内容 + 全宽底部
-/// 播放栏）。
-///
-/// 全项目桌面化分支的**唯一判定源**。现由用户设置 [kDesktopModeEnabled] 决定，
-/// 不再自动按方向/尺寸切换：
-/// - 关闭（默认）→ 恒返回 false，无论横竖屏都用 [ResponsiveScaffold]
-///   （竖屏底部导航栏、横屏侧边 [NavigationRail]）；
-/// - 开启 → 恒返回 true，无论横竖屏都用桌面外壳。
-///
-/// 保留 [context] 形参仅为兼容既有调用点签名。
-bool isDesktopLayout(BuildContext context) => kDesktopModeEnabled.value;
-
 /// 按容器**局部宽度**推导网格列数（计划 4.7 宽屏密度）。
 ///
 /// 分栏 / 双栏会改变可用宽度，列数必须按面板内 [LayoutBuilder] 的局部宽度
@@ -113,8 +90,6 @@ class ResponsiveLayout extends StatelessWidget {
 
 class ResponsiveScaffold extends StatefulWidget {
   final List<NavigationDestination> destinations;
-  final List<NavigationRailDestination> railDestinations;
-  final List<NavigationDrawerDestination> drawerDestinations;
   final int selectedIndex;
   final ValueChanged<int> onDestinationSelected;
   final Widget body;
@@ -124,15 +99,13 @@ class ResponsiveScaffold extends StatefulWidget {
   final PreferredSizeWidget? appBar;
   final Widget? floatingActionButton;
 
-  /// 为 true 时隐藏导航栏（横屏不渲染 NavigationRail、竖屏不渲染 NavigationBar），
+  /// 为 true 时隐藏导航栏（不渲染 NavigationBar），
   /// 用于封面流页的横屏沉浸浏览。
   final bool hideNavigation;
 
   const ResponsiveScaffold({
     super.key,
     required this.destinations,
-    required this.railDestinations,
-    required this.drawerDestinations,
     required this.selectedIndex,
     required this.onDestinationSelected,
     required this.body,
@@ -151,25 +124,21 @@ class ResponsiveScaffold extends StatefulWidget {
 class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  /// 每个 tab 胶囊回弹动画的 key（竖屏 NavigationBar 用 icon，横屏
-  /// NavigationRail 的 icon / selectedIcon 各占一个 key 槽位）。
+  /// 每个 tab 胶囊回弹动画的 key（NavigationBar 的 icon 各占一个 key 槽位）。
   late List<GlobalKey<_CapsuleBounceState>> _bounceKeys;
-  late List<GlobalKey<_CapsuleBounceState>> _selectedBounceKeys;
 
   @override
   void initState() {
     super.initState();
-    _bounceKeys = _initBounceKeys(widget.railDestinations.length);
-    _selectedBounceKeys = _initBounceKeys(widget.railDestinations.length);
+    _bounceKeys = _initBounceKeys(widget.destinations.length);
   }
 
   @override
   void didUpdateWidget(covariant ResponsiveScaffold oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final count = widget.railDestinations.length;
+    final count = widget.destinations.length;
     if (_bounceKeys.length != count) {
       _bounceKeys = _initBounceKeys(count);
-      _selectedBounceKeys = _initBounceKeys(count);
     }
   }
 
@@ -180,30 +149,23 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
   /// 点击 destination 完成后的统一入口：先触发该 tab 胶囊自驱动的水平
   /// 超出回弹（点击已选中项时），再转发原生选择回调（不改变原有切换行为；
   /// 切换选中项时胶囊由 _CapsuleBounce 的 didUpdateWidget 自动播放）。
-  /// 选择类震动（EFFECT_TICK）：竖屏 NavigationBar / 横屏 NavigationRail 共用。
+  /// 选择类震动（EFFECT_TICK）：NavigationBar 共用。
   void _handleDestinationSelected(int index) {
     AppHaptics.tick();
     _bounceKeys[index].currentState?.playBounce();
-    _selectedBounceKeys[index].currentState?.playBounce();
     widget.onDestinationSelected(index);
   }
 
   @override
   Widget build(BuildContext context) {
-    final isLandscape =
-        MediaQuery.orientationOf(context) == Orientation.landscape;
+    // 底部导航栏可见时，body 之下还压着 NavigationBar：告知子树
+    // 无需再为屏幕底部留白、也无需加宽左右内边距。导航栏被隐藏
+    // （玻璃 Dock 悬浮 / 沉浸浏览）时，body 的最底部就是屏幕最底部，需要防护。
+    final hasBottomChrome = !widget.hideNavigation;
 
-    // 竖屏且底部导航栏可见时，body 之下还压着 NavigationBar：告知子树
-    // 无需再为屏幕底部留白、也无需加宽左右内边距。横屏走侧栏、
-    // 或导航栏被隐藏（玻璃 Dock 悬浮 / 沉浸浏览）时，body 的最底部就是
-    // 屏幕最底部，需要防护。
-    final hasBottomChrome = !isLandscape && !widget.hideNavigation;
-
-    // 横屏（手机/平板）使用侧边导航栏，导航项垂直居中；
-    // 竖屏（手机/平板）使用底部导航栏。
     return BottomChromeScope(
       hasBottomChrome: hasBottomChrome,
-      child: isLandscape ? _buildRailLayout() : _buildCompactLayout(),
+      child: _buildCompactLayout(),
     );
   }
 
@@ -245,84 +207,6 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
     );
   }
 
-  Widget _buildRailLayout() {
-    // 横屏侧栏文字跟随设置页「底部导航栏文字」三档
-    //（NavigationBarThemeData.labelBehavior，与竖屏 NavigationBar 同源），
-    // 映射到原生 NavigationRail 的 labelType。
-    // null（主题未显式设置）按始终显示处理，与竖屏分支的默认行为一致。
-    final labelBehavior =
-        Theme.of(context).navigationBarTheme.labelBehavior ??
-        NavigationDestinationLabelBehavior.alwaysShow;
-    final labelType = switch (labelBehavior) {
-      NavigationDestinationLabelBehavior.alwaysShow =>
-        NavigationRailLabelType.all,
-      NavigationDestinationLabelBehavior.onlyShowSelected =>
-        NavigationRailLabelType.selected,
-      NavigationDestinationLabelBehavior.alwaysHide => NavigationRailLabelType.none,
-    };
-    return Scaffold(
-      key: _scaffoldKey,
-      appBar: widget.appBar,
-      // 横屏左右安全区：侧栏与内容避开异形屏/圆角屏的左右 cutout（刘海横置）。
-      // 只保护左右，上下留给页面自身的 AppBar / body 处理。
-      body: SafeArea(
-        top: false,
-        bottom: false,
-        child: Row(
-          children: [
-            // Visibility(maintainState) 内部用 Offstage 隐藏：元素树结构保持稳定，
-            // hideNavigation 切换时 body（Expanded 子项）不会卸载重建，避免页面
-            // dispose→重建死循环导致横屏无法滑动/点击。
-            Visibility(
-              visible: !widget.hideNavigation,
-              maintainState: true,
-              child: NavigationRail(
-                selectedIndex: widget.selectedIndex,
-                onDestinationSelected: _handleDestinationSelected,
-                // 每个 tab 的图标外包自定义胶囊（icon 与 selectedIcon 各占一个
-                // key 槽位，同一时刻只有其一在树中；选中时显示胶囊，
-                // 点击/切换后胶囊水平超出回弹，图标不动）
-                destinations: [
-                  for (int i = 0; i < widget.railDestinations.length; i++)
-                    NavigationRailDestination(
-                      icon: _CapsuleBounce(
-                        key: _bounceKeys[i],
-                        selected: widget.selectedIndex == i,
-                        child: widget.railDestinations[i].icon,
-                      ),
-                      selectedIcon: _CapsuleBounce(
-                        key: _selectedBounceKeys[i],
-                        selected: widget.selectedIndex == i,
-                        child: widget.railDestinations[i].selectedIcon,
-                      ),
-                      label: widget.railDestinations[i].label,
-                    ),
-                ],
-                leading: widget.floatingActionButton,
-                labelType: labelType,
-                // 原生胶囊已由 theme 关闭（indicatorColor transparent），
-                // 胶囊统一由 _CapsuleBounce 绘制
-                indicatorColor: Colors.transparent,
-                // 图标组垂直居中排列（groupAlignment 0 = 居中，-1 = 顶部）。
-                // tab 过多时 NavigationRail 内部自动滚动。宽度/间距均为原生固定规格。
-                groupAlignment: 0.0,
-              ),
-            ),
-            Visibility(
-              visible: !widget.hideNavigation,
-              maintainState: true,
-              child: VerticalDivider(
-                thickness: 1,
-                width: 1,
-                color: Theme.of(context).colorScheme.outlineVariant,
-              ),
-            ),
-            Expanded(child: widget.mediumBody ?? widget.body),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 /// 选中指示器胶囊（外观与 M3 原生胶囊一致：secondaryContainer 实心
@@ -334,7 +218,7 @@ class _ResponsiveScaffoldState extends State<ResponsiveScaffold> {
 /// - 动画由 **MD3E spatial spring**（dampingRatio 0.6 / stiffness 200，
 ///   与 m3e_core 弹簧一致）驱动：快速拉伸超出（1 → 1.2，过冲）后弹回
 ///   （1.2 → 1，过冲振荡收敛），自驱动播完；
-/// - 不包任何手势/监听，避免与 NavigationBar / NavigationRail 自身的点击
+/// - 不包任何手势/监听，避免与 NavigationBar 自身的点击
 ///   竞争；动画由父级（_handleDestinationSelected 点击）或本组件
 ///   didUpdateWidget（selected false→true 切换）触发。
 class _CapsuleBounce extends StatefulWidget {

@@ -137,7 +137,7 @@ void main() {
           ],
           child: MaterialApp(
             navigatorKey: appNavigatorKey,
-            home: const FullPlayer(dockMode: true),
+            home: const FullPlayer(),
           ),
         ),
       );

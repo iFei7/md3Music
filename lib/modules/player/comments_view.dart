@@ -104,9 +104,7 @@ class _FloorState {
 ///
 /// 在 FullPlayer 中作为 TabBarView 第三个 Tab 展示。
 ///
-/// - AM 风格（[isAmStyle] = true）：背景为模糊封面 + 黑蒙版，统一白色文字。
-/// - MD3 风格（[isAmStyle] = false，默认）：跟随莫奈色主题，用户名用主色调，
-///   评论正文和时间戳根据深浅色模式自动适配。
+/// 跟随莫奈色主题：用户名用主色调，评论正文和时间戳根据深浅色模式自动适配。
 ///
 /// **功能**：
 /// - 歌手评论/歌手评论置顶展示，带徽章标识
@@ -122,9 +120,6 @@ class CommentsView extends StatefulWidget {
 
   /// 封面 URL（保留参数兼容性，不再用于智能反色）。
   final String? artworkUri;
-
-  /// 是否为 AM 风格播放器。true 时使用白色文字方案，false 时跟随主题色。
-  final bool isAmStyle;
 
   /// 外部传入的滚动控制器（评论托盘 DraggableScrollableSheet 提供），
   /// 用于让面板高度可随列表滚动交互式缩放。为空时内部自建。
@@ -146,7 +141,6 @@ class CommentsView extends StatefulWidget {
     required this.songHash,
     this.albumAudioId,
     this.artworkUri,
-    this.isAmStyle = false,
     this.scrollController,
     this.showComposer = true,
     this.onReplyComment,
@@ -682,28 +676,11 @@ class _CommentsViewState extends State<CommentsView> {
   Widget _buildSortSelector() {
     // 播放器评论 tab 没有内联输入框：右侧提供显式的「评论」入口
     final showComposeButton = !widget.showComposer && widget.onReplyComment != null;
-    // AM 皮肤浮在模糊封面上，跟随主题的分组底色会很突兀，
-    // 改成半透明白色：选中段更亮、未选中段更淡
-    final groupDecoration = widget.isAmStyle
-        ? M3EToggleButtonDecoration(
-            backgroundColor: WidgetStateProperty.resolveWith(
-              (states) => states.contains(WidgetState.selected)
-                  ? const Color(0x2EFFFFFF)
-                  : const Color(0x14FFFFFF),
-            ),
-            foregroundColor: WidgetStateProperty.resolveWith(
-              (states) => states.contains(WidgetState.selected)
-                  ? Colors.white
-                  : const Color(0xB3FFFFFF),
-            ),
-          )
-        : null;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(
         children: [
           M3EToggleButtonGroup(
-            decoration: groupDecoration,
             actions: const [
               M3EToggleButtonGroupAction(label: Text('最热')),
               M3EToggleButtonGroupAction(label: Text('最新')),
@@ -733,23 +710,9 @@ class _CommentsViewState extends State<CommentsView> {
                 HapticFeedback.selectionClick();
                 setState(() => _scope = scope);
               },
-              fieldStyle: widget.isAmStyle
-                  ? const M3EDropdownFieldStyle(
-                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      backgroundColor: Color(0x14FFFFFF),
-                      // 前景色同时驱动下拉箭头（fgColor），AM 皮肤下要求白色
-                      foregroundColor: Colors.white,
-                      border: BorderSide.none,
-                      focusedBorder: BorderSide.none,
-                      selectedTextStyle: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                      ),
-                      hintStyle: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
-                    )
-                  : const M3EDropdownFieldStyle(
-                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    ),
+              fieldStyle: const M3EDropdownFieldStyle(
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -758,19 +721,10 @@ class _CommentsViewState extends State<CommentsView> {
             M3EFilledButton(
               onPressed: () => widget.onReplyComment?.call(null),
               tooltip: '写评论',
-              decoration: widget.isAmStyle
-                  ? M3EButtonDecoration(
-                      padding: EdgeInsets.zero,
-                      fixedSize: const Size.square(36),
-                      backgroundColor: WidgetStateProperty.all(
-                        const Color(0x1FFFFFFF),
-                      ),
-                      foregroundColor: WidgetStateProperty.all(Colors.white),
-                    )
-                  : const M3EButtonDecoration(
-                      padding: EdgeInsets.zero,
-                      fixedSize: Size.square(36),
-                    ),
+              decoration: const M3EButtonDecoration(
+                padding: EdgeInsets.zero,
+                fixedSize: Size.square(36),
+              ),
               semanticLabel: '写评论',
               child: const Icon(Icons.edit_outlined, size: 18),
             ),
@@ -863,25 +817,13 @@ class _CommentsViewState extends State<CommentsView> {
     final commentFontSize = display.commentFontSize;
     final replyFontSize = display.commentReplyFontSize;
 
-    final Color primaryTextColor;
-    final Color secondaryTextColor;
-    final Color usernameColor;
+    final colorScheme = Theme.of(context).colorScheme;
+    final Color primaryTextColor = colorScheme.onSurface;
+    final Color secondaryTextColor = colorScheme.onSurfaceVariant;
+    final Color usernameColor = colorScheme.primary;
 
-    if (widget.isAmStyle) {
-      primaryTextColor = Colors.white;
-      secondaryTextColor = const Color(0xB3FFFFFF);
-      usernameColor = const Color(0xB3FFFFFF);
-    } else {
-      final colorScheme = Theme.of(context).colorScheme;
-      primaryTextColor = colorScheme.onSurface;
-      secondaryTextColor = colorScheme.onSurfaceVariant;
-      usernameColor = colorScheme.primary;
-    }
-
-    // loading 指示器颜色：AM 风格保持白色，MD3 风格跟随莫奈色（primary）。
-    final indicatorColor = widget.isAmStyle
-        ? primaryTextColor
-        : Theme.of(context).colorScheme.primary;
+    // loading 指示器颜色：跟随莫奈色（primary）。
+    final indicatorColor = colorScheme.primary;
 
     if (_isLoading) {
       return Center(child: M3ELoadingIndicator(color: indicatorColor));
@@ -1117,7 +1059,6 @@ class _CommentsViewState extends State<CommentsView> {
       avoidKeyboard: true,
       replyToName: _replyTarget?.displayName,
       onCancelReply: () => setState(() => _replyTarget = null),
-      isAmStyle: widget.isAmStyle,
       onSubmit: _submitComment,
     );
   }

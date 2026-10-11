@@ -4,7 +4,6 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/models/album.dart';
-import '../../core/layout/responsive_layout.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../providers/kugou_provider.dart';
 import '../../providers/player_provider.dart';
@@ -462,13 +461,9 @@ class _CompactAlbumGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final count = albums.length < maxItems ? albums.length : maxItems;
-    // 计划 4.7：按面板局部宽度定列数——桌面宽面板多列，手机仍两列。
     return LayoutBuilder(
       builder: (context, c) {
-        final columns = isDesktopLayout(context)
-            ? gridColumnsForWidth(c.maxWidth,
-                targetExtent: 280, min: 2, max: 4)
-            : 2;
+        const columns = 2;
         final rows = <Widget>[];
         for (var i = 0; i < count; i += columns) {
           final cells = <Widget>[];

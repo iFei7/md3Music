@@ -9,9 +9,9 @@ import 'responsive_layout.dart';
 /// 的 `LayoutBuilder + gridColumnsForWidth + SliverGrid` 模式收敛成一个可复用组件，
 /// 统一列数 / 间距 / 目标列宽入参，供各**卡片 / 封面类**列表页复用。
 ///
-/// 关键原则（与 `isDesktopLayout` 桌面开关**无关**）：
-/// - 一律按 [LayoutBuilder] 的**局部约束宽度**判定列数，而非全局 `MediaQuery` 或
-///   开关。因此分栏 / 双栏 / 窄窗 / 竖屏手机都能自然回落到单列或少列，不会把内容
+/// 关键原则：
+/// - 一律按 [LayoutBuilder] 的**局部约束宽度**判定列数，而非全局 `MediaQuery`。
+///   因此分栏 / 双栏 / 窄窗 / 竖屏手机都能自然回落到单列或少列，不会把内容
 ///   拉伸撑满，也不会在窄面板里塞进过多列。
 /// - 宽度低于 [singleColumnBelow] 时强制单列（[ListView] / [SliverList]），保证窄屏
 ///   仍是清晰的单列列表；越过阈值后按每列目标宽度 [targetExtent] 均分列数，夹在

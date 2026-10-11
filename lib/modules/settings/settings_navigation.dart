@@ -112,17 +112,14 @@ SettingsLevel resolveSettingsLevel({
 
 /// 设置页 Pad 双列视图开关（纯函数，便于单测）。
 ///
-/// 三个条件同时满足才出「左列分类 + 右列内容」双列：
+/// 两个条件同时满足才出「左列分类 + 右列内容」双列：
 /// - [padLayout]：大屏设备判定，由调用方用 `isPadLayout(context)` 求值
 ///   （手机横屏宽度再大也返回 false，不触发双列）；
-/// - [desktopLayout]：桌面外壳开启时恒单列 —— 横屏平板重设计计划 4.4
-///   把设置页归为 A 类（中央内容区导航），桌面形态不引入双栏；
 /// - [width] ≥ 600：Pad 竖屏（逻辑宽 ≈853）也出双列；「显示大小」调大后
 ///   视口跌出 600 回落单列，与 `isPadLayout` auto 判定口径一致。
 bool settingsUseTwoPaneLayout({
   required bool padLayout,
   required double width,
-  bool desktopLayout = false,
 }) {
-  return padLayout && !desktopLayout && width >= 600;
+  return padLayout && width >= 600;
 }

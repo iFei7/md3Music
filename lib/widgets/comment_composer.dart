@@ -20,9 +20,6 @@ class CommentComposer extends StatefulWidget {
   /// 取消回复模式。
   final VoidCallback? onCancelReply;
 
-  /// AM 风格（深色背景 + 白字），与 `CommentsView.isAmStyle` 保持一致。
-  final bool isAmStyle;
-
   /// 提交回调：返回 true 表示发送成功。
   final Future<bool> Function(String text) onSubmit;
 
@@ -45,7 +42,6 @@ class CommentComposer extends StatefulWidget {
     this.sending = false,
     this.replyToName,
     this.onCancelReply,
-    this.isAmStyle = false,
     this.autofocus = false,
     this.avoidKeyboard = false,
     this.showTopBorder = true,
@@ -84,21 +80,15 @@ class _CommentComposerState extends State<CommentComposer> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final Color textColor =
-        widget.isAmStyle ? Colors.white : colorScheme.onSurface;
-    final Color hintColor = widget.isAmStyle
-        ? const Color(0x8AFFFFFF)
-        : colorScheme.onSurfaceVariant;
-    final Color borderColor = widget.isAmStyle
-        ? const Color(0x33FFFFFF)
-        : colorScheme.outlineVariant;
+    final Color textColor = colorScheme.onSurface;
+    final Color hintColor = colorScheme.onSurfaceVariant;
+    final Color borderColor = colorScheme.outlineVariant;
 
     return Container(
       decoration: BoxDecoration(
         border: widget.showTopBorder
             ? Border(top: BorderSide(color: borderColor))
             : null,
-        color: widget.isAmStyle ? const Color(0x1A000000) : null,
       ),
       padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
       child: SafeArea(

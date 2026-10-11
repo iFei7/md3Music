@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
@@ -7,7 +6,6 @@ import 'package:provider/provider.dart';
 import 'package:provider/single_child_widget.dart';
 import 'package:quick_actions/quick_actions.dart';
 
-import 'core/layout/desktop_shell.dart';
 import 'core/layout/responsive_layout.dart';
 import 'core/layout/ui_density.dart';
 import 'core/services/external_media_intent_service.dart';
@@ -19,7 +17,6 @@ import 'core/utils/app_toast.dart';
 import 'core/widgets/app_background.dart';
 import 'core/widgets/safe_insets_guard.dart';
 import 'data/models/playlist.dart';
-import 'data/repositories/settings_repository.dart';
 import 'services/kugou_api/kugou_api_client.dart';
 import 'main.dart'
     show
@@ -36,7 +33,6 @@ import 'modules/player/full_player.dart';
 import 'modules/player/full_player_route.dart';
 import 'modules/player/glass_dock_player.dart';
 import 'modules/player/player_drag_overlay.dart';
-import 'modules/player/car_mode_panel.dart';
 import 'modules/playlist/playlist_page.dart';
 import 'modules/search/search_page.dart';
 import 'modules/settings/settings_page.dart';
@@ -61,7 +57,6 @@ import 'providers/shortcut_config_provider.dart';
 import 'providers/tab_config_provider.dart';
 import 'providers/theme_provider.dart';
 import 'providers/comment_display_provider.dart';
-import 'providers/car_mode_provider.dart';
 import 'services/kugou_server.dart';
 import 'widgets/dlna_casting_overlay.dart';
 import 'core/widgets/local_server_down_banner.dart';
@@ -166,8 +161,6 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => DlnaProvider()),
         // 评论显示设置（字号等）
         ChangeNotifierProvider(create: (_) => CommentDisplayProvider()),
-        // 车机模式（常驻播放器面板的开关 / 宽度 / 停靠位置）
-        ChangeNotifierProvider(create: (_) => CarModeProvider()),
         // 可选扩展：私有构建注入的额外 Provider（默认无）
         ...?extraProviders,
       ],
@@ -354,19 +347,12 @@ class _AppViewState extends State<_AppView> {
                   // 全局背景层（主页/底层背景）：复用 AppBackground 组件。
                   // 二级页面由路由过渡内嵌 AppBackground，随页面位移入场。
                   Positioned.fill(child: AppBackground()),
-                  // 车机模式：把整棵 Navigator 与常驻播放器面板并排。
-                  // 必须包在 Navigator **之外**（就是这里）——面板要同时覆盖
-                  // push 出来的所有二级页面，放进任何路由内部都覆盖不到。
-                  // 未开启车机模式（或当前页面声明抑制）时本组件原样返回 child，
-                  // 布局与改动前完全一致。
                   // material_ui 兼容桥：dynamic_color / cached_network_image 等第三方包
                   // 仍导入 package:flutter/material.dart，其 Theme.of(context) 取不到本项目的
                   // material_ui 主题。本桥把 ThemeData / MaterialLocalizations 提供给它们。
                   // 官方定位为过渡工具，待依赖全部迁移到 material_ui 后移除。
-                  CarModePanel(
-                    // ignore: deprecated_member_use
-                    child: MaterialUiCompatibilityBridge(child: child!),
-                  ),
+                  // ignore: deprecated_member_use
+                  MaterialUiCompatibilityBridge(child: child!),
                   const DlnaCastingOverlay(),
                   // 上滑拖拽跟手覆盖层（在 Navigator 之上，拖拽期间显示预览）
                   const PlayerDragOverlay(),
@@ -622,11 +608,6 @@ class _MainLayoutState extends State<_MainLayout>
   /// 竖屏下为 Dock 预留的内容底部空间（Dock 高 52 + 底部留白 12 + 缓冲）。
   static const double _kDockReservedBottom = 80.0;
 
-  /// 桌面外壳句柄：横屏平板布局下由根 [PopScope] 调用其 [DesktopShellState.maybePop]
-  /// 先回退当前 Tab 的中央内容栈（见横屏平板重设计计划 4.4 / 六）。
-  final GlobalKey<DesktopShellState> _desktopShellKey =
-      GlobalKey<DesktopShellState>();
-
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
 
 
@@ -758,124 +739,6 @@ class _MainLayoutState extends State<_MainLayout>
     }
   }
 
-  NavigationRailDestination _buildRailDestination(TabItem tab) {
-    // 横屏侧栏文字跟随设置页「底部导航栏文字」三档：由
-    // CompactNavigationRail 按 labelBehavior 决定是否渲染。这里始终传真实标题
-    //（与底部 NavigationBar 一致；仅图标模式下文字被隐藏，label 仍用于无障碍朗读）。
-    final label = Text(tab.label);
-    switch (tab.id) {
-      case 'discover':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.home_outlined),
-          selectedIcon: const Icon(Icons.home),
-          label: label,
-        );
-      case 'library':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.library_music_outlined),
-          selectedIcon: const Icon(Icons.library_music),
-          label: label,
-        );
-      case 'favorites':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.favorite_outline),
-          selectedIcon: const Icon(Icons.favorite),
-          label: label,
-        );
-      case 'search':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.search_outlined),
-          selectedIcon: const Icon(Icons.search),
-          label: label,
-        );
-      case 'recognition':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.mic_none_outlined),
-          selectedIcon: const Icon(Icons.mic),
-          label: label,
-        );
-      case 'settings':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.settings_outlined),
-          selectedIcon: const Icon(Icons.settings),
-          label: label,
-        );
-      case 'user':
-        return NavigationRailDestination(
-          icon: const Icon(Icons.person_outlined),
-          selectedIcon: const Icon(Icons.person),
-          label: label,
-        );
-      default:
-        return NavigationRailDestination(
-          icon: const Icon(Icons.circle_outlined),
-          selectedIcon: const Icon(Icons.circle),
-          label: label,
-        );
-    }
-  }
-
-  NavigationDrawerDestination _buildDrawerDestination(TabItem tab) {
-    switch (tab.id) {
-      case 'discover':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.home_outlined),
-          selectedIcon: const Icon(Icons.home),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'library':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.library_music_outlined),
-          selectedIcon: const Icon(Icons.library_music),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'favorites':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.favorite_outline),
-          selectedIcon: const Icon(Icons.favorite),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'search':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.search_outlined),
-          selectedIcon: const Icon(Icons.search),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'recognition':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.mic_none_outlined),
-          selectedIcon: const Icon(Icons.mic),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'settings':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.settings_outlined),
-          selectedIcon: const Icon(Icons.settings),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      case 'user':
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.person_outlined),
-          selectedIcon: const Icon(Icons.person),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-      default:
-        return NavigationDrawerDestination(
-          icon: const Icon(Icons.circle_outlined),
-          selectedIcon: const Icon(Icons.circle),
-          // 公开版偏好：侧栏（NavigationRail）也不显示文字，仅图标
-          label: const Text(''),
-        );
-    }
-  }
-
   @override
   void initState() {
     super.initState();
@@ -924,10 +787,6 @@ class _MainLayoutState extends State<_MainLayout>
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _handleExternalMediaRequest(),
     );
-    // 桌面外壳总开关：启动时载入持久化值 + 监听运行时切换（设置页开关）。
-    // 载入前默认 false（常规响应式布局），载入/切换后触发整棵子树重建。
-    kDesktopModeEnabled.addListener(_onDesktopModeChanged);
-    unawaited(_loadDesktopModeEnabled());
   }
 
   @override
@@ -935,28 +794,10 @@ class _MainLayoutState extends State<_MainLayout>
     _exitResetTimer?.cancel();
     _exitController.dispose();
     _navExpanded.dispose();
-    kDesktopModeEnabled.removeListener(_onDesktopModeChanged);
     shortcutTabRequest.removeListener(_handleShortcutTabRequest);
     externalMediaRequest.removeListener(_handleExternalMediaRequest);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
-  }
-
-  /// 启动时从持久化载入桌面外壳开关，写入全局 [kDesktopModeEnabled]。
-  Future<void> _loadDesktopModeEnabled() async {
-    final enabled = await SettingsRepository().getDesktopModeEnabled();
-    if (!mounted) return;
-    // 仅在与当前值不同时赋值，避免无谓通知；赋值会触发 _onDesktopModeChanged。
-    if (kDesktopModeEnabled.value != enabled) {
-      kDesktopModeEnabled.value = enabled;
-    }
-  }
-
-  /// 桌面外壳开关变化（启动载入 / 设置页切换）→ 重建整棵子树，
-  /// 让 [isDesktopLayout] 分支（外壳选择、双栏导航、探索列数等）随之切换。
-  void _onDesktopModeChanged() {
-    if (!mounted) return;
-    setState(() {});
   }
 
   /// 处理 shortcut 入口的 tab 切换请求。
@@ -1150,10 +991,6 @@ class _MainLayoutState extends State<_MainLayout>
     for (var i = 0; i < visibleTabs.length; i++) {
       destinations.add(_buildDestination(visibleTabs[i], i));
     }
-    final railDestinations = visibleTabs.map(_buildRailDestination).toList();
-    final drawerDestinations = visibleTabs
-        .map(_buildDrawerDestination)
-        .toList();
 
     // 一级页面返回拦截：
     // 1) PopScope 拦截系统返回手势 / 物理返回键，canPop=false → 触发 onPopInvoked
@@ -1167,11 +1004,6 @@ class _MainLayoutState extends State<_MainLayout>
         if (playerDragActive.value) {
           playerDragActive.value = false;
           playerExpansion.value = 0.0;
-          return;
-        }
-        // 桌面布局：先回退当前 Tab 的中央内容栈（详情页返回），空栈才继续。
-        if (isDesktopLayout(context) &&
-            (_desktopShellKey.currentState?.maybePop() ?? false)) {
           return;
         }
         _onBackPressedForExit();
@@ -1201,38 +1033,12 @@ class _MainLayoutState extends State<_MainLayout>
               ),
             );
           },
-          child: isDesktopLayout(context)
-              ? DesktopShell(
-                  key: _desktopShellKey,
-                  visibleTabs: visibleTabs,
-                  selectedIndex: _selectedIndex,
-                  railDestinations: railDestinations,
-                  pageBuilder: _buildPageForTab,
-                  header: ValueListenableBuilder<bool>(
-                    valueListenable: KugouApiClient.localServerAvailable,
-                    builder: (context, available, _) => available
-                        ? const SizedBox.shrink()
-                        : LocalServerDownBanner(onRetry: KugouApiServer.start),
-                  ),
-                  onDestinationSelected: (index) {
-                    if (isFullPlayerOnTop) return;
-                    _expandNav();
-                    setState(() {
-                      _previousSelectedIndex = _selectedIndex;
-                      _selectedIndex = index;
-                    });
-                  },
-                )
-              : ResponsiveScaffold(
+          child: ResponsiveScaffold(
               destinations: destinations,
-              railDestinations: railDestinations,
-              drawerDestinations: drawerDestinations,
               selectedIndex: _selectedIndex,
-              // 竖屏：底部 NavigationBar 由悬浮玻璃 Dock 取代（hideNavigation
-              // 只隐藏原生导航，Dock 在 _buildBody 的 Stack 里渲染）；
-              // 横屏：保留 NavigationRail，Dock 退化为右下播放器圆钮。
-              hideNavigation:
-                  MediaQuery.orientationOf(context) == Orientation.portrait,
+              // 底部 NavigationBar 由悬浮玻璃 Dock 取代（hideNavigation 只隐藏
+              // 原生导航，Dock 在 _buildBody 的 Stack 里渲染，导航胶囊 + 播放器）。
+              hideNavigation: true,
               onDestinationSelected: (index) {
                 // 守卫：FullPlayer 在栈顶时（展开进度 > 0.5），忽略 tab 切换，
                 // 避免与 FullPlayer 动画叠加导致状态混乱。
@@ -1259,7 +1065,7 @@ class _MainLayoutState extends State<_MainLayout>
     BuildContext context,
     List<TabItem> visibleTabs,
   ) {
-    // 切换方向：横屏（侧边导航栏）用上下淡入，竖屏（底部导航栏）用左右滑动
+    // 切换方向：横屏用上下淡入，竖屏用左右滑动
     final isLandscape =
         MediaQuery.orientationOf(context) == Orientation.landscape;
     final useVerticalTransition = isLandscape;
@@ -1353,8 +1159,7 @@ class _MainLayoutState extends State<_MainLayout>
       );
     }
 
-    // 悬浮玻璃 Dock：竖屏底部居中（导航胶囊 + 播放器圆钮）；
-    // 横屏（NavigationRail）退化为右下播放器圆钮，导航交给侧栏。
+    // 悬浮玻璃 Dock：底部居中（导航胶囊 + 播放器圆钮）。
     return Stack(
       children: [
         Positioned.fill(
@@ -1382,7 +1187,6 @@ class _MainLayoutState extends State<_MainLayout>
                 _collapseNav();
               }
             },
-            playerOnly: isLandscape,
           ),
         ),
       ],
