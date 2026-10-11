@@ -36,8 +36,8 @@ void main() {
       'decodeContent': krcText,
     };
 
-    test('场景1: 双请求成功 — decodedContent 与 decodedKrcContent 都有值', () {
-      final lyric = KugouApiClient.mergeLyricResponses(lrcJson, krcJson);
+    test('场景1: 双请求成功 — decodedContent 与 decodedKrcContent 都有值', () async {
+      final lyric = await KugouApiClient.mergeLyricResponses(lrcJson, krcJson);
 
       expect(lyric, isNotNull);
       // LRC 明文来自 LRC 响应的 decodeContent
@@ -54,14 +54,14 @@ void main() {
       expect(lyric.displayLrcLyric, lrcText);
     });
 
-    test('场景1变体: KRC 响应显式带 decodeKrcContent 字段时优先用专用字段', () {
+    test('场景1变体: KRC 响应显式带 decodeKrcContent 字段时优先用专用字段', () async {
       // 上游若显式返回 decodeKrcContent 字段，应优先于 decodeContent
       final krcJsonWithExplicitField = <String, dynamic>{
         'content': 'BASE64_KRC_RAW',
         'decodeContent': 'SHOULD_NOT_BE_USED',
         'decodeKrcContent': krcText,
       };
-      final lyric = KugouApiClient.mergeLyricResponses(
+      final lyric = await KugouApiClient.mergeLyricResponses(
         lrcJson,
         krcJsonWithExplicitField,
       );
@@ -70,9 +70,9 @@ void main() {
       expect(lyric.decodedContent, lrcText);
     });
 
-    test('场景2: 仅 LRC 成功（KRC 失败）— decodedKrcContent 为 null', () {
+    test('场景2: 仅 LRC 成功（KRC 失败）— decodedKrcContent 为 null', () async {
       // KRC 请求失败 → krcJson 为 null
-      final lyric = KugouApiClient.mergeLyricResponses(lrcJson, null);
+      final lyric = await KugouApiClient.mergeLyricResponses(lrcJson, null);
 
       expect(lyric, isNotNull);
       expect(lyric!.decodedContent, lrcText);
@@ -82,9 +82,9 @@ void main() {
       expect(lyric.displayLyric, lrcText);
     });
 
-    test('场景3: 仅 KRC 成功（LRC 失败）— decodedContent 为 null', () {
+    test('场景3: 仅 KRC 成功（LRC 失败）— decodedContent 为 null', () async {
       // LRC 请求失败 → lrcJson 为 null
-      final lyric = KugouApiClient.mergeLyricResponses(null, krcJson);
+      final lyric = await KugouApiClient.mergeLyricResponses(null, krcJson);
 
       expect(lyric, isNotNull);
       expect(lyric!.decodedContent, isNull);
@@ -95,8 +95,8 @@ void main() {
       expect(lyric.displayLrcLyric, isNull);
     });
 
-    test('场景4: 两者都失败 — 返回 null', () {
-      final lyric = KugouApiClient.mergeLyricResponses(null, null);
+    test('场景4: 两者都失败 — 返回 null', () async {
+      final lyric = await KugouApiClient.mergeLyricResponses(null, null);
       expect(lyric, isNull);
     });
 
@@ -119,7 +119,7 @@ void main() {
       expect(lyric.displayLyric, krcText);
     });
 
-    test('合并时 translatedContent 优先取 LRC，LRC 缺失则取 KRC', () {
+    test('合并时 translatedContent 优先取 LRC，LRC 缺失则取 KRC', () async {
       // LRC 没有 translated_content，KRC 有
       final lrcNoTrans = <String, dynamic>{
         'content': 'LRC_RAW',
@@ -130,7 +130,7 @@ void main() {
         'decodeContent': krcText,
         'translated_content': '[00:01.00]KRC翻译',
       };
-      final lyric = KugouApiClient.mergeLyricResponses(
+      final lyric = await KugouApiClient.mergeLyricResponses(
         lrcNoTrans,
         krcWithTrans,
       );
@@ -138,8 +138,8 @@ void main() {
       expect(lyric!.translatedContent, '[00:01.00]KRC翻译');
     });
 
-    test('空 JSON 输入不崩溃，返回非 null 但字段为空/null', () {
-      final lyric = KugouApiClient.mergeLyricResponses(
+    test('空 JSON 输入不崩溃，返回非 null 但字段为空/null', () async {
+      final lyric = await KugouApiClient.mergeLyricResponses(
         <String, dynamic>{},
         <String, dynamic>{},
       );
@@ -149,7 +149,7 @@ void main() {
       expect(lyric.decodedKrcContent, isNull);
     });
 
-    test('韩语歌 KRC 含翻译+汉字拟声词+拉丁罗马音 3 条目时正确分离', () {
+    test('韩语歌 KRC 含翻译+汉字拟声词+拉丁罗马音 3 条目时正确分离', () async {
       // 模拟韩语歌 KRC 明文：含 [language:<base64>] 元数据
       // base64 解码后 content 数组有 3 个 entry：
       // - 单元素翻译（含汉字）
@@ -191,7 +191,7 @@ void main() {
         'decodeContent': krcText,
       };
 
-      final lyric = KugouApiClient.mergeLyricResponses(null, krcJson);
+      final lyric = await KugouApiClient.mergeLyricResponses(null, krcJson);
 
       expect(lyric, isNotNull);
       // 翻译应是单元素条目（"翻译行1"/"翻译行2"），而非汉字拟声词

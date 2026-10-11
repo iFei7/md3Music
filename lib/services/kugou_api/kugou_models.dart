@@ -826,6 +826,11 @@ class KugouPlayUrl {
     if (lufs != null && lufs.isFinite && url.isNotEmpty) {
       kugouUrlLoudness.remove(url);
       kugouUrlLoudness[url] = (lufs: lufs, peak: peak);
+      // 内存 map 同样封顶：url 随音质/CDN 变化只增不减，长期播放会无限增长；
+      // 超限按插入顺序淘汰最旧条目（与持久化截断口径一致），保证内存有界
+      while (kugouUrlLoudness.length > _kugouLoudnessMax) {
+        kugouUrlLoudness.remove(kugouUrlLoudness.keys.first);
+      }
       // 持久化（fire-and-forget），限制数量
       if (kugouUrlLoudness.length >= 1) _persistLoudnessCache();
     }

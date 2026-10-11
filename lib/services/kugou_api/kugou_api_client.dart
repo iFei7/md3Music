@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -15,6 +16,15 @@ import 'kugou_models.dart';
 import 'lyric_lookup_result.dart';
 import 'comment_send_result.dart';
 import '../local_server_lifecycle.dart';
+
+/// 后台 isolate 内解码 JSON 并断言为对象结构（Map<String, dynamic>）。
+///
+/// 必须是顶层函数：闭包内只捕获 String 参数，不隐式捕获 receiver（this），
+/// 否则 Isolate.run 无法通过 SendPort 传递。大响应（榜单/歌单/歌词搜索
+/// JSON 可达数百 KB~MB）的解码由此挪出 UI isolate，避免掉帧。
+/// 解码失败或非对象结构时原样抛出异常，语义与调用方旧的同步 jsonDecode + as 一致。
+Map<String, dynamic> _decodeJsonMapInIsolate(String source) =>
+    jsonDecode(source) as Map<String, dynamic>;
 
 /// 一次广告领取（/youth/vip → /youth/v1/ad/play_report）的判定结果。
 enum AdClaimOutcome {
@@ -485,11 +495,11 @@ class KugouApiClient {
           .timeout(const Duration(minutes: 5));
       // 酷狗指纹接口在"未匹配"时返回 502 + JSON body（含 error_code），
       // 需要解析 body 以区分"未识别"和"真正的服务错误"
+      // （云盘上传等响应体可能很大，解码放后台 isolate，避免阻塞 UI）
       try {
-        final json = jsonDecode(response.body);
-        if (json is Map<String, dynamic>) {
-          return json;
-        }
+        final body = response.body;
+        final json = await Isolate.run(() => _decodeJsonMapInIsolate(body));
+        return json;
       } catch (_) {}
       print(
         '[API _postBinary] Non-JSON body: status=${response.statusCode} body=${response.body.substring(0, response.body.length.clamp(0, 200))}',
@@ -1797,7 +1807,7 @@ class KugouApiClient {
       ]);
       final lrcJson = results[0];
       final krcJson = results[1];
-      final merged = mergeLyricResponses(lrcJson, krcJson);
+      final merged = await mergeLyricResponses(lrcJson, krcJson);
       if (!_hasLyricText(merged)) {
         failures.record(_LyricApiFailure.invalidData);
         return failures.noMatchResult();
@@ -1983,7 +1993,7 @@ class KugouApiClient {
             krcJson['decoded_krc_content']?.toString() ??
             krcJson['krcContent']?.toString();
         if (krcContent == null) continue;
-        final extracted = _extractTranslationFromKrc(krcContent);
+        final extracted = await _extractTranslationFromKrc(krcContent);
         if (extracted.translation != null &&
             extracted.translation!.isNotEmpty) {
           return extracted;
@@ -1997,6 +2007,7 @@ class KugouApiClient {
 
   /// 合并 LRC 与 KRC 两个响应，构造同时携带两种明文的 KugouLyric。
   /// 抽为静态方法便于单元测试（无需 mock HTTP）。
+  /// KRC 响应若含 [language:] 元数据，内部会经后台 isolate 解码（异步）。
   ///
   /// 字段映射规则（依 spec.md "Requirement: KRC 双请求与降级"）：
   /// - LRC 响应的 `decodeContent` → `KugouLyric.decodedContent`
@@ -2007,10 +2018,10 @@ class KugouApiClient {
   /// 显式返回 `decodeKrcContent` / `decoded_krc_content` / `krcContent`）。
   /// 这里对 KRC 响应做特殊处理：优先取专用字段，否则把 `decodeContent` 作为 KRC 明文。
   /// 两者都为 null 时返回 null。
-  static KugouLyric? mergeLyricResponses(
+  static Future<KugouLyric?> mergeLyricResponses(
     Map<String, dynamic>? lrcJson,
     Map<String, dynamic>? krcJson,
-  ) {
+  ) async {
     if (lrcJson == null && krcJson == null) return null;
 
     final lrcLyric = lrcJson != null ? KugouLyric.fromJson(lrcJson) : null;
@@ -2043,7 +2054,7 @@ class KugouApiClient {
     }
     String? romaLrc;
     if (krcContent != null) {
-      final extracted = _extractTranslationFromKrc(krcContent);
+      final extracted = await _extractTranslationFromKrc(krcContent);
       translationLrc ??= extracted.translation;
       romaLrc = extracted.roma;
     }
@@ -2073,9 +2084,9 @@ class KugouApiClient {
   ///
   /// 返回记录 `(translation, roma)`，任一为空表示无对应数据。
   /// 翻译/罗马音行的 startTime 来自对应 KRC 歌词行。
-  static ({String? translation, String? roma}) _extractTranslationFromKrc(
+  static Future<({String? translation, String? roma})> _extractTranslationFromKrc(
     String krcContent,
-  ) {
+  ) async {
     try {
       final langMatch = RegExp(r'\[language:([^\]]*)\]').firstMatch(krcContent);
       if (langMatch == null) return (translation: null, roma: null);
@@ -2083,7 +2094,9 @@ class KugouApiClient {
       // Base64 padding 修正
       final padding = '=' * ((4 - b64.length % 4) % 4);
       final decoded = utf8.decode(base64.decode(b64 + padding));
-      final json = jsonDecode(decoded) as Map<String, dynamic>;
+      // [language:] JSON 在逐字 KRC（长翻译/罗马音）下可达数十 KB~数百 KB，
+      // 解码放后台 isolate，只传 String，不捕获实例状态。
+      final json = await Isolate.run(() => _decodeJsonMapInIsolate(decoded));
       final contentList = json['content'] as List;
 
       // 提取 KRC 歌词行的 startTime（所有 language 共用同一套时间戳）

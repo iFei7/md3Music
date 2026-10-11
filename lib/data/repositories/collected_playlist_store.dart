@@ -11,6 +11,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 class CollectedPlaylistStore {
   static const String _kKey = 'kugou_collected_playlist_map';
 
+  /// 收藏映射条目上限：该 map 随用户历史收藏/取消收藏行为只增不减
+  /// （取消收藏走 remove，但换号/清理远端后本地残留会累积）。
+  /// 超限按写入顺序（LinkedHashMap 插入序）淘汰最旧条目；单个条目仅
+  /// `playlistId → listid` 两个短 id，200 条上限远超单用户实际收藏量，
+  /// 不会伤及在用数据。数据格式不变，旧数据可正常读取。
+  static const int _maxEntries = 200;
+
   static Future<Map<String, String>> _load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -48,6 +55,10 @@ class CollectedPlaylistStore {
       map.remove(playlistId);
     } else {
       map[playlistId] = listId;
+      // 写入新条目后超限 → 淘汰最旧（插入序最早）的条目，防无界增长
+      while (map.length > _maxEntries) {
+        map.remove(map.keys.first);
+      }
     }
     await _save(map);
   }
