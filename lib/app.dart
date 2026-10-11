@@ -593,11 +593,12 @@ class _MainLayoutState extends State<_MainLayout>
   /// 默认 true → 冷启动为「导航胶囊 + 播放器球」组合。
   final ValueNotifier<bool> _navExpanded = ValueNotifier<bool>(true);
 
-  /// 内容区为悬浮 Dock 让出的底部空间（不含系统手势条）。
+  /// 注入到 MediaQuery 底部 padding 的 Dock 避让高度（不含系统手势条，
+  /// 手势条已包含在 mq.padding.bottom 中，注入时相加）。
   ///
-  /// Dock 内容高 52 + 底部留白 12 = 64，取 72 留 8dp 呼吸余量；系统手势条
-  /// 由 [_buildBody] 叠加 [MediaQuery.padding.bottom] 动态计算（不同机型
-  /// 手势条高度不一，写死会漏算或多留）。
+  /// Dock 内容高 52 + 底部留白 12 = 64，取 72 留 8dp 呼吸余量。各页滚动
+  /// 容器的底部 padding 应读取 MediaQuery.paddingOf(context).bottom 消费
+  /// 该值——内容延伸到 Dock 后面（悬浮感），滚动末尾靠这个 padding 让位。
   static const double _kDockReservedBottom = 72.0;
 
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
@@ -1049,10 +1050,13 @@ class _MainLayoutState extends State<_MainLayout>
     final safeIndex = _selectedIndex.clamp(0, visibleTabs.length - 1);
     final currentTab = visibleTabs[safeIndex];
 
-    // 页面内容：滚动不参与 Dock 折叠状态（已移除滚动驱动）。Dock 让位不在
-    // 这里注入 MediaQuery padding，而在最终 Stack 层统一收缩内容区（见下方注释）。
+    // 页面内容：滚动不参与 Dock 折叠状态（已移除滚动驱动）。悬浮 Dock 的
+    // 避让采用「滚动末尾 padding」而非收缩内容区：内容必须延伸到 Dock 后面
+    // 才有悬浮感（玻璃模糊衬在内容上），收缩内容区会让 Dock 下方露出一块
+    // 固定背景，看起来像坐死在底座上。因此这里把 Dock 高度并入 MediaQuery
+    // 底部 padding，由各页滚动容器消费 paddingOf(context).bottom 让位。
     final mq = MediaQuery.of(context);
-    final Widget content = Column(
+    Widget content = Column(
       children: [
         // 本地 API 服务器启动失败提示：在线内容全部不可用，但页面本身仍能渲染
         // 成空列表/转圈，用户无从判断原因。这里把状态显式摆到所有 tab 顶部。
@@ -1122,24 +1126,32 @@ class _MainLayoutState extends State<_MainLayout>
       ],
     );
 
+    // 仅竖屏注入 Dock 避让高度（横屏侧边导航场景另行处理，保持原状）。
+    // 注入值 = mq.padding.bottom（已含系统手势条）+ Dock 专属高度，页面内
+    // 读 MediaQuery.paddingOf(context).bottom 即可一次拿到「手势条 + Dock」
+    // 的完整让位量。已适配的页面（收藏 / 新碟 / 榜单 / 发现二级页等）自动
+    // 生效；未读取的硬编码 padding 页面需各自补读。
+    if (!isLandscape) {
+      content = MediaQuery(
+        data: mq.copyWith(
+          padding: mq.padding.copyWith(
+            bottom: mq.padding.bottom + _kDockReservedBottom,
+          ),
+        ),
+        child: content,
+      );
+    }
+
     // 悬浮玻璃 Dock：底部居中（导航胶囊 + 播放器圆钮）。
     // 单展开不变量：任意时刻 nav 与 player 恰好一个展开，仅两种合法组合
     // [导航胶囊 + 播放器球] / [导航球 + 播放器胶囊]。
     // 完整播放页往返：openFullPlayer / close 不触碰折叠状态，关闭播放页后
     // Dock 恢复「打开前的那个唯一展开组件」（状态只由用户点击驱动，可预期）。
+    // 内容必须 Positioned.fill 延伸到 Dock 后面（悬浮感的来源），滚动末尾
+    // 让位由上方注入的 MediaQuery padding 承担。
     return Stack(
       children: [
-        // Dock 悬浮在内容之上（Stack 兄弟节点，非 Scaffold.bottomNavigationBar），
-        // 因此内容区必须自身收缩让位，否则滑到底时末项会被 Dock 压住而点不到。
-        // 高度 = Dock 内容 52 + 底部留白 12 + 系统手势条（SafeArea.bottom）。
-        // 去掉 Dock 展开/坍缩两种状态的高度差异：两者内容高恒为 52。
-        Positioned(
-          left: 0,
-          right: 0,
-          top: 0,
-          bottom: isLandscape ? 0 : _kDockReservedBottom + mq.padding.bottom,
-          child: content,
-        ),
+        Positioned.fill(child: content),
         Positioned(
           left: 0,
           right: 0,

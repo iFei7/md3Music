@@ -336,7 +336,13 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
             child: LayoutBuilder(
               builder: (context, constraints) {
                 return SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
+                  // Dock 避让：消费注入的底部 padding
+                  padding: EdgeInsets.fromLTRB(
+                    24,
+                    24,
+                    24,
+                    24 + MediaQuery.paddingOf(context).bottom,
+                  ),
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
                       minHeight: constraints.maxHeight - 48,

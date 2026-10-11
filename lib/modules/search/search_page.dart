@@ -326,7 +326,10 @@ class _SearchPageState extends State<SearchPage>
     // 未输入关键词：搜索历史 + 音乐探索（从发现页迁移的内容模块）。
     // 已移除「热门搜索」及其自动网络请求。
     return ListView(
-      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+      padding: EdgeInsets.only(
+        bottom: AppSpacing.sm + MediaQuery.paddingOf(context).bottom,
+      ),
       children: [
         if (_searchHistory.isNotEmpty) ...[
           Padding(
@@ -392,7 +395,13 @@ class _SearchPageState extends State<SearchPage>
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+      // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+      padding: EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.sm,
+        AppSpacing.lg,
+        AppSpacing.sm + MediaQuery.paddingOf(context).bottom,
+      ),
       itemCount: suggestions.length,
       itemBuilder: (context, index) {
         final suggestion = suggestions[index];
@@ -453,6 +462,10 @@ class _SearchPageState extends State<SearchPage>
         children: [
           Expanded(
             child: ListView.builder(
+              // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.paddingOf(context).bottom,
+              ),
               itemCount: results.length,
               itemBuilder: (context, index) {
                 return SongListItem(
@@ -515,7 +528,13 @@ class _SearchPageState extends State<SearchPage>
         children: [
           Expanded(
             child: ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+              // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+              padding: EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.sm,
+                AppSpacing.md,
+                AppSpacing.sm + MediaQuery.paddingOf(context).bottom,
+              ),
               itemCount: results.length,
               itemBuilder: (context, index) {
                 final detail = results[index];
@@ -607,7 +626,13 @@ class _SearchPageState extends State<SearchPage>
             // 用 PinchableGridView 替代固定 2 列的 GridView，
             // Pad 模式下可双指捏合动态调整列数，非 Pad 模式仍固定 2 列
             child: PinchableGridView(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+              // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+              padding: EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.sm,
+                AppSpacing.md,
+                AppSpacing.sm + MediaQuery.paddingOf(context).bottom,
+              ),
               // 原 childAspectRatio 0.75、spacing 12 保持不变
               childAspectRatio: 0.75,
               spacing: 12,
@@ -687,7 +712,13 @@ class _SearchPageState extends State<SearchPage>
           Expanded(
             // 歌手是卡片类结果：手机竖屏（<600）单列，变宽后铺成多列横向卡片（计划 ⑥）。
             child: AdaptiveContentGrid(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+              // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+              padding: EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.sm,
+                AppSpacing.md,
+                AppSpacing.sm + MediaQuery.paddingOf(context).bottom,
+              ),
               targetExtent: 380,
               childAspectRatio: 3.5,
               spacing: AppSpacing.sm,
@@ -774,7 +805,13 @@ class _SearchPageState extends State<SearchPage>
             // 用 PinchableGridView 替代固定 2 列的 GridView，
             // Pad 模式下可双指捏合动态调整列数，非 Pad 模式仍固定 2 列
             child: PinchableGridView(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+              // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+              padding: EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.sm,
+                AppSpacing.md,
+                AppSpacing.sm + MediaQuery.paddingOf(context).bottom,
+              ),
               // 原 childAspectRatio 0.75、spacing 12 保持不变
               childAspectRatio: 0.75,
               spacing: 12,
@@ -911,7 +948,13 @@ class _SearchPageState extends State<SearchPage>
       return _buildNoResult();
     }
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+      // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+      padding: EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.md,
+        AppSpacing.sm + MediaQuery.paddingOf(context).bottom,
+      ),
       itemCount: results.length,
       itemBuilder: (context, index) {
         return SongListItem(

@@ -501,6 +501,8 @@ class _SettingsPageState extends State<SettingsPage>
                     else
                       ..._buildCategoryEntries(colorScheme),
                     const Gap(AppSpacing.xxl),
+                    // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+                    SizedBox(height: MediaQuery.paddingOf(context).bottom),
                   ],
                 )
               : ListView(
@@ -518,6 +520,8 @@ class _SettingsPageState extends State<SettingsPage>
                       ),
                     ),
                     const Gap(AppSpacing.xxl),
+                    // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+                    SizedBox(height: MediaQuery.paddingOf(context).bottom),
                   ],
                 ),
         ),
@@ -542,6 +546,8 @@ class _SettingsPageState extends State<SettingsPage>
           else
             ..._buildCategoryEntries(colorScheme),
           const Gap(AppSpacing.xxl),
+          // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+          SizedBox(height: MediaQuery.paddingOf(context).bottom),
         ],
       ),
       detail: _transitioned(
@@ -566,6 +572,8 @@ class _SettingsPageState extends State<SettingsPage>
                     ),
                   ),
                   const Gap(AppSpacing.xxl),
+                  // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+                  SizedBox(height: MediaQuery.paddingOf(context).bottom),
                 ],
               ),
       ),

@@ -221,6 +221,8 @@ class _SongsPageState extends State<SongsPage> {
         Expanded(
           child: ListView.builder(
             controller: _scrollController,
+            // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+            padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
             itemCount: songs.length,
             itemBuilder: (context, index) {
               return SongListItem(
