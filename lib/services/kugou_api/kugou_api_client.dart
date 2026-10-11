@@ -68,6 +68,14 @@ class KugouApiClient {
 
   factory KugouApiClient() => _instance;
 
+  /// 懒启动触发回调（由 main.dart bootstrap 时注入 KugouApiServer.ensureStarted）。
+  ///
+  /// kugou_server.dart 已引用本类的代次/状态静态成员，若本文件反向
+  /// import 会形成环形依赖，因此通过此可注入回调解耦。回调实现必须
+  /// 幂等：生命周期 starting/ready 时直接返回，仅 stopped/failed 真正启动。
+  /// 未注入（如 Web 平台）时保持旧行为：不触发启动，仅按就绪状态等待/拒绝。
+  static Future<void> Function()? onServerNeeded;
+
   KugouApiClient._internal() {
     _dio = Dio(
       BaseOptions(
@@ -198,6 +206,17 @@ class KugouApiClient {
   ) async {
     if (!_isInitialized) {
       await _initCompleter?.future;
+    }
+
+    // 懒启动：本地服务器未就绪（stopped/failed/懒启动初始代次）时先异步
+    // 触发一次启动，再进入下方的就绪等待。ensureStarted 幂等且 start()
+    // 同步置位 _startFuture，并发请求只触发一次真正的 _doStart；首次
+    // 冷启动的 dlopen + listen 延迟由首个请求承担，8s 超时窗口内完成。
+    if (onServerNeeded != null &&
+        _serverLifecycle.state != LocalServerState.ready &&
+        _serverLifecycle.state != LocalServerState.stopping) {
+      // ignore: discarded_futures
+      unawaited(onServerNeeded!());
     }
 
     // 启动失败/停止/ready超时均快速拒绝，不把请求放到旧端口或默认端口。

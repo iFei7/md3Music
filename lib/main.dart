@@ -21,6 +21,7 @@ import 'data/repositories/settings_repository.dart';
 import 'providers/theme_provider.dart';
 import 'modules/update/update_check_service.dart';
 import 'modules/onboarding/user_agreement_page.dart';
+import 'services/kugou_api/kugou_api_client.dart';
 import 'services/kugou_server.dart';
 import 'utils/landscape_immersive.dart';
 import 'widgets/md3_lyric_preferences.dart';
@@ -161,33 +162,19 @@ Future<(bool, bool, bool)> runBootstrap() async {
   // 边沿驱动，开关复用 settings_upload_listening_duration（默认关闭）。
   ListenReportService.instance.init();
 
-  // P0: 本地 API 服务器与 DLNA 本地 HTTP 服务器改为后台启动（不阻塞 runApp）。
-  // 之前 await KugouApiServer.start() 在首帧前完成，其中
-  // DynamicLibrary.open('libkugou_server.so')（dlopen，so 可达 10MB+）与
-  // 服务器初始化可能耗时数秒 → 用户看到长时间启动画面/白屏。
-  // 现在首帧立即渲染；发现页等首屏请求通过 KugouApiClient 的
-  // 按本地服务启动代次等待ready；启动失败或停止时请求快速失败，不触碰旧端口。
-  // 桌面与 Android 都启动本地服务器（桌面走 dart:ffi 加载 kugou_server.dll）。
-  // LocalHttpServer（DLNA 拉流）不再无条件启动：仅投屏本地歌曲时由
-  // DlnaProvider.castSong 懒启动，避免 App 常驻一个局域网监听 socket。
+  // 懒启动策略（lite）：本地 API 服务器不再于启动时无条件启动（此前后台
+  // unawaited 启动仍会在每次冷启动付出 dlopen libkugou_server.so（4.7MB+）
+  // 与 Rust 初始化的成本，即便本次会话一次酷狗请求都没有）。改为把
+  // KugouApiServer.ensureStarted 注入 KugouApiClient.onServerNeeded：
+  // 首个酷狗 API 请求在等待就绪前发现服务未启动/失败时异步触发启动，
+  // 并通过生命周期 completer 与后续并发请求共享同一次启动。回调解耦是
+  // 因为 kugou_server.dart 已引用 KugouApiClient 的代次/状态静态成员，
+  // 反向 import 会成环。LocalServerDownBanner 重试（app.dart）与播放前
+  // 兜底（player_provider）仍直接调用 KugouApiServer.start，语义不变。
+  // LocalHttpServer（DLNA 拉流）同为懒启动：仅投屏本地歌曲时由
+  // DlnaProvider.castSong 触发，避免 App 常驻一个局域网监听 socket。
   if (!kIsWeb) {
-    final serverClock = Stopwatch()..start();
-    unawaited(
-      KugouApiServer.start()
-          .then((_) {
-            DiagnosticLogger.instance.i(
-              '[Startup] phase=api_ready elapsed_ms=${startupClock.elapsedMilliseconds} '
-              'server_ms=${serverClock.elapsedMilliseconds}',
-            );
-          })
-          .catchError((Object error) {
-            DiagnosticLogger.instance.e(
-              '[Startup] phase=api_failed elapsed_ms=${startupClock.elapsedMilliseconds} '
-              'server_ms=${serverClock.elapsedMilliseconds} '
-              'error_type=${error.runtimeType}',
-            );
-          }),
-    );
+    KugouApiClient.onServerNeeded = KugouApiServer.ensureStarted;
   }
 
   // 注册 Android 长按应用图标 Shortcut 回调。

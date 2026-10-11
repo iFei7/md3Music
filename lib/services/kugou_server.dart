@@ -67,6 +67,16 @@ bool _isServerRunningInWorker(String libraryName) {
   return isRunning() == 1;
 }
 
+/// 本地酷狗 API 服务器（libkugou_server.so FFI 封装）。
+///
+/// 启动策略（lite 懒启动）：App 启动时**不再**无条件启动本地服务器，
+/// 而是由首个酷狗 API 请求触发。链路：KugouApiClient 的请求拦截器发现
+/// 生命周期处于未就绪状态时，通过静态回调 [KugouApiClient.onServerNeeded]
+/// （由 main.dart 在 bootstrap 时注入 [ensureStarted]）触发启动——用回调
+/// 而非直接 import 是为了避免 kugou_server.dart ↔ kugou_api_client.dart
+/// 的环形依赖（本文件已引用 KugouApiClient 的代次/状态静态成员）。
+/// [start] 保留公开语义不变：LocalServerDownBanner 重试、播放前兜底
+/// （player_provider）与设置页重启仍直接调用 start / restart。
 class KugouApiServer {
   static const _channel = MethodChannel('com.md3music.md3music/kugou_api');
   static bool _started = false;
@@ -90,6 +100,34 @@ class KugouApiServer {
     final future = _doStart(generation);
     _startFuture = future;
     return future;
+  }
+
+  /// 懒启动入口（幂等）：仅在服务器未启动或上次启动失败时真正调用
+  /// [start]；starting（启动进行中）复用进行中的 Future；ready 直接返回；
+  /// stopping 不自动重启（用户/系统正在显式停止，让请求按未就绪快速失败）。
+  ///
+  /// 并发防重依赖 start() 自身的两道闸：`_startFuture != null` 时直接
+  /// 返回同一 Future（start 在任何 await 之前同步置位 _startFuture，
+  /// 因此多个请求同时触发也只会执行一次 _doStart）；已 ready 时返回
+  /// _confirmRunning 校验。多个请求同时到达时由首个请求承担冷启动
+  /// （dlopen + listen）延迟，其余请求通过生命周期 completer 共同等待。
+  static Future<void> ensureStarted() {
+    if (kIsWeb) return Future<void>.value();
+    switch (KugouApiClient.localServerState) {
+      case LocalServerState.ready:
+        return Future<void>.value();
+      case LocalServerState.starting:
+        final pending = _startFuture;
+        if (pending != null) return pending;
+        // 懒启动下的初始代次（从未真正 beginStart）→ 继续走 start()
+        return start();
+      case LocalServerState.stopping:
+        // 显式停止进行中：不自动重启，请求方按未就绪快速失败
+        return Future<void>.value();
+      case LocalServerState.stopped:
+      case LocalServerState.failed:
+        return start();
+    }
   }
 
   static Future<void> _confirmRunning() async {
