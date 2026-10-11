@@ -8,7 +8,7 @@ import '../../core/widgets/liquid_glass_container.dart';
 import '../../providers/car_mode_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/tab_config_provider.dart';
-import '../../widgets/playing_spectrum_indicator.dart';
+import '../../widgets/player_artwork_image.dart';
 import 'full_player_route.dart';
 
 /// Dock 导航项定义（lite 版固定三项：主页 / 收藏 / 我的）。
@@ -35,8 +35,12 @@ const List<_DockTab> _kDockTabs = [
 ///   页面滚动超过滞回阈值坍缩、切 tab / 点坍缩圆展开；
 /// - **播放器圆钮**：点击在「圆钮 ↔ 控制小胶囊」间收敛形变（AnimatedSize）；
 ///   圆钮外周进度环订阅 [PlayerProvider.positionNotifier]（~200ms 高频通道，
-///   禁 context.watch），中央为播放标识（PlayingSpectrumIndicator / 暂停图标 /
-///   无歌音符）；整钮 [RepaintBoundary] 隔离高频重绘；
+///   禁 context.watch），中央为当前歌曲的**圆形封面缩略图**（播放中封面即
+///   状态，无频谱动画，功耗优先；暂停时叠加半透明底 + 静态 pause 图标；
+///   无歌 / 封面缺失时回退音符占位）；整钮 [RepaintBoundary] 隔离高频重绘；
+/// - **展开布局**：控制胶囊展开后置于屏幕**左侧**（行序翻转为
+///   [播放器胶囊, 8, 导航坍缩球]）；已移除向上按钮——点封面 / 歌名
+///   进入完整播放页（胶囊内左侧含 36dp 圆形封面缩略图，同源可点）；
 /// - **隐藏**：完整播放页展开（playerExpansion > 0.5）或车机模式时整体移除，
 ///   不产帧。
 ///
@@ -78,9 +82,18 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   static const double _kButtonSize = 52.0;
   static const Duration _kMorphDuration = Duration(milliseconds: 260);
 
-  /// 展开态控制胶囊内 4 个紧凑 IconButton 的总宽（40dp/个），
+  /// 展开态控制胶囊内 3 个紧凑 IconButton 的总宽（40dp/个），
   /// 用于小屏下计算歌名 marquee 的可压缩宽度。
-  static const double _kControlsButtonsWidth = 160.0;
+  static const double _kControlsButtonsWidth = 120.0;
+
+  /// 坍缩圆中央的圆形封面直径（52dp 圆钮内、进度环内圈）。
+  static const double _kCircleCoverSize = 40.0;
+
+  /// 展开胶囊内左侧的圆形封面缩略图直径。
+  static const double _kCapsuleCoverSize = 36.0;
+
+  /// 展开胶囊内封面与歌名 marquee 之间的间距。
+  static const double _kCapsuleCoverGap = 8.0;
 
   @override
   void initState() {
@@ -157,20 +170,35 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   // 宽度防御：播放器按钮用 Flexible（loose）吃剩余宽度，
                   // 极限屏宽下歌名区先压缩，整体任何状态不超屏宽。
+                  // 展开态行序翻转：控制胶囊在左、导航坍缩球在右
+                  // （_controlsExpanded 时导航已被强制坍缩为球）。
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildNavPart(),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: _buildPlayerButton(
-                          player,
-                          song,
-                          isPlaying,
-                          duration,
-                        ),
-                      ),
-                    ],
+                    children: _controlsExpanded
+                        ? [
+                            Flexible(
+                              child: _buildPlayerButton(
+                                player,
+                                song,
+                                isPlaying,
+                                duration,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            _buildNavPart(),
+                          ]
+                        : [
+                            _buildNavPart(),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: _buildPlayerButton(
+                                player,
+                                song,
+                                isPlaying,
+                                duration,
+                              ),
+                            ),
+                          ],
                   ),
                 ),
               ),
@@ -186,6 +214,7 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
       builder: (context, expanded, _) => AnimatedSize(
         duration: _kMorphDuration,
         curve: Curves.easeOutCubic,
+        // 右缘锚定：坍缩为球时右缘不动（球位于行尾 / 屏右侧时不左漂）。
         alignment: Alignment.centerRight,
         child: expanded ? _buildNavPill() : _buildNavCollapsed(),
       ),
@@ -259,6 +288,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
       child: AnimatedSize(
         duration: _kMorphDuration,
         curve: Curves.easeOutCubic,
+        // 左缘锚定：展开为胶囊时（胶囊位于行首 / 屏左侧）左缘不动、
+        // 向右生长，不会顶出屏幕右缘。
         alignment: Alignment.centerLeft,
         child: _controlsExpanded
             ? _buildControlsCapsule(player, song)
@@ -307,17 +338,16 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                   },
                 ),
               ),
-              // 中央标识：播放中→频谱；暂停→pause；无歌→音符。
+              // 中央标识：有歌→圆形封面（播放中封面即状态，无动画；
+              // 暂停→叠半透明底 + 静态 pause）；无歌→音符占位。
               if (song == null)
                 Icon(
                   Icons.music_note,
                   size: 22,
                   color: cs.onSurfaceVariant.withValues(alpha: 0.6),
                 )
-              else if (isPlaying)
-                PlayingSpectrumIndicator(color: cs.primary, size: 18)
               else
-                Icon(Icons.pause, size: 22, color: cs.primary),
+                _buildCircleArtwork(song, isPlaying, cs),
             ],
           ),
         ),
@@ -325,25 +355,91 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     );
   }
 
-  /// 展开态控制小胶囊：歌名 marquee + 上一曲 / 播放暂停 / 下一曲 / 展开播放页。
+  /// 圆形歌曲封面：复用 [PlayerArtworkImage]（http(s):// 走 CachedNetworkImage、
+  /// content:// / local:// / file:// 走内嵌封面懒加载、null / 失败回退音符占位），
+  /// 外层 [ClipOval] 裁圆。仅随 song 变化重建（封面低频，不进 positionNotifier
+  /// 高频通道）；播放中不加任何动画，暂停时叠加半透明底 + 静态 pause 图标。
+  Widget _buildCircleArtwork(dynamic song, bool isPlaying, ColorScheme cs) {
+    Widget cover = ClipOval(
+      child: SizedBox(
+        width: _kCircleCoverSize,
+        height: _kCircleCoverSize,
+        // PlayerArtworkImage 未指定 width/height 时流式布局，由 SizedBox 约束。
+        child: PlayerArtworkImage(
+          artworkUri: song.artworkUri as String?,
+          fallbackFilePath: song.localPath as String?,
+          fit: BoxFit.cover,
+          iconSize: 20,
+          backgroundColor: cs.surfaceContainerHighest,
+          iconColor: cs.onSurfaceVariant,
+        ),
+      ),
+    );
+    if (!isPlaying) {
+      cover = Stack(
+        alignment: Alignment.center,
+        children: [
+          cover,
+          Container(
+            width: _kCircleCoverSize,
+            height: _kCircleCoverSize,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: cs.surface.withValues(alpha: 0.45),
+            ),
+            child: Icon(Icons.pause, size: 16, color: cs.primary),
+          ),
+        ],
+      );
+    }
+    return cover;
+  }
+
+  /// 展开态控制小胶囊：圆形封面缩略图 + 歌名 marquee + 上一曲 / 播放暂停 / 下一曲。
+  /// 封面与歌名点击均进入完整播放页（原「向上按钮」职责由二者承担）。
   Widget _buildControlsCapsule(PlayerProvider player, dynamic song) {
     final cs = Theme.of(context).colorScheme;
     return GestureDetector(
       onTap: _toggleControls,
       child: LiquidGlassContainer(
         shape: GlassShape.pill,
-        padding: const EdgeInsets.fromLTRB(14, 0, 4, 0),
+        padding: const EdgeInsets.fromLTRB(6, 0, 4, 0),
         child: SizedBox(
           height: _kButtonSize,
           // 宽度防御：歌名 marquee 区随可用宽度压缩（上限 120，下限 0），
-          // 4 个按钮区固定，保证小屏（含 320dp）下胶囊自身也不超宽。
+          // 固定区 = 水平 padding(10) + 封面(36) + 间距(8) + 3 个按钮(120)，
+          // 保证小屏（含 320dp）下胶囊自身也不超宽。
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final marqueeWidth = (constraints.maxWidth - _kControlsButtonsWidth)
-                  .clamp(0.0, 120.0);
+              final fixedWidth = _kControlsButtonsWidth +
+                  _kCapsuleCoverSize +
+                  _kCapsuleCoverGap +
+                  10; // 水平 padding（6 + 4）
+              final marqueeWidth =
+                  (constraints.maxWidth - fixedWidth).clamp(0.0, 120.0);
               return Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // 圆形封面缩略图：点击进入播放页。
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: song == null ? null : () => openFullPlayer(context),
+                    child: ClipOval(
+                      child: SizedBox(
+                        width: _kCapsuleCoverSize,
+                        height: _kCapsuleCoverSize,
+                        child: PlayerArtworkImage(
+                          artworkUri: song?.artworkUri as String?,
+                          fallbackFilePath: song?.localPath as String?,
+                          fit: BoxFit.cover,
+                          iconSize: 16,
+                          backgroundColor: cs.surfaceContainerHighest,
+                          iconColor: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: _kCapsuleCoverGap),
                   // 歌名 marquee：点击打开播放页。
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
@@ -375,11 +471,6 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                     icon: Icons.skip_next,
                     tooltip: '下一曲',
                     onTap: song == null ? null : player.next,
-                  ),
-                  _DockIconButton(
-                    icon: Icons.keyboard_arrow_up,
-                    tooltip: '展开播放页',
-                    onTap: song == null ? null : () => openFullPlayer(context),
                   ),
                 ],
               );
