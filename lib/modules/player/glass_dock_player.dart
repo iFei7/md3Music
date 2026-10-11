@@ -40,14 +40,19 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 /// 底部悬浮玻璃 Dock：导航胶囊 + 常驻播放器圆钮。
 ///
 /// 状态机（全部收敛型动画，无 repeat 连续动画）：
+/// - **单展开不变量**：导航与播放器工具**恰好一个展开**，仅两种合法组合：
+///   [导航胶囊 + 播放器球]（默认）与 [导航球 + 播放器胶囊]。折叠状态唯一
+///   驱动是用户点击，滚动不参与：
+///   · 点坍缩导航圆 / 切 tab / 播放器工具收起 → 导航展开；
+///   · 播放器工具展开（点播放器圆钮）→ 导航坍缩让位；
+///   · 导航展开 → 播放器工具收起（listener 双向闭环，无双坍缩驻留）。
 /// - **导航**：展开（玻璃胶囊导航项）↔ 坍缩（单个当前 tab 玻璃圆）。
 ///   导航项完全跟随 [TabConfigProvider.visibleTabs]（顺序 + 显隐 + label，
 ///   即设置→主页管理的配置实时生效，低频 watch 不进 positionNotifier
 ///   高频通道）；图标按 id 查 `_kDockTabById`（与 app.dart 一致）；
 ///   坍缩圆显示当前选中且可见 tab 的图标（选中 filled / 回退 outlined），
 ///   selectedTabId 不在 visibleTabs 时回退第一个可见 tab；
-///   展开态由外部（`_MainLayout`）持有并通过 [navExpanded] 注入——
-///   页面滚动超过滞回阈值坍缩、切 tab / 点坍缩圆展开；
+///   展开态由外部（`_MainLayout`）持有并通过 [navExpanded] 注入；
 ///   项宽随项数自适应（≤4 项 44dp，更多时按 320dp 最小屏预算压缩，
 ///   见 `_buildNavPill`），保证「导航胶囊 + 播放器球」组合不超宽；
 /// - **播放器圆钮**：点击在「圆钮 ↔ 控制小胶囊」间收敛形变（AnimatedSize）；
@@ -56,10 +61,14 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 ///   半透明底 + [PlayingSpectrumIndicator] 律动图标（挂共享 60fps 节拍、
 ///   仅播放中运行）；暂停时叠半透明底 + 静态 pause 图标；
 ///   无歌 / 封面缺失时回退音符占位；整钮 [RepaintBoundary] 隔离高频重绘；
+/// - **完整播放页往返**：openFullPlayer / close 不触碰折叠状态；关闭播放页
+///   后 Dock 恢复「打开前的那个唯一展开组件」——状态只由用户点击驱动，
+///   关闭后即为打开前状态，符合单展开不变量，无额外恢复路径。
 /// - **布局固定**：行恒为 [导航部分, 8, 播放器(Flexible)]——左侧悬浮导航、
-///   右侧悬浮播放器，位置恒定不互换；互斥展开（导航胶囊与播放器胶囊
-///   同时最多一个展开，另一个坍缩为球）；已移除向上按钮——点封面 / 歌名
-///   进入完整播放页（胶囊内左侧含 36dp 圆形封面缩略图，同源可点击）；
+///   右侧悬浮播放器，位置恒定不互换；单展开不变量保证「导航胶囊 +
+///   播放器球」「导航球 + 播放器胶囊」两种组合均不超宽；已移除向上按钮——
+///   点封面 / 歌名进入完整播放页（胶囊内左侧含 36dp 圆形封面缩略图，
+///   同源可点击）；
 /// - **隐藏**：完整播放页展开（playerExpansion > 0.5）时整体移除，不产帧。
 class GlassDockPlayer extends StatefulWidget {
   const GlassDockPlayer({
@@ -76,10 +85,12 @@ class GlassDockPlayer extends StatefulWidget {
   /// 点击导航项回调（tabId）。
   final ValueChanged<String> onSelectTab;
 
-  /// 导航展开态（由 _MainLayout 持有的 ValueNotifier，滚动滞回驱动）。
+  /// 导航展开态（由 _MainLayout 持有的 ValueNotifier，用户点击驱动，
+  /// 滚动不参与）。
   final ValueListenable<bool> navExpanded;
 
-  /// 用户点击坍缩态导航圆请求展开导航。
+  /// 请求导航展开/坍缩（双向闭环）：true = 点坍缩圆或播放器工具收起时
+  /// 恢复展开；false = 播放器工具展开时请求导航让位坍缩。
   final ValueChanged<bool> onNavExpandedChanged;
 
   @override
@@ -109,9 +120,10 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   @override
   void initState() {
     super.initState();
-    // 状态联动：导航展开 ⇒ 播放器工具强制收起（两个展开态不得同时存在，
-    // 否则总宽超出屏宽）。收起播放器工具后导航保持坍缩，由滚动 /
-    // 手势 / 切 tab 自然恢复，避免乒乓。
+    // 状态联动（单展开不变量的反向闭环）：导航展开 ⇒ 播放器工具强制收起。
+    // 正向闭环（播放器工具展开 ⇒ 导航坍缩；收起 ⇒ 导航恢复展开）在
+    // [_toggleControls] 中经 onNavExpandedChanged 回调完成。两个展开态
+    // 不得同时存在，否则总宽超出屏宽。
     widget.navExpanded.addListener(_onNavExpandedChanged);
   }
 
@@ -136,11 +148,17 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     }
   }
 
+  /// 播放器工具展开/收起（单展开不变量的正向驱动，双向闭环）：
+  /// - 展开：先置 _controlsExpanded = true，再回调 onNavExpandedChanged(false)
+  ///   请求导航坍缩让位；
+  /// - 收起：先置 _controlsExpanded = false，再回调 onNavExpandedChanged(true)
+  ///   请求导航恢复展开。时序保证：回调触发 _onNavExpandedChanged 时
+  ///   _controlsExpanded 已为 false，命中 no-op 分支，不会反向收起导航，
+  ///   无乒乓竞态。
   void _toggleControls() {
     AppHaptics.click();
     setState(() => _controlsExpanded = !_controlsExpanded);
-    // 播放器工具展开时请求导航坍缩（_MainLayout 侧置 _navExpanded = false）。
-    if (_controlsExpanded) widget.onNavExpandedChanged(false);
+    widget.onNavExpandedChanged(_controlsExpanded);
   }
 
   @override
@@ -170,9 +188,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
           alignment: Alignment.bottomCenter,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            // 宽度防御：播放器按钮用 Flexible（loose）吃剩余宽度，
+            // 布局防御：播放器按钮用 Flexible（loose）吃剩余宽度，
             // 极限屏宽下歌名区先压缩，整体任何状态不超屏宽。
-            // 布局恒定：左 = 悬浮导航、右 = 悬浮播放器；互斥展开
+            // 布局恒定：左 = 悬浮导航、右 = 悬浮播放器；单展开不变量
             // 保证「导航胶囊 + 播放器球」「导航球 + 播放器胶囊」
             // 两种组合在 320dp 屏均不超宽。
             child: Row(

@@ -594,16 +594,11 @@ class _MainLayoutState extends State<_MainLayout>
   int _selectedIndex = 0;
   int _previousSelectedIndex = 0;
 
-  /// Dock 导航展开态：页面滚动超阈值坍缩（24dp 滞回），切 tab / 点击坍缩
-  /// 圆时展开。用 ValueNotifier 驱动，只让 Dock 的导航部分重建。
+  /// Dock 导航展开态（单展开不变量的一半）：nav 与 player 恰好一个展开。
+  /// 唯一驱动是用户点击（点坍缩圆 / 切 tab 展开；播放器工具胶囊展开时让位
+  /// 坍缩），滚动不参与。用 ValueNotifier 驱动，只让 Dock 的导航部分重建。
+  /// 默认 true → 冷启动为「导航胶囊 + 播放器球」组合。
   final ValueNotifier<bool> _navExpanded = ValueNotifier<bool>(true);
-
-  /// 同向滚动累计位移；反向时清零，实现阈值滞回，防抖动。
-  double _navScrollAccum = 0.0;
-  int _navAccumSign = 0;
-
-  /// 触发导航坍缩/展开的累计滚动阈值（dp），与旧悬浮播放器一致。
-  static const double _kNavCollapseThreshold = 24.0;
 
   /// 竖屏下为 Dock 预留的内容底部空间（Dock 高 52 + 底部留白 12 + 缓冲）。
   static const double _kDockReservedBottom = 80.0;
@@ -863,7 +858,8 @@ class _MainLayoutState extends State<_MainLayout>
 
   /// 切换到指定 tab（仅对已可见的 tab 生效）。
   /// 与 onDestinationSelected 相同的守卫：FullPlayer 在栈顶时忽略。
-  /// tab 切换同时自动展开 Dock 导航。
+  /// tab 切换同时自动展开 Dock 导航（若播放器工具胶囊展开，Dock 内部
+  /// listener 会将其收起，维持单展开不变量）。
   void _switchToTab(String tabId) {
     if (isFullPlayerOnTop) return;
     final index = context.read<TabConfigProvider>().visibleIndexOf(tabId);
@@ -875,35 +871,16 @@ class _MainLayoutState extends State<_MainLayout>
     });
   }
 
-  /// 展开 Dock 导航（切 tab / 快捷方式入口时）。
+  /// 展开 Dock 导航（切 tab / 快捷方式 / 播放器工具收起时）。
+  /// 若此时播放器工具胶囊仍展开，GlassDockPlayer 内部 listener 会将其收起，
+  /// 维持「恰好一个展开」。
   void _expandNav() {
     if (!_navExpanded.value) _navExpanded.value = true;
   }
 
-  /// 坍缩 Dock 导航（播放器工具胶囊展开时强制让位，避免两展开态同屏超宽）。
+  /// 坍缩 Dock 导航（播放器工具胶囊展开时强制让位，维持单展开不变量）。
   void _collapseNav() {
     if (_navExpanded.value) _navExpanded.value = false;
-  }
-
-  /// 页面滚动驱动 Dock 导航展开/坍缩（24dp 同向累计滞回，防抖动）。
-  bool _onDockScrollNotification(ScrollNotification n) {
-    if (n is ScrollUpdateNotification) {
-      final d = n.scrollDelta ?? 0.0;
-      if (d == 0) return false;
-      final sign = d > 0 ? 1 : -1;
-      if (sign != _navAccumSign) {
-        _navScrollAccum = 0.0;
-        _navAccumSign = sign;
-      }
-      _navScrollAccum += d;
-      if (_navScrollAccum > _kNavCollapseThreshold && _navExpanded.value) {
-        _navExpanded.value = false; // 向下浏览 → 坍缩
-      } else if (_navScrollAccum < -_kNavCollapseThreshold &&
-          !_navExpanded.value) {
-        _navExpanded.value = true; // 向上浏览 → 展开
-      }
-    }
-    return false;
   }
 
   /// 点击隐藏 tab 对应的桌面快捷方式：以二级页面路由打开对应功能页（不切换主 tab）。
@@ -1075,8 +1052,9 @@ class _MainLayoutState extends State<_MainLayout>
     final safeIndex = _selectedIndex.clamp(0, visibleTabs.length - 1);
     final currentTab = visibleTabs[safeIndex];
 
-    // 页面内容：滚动通知驱动 Dock 导航展开/坍缩；竖屏为 Dock 预留底部空间
-    //（注入 MediaQuery 底部 padding，列表 / SafeArea 自动让位，无需逐页改）。
+    // 页面内容：滚动不参与 Dock 折叠状态（已移除滚动驱动），竖屏为 Dock
+    // 预留底部空间（注入 MediaQuery 底部 padding，列表 / SafeArea 自动让位，
+    // 无需逐页改）。
     final mq = MediaQuery.of(context);
     Widget content = Column(
       children: [
@@ -1160,14 +1138,13 @@ class _MainLayoutState extends State<_MainLayout>
     }
 
     // 悬浮玻璃 Dock：底部居中（导航胶囊 + 播放器圆钮）。
+    // 单展开不变量：任意时刻 nav 与 player 恰好一个展开，仅两种合法组合
+    // [导航胶囊 + 播放器球] / [导航球 + 播放器胶囊]。
+    // 完整播放页往返：openFullPlayer / close 不触碰折叠状态，关闭播放页后
+    // Dock 恢复「打开前的那个唯一展开组件」（状态只由用户点击驱动，可预期）。
     return Stack(
       children: [
-        Positioned.fill(
-          child: NotificationListener<ScrollNotification>(
-            onNotification: _onDockScrollNotification,
-            child: content,
-          ),
-        ),
+        Positioned.fill(child: content),
         Positioned(
           left: 0,
           right: 0,
@@ -1178,9 +1155,9 @@ class _MainLayoutState extends State<_MainLayout>
             onSelectTab: _switchToTab,
             navExpanded: _navExpanded,
             onNavExpandedChanged: (expanded) {
-              // 双向语义：true = 用户点坍缩圆请求展开；false = 播放器工具
-              // 胶囊展开时请求导航让位（收起工具后导航不自动恢复，
-              // 由滚动 / 切 tab 自然展开，避免乒乓）。
+              // 双向闭环：true = 点坍缩圆或播放器工具收起时请求导航展开；
+              // false = 播放器工具胶囊展开时请求导航让位。两个方向都保证
+              // 「恰好一个展开」，无双坍缩驻留路径。
               if (expanded) {
                 _expandNav();
               } else {
