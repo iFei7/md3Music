@@ -94,19 +94,38 @@ void applyImmersiveForOrientation() {
   }
 }
 
+/// 主界面恒定沉浸式系统栏：状态栏与底部导航条完全透明，内容延伸到系统栏之后。
+///
+/// 主界面以及「从全屏播放器返回」的恢复路径都应调用本函数，避免使用
+/// [SystemUiMode.manual]：targetSdk 35 起 Android 15 强制 edge-to-edge，
+/// manual 会与系统强制行为叠出「新旧两套表现」。
+///
+/// 另需在首帧之后再调一次：冷启动时首帧前设置的 edgeToEdge 会被随后原生
+/// LaunchTheme → NormalTheme 的切换（发生在 Flutter 首帧之后）冲掉，
+/// 表现为「底部导航条不沉浸，直到用户改一次设置才恢复」。
+void applyMainEdgeToEdge({required Brightness brightness}) {
+  final isDark = brightness == Brightness.dark;
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(
+    SystemUiOverlayStyle(
+      statusBarColor: const Color(0x00000000),
+      statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      systemNavigationBarColor: const Color(0x00000000),
+      systemNavigationBarDividerColor: const Color(0x00000000),
+      systemNavigationBarContrastEnforced: false,
+      systemNavigationBarIconBrightness:
+          isDark ? Brightness.light : Brightness.dark,
+    ),
+  );
+}
+
 /// 退出全屏播放器时恢复系统栏显示。
 ///
-/// 恢复为 [SystemUiMode.manual]（状态栏 + 导航栏正常显示），
-/// 随后主界面的 [_SystemUiUpdater] 会立即设置正确的 surface 色。
-void restoreSystemUi({Color? navigationBarColor, Brightness? statusBarBrightness}) {
-  SystemChrome.setEnabledSystemUIMode(
-    SystemUiMode.manual,
-    overlays: SystemUiOverlay.values,
+/// 恢复目标不是 [SystemUiMode.manual]，而是与主界面完全一致的「恒定沉浸」
+/// （edgeToEdge + 透明状态栏 / 导航条）：用 manual 会让返回主界面后的系统栏
+/// 状态与冷启动直入不一致，必须等下一次 [_updateSystemUi] 才纠正。
+void restoreSystemUi({Brightness? statusBarBrightness}) {
+  applyMainEdgeToEdge(
+    brightness: statusBarBrightness ?? Brightness.light,
   );
-  SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-    statusBarColor: const Color(0x00000000),
-    statusBarIconBrightness: statusBarBrightness ?? Brightness.dark,
-    systemNavigationBarColor: navigationBarColor ?? const Color(0x00000000),
-    systemNavigationBarIconBrightness: statusBarBrightness ?? Brightness.dark,
-  ));
 }

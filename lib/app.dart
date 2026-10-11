@@ -521,6 +521,12 @@ class _SystemUiUpdaterState extends State<_SystemUiUpdater>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 首帧之后再补一次系统栏设置：didChangeDependencies 在首帧前就跑了，那次的
+    // SystemChrome 调用（异步 platform channel）会被随后原生 LaunchTheme →
+    // NormalTheme 的切换冲掉，表现为冷启动底部导航条不沉浸。首帧后重跑即可稳定。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _updateSystemUi();
+    });
   }
 
   @override
@@ -532,6 +538,14 @@ class _SystemUiUpdaterState extends State<_SystemUiUpdater>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _updateSystemUi();
+  }
+
+  @override
+  void didChangeMetrics() {
+    // 窗口尺寸变化（含系统栏显隐引发的 metrics 变化）后系统栏可能被原生重置，
+    // 需重新应用主界面沉浸态，避免系统栏样式与 edgeToEdge 状态不一致。
+    super.didChangeMetrics();
     _updateSystemUi();
   }
 
@@ -550,32 +564,11 @@ class _SystemUiUpdaterState extends State<_SystemUiUpdater>
     // 播放器横屏沉浸（非 Zen）生效中：同 Zen，保留 immersiveSticky 不被覆盖。
     if (kPlayerLandscapeImmersiveActive.value) return;
     final brightness = Theme.of(context).brightness;
-    final isDark = brightness == Brightness.dark;
 
-    // 主界面使用 edgeToEdge：状态栏与底部导航条（小横条）完全透明并悬浮在
-    // 内容之上，App 内容延伸到系统栏后面。底部留白由各自组件消费系统 inset：
-    // NavigationBar 内部自带 SafeArea(top:false)，MiniPlayer 用
-    // SafeArea(bottom:true)（无底栏时生效，Scaffold 有 bottomNavigationBar
-    // 时会先移除 body 的 bottom padding，两者不会重复留白）。
-    //
-    // 不再用 SystemUiMode.manual + systemNavigationBarColor：targetSdk 35 起
-    // Android 15+ 强制 edge-to-edge 并忽略该颜色，manual 只会造成新旧系统
-    // 表现不一致。
-    // 底部留白消费：悬浮玻璃 Dock 经 SafeArea(bottom:true) 自行消费系统
-    // inset，页面内容由 _buildBody 注入的底部预留 padding 让位。
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setSystemUIOverlayStyle(
-      SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
-        systemNavigationBarColor: Colors.transparent,
-        systemNavigationBarDividerColor: Colors.transparent,
-        systemNavigationBarContrastEnforced: false,
-        systemNavigationBarIconBrightness: isDark
-            ? Brightness.light
-            : Brightness.dark,
-      ),
-    );
+    // 主界面恒定沉浸的具体实现集中在 [applyMainEdgeToEdge]（含为何不能退回
+    // SystemUiMode.manual、冷启动为何需要首帧后补一次），此处只负责在正确时机
+    // 以当前主题亮度触发它，并让位给播放器的 Zen / 横屏沉浸。
+    applyMainEdgeToEdge(brightness: brightness);
   }
 
   @override
@@ -600,8 +593,12 @@ class _MainLayoutState extends State<_MainLayout>
   /// 默认 true → 冷启动为「导航胶囊 + 播放器球」组合。
   final ValueNotifier<bool> _navExpanded = ValueNotifier<bool>(true);
 
-  /// 竖屏下为 Dock 预留的内容底部空间（Dock 高 52 + 底部留白 12 + 缓冲）。
-  static const double _kDockReservedBottom = 80.0;
+  /// 内容区为悬浮 Dock 让出的底部空间（不含系统手势条）。
+  ///
+  /// Dock 内容高 52 + 底部留白 12 = 64，取 72 留 8dp 呼吸余量；系统手势条
+  /// 由 [_buildBody] 叠加 [MediaQuery.padding.bottom] 动态计算（不同机型
+  /// 手势条高度不一，写死会漏算或多留）。
+  static const double _kDockReservedBottom = 72.0;
 
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
 
@@ -1052,11 +1049,10 @@ class _MainLayoutState extends State<_MainLayout>
     final safeIndex = _selectedIndex.clamp(0, visibleTabs.length - 1);
     final currentTab = visibleTabs[safeIndex];
 
-    // 页面内容：滚动不参与 Dock 折叠状态（已移除滚动驱动），竖屏为 Dock
-    // 预留底部空间（注入 MediaQuery 底部 padding，列表 / SafeArea 自动让位，
-    // 无需逐页改）。
+    // 页面内容：滚动不参与 Dock 折叠状态（已移除滚动驱动）。Dock 让位不在
+    // 这里注入 MediaQuery padding，而在最终 Stack 层统一收缩内容区（见下方注释）。
     final mq = MediaQuery.of(context);
-    Widget content = Column(
+    final Widget content = Column(
       children: [
         // 本地 API 服务器启动失败提示：在线内容全部不可用，但页面本身仍能渲染
         // 成空列表/转圈，用户无从判断原因。这里把状态显式摆到所有 tab 顶部。
@@ -1126,17 +1122,6 @@ class _MainLayoutState extends State<_MainLayout>
       ],
     );
 
-    if (!isLandscape) {
-      content = MediaQuery(
-        data: mq.copyWith(
-          padding: mq.padding.copyWith(
-            bottom: mq.padding.bottom + _kDockReservedBottom,
-          ),
-        ),
-        child: content,
-      );
-    }
-
     // 悬浮玻璃 Dock：底部居中（导航胶囊 + 播放器圆钮）。
     // 单展开不变量：任意时刻 nav 与 player 恰好一个展开，仅两种合法组合
     // [导航胶囊 + 播放器球] / [导航球 + 播放器胶囊]。
@@ -1144,7 +1129,17 @@ class _MainLayoutState extends State<_MainLayout>
     // Dock 恢复「打开前的那个唯一展开组件」（状态只由用户点击驱动，可预期）。
     return Stack(
       children: [
-        Positioned.fill(child: content),
+        // Dock 悬浮在内容之上（Stack 兄弟节点，非 Scaffold.bottomNavigationBar），
+        // 因此内容区必须自身收缩让位，否则滑到底时末项会被 Dock 压住而点不到。
+        // 高度 = Dock 内容 52 + 底部留白 12 + 系统手势条（SafeArea.bottom）。
+        // 去掉 Dock 展开/坍缩两种状态的高度差异：两者内容高恒为 52。
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          bottom: isLandscape ? 0 : _kDockReservedBottom + mq.padding.bottom,
+          child: content,
+        ),
         Positioned(
           left: 0,
           right: 0,

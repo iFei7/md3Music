@@ -239,7 +239,9 @@ class _DiscoverPageState extends State<DiscoverPage> {
                 slivers: [
                   _buildDailySection(colorScheme),
                   _buildHomeDiscoverSection(colorScheme),
-                  const SliverToBoxAdapter(child: SizedBox(height: 80)),
+                  // Dock 让位已由主布局（_buildBody 的 Stack 收缩）统一处理，
+                  // 这里只留少量呼吸留白，避免末分区紧贴内容区边缘。
+                  const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.lg)),
                 ],
               ),
       ),

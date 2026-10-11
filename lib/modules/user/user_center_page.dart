@@ -127,11 +127,9 @@ class _UserCenterPageState extends State<UserCenterPage> {
                 _buildActionGrid(cs),
                 const SliverToBoxAdapter(child: Gap(AppSpacing.lg)),
                 _buildVipCard(cs, tt, kugou),
-                // 80 之上叠加系统手势条（小横条）高度，避免末项被压住
+                // Dock 让位已由主布局统一处理，这里只需少量呼吸留白
                 SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: 80 + MediaQuery.paddingOf(context).bottom,
-                  ),
+                  child: SizedBox(height: AppSpacing.xl),
                 ),
               ],
             ),
