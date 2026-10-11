@@ -9,6 +9,7 @@ import '../../providers/car_mode_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/tab_config_provider.dart';
 import '../../widgets/player_artwork_image.dart';
+import '../../widgets/playing_spectrum_indicator.dart';
 import 'full_player_route.dart';
 
 /// Dock 导航项定义（lite 版固定三项：主页 / 收藏 / 我的）。
@@ -35,12 +36,14 @@ const List<_DockTab> _kDockTabs = [
 ///   页面滚动超过滞回阈值坍缩、切 tab / 点坍缩圆展开；
 /// - **播放器圆钮**：点击在「圆钮 ↔ 控制小胶囊」间收敛形变（AnimatedSize）；
 ///   圆钮外周进度环订阅 [PlayerProvider.positionNotifier]（~200ms 高频通道，
-///   禁 context.watch），中央为当前歌曲的**圆形封面缩略图**（播放中封面即
-///   状态，无频谱动画，功耗优先；暂停时叠加半透明底 + 静态 pause 图标；
-///   无歌 / 封面缺失时回退音符占位）；整钮 [RepaintBoundary] 隔离高频重绘；
-/// - **展开布局**：控制胶囊展开后置于屏幕**左侧**（行序翻转为
-///   [播放器胶囊, 8, 导航坍缩球]）；已移除向上按钮——点封面 / 歌名
-///   进入完整播放页（胶囊内左侧含 36dp 圆形封面缩略图，同源可点）；
+///   禁 context.watch），中央为当前歌曲的**圆形封面缩略图**：播放中叠加
+///   半透明底 + [PlayingSpectrumIndicator] 律动图标（挂共享 60fps 节拍、
+///   仅播放中运行）；暂停时叠半透明底 + 静态 pause 图标；
+///   无歌 / 封面缺失时回退音符占位；整钮 [RepaintBoundary] 隔离高频重绘；
+/// - **布局固定**：行恒为 [导航部分, 8, 播放器(Flexible)]——左侧悬浮导航、
+///   右侧悬浮播放器，位置恒定不互换；互斥展开（导航胶囊与播放器胶囊
+///   同时最多一个展开，另一个坍缩为球）；已移除向上按钮——点封面 / 歌名
+///   进入完整播放页（胶囊内左侧含 36dp 圆形封面缩略图，同源可点击）；
 /// - **隐藏**：完整播放页展开（playerExpansion > 0.5）或车机模式时整体移除，
 ///   不产帧。
 ///
@@ -170,35 +173,23 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   // 宽度防御：播放器按钮用 Flexible（loose）吃剩余宽度，
                   // 极限屏宽下歌名区先压缩，整体任何状态不超屏宽。
-                  // 展开态行序翻转：控制胶囊在左、导航坍缩球在右
-                  // （_controlsExpanded 时导航已被强制坍缩为球）。
+                  // 布局恒定：左 = 悬浮导航、右 = 悬浮播放器；互斥展开
+                  // 保证「导航胶囊 + 播放器球」「导航球 + 播放器胶囊」
+                  // 两种组合在 320dp 屏均不超宽。
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
-                    children: _controlsExpanded
-                        ? [
-                            Flexible(
-                              child: _buildPlayerButton(
-                                player,
-                                song,
-                                isPlaying,
-                                duration,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            _buildNavPart(),
-                          ]
-                        : [
-                            _buildNavPart(),
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: _buildPlayerButton(
-                                player,
-                                song,
-                                isPlaying,
-                                duration,
-                              ),
-                            ),
-                          ],
+                    children: [
+                      _buildNavPart(),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: _buildPlayerButton(
+                          player,
+                          song,
+                          isPlaying,
+                          duration,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -214,8 +205,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
       builder: (context, expanded, _) => AnimatedSize(
         duration: _kMorphDuration,
         curve: Curves.easeOutCubic,
-        // 右缘锚定：坍缩为球时右缘不动（球位于行尾 / 屏右侧时不左漂）。
-        alignment: Alignment.centerRight,
+        // 左缘锚定：导航恒在行首（屏左），坍缩 ↔ 展开时左缘不动、
+        // 向右生长，不会顶出屏幕左缘。
+        alignment: Alignment.centerLeft,
         child: expanded ? _buildNavPill() : _buildNavCollapsed(),
       ),
     );
@@ -288,9 +280,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
       child: AnimatedSize(
         duration: _kMorphDuration,
         curve: Curves.easeOutCubic,
-        // 左缘锚定：展开为胶囊时（胶囊位于行首 / 屏左侧）左缘不动、
-        // 向右生长，不会顶出屏幕右缘。
-        alignment: Alignment.centerLeft,
+        // 右缘锚定：播放器恒在行尾（屏右），坍缩 ↔ 展开时右缘不动、
+        // 向左生长，不会顶出屏幕右缘。
+        alignment: Alignment.centerRight,
         child: _controlsExpanded
             ? _buildControlsCapsule(player, song)
             : _buildCircle(song, isPlaying, duration, player),
@@ -338,7 +330,7 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                   },
                 ),
               ),
-              // 中央标识：有歌→圆形封面（播放中封面即状态，无动画；
+              // 中央标识：有歌→圆形封面（播放中叠半透明底 + 律动图标；
               // 暂停→叠半透明底 + 静态 pause）；无歌→音符占位。
               if (song == null)
                 Icon(
@@ -358,7 +350,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   /// 圆形歌曲封面：复用 [PlayerArtworkImage]（http(s):// 走 CachedNetworkImage、
   /// content:// / local:// / file:// 走内嵌封面懒加载、null / 失败回退音符占位），
   /// 外层 [ClipOval] 裁圆。仅随 song 变化重建（封面低频，不进 positionNotifier
-  /// 高频通道）；播放中不加任何动画，暂停时叠加半透明底 + 静态 pause 图标。
+  /// 高频通道）。播放中叠加半透明底 + [PlayingSpectrumIndicator] 律动图标；
+  /// 暂停时叠半透明底 + 静态 pause 图标。
   Widget _buildCircleArtwork(dynamic song, bool isPlaying, ColorScheme cs) {
     Widget cover = ClipOval(
       child: SizedBox(
@@ -372,10 +365,16 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
           iconSize: 20,
           backgroundColor: cs.surfaceContainerHighest,
           iconColor: cs.onSurfaceVariant,
+          // 40dp 圆钮按 128px 解码，避免全尺寸封面（RGBA 4MB+）解码浪费
+          decodeCap: 128,
         ),
       ),
     );
-    if (!isPlaying) {
+    if (isPlaying) {
+      // 播放中：封面 + 半透明底（与暂停态同一 45% surface 遮罩样式）+
+      // 律动图标。PlayingSpectrumIndicator 挂 PlayerFrameDriver 共享
+      // 60fps 节拍、ValueNotifier 驱动 painter 重绘（不 setState）、
+      // 仅播放中运行，功耗合规。
       cover = Stack(
         alignment: Alignment.center,
         children: [
@@ -383,6 +382,29 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
           Container(
             width: _kCircleCoverSize,
             height: _kCircleCoverSize,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: cs.surface.withValues(alpha: 0.45),
+            ),
+            child: PlayingSpectrumIndicator(
+              color: cs.primary,
+              size: 14,
+              isPlaying: true,
+            ),
+          ),
+        ],
+      );
+    } else {
+      // 暂停：封面 + 半透明底 + 静态 pause 图标。
+      cover = Stack(
+        alignment: Alignment.center,
+        children: [
+          cover,
+          Container(
+            width: _kCircleCoverSize,
+            height: _kCircleCoverSize,
+            alignment: Alignment.center,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: cs.surface.withValues(alpha: 0.45),
@@ -435,6 +457,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                           iconSize: 16,
                           backgroundColor: cs.surfaceContainerHighest,
                           iconColor: cs.onSurfaceVariant,
+                          // 36dp 胶囊缩略图按 128px 解码
+                          decodeCap: 128,
                         ),
                       ),
                     ),
@@ -565,7 +589,7 @@ class _ProgressRingPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    const stroke = 3.0;
+    const stroke = 2.0;
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width / 2 - stroke / 2 - 1;
     final rect = Rect.fromCircle(center: center, radius: radius);
