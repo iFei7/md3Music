@@ -115,6 +115,12 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
   /// 正在跟踪的指针 id（多指按下时置空，避免与双指手势冲突）
   int? _swipePointer;
 
+  /// 边缘渐隐 shader 缓存：RenderShaderMask 每次 paint 都会调 shaderCallback，
+  /// 列表滚动时逐帧回调，按 bounds 尺寸缓存 shader 避免逐帧重建 Gradient
+  /// （等价于 Sonify drawWithCache 的静态缓存做法，零逐帧成本）。
+  Size? _fadeMaskSize;
+  Shader? _fadeMaskShader;
+
   /// 本次跟踪的起点（全局坐标）
   Offset _swipeOrigin = Offset.zero;
 
@@ -470,10 +476,13 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
     _PanelColors colors,
   ) {
     return ShaderMask(
+      // 上下边缘 24px 静态 DstIn 渐隐：shader 按 bounds 尺寸缓存复用
       shaderCallback: (Rect bounds) {
+        final cached = _fadeMaskShader;
+        if (cached != null && _fadeMaskSize == bounds.size) return cached;
         const double fadeHeight = 24.0;
         final double fadeRatio = (fadeHeight / bounds.height).clamp(0.0, 0.5);
-        return LinearGradient(
+        final shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: const [
@@ -484,6 +493,9 @@ class _PlayerPlaylistViewState extends State<PlayerPlaylistView> {
           ],
           stops: [0.0, fadeRatio, 1.0 - fadeRatio, 1.0],
         ).createShader(bounds);
+        _fadeMaskShader = shader;
+        _fadeMaskSize = bounds.size;
+        return shader;
       },
       blendMode: BlendMode.dstIn,
       child: M3EReorderableDismissibleList(

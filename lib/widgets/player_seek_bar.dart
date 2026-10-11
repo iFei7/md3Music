@@ -347,23 +347,38 @@ class _PlayerSeekBarState extends State<PlayerSeekBar>
                           ),
                         ),
                       ),
-                      // 时间：常显但压暗，拖动时提亮到全不透明
+                      // 时间：常显但压暗，拖动时提亮到全不透明并放大字号
+                      // （Sonify 同款按压反馈：字号与透明度随手势一次性收敛，
+                      // 复用轨道膨胀的 [_expand] 控制器，无新增常驻动画）。
                       SizedBox(
                         height: _labelHeight,
                         child: IgnorePointer(
                           child: AnimatedOpacity(
                             opacity: _dragging ? 1 : 0.5,
                             duration: const Duration(milliseconds: 150),
-                            child: Row(
-                              children: [
-                                Text(_format(elapsed), style: labelStyle),
-                                const Spacer(),
-                                Text(
-                                  '-${_format(remaining)}',
-                                  style: labelStyle,
+                                child: Transform.scale(
+                                  scale: lerpDouble(
+                                    1.0,
+                                    1.3,
+                                    Curves.easeOutCubic.transform(
+                                      _expand.value,
+                                    ),
+                                  )!,
+                                  alignment: Alignment.center,
+                                  child: Row(
+                                    children: [
+                                      Text(
+                                        _format(elapsed),
+                                        style: labelStyle,
+                                      ),
+                                      const Spacer(),
+                                      Text(
+                                        '-${_format(remaining)}',
+                                        style: labelStyle,
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ],
-                            ),
                           ),
                         ),
                       ),
