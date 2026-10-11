@@ -173,17 +173,20 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
       vsync: this,
       duration: _pressDuration,
     );
+    // Sonify 的按压反馈完全没有缩放，这里只保留极轻微的一点点，
+    // 作为裸图标唯一的实体反馈，因此比原先更克制（0.92 → 0.94）
     _pressScale = Tween<double>(
       begin: 1.0,
-      end: 0.92,
+      end: 0.94,
     ).animate(CurvedAnimation(parent: _pressController, curve: Curves.easeOut));
     _pressColor = CurvedAnimation(
       parent: _pressController,
       curve: Curves.easeOut,
     );
+    // 图标下移量同步减半（2 → 1），避免大图标按压时位移过于明显
     _pressIconOffset = Tween<double>(
       begin: 0,
-      end: 2,
+      end: 1,
     ).animate(CurvedAnimation(parent: _pressController, curve: Curves.easeOut));
 
     // 监听 _controller.value，phase2 末段（约 _controller.value=0.5 时）触发
@@ -292,30 +295,36 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
   /// 根据视觉身份返回 (normalBg, pressedBg, normalFg, pressedFg) 配色。
   /// settled 状态下原 slot 可能接管其他位置并显示不同形态，按压反馈的
   /// 配色应跟随当前视觉形态，否则颜色会"错位"（如 prev 形态按压时
-  /// 颜色却用 play 形态的 primary.withValues(0.85)）。
+  /// 颜色却用 play 形态的配色）。
+  ///
+  /// Sonify 风格的"裸图标"方案：三个键都不带实心底色（背景全程透明），
+  /// 因此切歌形变、按下反馈都只作用在前景图标色上。侧键常态用 onSurface
+  /// 的中性色保持次要，播放键常态用 primary 充当视觉主角；按下时侧键转
+  /// primary、播放键加深，以此替代 Sonify 的 ripple 作为按压反馈。
   ({Color normalBg, Color pressedBg, Color normalFg, Color pressedFg})
   _resolvePressColors(_Button visualId, ColorScheme cs) {
     switch (visualId) {
       case _Button.prev:
         return (
-          normalBg: cs.primaryContainer,
-          pressedBg: cs.primary,
-          normalFg: cs.onPrimaryContainer,
-          pressedFg: cs.onPrimary,
+          normalBg: Colors.transparent,
+          pressedBg: Colors.transparent,
+          normalFg: cs.onSurface,
+          pressedFg: cs.primary,
         );
       case _Button.play:
         return (
-          normalBg: cs.primary,
-          pressedBg: cs.primary.withValues(alpha: 0.85),
-          normalFg: cs.onPrimary,
-          pressedFg: cs.onPrimary,
+          normalBg: Colors.transparent,
+          pressedBg: Colors.transparent,
+          // 播放键是视觉主角：用 primary 图标；侧键用 onSurface 保持次要。
+          normalFg: cs.primary,
+          pressedFg: cs.primary.withValues(alpha: 0.6),
         );
       case _Button.next:
         return (
-          normalBg: cs.primaryContainer,
-          pressedBg: cs.primary,
-          normalFg: cs.onPrimaryContainer,
-          pressedFg: cs.onPrimary,
+          normalBg: Colors.transparent,
+          pressedBg: Colors.transparent,
+          normalFg: cs.onSurface,
+          pressedFg: cs.primary,
         );
     }
   }
@@ -498,7 +507,6 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
     double currentWidth = widget.sideButtonSize;
     double opacity = 1.0;
     double left = _prevLeft;
-    Color? bgOverride;
     Color? fgOverride;
     IconData? iconOverride;
 
@@ -516,14 +524,9 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
           currentWidth = widget.sideButtonSize + widthDiff * _phase2.value;
           left = _prevLeft + _playLeft * _phase2.value;
           final cs = Theme.of(context).colorScheme;
-          bgOverride = Color.lerp(
-            cs.primaryContainer,
-            cs.primary,
-            _phase2.value,
-          )!;
           fgOverride = Color.lerp(
-            cs.onPrimaryContainer,
-            cs.onPrimary,
+            cs.onSurface,
+            cs.primary,
             _phase2.value,
           )!;
           iconOverride = effectiveIsPlaying ? Icons.pause : Icons.play_arrow;
@@ -538,8 +541,7 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
         left = _playLeft;
         currentWidth = widget.playButtonSize;
         final cs = Theme.of(context).colorScheme;
-        bgOverride = cs.primary;
-        fgOverride = cs.onPrimary;
+        fgOverride = cs.primary;
         iconOverride = effectiveIsPlaying ? Icons.pause : Icons.play_arrow;
         break;
       case _Transition.playBounce:
@@ -560,9 +562,10 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
     final pressedBg = pressColors.pressedBg;
     final pressedFg = pressColors.pressedFg;
 
+    // 裸图标方案：背景恒为 normalBg（透明），仅前景色随按压/形变变化
     final bg = pressT > 0
         ? Color.lerp(normalBg, pressedBg, pressT)!
-        : (bgOverride ?? normalBg);
+        : normalBg;
     final fg = pressT > 0
         ? Color.lerp(normalFg, pressedFg, pressT)!
         : (fgOverride ?? normalFg);
@@ -605,7 +608,6 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
     // 避免按左上角缩小导致位置漂移。
     double currentWidth = widget.playButtonSize;
     double left = _playLeft;
-    Color? bgOverride;
     Color? fgOverride;
     IconData? iconOverride;
 
@@ -621,14 +623,9 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
           currentWidth = widget.playButtonSize - widthDiff * _phase2.value;
           left = _playLeft - _playLeft * _phase2.value;
           final cs = Theme.of(context).colorScheme;
-          bgOverride = Color.lerp(
-            cs.primary,
-            cs.primaryContainer,
-            _phase2.value,
-          )!;
           fgOverride = Color.lerp(
-            cs.onPrimary,
-            cs.onPrimaryContainer,
+            cs.primary,
+            cs.onSurface,
             _phase2.value,
           )!;
           iconOverride = Icons.skip_previous;
@@ -637,22 +634,17 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
       case _Transition.toPrev:
         // toPrev 期间 play 按钮向右被挤压形变成 next 形态：
         // - left 从 _playLeft 滑到 _nextLeft（向右挤压）
-        // - width 从 72 缩到 56
-        // - color primary → primaryContainer
+        // - width 从 playButtonSize 缩到 sideButtonSize
+        // - 图标色 primary → onSurface（与侧键同级）
         // - icon play/pause → skip_next
         if (_phase2.value > 0) {
           final widthDiff = widget.playButtonSize - widget.sideButtonSize;
           currentWidth = widget.playButtonSize - widthDiff * _phase2.value;
           left = _playLeft + (_nextLeft - _playLeft) * _phase2.value;
           final cs = Theme.of(context).colorScheme;
-          bgOverride = Color.lerp(
-            cs.primary,
-            cs.primaryContainer,
-            _phase2.value,
-          )!;
           fgOverride = Color.lerp(
-            cs.onPrimary,
-            cs.onPrimaryContainer,
+            cs.primary,
+            cs.onSurface,
             _phase2.value,
           )!;
           iconOverride = Icons.skip_next;
@@ -663,8 +655,7 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
         left = _prevLeft;
         currentWidth = widget.sideButtonSize;
         final cs = Theme.of(context).colorScheme;
-        bgOverride = cs.primaryContainer;
-        fgOverride = cs.onPrimaryContainer;
+        fgOverride = cs.onSurface;
         iconOverride = Icons.skip_previous;
         break;
       case _Transition.settledToPrev:
@@ -672,8 +663,7 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
         left = _nextLeft;
         currentWidth = widget.sideButtonSize;
         final cs = Theme.of(context).colorScheme;
-        bgOverride = cs.primaryContainer;
-        fgOverride = cs.onPrimaryContainer;
+        fgOverride = cs.onSurface;
         iconOverride = Icons.skip_next;
         break;
       case _Transition.playBounce:
@@ -693,9 +683,10 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
     final pressedBg = pressColors.pressedBg;
     final pressedFg = pressColors.pressedFg;
 
+    // 裸图标方案：背景恒为 normalBg（透明），仅前景色随按压/形变变化
     final bg = pressT > 0
         ? Color.lerp(normalBg, pressedBg, pressT)!
-        : (bgOverride ?? normalBg);
+        : normalBg;
     final fg = pressT > 0
         ? Color.lerp(normalFg, pressedFg, pressT)!
         : (fgOverride ?? normalFg);
@@ -739,7 +730,6 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
     double currentWidth = widget.sideButtonSize;
     double opacity = 1.0;
     double left = _nextLeft;
-    Color? bgOverride;
     Color? fgOverride;
     IconData? iconOverride;
 
@@ -755,14 +745,9 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
           currentWidth = widget.sideButtonSize + widthDiff * _phase2.value;
           left = _nextLeft - (_nextLeft - _playLeft) * _phase2.value;
           final cs = Theme.of(context).colorScheme;
-          bgOverride = Color.lerp(
-            cs.primaryContainer,
-            cs.primary,
-            _phase2.value,
-          )!;
           fgOverride = Color.lerp(
-            cs.onPrimaryContainer,
-            cs.onPrimary,
+            cs.onSurface,
+            cs.primary,
             _phase2.value,
           )!;
           iconOverride = effectiveIsPlaying ? Icons.pause : Icons.play_arrow;
@@ -779,8 +764,7 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
         left = _playLeft;
         currentWidth = widget.playButtonSize;
         final cs = Theme.of(context).colorScheme;
-        bgOverride = cs.primary;
-        fgOverride = cs.onPrimary;
+        fgOverride = cs.primary;
         iconOverride = effectiveIsPlaying ? Icons.pause : Icons.play_arrow;
         break;
       case _Transition.settledToPrev:
@@ -805,9 +789,10 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
     final pressedBg = pressColors.pressedBg;
     final pressedFg = pressColors.pressedFg;
 
+    // 裸图标方案：背景恒为 normalBg（透明），仅前景色随按压/形变变化
     final bg = pressT > 0
         ? Color.lerp(normalBg, pressedBg, pressT)!
-        : (bgOverride ?? normalBg);
+        : normalBg;
     final fg = pressT > 0
         ? Color.lerp(normalFg, pressedFg, pressT)!
         : (fgOverride ?? normalFg);
@@ -1015,8 +1000,11 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
     // widthFactor 是相对 playButtonSize 的比例（因为 Positioned.width = playButtonSize）
     final currentWidth = size * widthFactor;
     final currentHeight = size * heightFactor;
-    // 中央 play 按钮的图标略大
-    final iconSize = size * (isCenterPlay ? 0.45 : 0.5);
+    // Sonify 参考：图标几乎撑满按钮，内部只留很窄的一圈边距，系数由
+    // 原来的 0.45 / 0.50 提上来。因三键已等大（不再靠 playButtonSize
+    // 更大来补偿），此处必须保证播放键系数 > 侧键，否则播放键图标会
+    // 反而小于两侧，主次颠倒。
+    final iconSize = size * (isCenterPlay ? 0.62 : 0.58);
     final label = switch (icon) {
       Icons.skip_previous => '上一首',
       Icons.skip_next => '下一首',
@@ -1049,10 +1037,9 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
                 height: currentHeight,
                 child: Material(
                   color: backgroundColor,
-                  // 圆角矩形：圆角 8dp，比胶囊形更克制、更现代
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                  // 裸图标方案下背景是透明的，圆角矩形已无意义；
+                  // 改用圆形，让 InkWell 的涟漪能被完整裁剪成圆形
+                  shape: const CircleBorder(),
                   clipBehavior: Clip.antiAlias,
                   child: Center(
                     child: Transform.translate(

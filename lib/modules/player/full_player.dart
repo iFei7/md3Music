@@ -128,6 +128,11 @@ class _FullPlayerState extends State<FullPlayer>
   /// 覆盖层（非路由）场景从未修改，dispose 时无需恢复系统栏。
   bool _systemUiModified = false;
 
+  /// 缓存的主题亮度，仅在 [didChangeDependencies] 中更新。
+  /// 供 [dispose] 恢复系统栏时判断图标明暗——dispose 时 Element 已 inactive，
+  /// 不能就地调用 `Theme.of(context)`。
+  Brightness _themeBrightness = Brightness.dark;
+
   // ── 顶栏向下拖拽收起状态（与上滑展开镜像） ──
   DraggablePlayerRoute? _topBarDragRoute; // 正在拖拽的路由
   double _topBarDragDistance = 0.0; // 向下累计距离（px，≥0）
@@ -581,6 +586,9 @@ class _FullPlayerState extends State<FullPlayer>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _syncTabLayout();
+    // 缓存主题亮度，供 dispose 恢复系统栏时使用（dispose 时 Element 已
+    // inactive，不能就地 Theme.of(context)）。
+    _themeBrightness = Theme.of(context).brightness;
     // 系统栏/沉浸模式初始化：只在首次依赖建立时执行一次。
     // ModalRoute.of 依赖 _ModalScopeStatus（inherited widget），
     // 不能在 initState 中调用，否则报 dependOnInheritedWidgetOfExactType 错误
@@ -720,7 +728,9 @@ class _FullPlayerState extends State<FullPlayer>
       if (kCoverFlowImmersiveActive.value) {
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       } else {
-        restoreSystemUi();
+        // 用缓存的主题亮度而非就地读 Theme.of(context)：dispose 时 Element
+        // 已 inactive，就地取会触发 dependOnInheritedWidget 断言。
+        restoreSystemUi(statusBarBrightness: _themeBrightness);
       }
     }
     super.dispose();
@@ -1715,11 +1725,17 @@ class _FullPlayerState extends State<FullPlayer>
           ),
         ),
         // Phase 5: 上一曲/暂停/下一曲联合动画控件
+        // 尺寸参考 Sonify 的 NowPlaying：去掉实心底色（裸图标）、图标撑满、
+        // 三键视觉等大。容器尺寸保持克制——控制行左右各有一个 Expanded 包裹
+        // 48dp 边缘键（播放模式 / 收藏），三键总宽每涨 1dp，两侧热区就各少
+        // 0.5dp。360dp 主流屏可用 320dp，原 212 总宽时每侧余 54dp；若按
+        // Sonify 比例放大到 300，每侧只剩 10dp，边缘键实际不可点。
+        // 故：等大 + 图标放大承担视觉升级，容器反而略收（竖屏 206 < 原 212）。
         MD3ETransportRow(
           isPlaying: playerProvider.isPlaying,
-          sideButtonSize: isExpanded ? 44.0 : 56.0,
-          playButtonSize: isExpanded ? 60.0 : 76.0,
-          spacing: isExpanded ? 8.0 : 12.0,
+          sideButtonSize: isExpanded ? 50.0 : 58.0,
+          playButtonSize: isExpanded ? 50.0 : 58.0,
+          spacing: isExpanded ? 12.0 : 16.0,
           onPrevious: () {
             AppHaptics.click();
             playerProvider.previous();
