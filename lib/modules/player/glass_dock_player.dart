@@ -240,31 +240,13 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
         // 左缘锚定：导航恒在行首（屏左），坍缩 ↔ 展开时左缘不动、
         // 向右生长，不会顶出屏幕左缘。
         alignment: Alignment.centerLeft,
-        // AnimatedSize 只动画容器尺寸，child 三元切换的内容是瞬间硬替换的
-        // （一排 tab 图标 ↔ 单圆图标），观感生硬。内嵌 AnimatedSwitcher 让
-        // 旧形态淡出、新形态淡入，与尺寸 morph 同步；layoutBuilder 对齐到
-        // centerLeft，保证淡入中的新形态与容器收缩方向一致（左缘不动）。
-        child: AnimatedSwitcher(
-          duration: _kMorphDuration,
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          layoutBuilder: (currentChild, previousChildren) => Stack(
-            alignment: Alignment.centerLeft,
-            children: [
-              ...previousChildren,
-              if (currentChild != null) currentChild,
-            ],
-          ),
-          child: expanded
-              ? KeyedSubtree(
-                  key: const ValueKey('nav_pill'),
-                  child: _buildNavPill(tabConfig),
-                )
-              : KeyedSubtree(
-                  key: const ValueKey('nav_ball'),
-                  child: _buildNavCollapsed(tabConfig),
-                ),
-        ),
+        // 注意：不要在此包 AnimatedSwitcher 做内容交叉淡化——淡出中的旧
+        // 形态会以非定位子元素参与 Stack 布局，容器尺寸被钉在 max(旧, 新)
+        // 上直到旧形态移除，尺寸动画被推迟成「先等待后收缩」的两段式，
+        // 观感跳变（b70a19b 的纯 AnimatedSize 单动画节奏反而干脆）。
+        child: expanded
+            ? _buildNavPill(tabConfig)
+            : _buildNavCollapsed(tabConfig),
       ),
     );
   }
@@ -358,30 +340,11 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
         curve: Curves.easeOutCubic,
         // 右缘锚定：播放器恒在行尾（屏右），坍缩 ↔ 展开时右缘不动、
         // 向左生长，不会顶出屏幕右缘。
+        // 同导航部分：不包 AnimatedSwitcher（理由见 _buildNavPart 注释）。
         alignment: Alignment.centerRight,
-        // 同导航部分：AnimatedSwitcher 交叉淡化消除内容瞬间替换的生硬感，
-        // layoutBuilder 对齐 centerRight 与容器收缩方向一致（右缘不动）。
-        child: AnimatedSwitcher(
-          duration: _kMorphDuration,
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          layoutBuilder: (currentChild, previousChildren) => Stack(
-            alignment: Alignment.centerRight,
-            children: [
-              ...previousChildren,
-              if (currentChild != null) currentChild,
-            ],
-          ),
-          child: _controlsExpanded
-              ? KeyedSubtree(
-                  key: const ValueKey('player_capsule'),
-                  child: _buildControlsCapsule(player, song),
-                )
-              : KeyedSubtree(
-                  key: const ValueKey('player_circle'),
-                  child: _buildCircle(song, isPlaying, duration, player),
-                ),
-        ),
+        child: _controlsExpanded
+            ? _buildControlsCapsule(player, song)
+            : _buildCircle(song, isPlaying, duration, player),
       ),
     );
   }
