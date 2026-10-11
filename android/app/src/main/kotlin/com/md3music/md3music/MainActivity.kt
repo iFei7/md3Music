@@ -786,6 +786,10 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // 注册系统 WebView 平台视图（viewType 'system_webview'）：替代
+        // webview_flutter 插件，仅服务于签到滑块验证码（见 SystemWebViewPlugin.kt）。
+        SystemWebViewPlugin.register(flutterEngine)
     }
 
     /// 原生震动分发：把 Dart/m3e_core 传入的语义 type 映射到系统预定义

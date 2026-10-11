@@ -3,10 +3,10 @@ import 'package:intl/intl.dart';
 import 'package:m3e_core/m3e_core.dart';
 import '../../widgets/md3_pull_to_refresh.dart';
 import 'package:provider/provider.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/theme/app_dimens.dart';
 import '../../core/utils/app_toast.dart';
+import '../../core/widgets/system_webview.dart';
 import '../../providers/kugou_provider.dart';
 import 'vip_status.dart';
 
@@ -298,50 +298,30 @@ class _SignInCalendarPageState extends State<SignInCalendarPage> {
 
   /// 20028 二次安全验证弹窗：WebView 加载本地滑块验证码页面（腾讯 TCaptcha），
   /// 验证通过后把 verifycode 回传给 provider，由 provider 调 /verify/user/info 并重试签到。
+  ///
+  /// WebView 使用系统 android.webkit.WebView 平台视图（SystemWebView 薄封装，
+  /// 替代 webview_flutter 插件）。行为契约与原 webview_flutter 版本逐条等价：
+  /// 1) 加载 assets/web/verify_captcha.html；
+  /// 2) JS 通道 'CaptchaChannel'：__READY__ → 注入 initCaptcha(txappid)；
+  ///    __CANCEL__/__ERROR__ → cancelVerifyCaptcha；其余 → completeVerifyCaptcha，
+  ///    随后 pop 弹窗；
+  /// 3) onPageFinished 同样注入 initCaptcha(txappid)；
+  /// 4) 资源加载错误 → cancelVerifyCaptcha + pop；
+  /// 5) JS unrestricted、DOM storage（原生 WebView settings 已开启）。
   Future<void> _showVerifyCaptchaDialog(
     BuildContext context,
     KugouProvider kugou,
     VerifyCaptchaRequest pending,
   ) async {
-    final controller = WebViewController();
-    controller
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..addJavaScriptChannel(
-        'CaptchaChannel',
-        onMessageReceived: (message) {
-          final data = message.message;
-          print('[CAPTCHA] channel: $data');
-          if (data == '__READY__') {
-            // 页面 JS 就绪信号：注入 txappid 拉起验证码（比 onPageFinished 更可靠）
-            controller.runJavaScript(
-              'window.initCaptcha && initCaptcha(${pending.txappid})',
-            );
-            return;
-          }
-          if (data == '__CANCEL__' || data == '__ERROR__') {
-            kugou.cancelVerifyCaptcha();
-          } else {
-            kugou.completeVerifyCaptcha(data);
-          }
-          if (context.mounted) Navigator.of(context).pop();
-        },
-      )
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageFinished: (_) {
-            // 页面加载完成后注入 txappid 并拉起腾讯验证码
-            controller.runJavaScript(
-              'window.initCaptcha && initCaptcha(${pending.txappid})',
-            );
-          },
-          onWebResourceError: (_) {
-            // 页面/资源加载失败：取消验证，避免白框卡死
-            kugou.cancelVerifyCaptcha();
-            if (context.mounted) Navigator.of(context).pop();
-          },
-        ),
-      )
-      ..loadFlutterAsset('assets/web/verify_captcha.html');
+    SystemWebViewController? captchaController;
+
+    // 页面 JS 就绪信号或页面加载完成 → 注入 txappid 拉起验证码
+    // （JS 侧 initCaptcha 有 CAPTCHA_READY 防重入，双路注入安全）。
+    void injectInitCaptcha() {
+      captchaController?.evaluateJavascript(
+        'window.initCaptcha && initCaptcha(${pending.txappid})',
+      );
+    }
 
     await showDialog<void>(
       context: context,
@@ -380,7 +360,33 @@ class _SignInCalendarPageState extends State<SignInCalendarPage> {
             SizedBox(
               width: 360,
               height: 400,
-              child: WebViewWidget(controller: controller),
+              child: SystemWebView(
+                assetKey: 'assets/web/verify_captcha.html',
+                onCreated: (controller) => captchaController = controller,
+                onMessage: (data) {
+                  print('[CAPTCHA] channel: $data');
+                  if (data == '__READY__') {
+                    // 页面 JS 就绪信号：注入 txappid 拉起验证码（比 onPageFinished 更可靠）
+                    injectInitCaptcha();
+                    return;
+                  }
+                  if (data == '__CANCEL__' || data == '__ERROR__') {
+                    kugou.cancelVerifyCaptcha();
+                  } else {
+                    kugou.completeVerifyCaptcha(data);
+                  }
+                  if (context.mounted) Navigator.of(context).pop();
+                },
+                onPageFinished: (_) {
+                  // 页面加载完成后注入 txappid 并拉起腾讯验证码
+                  injectInitCaptcha();
+                },
+                onResourceError: (_) {
+                  // 页面/资源加载失败：取消验证，避免白框卡死
+                  kugou.cancelVerifyCaptcha();
+                  if (context.mounted) Navigator.of(context).pop();
+                },
+              ),
             ),
           ],
         ),
