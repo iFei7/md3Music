@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- MD3Music native: vendored media3 源码（exoplayer/session/decoder-flac）编译模块。
+         namespace = com.ryanheise.just_audio，使 vendored session 源码中
+         `import com.ryanheise.just_audio.R` 零改动解析。 -->
+</manifest>

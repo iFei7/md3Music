@@ -81,6 +81,13 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
+# --- androidx.core（core 明文条目供 :media3fork 使用）---
+# :media3fork 编译 vendored media3-session，其中 NotificationCompat.Builder
+# #setForegroundServiceBehavior / #setSilent 等为 androidx.core 1.7.0+ API；
+# 而 androidx.media:media:1.7.0 的传递依赖把 core 拉到 1.6.0（编译失败）。
+# Flutter 侧由 core-ktx 1.12.0 抬升到 ≥1.7.0 故不暴露；native 工程需显式声明。
+# 版本与 app 的 core-ktx 保持一致（同一 coreKtx 版本号）。
+androidx-core = { group = "androidx.core", name = "core", version.ref = "coreKtx" }
 
 # --- 图片（Coil 3，网络加载需显式 okhttp 组件）---
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }

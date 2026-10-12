@@ -75,6 +75,15 @@ kotlin {
     }
 }
 
+// MD3Music native: 全局排除 Maven 的 media3-exoplayer / media3-session。
+// 二者由 :media3fork（fork 本地源码）提供，任何传递依赖再次引入 Maven 版都会造成
+// "Duplicate class androidx.media3.exoplayer.*" 编译失败 —— 与 Flutter 工程
+// android/app/build.gradle.kts 的全局排除策略对齐。
+configurations.configureEach {
+    exclude(group = "androidx.media3", module = "media3-exoplayer")
+    exclude(group = "androidx.media3", module = "media3-session")
+}
+
 dependencies {
     // --- Compose（BOM 统一版本）---
     implementation(platform(libs.compose.bom))
@@ -109,9 +118,12 @@ dependencies {
     implementation(libs.retrofit.converter.kotlinx.serialization)
     implementation(libs.okhttp)
 
-    // --- 播放（Media3 锁定 1.4.1，与 just_audio fork 内嵌源码对齐）---
-    implementation(libs.media3.exoplayer)
-    implementation(libs.media3.session)
+    // --- 播放（Media3 1.4.1）---
+    // exoplayer / session 由 :media3fork 提供（fork 内嵌本地源码，含 9 处产品级改动：
+    // 焦点事件暴露、vivo 车载歌词/原子随身听、DefaultAudioSink 缓冲修复、媒体卡下一首修复、
+    // 前台服务补偿等）。必须走本地源码 —— Maven 版同为 1.4.1 但缺失上述改动。
+    // 仅 media3-common 走 Maven（同版本，供 app 侧 Kotlin 引用 UnstableApi/Player 等类型）。
+    implementation(project(":media3fork"))
     implementation(libs.media3.common)
 
     // --- 图片（Coil 3 + okhttp 网络组件）---

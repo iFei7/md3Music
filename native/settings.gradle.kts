@@ -34,3 +34,6 @@ dependencyResolutionManagement {
 }
 
 include(":app")
+// MD3Music native: just_audio fork 内嵌 media3 源码（exoplayer/session/decoder-flac）编译模块。
+// 单独成模块的原因见 media3fork/build.gradle.kts 顶部注释（R 引用零改动 + 单一事实来源）。
+include(":media3fork")
