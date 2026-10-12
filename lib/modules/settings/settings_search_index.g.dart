@@ -76,4 +76,5 @@ const List<({String label, String category, String subpage, String aliases})>
   (label: '用户协议', category: '关于', subpage: '', aliases: '协议 条款'),
   (label: '免责声明', category: '关于', subpage: '', aliases: '免责'),
   (label: '开源许可', category: '关于', subpage: '', aliases: '开源 license 许可'),
+  (label: '赞助支持', category: '关于', subpage: '', aliases: '赞助 捐赠 打赏 支持作者 请喝咖啡 coffee'),
 ];

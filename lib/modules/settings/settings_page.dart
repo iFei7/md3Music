@@ -49,6 +49,7 @@ import 'settings_two_pane.dart';
 import '../../core/layout/adaptive_navigator.dart' show DetailEmptyState;
 import 'home_tab_manager.dart';
 import 'settings_search_index.g.dart';
+import 'support_page.dart';
 
 /// CI compile-time version injection via --dart-define=APP_VERSION=X
 /// Fallback display when runtime PackageInfo read fails.
@@ -2585,12 +2586,25 @@ class _SettingsPageState extends State<SettingsPage>
           onTap: () {
             showLicensePage(
               context: context,
-              applicationName: 'MD3Music',
+              applicationName: 'Grace Music',
               applicationVersion: _appVersion.isEmpty
                   ? kBuildAppVersion
                   : _appVersion,
             );
           },
+        ),
+        // ④ 支持作者：赞助页（Navigator 独立页）
+        _buildGroupLabel('支持作者', colorScheme),
+        // search: 赞助 捐赠 打赏 支持作者 请喝咖啡
+        ListTile(
+          leading: const Icon(Icons.favorite_outline),
+          title: const Text('赞助支持'),
+          subtitle: const Text('请作者喝杯咖啡，支持持续开发'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const SupportPage()),
+          ),
         ),
       ],
     );
