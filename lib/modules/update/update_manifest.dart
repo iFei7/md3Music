@@ -261,7 +261,7 @@ class UpdateManifest {
       releasePageUrl: releasePageUrl,
       releaseNotes: releaseNotes.isEmpty
           ? const <String, List<String>>{'': <String>[]}
-          : const <String, List<String>>{'zh-CN': releaseNotes},
+          : <String, List<String>>{'zh-CN': releaseNotes},
     );
   }
 
