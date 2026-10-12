@@ -224,20 +224,19 @@ jobs:
           retention-days: 7
 
   # ============================================================
-  # test：Android JVM 单测 + Rust 单测。
-  # continue-on-error（job 级，观测项）：失败不阻断 build/release——
-  #   1) cargo test --locked：Rust 源码本次未改，列为观测项；
-  #   2) :app:testReleaseUnitTest：native 骨架期测试集在补齐中
-  #      （当前 app/src/test 为空），同样先作观测。
-  # 两个测试步骤各自也带 continue-on-error：job 级 continue-on-error
-  # 不改变步骤间的跳过语义（前一个失败仍会跳过后续步骤），故步骤级
-  # 显式声明，保证两个观测项都真实跑到。
+  # test：Android JVM 单测（门禁，失败阻断 release）+ Rust 单测（观测项）。
+  # Android 侧说明：AGP 9.0.1 不为 release 变体生成 testReleaseUnitTest
+  # 任务（本地 :app:tasks --all 实测仅存 testDebugUnitTest），故跑 debug
+  # 变体单测——与 stability-checks.yml 的 testStandardDebugUnitTest
+  # 同一路线；测试源码 src/test 两变体共用，无差异。
+  # Rust 侧 continue-on-error（观测项）：Rust 源码本次未改，失败不阻断
+  # native 发布；步骤级 continue-on-error 保证 Android 门禁失败时
+  # Rust 观测项仍独立执行完（job 级语义下失败会跳过后续步骤）。
   # ============================================================
   test:
-    name: Unit tests (Android JVM + Rust)
+    name: Unit tests (Android JVM gate + Rust)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
 
     steps:
       - name: Checkout repository
@@ -277,22 +276,21 @@ jobs:
             gradle-${{ runner.os }}-
 
       # ============================================================
-      # Android JVM 单测（--no-daemon --quiet 借鉴 stability-checks.yml）。
-      # 任务名适配：native 工程无 productFlavors（见 build job 注释），
-      # AGP 生成的单测任务是 :app:testReleaseUnitTest，而非 Flutter
-      # 工程的 testStandardReleaseUnitTest（那需要 standard flavor）。
-      # 直接跑即可——单测任务自行编译所需 variant，无需先 assemble
-      # （与 stability-checks 的 android-jvm job 一致）。
+      # Android JVM 单测（门禁）：--no-daemon --quiet 借鉴 stability-checks.yml。
+      # 任务名 testDebugUnitTest——AGP 9.0.1 不为 release 变体生成单测任务
+      # （本地 tasks --all 实测），debug 变体单测为仓库既有 CI 路线
+      # （stability-checks 的 testStandardDebugUnitTest 同款）。
+      # 直接跑即可——单测任务自行编译所需 variant，无需先 assemble。
       # ============================================================
       - name: Run Android JVM unit tests
-        continue-on-error: true
         working-directory: native
         run: >-
-          ./gradlew :app:testReleaseUnitTest
+          ./gradlew :app:testDebugUnitTest
           --no-daemon --quiet
 
       # 失败诊断：解析 Gradle XML 测试报告（脚本借鉴 stability-checks.yml
-      # 的 Report Android JVM test failures，报告目录按 native 工程适配）。
+      # 的 Report Android JVM test failures，报告目录按 native 工程 +
+      # debug 变体适配）。
       - name: Report Android JVM test failures
         if: always()
         shell: bash
@@ -302,7 +300,7 @@ jobs:
           import xml.etree.ElementTree as ET
 
           report_dirs = [
-              Path("native/app/build/test-results/testReleaseUnitTest"),
+              Path("native/app/build/test-results/testDebugUnitTest"),
           ]
           paths = [
               path
@@ -331,29 +329,31 @@ jobs:
       # Rust 单测：参数照抄 stability-checks.yml 的 rust-core job
       # （working-directory: kugou_api_server/rust + cargo test --locked；
       # --locked 保证 Cargo.lock 与 Cargo.toml 一致、依赖可复现）。
-      # 观测项：Rust 源码本次未改，失败不阻断 workflow。
+      # 观测项（continue-on-error）：Rust 源码本次未改，失败不阻断 workflow；
+      # Android JVM 单测在上方已是硬门禁。
       # ============================================================
       - name: Run Rust server and API tests
         continue-on-error: true
         working-directory: kugou_api_server/rust
         run: cargo test --locked
 
-      # 单测报告 artifact。两个测试步骤均为 continue-on-error，报告
-      # 可能缺失（如骨架期无测试用例），故 warn 不阻断。
+      # 单测报告 artifact。Rust 步骤为 continue-on-error、报告可能缺失，
+      # 故 warn 不阻断。
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-unit-test-reports
           path: |
-            native/app/build/test-results/testReleaseUnitTest
-            native/app/build/reports/tests/testReleaseUnitTest
+            native/app/build/test-results/testDebugUnitTest
+            native/app/build/reports/tests/testDebugUnitTest
           if-no-files-found: warn
           retention-days: 7
 
   # ============================================================
   # release：仅 push 到 native 分支、且 build/test 成功后执行
-  # （test 为观测项 continue-on-error，不阻断发布；build 失败则跳过）。
+  # （test job 的 Android JVM 单测为门禁，失败则跳过发布；Rust 观测项
+  # 不阻断。build 失败同样跳过）。
   # 版本解析：从 native/app/build.gradle.kts grep versionName；
   # sha7 用 ${GITHUB_SHA::7}。
   # tag：v<versionName>-native-<sha7>（per-commit 独立 tag，零清理逻辑）。
