@@ -1,3 +1,6 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -7,8 +10,50 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// ============================================================
+// 签名方案（debug 与 release 完全分离）
+// ============================================================
+// debug：沿用 Android 默认 debug 签名（AGP 自动生成 ~/.android/debug.keystore），
+//        仓库内不引入任何 debug 密钥。
+// release：按以下优先级装配签名，**绝不回退 debug 签名、绝不伪造签名**：
+//   1) native/keystore.properties（本地开发用；已在 native/.gitignore 忽略，禁止提交）：
+//         storeFile / storePassword / keyAlias / keyPassword
+//   2) 环境变量 ANDROID_KEYSTORE_PATH / ANDROID_KEYSTORE_PASSWORD /
+//         ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD（CI 经 GitHub Secrets 注入）
+//   两处都缺失时 release 构建显式报错退出（校验见文件末尾 taskGraph.whenReady）。
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+/** keystore.properties 优先，缺失项再落到环境变量；两者皆空返回 null。 */
+fun signingValue(propertyKey: String, envKey: String): String? =
+    keystoreProperties.getProperty(propertyKey)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(envKey)?.takeIf { it.isNotBlank() }
+
+val releaseStoreFilePath = signingValue("storeFile", "ANDROID_KEYSTORE_PATH")
+val releaseStorePasswordValue = signingValue("storePassword", "ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAliasValue = signingValue("keyAlias", "ANDROID_KEY_ALIAS")
+val releaseKeyPasswordValue = signingValue("keyPassword", "ANDROID_KEY_PASSWORD")
+
+// 四项齐全才视为「release 签名已配置」。
+val releaseSigningConfigured = listOf(
+    releaseStoreFilePath,
+    releaseStorePasswordValue,
+    releaseKeyAliasValue,
+    releaseKeyPasswordValue,
+).all { it != null }
+
+// storeFile 解析：绝对路径直接用；相对路径相对 Gradle 根（native/）。
+val releaseStoreFileResolved: File? = releaseStoreFilePath?.let { path ->
+    val candidate = File(path)
+    if (candidate.isAbsolute) candidate else rootProject.file(path)
+}
+
 android {
-    namespace = "com.md3music.md3music"
+    namespace = "com.gracemusic"
     compileSdk = 36
     ndkVersion = "28.2.13676358"
 
@@ -26,13 +71,18 @@ android {
     }
 
     defaultConfig {
-        // 与 lite（com.md3music.md3music.lite）共存安装、数据隔离；namespace/Kotlin 包路径
-        // 保留 com.md3music.md3music（JNI shim 符号、FileProvider authority 推导依赖）。
-        applicationId = "com.md3music.md3music.native"
+        // GraceMusic：由 md3Music 演进而来的独立原生应用，applicationId 与 lite 不同，
+        // 可与 lite 共存安装、数据隔离。
+        // namespace 与包根定为 com.gracemusic，与 JNI shim 符号（shim.c 的
+        // Java_com_gracemusic_kugou_KugouApiService_*）及生成的 R 包（com.gracemusic.R）
+        // 强耦合：改 namespace 必须同步改 shim.c 的符号名与源码包路径，否则运行期
+        // 必抛 UnsatisfiedLinkError。（注：本工程 Manifest 未使用 FileProvider，
+        // 不存在 authority 推导依赖。）
+        applicationId = "com.gracemusic.app"
         minSdk = 24
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0.0-native"
+        versionName = "1.0.0-grace"
 
         // 只构建 jniLibs 中实际存在的 ABI（arm64-v8a / armeabi-v7a；x86 系按体积
         // 决策排除）。Android.mk 内另有 wildcard 校验兜底缺失 ABI 的 so。
@@ -62,6 +112,19 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            // 仅在四项齐全时装配；缺项则留空，交由文件末尾的构建期校验显式失败——
+            // 配置阶段不抛错，以免「未配 release 签名」阻断 debug 构建与单测。
+            if (releaseSigningConfigured) {
+                storeFile = releaseStoreFileResolved
+                storePassword = releaseStorePasswordValue
+                keyAlias = releaseKeyAliasValue
+                keyPassword = releaseKeyPasswordValue
+            }
+        }
+    }
+
     buildTypes {
         debug {
             // 与 Flutter 工程 android/app/build.gradle.kts 对齐：Gradle 9.x 下显式固定
@@ -74,6 +137,11 @@ android {
         release {
             // R8 规则与混淆配置后续阶段补齐，骨架期暂不开 minify
             isMinifyEnabled = false
+            // 配好才装配 release 签名；缺失时不设 signingConfig，AGP 不会回退 debug，
+            // 且文件末尾的 taskGraph 校验会直接让构建失败（不产 unsigned 包冒充正式版）。
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 }
@@ -81,6 +149,26 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+// ============================================================
+// release 签名校验（fail-fast）：仅当本次构建确实要产出 release 时生效。
+// 放在 taskGraph 就绪后判定——既不阻断「未配 release 签名」的 debug 构建与
+// 单测，又保证 release 缺签名时给出可操作的错误并明确失败退出（绝不产
+// unsigned 包、绝不回退 debug 签名）。
+// ============================================================
+gradle.taskGraph.whenReady {
+    val buildingRelease = allTasks.any { task ->
+        task.name.startsWith("assembleRelease") ||
+            task.name.startsWith("bundleRelease") ||
+            task.name == "packageRelease" ||
+            task.name == "packageReleaseBundle"
+    }
+    if (buildingRelease && !releaseSigningConfigured) {
+        throw GradleException(
+            "GraceMusic release 签名未配置：请提供 keystore.properties 或 ANDROID_KEYSTORE_* 环境变量",
+        )
     }
 }
 

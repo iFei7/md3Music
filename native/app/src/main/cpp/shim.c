@@ -3,19 +3,23 @@
 // 为何需要 shim：入库的 libkugou_server.so 由上游 Rust 工程编译（见
 // kugou_api_server/rust/src/lib.rs），其 JNI 符号是上游旧包名
 // Java_com_md3music_premium_KugouApiService_*（premium），与本 App 的
-// com.md3music.md3music.kugou.KugouApiService 不匹配——直接 external 声明
+// com.gracemusic.kugou.KugouApiService 不匹配——直接 external 声明
 // 必然 UnsatisfiedLinkError。本 shim 以正确包名重新导出三个入口，内部只做
 // jstring → C 字符串的类型转换后转发纯 C 符号，零业务逻辑（语义以 lib.rs 的
 // C FFI 实现为准）。
 //
+// ⚠️ JNI 符号名完全由「声明 external 方法的类的全限定名」决定：本 App 包根为
+// com.gracemusic，故下方三个导出必须逐一为 Java_com_gracemusic_kugou_...。
+// 若只改 Kotlin 包名而不改这里，构建照过、运行期必崩（UnsatisfiedLinkError）。
+//
 // 符号对应关系（与 lib.rs 的 JNI 声明逐一对应，仅包名段改本 App、方法名保持）：
-//   Java_..._nativeStartNode(JNIEnv*, jobject, jint port, jstring data_dir) -> jint
+//   Java_com_gracemusic_kugou_KugouApiService_nativeStartNode(JNIEnv*, jobject, jint port, jstring data_dir) -> jint
 //     ↔ Rust Java_com_md3music_premium_KugouApiService_nativeStartNode(env, this, port: jint, data_dir: jstring) -> jint
 //     ↔ C   int  start_server(int port, const char *data_dir)   // port==0 随机端口；返回实际端口，0=失败
-//   Java_..._nativeIsNodeRunning(JNIEnv*, jobject) -> jboolean
+//   Java_com_gracemusic_kugou_KugouApiService_nativeIsNodeRunning(JNIEnv*, jobject) -> jboolean
 //     ↔ Rust Java_com_md3music_premium_KugouApiService_nativeIsNodeRunning(env, this) -> jboolean
 //     ↔ C   int  is_server_running(void)                        // 1=运行中，0=未运行
-//   Java_..._nativeStopNode(JNIEnv*, jobject) -> void
+//   Java_com_gracemusic_kugou_KugouApiService_nativeStopNode(JNIEnv*, jobject) -> void
 //     ↔ Rust Java_com_md3music_premium_KugouApiService_nativeStopNode(env, this)
 //     ↔ C   void stop_server(void)
 //
@@ -35,7 +39,7 @@ extern int is_server_running(void);
 #define SHIM_EXPORT __attribute__((visibility("default")))
 
 SHIM_EXPORT JNIEXPORT jint JNICALL
-Java_com_md3music_md3music_kugou_KugouApiService_nativeStartNode(
+Java_com_gracemusic_kugou_KugouApiService_nativeStartNode(
         JNIEnv *env, jobject thiz, jint port, jstring data_dir) {
     // 入参防护：env/dataDir 为空时直接失败返回 0，绝不解引用空指针。
     // data_dir 语义见 lib.rs：用于持久化 device_info.json；空路径交由 Rust 侧判失败。
@@ -53,13 +57,13 @@ Java_com_md3music_md3music_kugou_KugouApiService_nativeStartNode(
 }
 
 SHIM_EXPORT JNIEXPORT jboolean JNICALL
-Java_com_md3music_md3music_kugou_KugouApiService_nativeIsNodeRunning(
+Java_com_gracemusic_kugou_KugouApiService_nativeIsNodeRunning(
         JNIEnv *env, jobject thiz) {
     return is_server_running() == 1 ? JNI_TRUE : JNI_FALSE;
 }
 
 SHIM_EXPORT JNIEXPORT void JNICALL
-Java_com_md3music_md3music_kugou_KugouApiService_nativeStopNode(
+Java_com_gracemusic_kugou_KugouApiService_nativeStopNode(
         JNIEnv *env, jobject thiz) {
     stop_server();
 }

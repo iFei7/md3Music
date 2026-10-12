@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   # ============================================================
-  # build：原生 Release APK 构建（jniLibs 前置校验 + keystore 装配）。
+  # build：原生 Release APK 构建（jniLibs 前置校验 + release 签名装配）。
   # ============================================================
   build:
     name: Build native release APK
@@ -140,34 +140,50 @@ jobs:
           ls -lh "$jni"/*/
 
       # ============================================================
-      # keystore 装配（签名兜底，与 ci.yml / debug-build.yml 同一套机制）：
-      # 从仓库根 android/keystore/lite-release.keystore 复制（native
-      # 工程 Gradle 根为 native/，故相对路径为 ../android/keystore/），
-      # 密码/别名复用 ci.yml 的内置兜底值（md3lite / lite），让所有 run
-      # 的产物签名一致、可互相覆盖安装。
-      # 落盘约定（与 Flutter 工程 android/ 布局同构，供工程侧
-      # signingConfigs 接入后读取）：keystore.properties + app/release.keystore。
-      # 注意：native/app/build.gradle.kts 骨架期尚未配置 signingConfigs，
-      # 当前产物可能为 unsigned（Verify 步骤有 ::warning 提示，不阻断）；
-      # 正式分发应创建 'keystore' release 并配置 ANDROID_KEYSTORE_*
-      # Secrets（完整优先级链路见 ci.yml：keystore release + Secrets >
-      # 内置兜底 > debug 签名）。
+      # release 签名装配（从 GitHub Secrets 读取 GraceMusic 自己的 keystore）。
+      # 需要在仓库 Settings → Secrets and variables → Actions 配置：
+      #   ANDROID_KEYSTORE_BASE64     —— release keystore（.jks/.keystore）的 base64 编码
+      #   ANDROID_KEYSTORE_PASSWORD   —— storePassword
+      #   ANDROID_KEY_ALIAS           —— keyAlias
+      #   ANDROID_KEY_PASSWORD        —— keyPassword
+      # 解码落盘为 native/release.keystore，并经 $GITHUB_ENV 注入
+      # ANDROID_KEYSTORE_* 环境变量，供 app/build.gradle.kts 的 signingConfigs 读取。
+      #
+      # 为什么缺 Secret 必须「显式报错退出」而非回退 debug / 伪造签名：
+      #   GraceMusic 是独立分发应用，release 包必须用正式密钥签名；无密钥时若
+      #   静默产 unsigned 包或套 debug 签名，会污染发布链路且不可追溯。工程侧
+      #   app/build.gradle.kts 已对「release 缺签名」fail-fast，两端一致：缺任一
+      #   Secret 即让 job 失败，绝不产出任何半成品 APK。
+      #   （旧实现把仓库内 lite 的 keystore 拷来复用作 release 签名、并硬编码
+      #   固定口令——那是反例，已整体移除。）
       # ============================================================
-      - name: Setup bundled signing keystore
+      - name: Setup release signing (GitHub Secrets)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          src="../android/keystore/lite-release.keystore"
-          if [[ ! -f "$src" ]]; then
-            echo "::error::内置 keystore 缺失：$src"
+          missing=""
+          [[ -n "${KEYSTORE_BASE64:-}" ]]   || missing+=" ANDROID_KEYSTORE_BASE64"
+          [[ -n "${KEYSTORE_PASSWORD:-}" ]] || missing+=" ANDROID_KEYSTORE_PASSWORD"
+          [[ -n "${KEY_ALIAS:-}" ]]         || missing+=" ANDROID_KEY_ALIAS"
+          [[ -n "${KEY_PASSWORD:-}" ]]      || missing+=" ANDROID_KEY_PASSWORD"
+          if [[ -n "$missing" ]]; then
+            echo "::error::GraceMusic release 签名未配置：缺少 GitHub Secrets:${missing}。请在仓库 Settings → Secrets and variables → Actions 配置后重试（本地开发可改用 native/keystore.properties，注意勿提交）。"
             exit 1
           fi
-          cp "$src" app/release.keystore
-          # 内容与 ci.yml / main.yml 生成的 keystore.properties 一致
-          # （ci.yml 的 heredoc 版内容带缩进，java.util.Properties 会忽略
-          # 键前空白；此处用 printf 写干净版）
-          printf 'storePassword=md3lite\nkeyPassword=md3lite\nkeyAlias=lite\nstoreFile=release.keystore\n' \
-            > keystore.properties
-          echo "签名兜底就绪：内置固定 keystore（alias=lite）"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.keystore
+          # 经 $GITHUB_ENV 注入，供 ./gradlew :app:assembleRelease 读取
+          # （读取链见 native/app/build.gradle.kts 的 signingConfigs）
+          {
+            echo "ANDROID_KEYSTORE_PATH=${PWD}/release.keystore"
+            echo "ANDROID_KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}"
+            echo "ANDROID_KEY_ALIAS=${KEY_ALIAS}"
+            echo "ANDROID_KEY_PASSWORD=${KEY_PASSWORD}"
+          } >> "$GITHUB_ENV"
+          echo "release 签名就绪：来自 GitHub Secrets（alias=${KEY_ALIAS}）"
 
       # ============================================================
       # 构建 Release APK。
@@ -186,8 +202,9 @@ jobs:
       # 产物校验：借鉴 main.yml 的 Verify APKs（unzip -l 完整性 +
       # aapt2 badging 校验 applicationId），按 native 单 universal 包
       # 裁剪；aapt2 路径与上面安装的 build-tools;36.1.0 对应。
-      # 未接 signingConfigs 时 AGP 产出 app-release-unsigned.apk，
-      # 接入后为 app-release.apk——两种命名均兼容，unsigned 时告警不阻断。
+      # 工程已配置 release signingConfigs（缺签名时 assembleRelease 会
+      # fail-fast），故正常情况下只会有签名包 app-release.apk；若只见到
+      # unsigned 产物即为异常（说明签名链路失效），此处直接报错不放过。
       # ============================================================
       - name: Verify release APK
         id: apk
@@ -196,11 +213,8 @@ jobs:
           apk_dir="app/build/outputs/apk/release"
           if [[ -f "$apk_dir/app-release.apk" ]]; then
             src="$apk_dir/app-release.apk"
-          elif [[ -f "$apk_dir/app-release-unsigned.apk" ]]; then
-            src="$apk_dir/app-release-unsigned.apk"
-            echo "::warning::仅找到 unsigned 产物（native/app/build.gradle.kts 尚未配置 signingConfigs）；keystore 已按约定落盘，工程侧接入后即为签名包"
           else
-            echo "::error::未找到 release APK：$apk_dir/app-release.apk 或 $apk_dir/app-release-unsigned.apk"
+            echo "::error::未找到已签名 release APK：$apk_dir/app-release.apk（unsigned 产物不可用于发布，签名配置可能失效）"
             ls -lh "$apk_dir" 2>/dev/null || true
             exit 1
           fi
@@ -208,8 +222,8 @@ jobs:
           aapt2="$ANDROID_HOME/build-tools/36.1.0/aapt2"
           apk_id=$("$aapt2" dump badging "$src" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
           echo "APK: $src ($(du -h "$src" | cut -f1)) applicationId=${apk_id}"
-          [[ "$apk_id" == "com.md3music.md3music.native" ]] \
-            || { echo "::error::applicationId 异常：${apk_id}（期望 com.md3music.md3music.native）"; exit 1; }
+          [[ "$apk_id" == "com.gracemusic.app" ]] \
+            || { echo "::error::applicationId 异常：${apk_id}（期望 com.gracemusic.app）"; exit 1; }
           echo "staged_apk=$src" >> "$GITHUB_OUTPUT"
 
       # ⚠️ actions/upload-artifact 的 path 是工作区根相对路径，
@@ -356,8 +370,9 @@ jobs:
   # 不阻断。build 失败同样跳过）。
   # 版本解析：从 native/app/build.gradle.kts grep versionName；
   # sha7 用 ${GITHUB_SHA::7}。
-  # tag：v<versionName>-native-<sha7>（per-commit 独立 tag，零清理逻辑）。
-  # 资产名一律 ASCII：MD3Native-v<versionName>-<sha7>-standard-release.apk
+  # tag：v<versionName>-native-<sha7>（per-commit 独立 tag，零清理逻辑；
+  #   `-native-` 中缀是客户端解析版本号时依赖的既有约定，保持不变）。
+  # 资产名一律 ASCII：GraceMusic-v<versionName>-<sha7>-standard-release.apk
   #   —— 规避两个历史坑：
   #   1) GitHub 会把资产名中的非 ASCII 字符规范化为 '.'，中文名互相
   #      冲突 → 422 already_exists（ci.yml 的教训），故一律 ASCII，
@@ -414,7 +429,7 @@ jobs:
           # -native-<sha7> 后缀保证每次 push 独立 tag（固定 tag 覆盖会因
           # GitHub 资产名 GC 延迟必 422，见 ci.yml 注释）。
           tag="v${ver}-native-${sha7}"
-          out="MD3Native-v${ver}-${sha7}-standard-release.apk"
+          out="GraceMusic-v${ver}-${sha7}-standard-release.apk"
           echo "version=${ver} tag=${tag} asset=${out}"
 
           # ---- 定位 build job 产物，复制为 ASCII 发布名 ----
@@ -431,7 +446,7 @@ jobs:
           # ---- 创建 Release（prerelease；per-commit tag 永不重复）----
           rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg out "$out" \
             '{tag_name:$tag, target_commitish:$sha, prerelease:true,
-              name:("MD3Native v" + $ver + " (" + $tag + ")"),
+              name:("GraceMusic v" + $ver + " (" + $tag + ")"),
               body:("native 分支 CI 自动构建（universal release APK）。\n\n"
                   + "- 分支: native\n- 提交: " + $sha + "\n- 版本: v" + $ver + "\n\n"
                   + "### 下载\n"

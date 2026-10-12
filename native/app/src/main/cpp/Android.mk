@@ -2,7 +2,7 @@
 #
 # 背景：入库的 libkugou_server.so（Rust cdylib，见 kugou_api_server/rust/src/lib.rs）
 # 导出的 JNI 符号是上游旧包名 Java_com_md3music_premium_KugouApiService_*，与本 App
-# 的 com.md3music.md3music.kugou.KugouApiService 不匹配。shim.c 以正确包名重新导出
+# 的 com.gracemusic.kugou.KugouApiService 不匹配。shim.c 以正确包名重新导出
 # 三个入口并转发纯 C 符号（start_server / stop_server / is_server_running）。
 #
 # 构建系统说明：原为 CMake 方案（CMakeLists.txt），因部分环境无法启动 SDK cmake

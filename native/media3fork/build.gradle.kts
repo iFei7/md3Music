@@ -16,7 +16,7 @@
 //   vendored 源码包名是 androidx.media3.*，但 session 的 4 个文件（CommandButton /
 //   DefaultMediaNotificationProvider / legacy/MediaControllerCompat / LegacyConversions）
 //   `import com.ryanheise.just_audio.R`（通知图标、布局、多语言字符串），且这些资源必须一并编译。
-//   若并入 :app（namespace = com.md3music.md3music），需改动 third_party 下由 lite 分支共享的
+//   若并入 :app（namespace = com.gracemusic），需改动 third_party 下由 lite 分支共享的
 //   源码（破坏单一事实来源）。此处将本模块 namespace 设为 com.ryanheise.just_audio，
 //   使 R 零改动解析，且 third_party 源码保持逐字节不变。
 //

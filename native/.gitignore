@@ -4,3 +4,11 @@ build/
 local.properties
 app/build/
 .cxx/
+
+# 签名材料：release 密钥与口令**绝不入库**。
+# keystore.properties 存放 storePassword/keyPassword 等明文口令，一旦提交即泄露
+# 应用签名私钥；*.jks / *.keystore 是密钥库本体。CI 侧改从 GitHub Secrets 注入
+# （见 .github/workflows/native.yml），本地开发把二者放在 native/ 下由本规则兜住。
+keystore.properties
+*.jks
+*.keystore
