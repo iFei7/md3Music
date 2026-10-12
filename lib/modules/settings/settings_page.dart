@@ -2455,7 +2455,7 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
-  /// 关于 section：版本（含构建期渲染引擎）→ 帮助 → 法律与许可。
+  /// 关于 section：版本（含构建期渲染引擎）→ 支持作者 → 帮助 → 法律与许可。
   Widget _buildAboutSection(ColorScheme colorScheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2520,7 +2520,20 @@ class _SettingsPageState extends State<SettingsPage>
           ),
           singleLineLandscape: true,
         ),
-        // ② 帮助
+        // ② 支持作者：赞助页（Navigator 独立页）
+        _buildGroupLabel('支持作者', colorScheme),
+        // search: 赞助 捐赠 打赏 支持作者 请喝咖啡
+        ListTile(
+          leading: const Icon(Icons.favorite_outline),
+          title: const Text('赞助支持'),
+          subtitle: const Text('请作者喝杯咖啡，支持持续开发'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const SupportPage()),
+          ),
+        ),
+        // ③ 帮助
         _buildGroupLabel('帮助', colorScheme),
         // search: 教程 引导
         ListTile(
@@ -2553,7 +2566,7 @@ class _SettingsPageState extends State<SettingsPage>
           trailing: const Icon(Icons.chevron_right, size: 18),
           onTap: _showClearDiagnosticLogsDialog,
         ),
-        // ③ 法律与许可：协议 → 免责 → 开源许可
+        // ④ 法律与许可：协议 → 免责 → 开源许可
         _buildGroupLabel('法律与许可', colorScheme),
         // search: 协议 条款
         ListTile(
@@ -2592,19 +2605,6 @@ class _SettingsPageState extends State<SettingsPage>
                   : _appVersion,
             );
           },
-        ),
-        // ④ 支持作者：赞助页（Navigator 独立页）
-        _buildGroupLabel('支持作者', colorScheme),
-        // search: 赞助 捐赠 打赏 支持作者 请喝咖啡
-        ListTile(
-          leading: const Icon(Icons.favorite_outline),
-          title: const Text('赞助支持'),
-          subtitle: const Text('请作者喝杯咖啡，支持持续开发'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const SupportPage()),
-          ),
         ),
       ],
     );
