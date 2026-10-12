@@ -73,5 +73,3 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/web/
-  shaders:
-    - shaders/depth_parallax.frag
