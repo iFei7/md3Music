@@ -1000,11 +1000,12 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
     // widthFactor 是相对 playButtonSize 的比例（因为 Positioned.width = playButtonSize）
     final currentWidth = size * widthFactor;
     final currentHeight = size * heightFactor;
-    // Apple Music 参考比例：切歌图标 ≈ 43.5dp、播放键 ≈ 44.8dp（64dp 按钮 × 0.68/0.70）。
-    // 演进：0.45/0.50 → 0.58/0.62 → 0.61/0.64 → 0.68/0.70（真机多轮反馈"再大"，
-    // 系数小于 0.66 时视觉变化不可感知）。必须保证播放键系数 > 侧键，主次不倒挂；
-    // 上限 0.70：64dp 容器内 44.8dp 图标两侧各余 9.6dp，低于此会显得挤满。
-    final iconSize = size * (isCenterPlay ? 0.70 : 0.68);
+    // Apple Music 参考比例：切歌图标 ≈ 44.8dp、播放键 ≈ 46.1dp（64dp 按钮 × 0.70/0.72）。
+    // 演进：0.45/0.50 → 0.58/0.62 → 0.61/0.64 → 0.68/0.70 → 0.70/0.72
+    // （真机多轮反馈"再大"；注：0.68/0.70 一版用户未实际装机，此次为保险再上调）。
+    // 必须保证播放键系数 > 侧键，主次不倒挂；上限 0.72：64dp 容器内
+    // 46.1dp 图标两侧各余 9dp，再大会显得挤满。
+    final iconSize = size * (isCenterPlay ? 0.72 : 0.70);
     final label = switch (icon) {
       Icons.skip_previous => '上一首',
       Icons.skip_next => '下一首',
