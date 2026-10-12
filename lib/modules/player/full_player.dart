@@ -1476,8 +1476,9 @@ class _FullPlayerState extends State<FullPlayer>
             : context.watch<LocalFavoritesProvider>().isFavorite(song.id));
 
     // 封面再加大：两侧留白合计 16（单侧 8），360dp 屏封面边长可达 344；
-    // 标题行上移后 LayoutBuilder 拿到的 maxHeight 已扣除标题行高度，
-    // 纵向余量 56→48
+    // 标题行移到封面下方后，Expanded 内的 LayoutBuilder 拿到的 maxHeight
+    // 仍有界（Column 先给标题行/SizedBox 分配固定高度，剩余归 Expanded），
+    // 纵向余量 56→48 的扣除保持不变
     final horizontalPadding = 8.0;
     final verticalPadding = isExpanded ? 8.0 : 16.0;
     final textSpacing = isExpanded ? 8.0 : 24.0;
@@ -1492,65 +1493,6 @@ class _FullPlayerState extends State<FullPlayer>
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           if (!isExpanded) const Spacer(),
-          // 标题行上移：歌名先于封面出现（信息优先于视觉主体）。封面仍在
-          // Expanded 内占满剩余空间，LayoutBuilder 拿到的 maxHeight 已扣除
-          // 标题行高度；居中方式不变（isExpanded 由 Center 保证，
-          // 非 isExpanded 由 Column 的 mainAxisAlignment.center + Spacer 保证）
-          // 标题行改版：标题左对齐占满剩余宽度，收藏/播放模式键上移到同行
-          // 右端（原先分居底部传输行两端）。边键让位后传输行只剩三键，
-          // 无宽度竞争可整体放大；点击逻辑与 isFavorited 计算原样搬移。
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: _buildTitleBlock(
-                  playerProvider,
-                  currentSong,
-                  colorScheme,
-                  alignment: CrossAxisAlignment.start,
-                ),
-              ),
-              _buildEdgeAction(
-                icon: isFavorited ? Icons.favorite : Icons.favorite_border,
-                active: isFavorited,
-                onTap: song == null
-                    ? null
-                    : () {
-                        if (isFavorited) {
-                          AppHaptics.click();
-                        } else {
-                          AppHaptics.heavy();
-                        }
-                        if (isOnline) {
-                          context.read<FavoritesProvider>().toggleFavorite(
-                            song,
-                          );
-                        } else {
-                          context.read<LocalFavoritesProvider>().toggleFavorite(
-                            song.id,
-                          );
-                        }
-                      },
-                // 长按：在线歌曲弹出 AI 推荐歌曲面板
-                onLongPress: song != null && isOnline
-                    ? () => showAiRecommendSheet(context, song)
-                    : null,
-              ),
-              const SizedBox(width: 4),
-              _buildEdgeAction(
-                icon: _playModeIcon(
-                  playerProvider.shuffleEnabled,
-                  playerProvider.loopMode,
-                ),
-                active: !_isDefaultPlayMode(playerProvider),
-                onTap: () {
-                  AppHaptics.tick();
-                  playerProvider.cyclePlayMode();
-                },
-              ),
-            ],
-          ),
-          SizedBox(height: textSpacing),
           if (isExpanded) ...[
             // 用 Expanded 包一层，让 LayoutBuilder 拿到**有界**的高度：
             // 原实现靠上下两个 Spacer 撑居中，Column 给非 flex 子级的高度约束
@@ -1561,8 +1503,9 @@ class _FullPlayerState extends State<FullPlayer>
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   // 封面再加大：两侧 padding 单侧 8（合计 16，360dp 屏边长
-                  // 344）、宽度上限 420→440；标题行上移后 maxHeight 已扣除
-                  // 标题行（边键 48dp、标题可能两行），纵向余量 56→48。
+                  // 344）、宽度上限 420→440；标题行移到封面下方后，maxHeight
+                  // 同样已扣除标题行（边键 48dp、标题可能两行），纵向余量
+                  // 56→48。
                   // 360dp 竖屏核算：纵向可用 ≈ 540（屏高 800 - 顶栏 - 标题行
                   // ~56 - 底部控制区 ~150），-48 后 492 > 344，封面仍由
                   // 宽度主导，不会因高度收敛变小
@@ -1623,6 +1566,65 @@ class _FullPlayerState extends State<FullPlayer>
                 ),
               ),
             ),
+          SizedBox(height: textSpacing),
+          // 标题位于封面下方：视觉主体优先、信息随后。封面仍在 Expanded 内
+          // 占满剩余空间，LayoutBuilder 拿到的 maxHeight 已扣除标题行高度；
+          // 居中方式不变（isExpanded 由 Center 保证，非 isExpanded 由
+          // Column 的 mainAxisAlignment.center + 上下两个等量 Spacer 保证）。
+          // 标题行改版：标题左对齐占满剩余宽度，收藏/播放模式键移到同行
+          // 右端（原先分居底部传输行两端）。边键让位后传输行只剩三键，
+          // 无宽度竞争可整体放大；点击逻辑与 isFavorited 计算原样搬移。
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: _buildTitleBlock(
+                  playerProvider,
+                  currentSong,
+                  colorScheme,
+                  alignment: CrossAxisAlignment.start,
+                ),
+              ),
+              _buildEdgeAction(
+                icon: isFavorited ? Icons.favorite : Icons.favorite_border,
+                active: isFavorited,
+                onTap: song == null
+                    ? null
+                    : () {
+                        if (isFavorited) {
+                          AppHaptics.click();
+                        } else {
+                          AppHaptics.heavy();
+                        }
+                        if (isOnline) {
+                          context.read<FavoritesProvider>().toggleFavorite(
+                            song,
+                          );
+                        } else {
+                          context.read<LocalFavoritesProvider>().toggleFavorite(
+                            song.id,
+                          );
+                        }
+                      },
+                // 长按：在线歌曲弹出 AI 推荐歌曲面板
+                onLongPress: song != null && isOnline
+                    ? () => showAiRecommendSheet(context, song)
+                    : null,
+              ),
+              const SizedBox(width: 4),
+              _buildEdgeAction(
+                icon: _playModeIcon(
+                  playerProvider.shuffleEnabled,
+                  playerProvider.loopMode,
+                ),
+                active: !_isDefaultPlayMode(playerProvider),
+                onTap: () {
+                  AppHaptics.tick();
+                  playerProvider.cyclePlayMode();
+                },
+              ),
+            ],
+          ),
           if (!isExpanded) const Spacer(),
         ],
       ),
@@ -1659,12 +1661,13 @@ class _FullPlayerState extends State<FullPlayer>
           // 过长歌名不换行，改优雅滚动（两端停顿 + 缓动往返 + 边缘渐隐）。
           child: GentleScrollingText(
             currentSong.displayName.toUpperCase(),
-            // MD3E v2: 大写 + 粗体 w800 + 字间距 1.5（标题行上移成为视觉
-            // 主体后，加粗到 w800 增强信息层级；dense 分支是横屏左栏形态，
-            // 宽度紧张不动）
-            style: (dense ? textTheme.titleMedium : textTheme.headlineSmall)
-                ?.copyWith(
-                  fontWeight: dense ? FontWeight.w700 : FontWeight.w800,
+          // MD3E v2: 大写 + 粗体 w900 + 字间距 1.5（标题位于封面下方仍为
+          // 视觉层级次主体；w800 与 w700 在 Roboto 上观感差异不明显，
+          // 直接上 w900（Roboto Black）保证肉眼可辨的加粗；dense 分支是
+          // 横屏左栏形态，宽度紧张不动）
+          style: (dense ? textTheme.titleMedium : textTheme.headlineSmall)
+              ?.copyWith(
+                fontWeight: dense ? FontWeight.w700 : FontWeight.w900,
                   letterSpacing: dense ? 1.0 : 1.5,
                   height: 1.2,
                 ),

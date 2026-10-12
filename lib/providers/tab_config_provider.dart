@@ -56,7 +56,7 @@ const List<TabItem> kOptionalTabs = [
 /// 所有可用 Tab（默认显示 + 可选）。
 ///
 /// 「我的」显式收尾：无论用户开启多少可选 Tab，默认顺序下它都排在最后
-/// （老用户由 v3 迁移统一移位，之后仍可自行拖动）。
+/// （老用户由 v3/v4 迁移统一移位，之后仍可自行拖动）。
 const List<TabItem> kAllAvailableTabs = [
   TabItem(id: 'discover', label: '主页'),
   TabItem(id: 'favorites', label: '收藏'),
@@ -107,12 +107,14 @@ class TabConfigProvider extends ChangeNotifier {
       // 主页 tab 迁出（隐藏），入口收敛到收藏页「本地」tab 与快捷方式。
       // v3（FM/听书回归）：私人FM 与听书重新进入可选 Tab；「我的」统一
       // 收尾（老用户持久化 order 中它可能不在末位）。
-      // v4 起 library 恢复为可选 Tab（默认隐藏）但**不加迁移版本**：
-      // 下方追加逻辑会把「不在用户持久化 order 中的非默认 tab」自动加入
-      // _hiddenTabs——library 本就被 v2 迁移写入隐藏集合，新老用户在
-      // 主页管理中均默认关闭，用户手动打开即可，无需迁移版本升级。
+      // v4（library 回归可选 Tab）：library 的**默认隐藏**靠下方「补充
+      // 新增 tab」的追加逻辑自动完成——不在持久化 order 中的非默认 tab
+      // 会被加入 _hiddenTabs（library 本就被 v2 迁移写入隐藏集合），无需
+      // 为此升迁移版本；但追加逻辑会把 library 排到持久化 order 末尾，
+      // 即「我的」之后，破坏了 v3 建立的「我的收尾」不变量，因此「我的
+      // 收尾」的**恢复**需要 v4 迁移（见 v3 段之后的 v4 块）。
       final fromVersion = await _repo.getTabConfigMigrationVersion();
-      const tabConfigMigrationVersion = 3;
+      const tabConfigMigrationVersion = 4;
       if (fromVersion < 2) {
         if (fromVersion < 1) {
           _hiddenTabs..remove('favorites')..remove('library');
@@ -154,6 +156,20 @@ class TabConfigProvider extends ChangeNotifier {
       // 此时 _allTabs 已是最终顺序；仅当 user 确实不在末位时移位并回写，
       // 用户此后的手动拖动不受影响（迁移只跑一次）。
       if (fromVersion < 3) {
+        final userIndex = _allTabs.indexWhere((t) => t.id == 'user');
+        if (userIndex != -1 && userIndex != _allTabs.length - 1) {
+          final userTab = _allTabs.removeAt(userIndex);
+          _allTabs.add(userTab);
+          await _repo.setTabOrder([for (final t in _allTabs) t.id]);
+        }
+      }
+      // v4：library 恢复可选 Tab 后，「补充新增 tab」的追加逻辑把它排在
+      // 持久化 order 末尾——即「我的」之后，破坏了「我的收尾」。与 v3
+      // 同法，在追加逻辑完成后把 user 一次性移回末位并回写（用户此后的
+      // 手动拖动不受影响）。与 v3 块同构但作用域不同：fromVersion=3 的
+      // 用户不再进 v3 块，由本块负责恢复收尾；两块各只跑一次、条件幂等
+      // （user 已在末位时不做任何事）。
+      if (fromVersion < 4) {
         final userIndex = _allTabs.indexWhere((t) => t.id == 'user');
         if (userIndex != -1 && userIndex != _allTabs.length - 1) {
           final userTab = _allTabs.removeAt(userIndex);
