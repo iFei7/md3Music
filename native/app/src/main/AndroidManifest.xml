@@ -33,5 +33,44 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 媒体3 会话承载服务：把播放引擎挂进 MediaSession，由 media3 生成 now-playing
+             通知（通知栏/锁屏/蓝牙/车机的播放控制都来自这里）。
+             exported=true 是必需的：SystemUI 与 legacy MediaBrowser 客户端要以系统身份绑定
+             本服务；两个 intent-filter 分别对应 media3 会话协议与 vivo 原子随身听的私有 action。
+             （后者由 Md3MediaSessionService.onBind 重映射到 legacy browser 路径。） -->
+        <service
+            android:name=".player.session.Md3MediaSessionService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.vivo.musicwidgetmix.support.service" />
+            </intent-filter>
+        </service>
+
+        <!-- 播放保活前台服务：IMPORTANCE_MIN 静默常驻通知，防 ROM 折叠 now-playing 后回收进程。
+             exported=false：只由 App 自身（媒体键接收器 / 播放域）启动，不对外暴露。
+             stopWithTask=false：从最近任务划掉 App 不等于停止播放，保活服务应继续存活
+             （与 lite AudioPlaybackService 的清单声明一致）。 -->
+        <service
+            android:name=".player.session.PlaybackKeepAliveService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="false"
+            android:stopWithTask="false" />
+
+        <!-- 线控耳机媒体键接收器：进程被杀死时仍可被 MEDIA_BUTTON 广播拉起，
+             经 PlaybackKeepAliveService 完成「唤醒播放」。
+             有活跃媒体3会话时按键由系统直接送给会话，不会走到这里。 -->
+        <receiver
+            android:name=".player.session.MediaButtonReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

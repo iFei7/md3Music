@@ -1,5 +1,7 @@
 package com.md3music.md3music.player.engine
 
+import androidx.media3.common.C
+
 /**
  * 音频引擎角色。
  *
@@ -89,6 +91,7 @@ data class LoadControlConfig(
  * @property enableFlacExtension 是否追加 libflac 扩展渲染器（`libflacJNI.so` 可用时才生效）。
  * @property useLazyPreparation 惰性准备（just_audio Dart 默认 true）。
  * @property handleAudioBecomingNoisy 有线拔出 / 蓝牙断开时自动暂停。
+ * @property wakeMode 息屏保活级别，见 [DEFAULT_WAKE_MODE] 的长注释。
  * @property loadControl 缓冲策略。
  */
 data class AudioEngineConfig(
@@ -97,5 +100,32 @@ data class AudioEngineConfig(
     val enableFlacExtension: Boolean = true,
     val useLazyPreparation: Boolean = true,
     val handleAudioBecomingNoisy: Boolean = true,
+    val wakeMode: Int = DEFAULT_WAKE_MODE,
     val loadControl: LoadControlConfig = LoadControlConfig(),
-)
+) {
+    companion object {
+        /**
+         * 默认息屏保活级别：`C.WAKE_MODE_NETWORK`。
+         *
+         * **这里的默认值与 media3 相反，是刻意的**：`ExoPlayer.Builder` 的 `wakeMode`
+         * 默认为 `C.WAKE_MODE_NONE`（`ExoPlayer.java:700`），此时 media3 内部的
+         * `WakeLockManager` / `WifiLockManager` 都被 `setEnabled(false)` 关闭
+         * （`ExoPlayerImpl.java:433-436`），息屏后 CPU 与 Wi-Fi 都会被系统挂起。
+         *
+         * lite（Flutter 分支）因此只能在 `AudioPlaybackService` 里**手工**持
+         * `PARTIAL_WAKE_LOCK` + `WIFI_MODE_FULL_HIGH_PERF`（`AudioPlaybackService.kt:418-455`），
+         * 并为此维护一整套"何时持锁/何时释放"的分支，注释记录的现象是：
+         * 息屏后台切歌时 URL/歌词/封面等新连接全部失败，像断网却没断网。
+         *
+         * `C.WAKE_MODE_NETWORK` 让 media3 自带实现接管，它用的正是完全相同的两把锁
+         * （`WakeLockManager.java:64`、`WifiLockManager.java:63`），且随播放器状态
+         * 自动持放（`playWhenReady` 且未 IDLE/ENDED 时持有，含 BUFFERING 阶段，
+         * 因此也覆盖了切歌/重新缓冲的网络窗口）。比手写更少泄漏路径。
+         *
+         * 注意枚举值一致性：`C.WAKE_MODE_NONE=0`、`C.WAKE_MODE_LOCAL=1`、
+         * `C.WAKE_MODE_NETWORK=2`；此处写常量而非字面量，避免误配成 LOCAL
+         * （LOCAL 只持 CPU 锁、**不持 Wi-Fi 锁**，正是 lite 注释里那个"像断网"的故障）。
+         */
+        val DEFAULT_WAKE_MODE: Int = C.WAKE_MODE_NETWORK
+    }
+}

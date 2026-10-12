@@ -2,6 +2,7 @@ package com.md3music.md3music.player.engine
 
 import android.app.Application
 import android.content.Context
+import androidx.media3.common.C
 import androidx.media3.decoder.flac.FlacLibrary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -207,6 +208,55 @@ class AudioEngineFactoryTest {
             "缺 LegacyConversions.VMM_SUPPORT_EVENT_VALUE",
             legacyConversions.getDeclaredField("VMM_SUPPORT_EVENT_VALUE"),
         )
+    }
+
+    /**
+     * 息屏保活级别回归测试。
+     *
+     * media3 的 `wakeMode` **默认为 `C.WAKE_MODE_NONE`**（`ExoPlayer.java:700`），
+     * 此时 `ExoPlayerImpl` 会把内部 `WakeLockManager` / `WifiLockManager` 全部关闭
+     * （`ExoPlayerImpl.java:433-436`），息屏后 CPU 与 Wi-Fi 都会被系统挂起。
+     * lite 因此不得不手工持 `PARTIAL_WAKE_LOCK` + `WIFI_MODE_FULL_HIGH_PERF`
+     * （`AudioPlaybackService.kt:418-455`），现象是"息屏后台切歌像断网"。
+     *
+     * 本测试锁住"默认配置必须开启 WAKE_MODE_NETWORK"，防止这条链路被静默退回 NONE
+     * （编译器不会报错，真机表现是偶发的切歌失败，极难定位）。
+     */
+    @Test
+    fun `默认配置开启息屏网络保活`() {
+        factory().create(AudioEngineConfig(role = EngineRole.MAIN)).use { engine ->
+            assertEquals(
+                "默认必须为 WAKE_MODE_NETWORK：否则息屏后不持 WakeLock/WifiLock",
+                C.WAKE_MODE_NETWORK,
+                engine.wakeMode,
+            )
+            assertEquals(2, C.WAKE_MODE_NETWORK)
+        }
+    }
+
+    @Test
+    fun `三个保活级别的取值被钉死_防误配成只持 CPU 锁的 LOCAL`() {
+        assertEquals(0, C.WAKE_MODE_NONE)
+        assertEquals(1, C.WAKE_MODE_LOCAL)
+        assertEquals(
+            "LOCAL 只持 CPU 锁、不持 Wi-Fi 锁——正是 lite 注释里「像断网」的故障模式",
+            2,
+            C.WAKE_MODE_NETWORK,
+        )
+        assertEquals(
+            "默认必须是 NETWORK（同时持 CPU 锁与 Wi-Fi 锁）",
+            C.WAKE_MODE_NETWORK,
+            AudioEngineConfig.DEFAULT_WAKE_MODE,
+        )
+    }
+
+    @Test
+    fun `可显式关闭保活并如实反映在引擎事实上`() {
+        factory().create(
+            AudioEngineConfig(role = EngineRole.MAIN, wakeMode = C.WAKE_MODE_NONE),
+        ).use { engine ->
+            assertEquals(C.WAKE_MODE_NONE, engine.wakeMode)
+        }
     }
 
     private companion object {

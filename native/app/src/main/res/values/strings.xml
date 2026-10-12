@@ -2,6 +2,14 @@
 <resources>
     <string name="app_name">MD3Music</string>
 
+    <!-- 播放保活（T44）：IMPORTANCE_MIN 静默前台服务通知。
+         now-playing 通知由 media3 生成（渠道名取自 media3 的
+         default_notification_channel_name，已含 zh 本地化 =「正在播放」），
+         本渠道只承担「防 now-playing 被 ROM 折叠后进程被回收」的双保险职责。 -->
+    <string name="keepalive_channel_name">播放保活</string>
+    <string name="keepalive_channel_description">前台保活增强歌曲留存，可在系统通知设置中关闭</string>
+    <string name="keepalive_notification_text">前台保活增强歌曲留存，长按至系统通知设置关闭</string>
+
     <!-- 以下字符串由已复制到位的 widget layout / appwidget-info xml 引用
          （布局链接期校验，缺失会导致资源链接失败；P5 小组件移植时直接使用）。 -->
     <string name="widget_description">MD3Music 播放器小组件</string>

@@ -81,6 +81,9 @@ class AudioEngineFactory(private val context: Context) {
         val player = ExoPlayer.Builder(context, buildRenderersFactory(config, flacExtensionAvailable))
             .setUseLazyPreparation(config.useLazyPreparation)
             .setHandleAudioBecomingNoisy(config.handleAudioBecomingNoisy)
+            // 息屏保活：media3 默认 WAKE_MODE_NONE（不持任何锁），必须显式开启，
+            // 否则息屏后台切歌时 CPU/Wi-Fi 被挂起，新连接全部失败。见 AudioEngineConfig.DEFAULT_WAKE_MODE。
+            .setWakeMode(config.wakeMode)
             .setLoadControl(buildLoadControl(config.loadControl))
             .build()
 
@@ -92,7 +95,7 @@ class AudioEngineFactory(private val context: Context) {
             player.setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ true)
         }
 
-        return AudioEngine(player, config.role, audioSessionId, flacExtensionAvailable)
+        return AudioEngine(player, config.role, audioSessionId, flacExtensionAvailable, config.wakeMode)
     }
 
     /**

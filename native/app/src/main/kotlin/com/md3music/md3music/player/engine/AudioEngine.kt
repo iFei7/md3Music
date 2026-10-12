@@ -17,6 +17,9 @@ import androidx.media3.exoplayer.ExoPlayer
  *   表示未能生成/设置（由 media3 自行管理）。辅引擎恒等于主引擎的 id。
  * @property flacExtensionAvailable 本次构建是否挂载了 libflac 扩展渲染器
  *   （配置要求 + `libflacJNI.so` 可加载，两者同时满足才为 true）。
+ * @property wakeMode 本次构建采用的息屏保活级别（[AudioEngineConfig.wakeMode]）。
+ *   暴露为构建期事实而非仅写进 Builder：media3 的 `ExoPlayer` 没有 `getWakeMode()` 访问器，
+ *   若不在这里留存，"息屏保活是否真的开着"就只能靠真机息屏复现来验证。
  */
 @OptIn(UnstableApi::class)
 class AudioEngine internal constructor(
@@ -24,6 +27,7 @@ class AudioEngine internal constructor(
     val role: EngineRole,
     val audioSessionId: Int,
     val flacExtensionAvailable: Boolean,
+    val wakeMode: Int,
 ) : AutoCloseable {
 
     /** 释放底层播放器。重复调用是安全的（media3 的 release 幂等）。 */

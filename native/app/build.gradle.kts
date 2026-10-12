@@ -53,6 +53,15 @@ android {
         jniLibs.useLegacyPackaging = false
     }
 
+    // 单元测试：Robolectric 需要加载工程的 Android 资源（字符串/渠道文案、
+    // 通知小图标 ic_launcher_monochrome 等），否则资源查询抛
+    // Resources$NotFoundException。SDK 级别固定在 app/src/test/resources/robolectric.properties。
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
     buildTypes {
         debug {
             // 与 Flutter 工程 android/app/build.gradle.kts 对齐：Gradle 9.x 下显式固定
