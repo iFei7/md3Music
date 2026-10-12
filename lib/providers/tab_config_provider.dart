@@ -45,13 +45,27 @@ const List<TabItem> kDefaultTabs = [
 
 /// 可选 Tab（默认隐藏，需在设置页手动开启）。
 const List<TabItem> kOptionalTabs = [
+  TabItem(id: 'fm', label: '私人FM'),
   TabItem(id: 'search', label: '搜索'),
   TabItem(id: 'recognition', label: '听歌识曲'),
+  TabItem(id: 'audiobook', label: '听书'),
   TabItem(id: 'settings', label: '设置'),
 ];
 
 /// 所有可用 Tab（默认显示 + 可选）。
-final List<TabItem> kAllAvailableTabs = [...kDefaultTabs, ...kOptionalTabs];
+///
+/// 「我的」显式收尾：无论用户开启多少可选 Tab，默认顺序下它都排在最后
+/// （老用户由 v3 迁移统一移位，之后仍可自行拖动）。
+const List<TabItem> kAllAvailableTabs = [
+  TabItem(id: 'discover', label: '主页'),
+  TabItem(id: 'favorites', label: '收藏'),
+  TabItem(id: 'fm', label: '私人FM'),
+  TabItem(id: 'search', label: '搜索'),
+  TabItem(id: 'recognition', label: '听歌识曲'),
+  TabItem(id: 'audiobook', label: '听书'),
+  TabItem(id: 'settings', label: '设置'),
+  TabItem(id: 'user', label: '我的', isRemovable: false),
+];
 
 /// 管理主页底部导航 Tab 的显示/隐藏和排序。
 ///
@@ -89,15 +103,16 @@ class TabConfigProvider extends ChangeNotifier {
       // v1：恢复这两个默认入口，同时保留用户后续的手动配置。
       // v2（玻璃 Dock 改版）：tab 链收敛为 主页/收藏/我的，library 从
       // 主页 tab 迁出（隐藏），入口收敛到收藏页「本地」tab 与快捷方式。
-      const tabConfigMigrationVersion = 2;
-      if (await _repo.getTabConfigMigrationVersion() <
-          tabConfigMigrationVersion) {
-        if (await _repo.getTabConfigMigrationVersion() < 1) {
+      // v3（FM/听书回归）：私人FM 与听书重新进入可选 Tab；「我的」统一
+      // 收尾（老用户持久化 order 中它可能不在末位）。
+      final fromVersion = await _repo.getTabConfigMigrationVersion();
+      const tabConfigMigrationVersion = 3;
+      if (fromVersion < 2) {
+        if (fromVersion < 1) {
           _hiddenTabs..remove('favorites')..remove('library');
         }
         _hiddenTabs.add('library');
         await _repo.setHiddenTabs(_hiddenTabs);
-        await _repo.setTabConfigMigrationVersion(tabConfigMigrationVersion);
       }
 
       if (order != null && order.isNotEmpty) {
@@ -127,6 +142,21 @@ class TabConfigProvider extends ChangeNotifier {
         for (final tab in kOptionalTabs) {
           _hiddenTabs.add(tab.id);
         }
+      }
+
+      // v3：「我的」默认收尾。在 order 重排与新增 tab 追加完成之后执行，
+      // 此时 _allTabs 已是最终顺序；仅当 user 确实不在末位时移位并回写，
+      // 用户此后的手动拖动不受影响（迁移只跑一次）。
+      if (fromVersion < 3) {
+        final userIndex = _allTabs.indexWhere((t) => t.id == 'user');
+        if (userIndex != -1 && userIndex != _allTabs.length - 1) {
+          final userTab = _allTabs.removeAt(userIndex);
+          _allTabs.add(userTab);
+          await _repo.setTabOrder([for (final t in _allTabs) t.id]);
+        }
+      }
+      if (fromVersion < tabConfigMigrationVersion) {
+        await _repo.setTabConfigMigrationVersion(tabConfigMigrationVersion);
       }
 
       _rebuildVisible();
