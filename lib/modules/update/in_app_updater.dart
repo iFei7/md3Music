@@ -315,7 +315,7 @@ class InAppUpdater extends ChangeNotifier {
     _apkFile = null;
     _setPhase(InAppUpdaterPhase.downloading);
 
-    File? target;
+    File? apkFile;
     try {
       final base = await getTemporaryDirectory();
       final dir = Directory(
@@ -324,20 +324,20 @@ class InAppUpdater extends ChangeNotifier {
             : '${base.path}/$_cacheDirName',
       );
       await dir.create(recursive: true);
-      target = File(_joinPath(dir.path, _apkFileName(manifest.apkUrl)));
+      apkFile = File(_joinPath(dir.path, _apkFileName(manifest.apkUrl)));
       // 上一次中断可能残留同名文件，先删
-      if (await target.exists()) {
-        await target.delete();
+      if (await apkFile.exists()) {
+        await apkFile.delete();
       }
 
       await _dio.download(
         manifest.apkUrl,
-        target.path,
+        apkFile.path,
         onReceiveProgress: _onDownloadProgress,
       );
 
       _setPhase(InAppUpdaterPhase.verifying);
-      final length = await target.length();
+      final length = await apkFile.length();
       if (length != manifest.apkSize) {
         throw StateError(
           '文件大小不符（实际 $length B，清单 ${manifest.apkSize} B）',
@@ -345,20 +345,20 @@ class InAppUpdater extends ChangeNotifier {
       }
       // sha256 为空串（GitHub API 未返回 digest 的隐式清单）时只做字节数校验
       if (manifest.sha256.isNotEmpty) {
-        final digest = await _sha256Hex(target);
+        final digest = await _sha256Hex(apkFile);
         if (digest != manifest.sha256) {
           throw StateError('SHA-256 校验不符');
         }
       }
 
-      _apkFile = target;
+      _apkFile = apkFile;
       _setPhase(InAppUpdaterPhase.readyToInstall);
     } catch (error) {
       debugPrint('[InAppUpdate] 下载/校验失败：$error');
       // 清理半成品或校验不过的文件
       try {
-        if (target != null && await target.exists()) {
-          await target.delete();
+        if (apkFile != null && await apkFile.exists()) {
+          await apkFile.delete();
         }
       } catch (cleanupError) {
         debugPrint('[InAppUpdate] 清理半成品失败：$cleanupError');
