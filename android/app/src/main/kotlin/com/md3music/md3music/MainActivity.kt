@@ -31,6 +31,9 @@ class MainActivity : FlutterActivity() {
     private val MEDIA_STORE_CHANNEL = "com.md3music.md3music/media_store"
     private val RECOGNITION_CHANNEL = "com.md3music.md3music/floating_recognition"
     private val TASK_CHANNEL = "com.md3music.md3music/task"
+    // 应用内更新：Dart 侧下载并校验 APK 后经此通道调起系统安装器
+    // （authority 由 Dart 端按运行时包名拼出传入，见 InAppUpdater.install）
+    private val UPDATE_CHANNEL = "app.gracemusic/update"
     private var folderPickerResult: MethodChannel.Result? = null
     private var fontPickerResult: MethodChannel.Result? = null
     private var backgroundPickerResult: MethodChannel.Result? = null
@@ -732,6 +735,48 @@ class MainActivity : FlutterActivity() {
                 "moveToBack" -> {
                     moveTaskToBack(true)
                     result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // 注册应用内更新 MethodChannel：installApk(path, authority) 经
+        // FileProvider 把已校验的 APK 以 content:// 授权给系统安装器。
+        // 用 ACTION_INSTALL_PACKAGE（API 14+）：系统接管签名校验与
+        // 「安装未知应用」授权流程，最终安装由用户确认。
+        val updateChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            UPDATE_CHANNEL
+        )
+        updateChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "installApk" -> {
+                    val path = call.argument<String>("path")
+                    val authority = call.argument<String>("authority")
+                    if (path.isNullOrEmpty() || authority.isNullOrEmpty()) {
+                        result.error("INVALID_ARGS", "path/authority 不能为空", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        val apk = File(path)
+                        if (!apk.exists()) {
+                            result.error("FILE_MISSING", "APK 文件不存在: $path", null)
+                            return@setMethodCallHandler
+                        }
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            this, authority, apk
+                        )
+                        val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                            setDataAndType(uri, "application/vnd.android.package-archive")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "installApk failed", e)
+                        result.error("INSTALL_FAILED", e.message, null)
+                    }
                 }
                 else -> result.notImplemented()
             }

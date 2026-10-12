@@ -34,6 +34,8 @@ import '../../data/repositories/settings_repository.dart';
 import '../onboarding/onboarding_page.dart';
 import '../onboarding/user_agreement_page.dart';
 import '../update/github_release_client.dart';
+import '../update/in_app_updater.dart';
+import '../update/update_manifest.dart';
 import '../../providers/kugou_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/shortcut_config_provider.dart';
@@ -91,6 +93,10 @@ class _SettingsPageState extends State<SettingsPage>
   bool _updateReminderEnabled = true;
   // 上次已提醒的新版本号（形如 5.6.5，空串=无）。用于「更新最新版本」副标题提示。
   String _pendingUpdateVersion = '';
+  // 应用内更新器：检查→下载→校验→安装的状态机，供更新对话框订阅
+  final InAppUpdater _updater = InAppUpdater();
+  // 手动检查更新进行中（入口显示加载态，防重复点击）
+  bool _isCheckingUpdate = false;
   // 本地 API 服务器重启中（在线音乐区块显示加载态）
   bool _isRestarting = false;
   // 诊断日志导出进行中（关于区块显示加载态，防重复点击）
@@ -193,6 +199,7 @@ class _SettingsPageState extends State<SettingsPage>
   void dispose() {
     _sectionTransition.dispose();
     _searchController.dispose();
+    _updater.dispose();
     super.dispose();
   }
 
@@ -2486,8 +2493,14 @@ class _SettingsPageState extends State<SettingsPage>
                 : '有新版 v$_pendingUpdateVersion 可用，点击前往下载',
           ),
           leading: const Icon(Icons.system_update_outlined),
-          trailing: const Icon(Icons.open_in_new, size: 18),
-          onTap: () => _openReleasesUrl(),
+          trailing: _isCheckingUpdate
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.open_in_new, size: 18),
+          onTap: _isCheckingUpdate ? null : _checkForInAppUpdate,
         ),
         // 渲染引擎与版本号同属"当前构建的事实"，故并入版本组：
         // 由构建期 flavor 决定（skia / impeller），运行时不可切换，只读展示。
@@ -2615,6 +2628,179 @@ class _SettingsPageState extends State<SettingsPage>
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
+  }
+
+  /// 手动检查更新入口：优先走应用内更新（清单 → 下载 → 校验 → 安装）。
+  ///
+  /// 远端 Release 未附带 latest.json 时回退为打开浏览器下载页（旧行为）。
+  Future<void> _checkForInAppUpdate() async {
+    if (_isCheckingUpdate) return;
+    HapticFeedback.lightImpact();
+    setState(() => _isCheckingUpdate = true);
+    final result = await _updater.check();
+    if (!mounted) return;
+    setState(() => _isCheckingUpdate = false);
+    switch (result) {
+      case InAppUpdateCheckResult.available:
+        await _showInAppUpdateDialog();
+        break;
+      case InAppUpdateCheckResult.upToDate:
+        showToast('当前已是最新版本');
+        break;
+      case InAppUpdateCheckResult.noManifest:
+        // 该 Release 未附带应用内更新清单（或包名不匹配），回退浏览器下载页
+        await _openReleasesUrl();
+        break;
+      case InAppUpdateCheckResult.error:
+        showToast('检查更新失败：${_updater.errorMessage}', long: true);
+        _updater.reset();
+        break;
+    }
+  }
+
+  /// 应用内更新对话框：版本与更新说明 → 下载进度 → 安装按钮。
+  ///
+  /// 阶段由 [_updater]（ChangeNotifier）驱动，本方法只负责渲染与按钮接线；
+  /// 关闭对话框后复位更新器。下载/校验期间不可点击遮罩关闭。
+  Future<void> _showInAppUpdateDialog() async {
+    final manifest = _updater.manifest;
+    if (manifest == null) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => ListenableBuilder(
+        listenable: _updater,
+        builder: (context, _) {
+          return AlertDialog(
+            title: Text('发现新版本 ${manifest.versionName}'),
+            content: _buildUpdateDialogContent(manifest),
+            actions: _buildUpdateDialogActions(dialogCtx),
+          );
+        },
+      ),
+    );
+    _updater.reset();
+  }
+
+  Widget _buildUpdateDialogContent(UpdateManifest manifest) {
+    switch (_updater.phase) {
+      case InAppUpdaterPhase.downloading:
+        final percent = (_updater.progress * 100).round();
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            LinearProgressIndicator(value: _updater.progress),
+            const SizedBox(height: 12),
+            Text('正在下载 $percent%（共 ${_formatApkBytes(manifest.apkSize)}）'),
+          ],
+        );
+      case InAppUpdaterPhase.verifying:
+        return const Row(
+          children: [
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 12),
+            Text('正在校验安装包完整性…'),
+          ],
+        );
+      case InAppUpdaterPhase.readyToInstall:
+        return const Text('安装包已下载并通过校验，点击「安装」调起系统安装器。');
+      case InAppUpdaterPhase.error:
+        return Text('操作失败：${_updater.errorMessage}');
+      case InAppUpdaterPhase.idle:
+      case InAppUpdaterPhase.checking:
+      case InAppUpdaterPhase.available:
+        final notes = manifest.notesZh;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '版本 ${manifest.versionName}'
+              '（build ${manifest.versionCode}）· '
+              '${_formatApkBytes(manifest.apkSize)}',
+            ),
+            const SizedBox(height: 12),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 260),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final note in notes)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text('· $note'),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+    }
+  }
+
+  List<Widget> _buildUpdateDialogActions(BuildContext dialogCtx) {
+    switch (_updater.phase) {
+      case InAppUpdaterPhase.available:
+        return [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              // ignore: discarded_futures
+              _updater.startDownload();
+            },
+            child: const Text('下载'),
+          ),
+        ];
+      case InAppUpdaterPhase.readyToInstall:
+        return [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('稍后'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(dialogCtx);
+              final error = await _updater.install();
+              if (!mounted) return;
+              if (error != null) {
+                showToast(error, long: true);
+              } else {
+                showToast('已调起系统安装器，请在提示中确认安装', long: true);
+              }
+              _updater.reset();
+            },
+            child: const Text('安装'),
+          ),
+        ];
+      case InAppUpdaterPhase.error:
+        return [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('关闭'),
+          ),
+        ];
+      case InAppUpdaterPhase.idle:
+      case InAppUpdaterPhase.checking:
+      case InAppUpdaterPhase.downloading:
+      case InAppUpdaterPhase.verifying:
+        return const [];
+    }
+  }
+
+  String _formatApkBytes(int bytes) {
+    final mb = bytes / (1024 * 1024);
+    if (mb >= 1) return '${mb.toStringAsFixed(1)} MB';
+    return '${(bytes / 1024).toStringAsFixed(0)} KB';
   }
 
   /// 导出诊断日志：构建 zip 报告 → 打开系统分享面板。

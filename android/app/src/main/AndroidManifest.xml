@@ -30,8 +30,11 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <!-- 均衡器功能需要此权限 -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 应用内更新：下载并校验 APK 后调起系统安装器（Android 8+ 需要此权限
+         才能请求「安装未知应用」授权；最终安装仍由用户在系统界面确认） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
-        android:label="Grace Music"
+        android:label="Grace"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
@@ -80,7 +83,7 @@
             android:enabled="true"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:label="Grace Music">
+            android:label="Grace">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

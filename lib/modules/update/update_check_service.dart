@@ -133,6 +133,6 @@ class UpdateCheckService {
 
   void _notify(ReleaseInfo release, String current) {
     final currentPart = current.isEmpty ? '' : '（当前 $current）';
-    _notifier('发现新版本 ${release.tagName}$currentPart，可在「设置 → 关于」中更新');
+    _notifier('发现新版本 ${release.tagName}$currentPart，可在「设置 → 关于」中立即更新');
   }
 }
