@@ -39,11 +39,12 @@
         android:paddingStart="20dp"
         android:paddingEnd="20dp">
 
+        <!-- 品牌占位串：描述性文案用 brand_name=GraceMusic（app_name=Grace 仅作 Launcher 名） -->
         <TextView
             android:id="@+id/cover_widget_title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="MD3Music"
+            android:text="@string/brand_name"
             android:textSize="16sp"
             android:fontFamily="sans-serif-medium"
             android:gravity="center"

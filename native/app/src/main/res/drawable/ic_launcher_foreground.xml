@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GraceMusic 品牌标记（adaptive icon 前景层，API 26+）。
+     标记 = 几何「G」+ 音符（第八分音符）合体：开口朝右的粗环 + 环右侧横杠 = 字母 G，
+     环右缘向上延伸为音符杆、顶端带一面旗。
+     - 视口 108×108（adaptive 规范），白色标记；标记最大半径约 32 单位，
+       压在 33 单位的安全圈内，圆/方/圆角方等各种蒙版下均不被裁切。
+     - pathData 由生成脚本依同一几何参数导出（纯几何图形，不含任何第三方商标），
+       与 mipmap-nodpi 的回退位图同源。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M64.73,70.56A18.76,18.76 0 1 1 64.73,51.79L55.65,57.04A8.28,8.28 0 1 0 55.65,65.31Z M48.48,56.76L67.25,56.76L67.25,65.59L48.48,65.59Z M62.28,28.06L67.25,28.06L67.25,61.17L62.28,61.17Z M62.28,28.06L72.21,28.61L76.63,31.37L78.28,36.34L77.73,41.86L74.42,39.10L71.11,35.24L68.35,31.92L62.28,30.82Z" />
+</vector>

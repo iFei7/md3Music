@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GraceMusic 应用图标底色。
+     取 Material 主色蓝 #0061A4，来源 core/theme/Color.kt 的 SeedColors.Default
+     （Flutter 默认种子色，与 App 内主题保持一致）。
+     仅用于 API 26+ 的 adaptive icon 背景层；API 24/25 由
+     mipmap-nodpi/ic_launcher.webp 位图回退。 -->
+<resources>
+    <color name="ic_launcher_background">#0061A4</color>
+</resources>

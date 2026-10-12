@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GraceMusic adaptive icon（API 26+）：纯色背景 + 矢量前景标记。
+     背景色见 values/ic_launcher_background.xml；前景见 drawable/ic_launcher_foreground.xml。
+     API 24/25 不支持 adaptive icon，回退到 mipmap-nodpi/ic_launcher.webp 位图。 -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

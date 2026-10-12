@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">MD3Music</string>
+    <!-- 品牌命名区分（勿混用）：
+         - app_name = Launcher 图标下方显示名，用户显式指定为「Grace」；
+         - brand_name / brand_name_zh = 面向用户的品牌描述串（小组件、关于页、文档等），
+           统一用「GraceMusic」/「优雅音乐」。 -->
+    <string name="app_name">Grace</string>
+    <string name="brand_name">GraceMusic</string>
+    <string name="brand_name_zh">优雅音乐</string>
 
     <!-- 播放保活（T44）：IMPORTANCE_MIN 静默前台服务通知。
          now-playing 通知由 media3 生成（渠道名取自 media3 的
@@ -12,7 +18,7 @@
 
     <!-- 以下字符串由已复制到位的 widget layout / appwidget-info xml 引用
          （布局链接期校验，缺失会导致资源链接失败；P5 小组件移植时直接使用）。 -->
-    <string name="widget_description">MD3Music 播放器小组件</string>
+    <string name="widget_description">GraceMusic 播放器小组件</string>
     <string name="widget_not_playing">未在播放</string>
     <string name="widget_cover_desc">专辑封面</string>
     <string name="widget_play_desc">播放/暂停</string>
