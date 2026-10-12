@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+// FontVariation 不经 material/widgets 导出，需显式引入（同 player_seek_bar）
+import 'dart:ui' show FontVariation;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
@@ -34,6 +36,7 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/comment_reply_target.dart';
 import 'comment_compose_sheet.dart';
 import 'comments_view.dart';
+import 'apple_music_lyrics_view.dart';
 import 'lyrics_view.dart';
 import 'player_tab_layout.dart';
 import '../../widgets/apple_lyrics/parsers/lyric_parser_chain.dart';
@@ -1271,18 +1274,39 @@ class _FullPlayerState extends State<FullPlayer>
                         // P0: 歌词时间只订阅 positionNotifier（高频 200ms），
                         // 不再因 positionStream 触发整页重建
                         : RepaintBoundary(
-                            child: LyricsView(
-                              lyrics: _lyrics,
-                              parsedLyrics: _lyricMetadata,
-                              position: Duration.zero,
-                              positionListenable:
-                                  playerProvider.positionNotifier,
-                              adaptPosition: (position) =>
-                                  _adjustedLyricPosition(position, currentSong),
-                              onSeek: (duration) {
-                                playerProvider.seek(duration);
-                              },
-                            ),
+                            // 已解析出结构化歌词（KRC/TTML 逐字或 LRC 行级）时
+                            // 用 Apple Music 风格视图（扫色 + 自驱动内插）；
+                            // 无结构化歌词（_lyricMetadata 为空）时回退旧
+                            // LyricsView（保底不空窗）。
+                            child: _lyricMetadata.isNotEmpty
+                                ? AppleMusicLyricsView(
+                                    lyricLines: _lyricMetadata,
+                                    positionListenable:
+                                        playerProvider.positionNotifier,
+                                    adaptPosition: (position) =>
+                                        _adjustedLyricPosition(
+                                            position, currentSong),
+                                    onSeek: (duration) {
+                                      playerProvider.seek(duration);
+                                    },
+                                    // 倍速参与 Ticker 自驱动内插；
+                                    // 播放态直达（暂停立即停帧，不靠 200ms 推断）
+                                    speed: playerProvider.speed,
+                                    isPlaying: playerProvider.isPlaying,
+                                  )
+                                : LyricsView(
+                                    lyrics: _lyrics,
+                                    parsedLyrics: _lyricMetadata,
+                                    position: Duration.zero,
+                                    positionListenable:
+                                        playerProvider.positionNotifier,
+                                    adaptPosition: (position) =>
+                                        _adjustedLyricPosition(
+                                            position, currentSong),
+                                    onSeek: (duration) {
+                                      playerProvider.seek(duration);
+                                    },
+                                  ),
                           ),
                   ),
                 ),
@@ -1519,7 +1543,11 @@ class _FullPlayerState extends State<FullPlayer>
                         ),
                       );
                   // 长按封面进入/退出 Zen 模式：精确 2000ms + 按压内缩与引导提示
-                  return Center(
+                  // 竖屏（isExpanded）分支不再用 Center 纯居中：改 Align 略微
+                  // 上移（Alignment(0, -0.25)），给下方标题行与留空让出视觉
+                  // 权重（Apple Music 风格布局，封面重心偏上）。横屏分支不受影响。
+                  return Align(
+                    alignment: const Alignment(0, -0.25),
                     child: _wrapArtworkZenPress(
                       child: ConstrainedBox(
                         constraints: BoxConstraints(
@@ -1625,6 +1653,9 @@ class _FullPlayerState extends State<FullPlayer>
               ),
             ],
           ),
+          // 歌名下方多一行留空：标题行不再贴住底部控制区，配合封面上移
+          // （Alignment(0, -0.25)）形成重心偏上的 AM 风格纵向节奏。
+          const SizedBox(height: 16),
           if (!isExpanded) const Spacer(),
         ],
       ),
@@ -1661,16 +1692,16 @@ class _FullPlayerState extends State<FullPlayer>
           // 过长歌名不换行，改优雅滚动（两端停顿 + 缓动往返 + 边缘渐隐）。
           child: GentleScrollingText(
             currentSong.displayName.toUpperCase(),
-          // MD3E v2: 大写 + 粗体 w900 + 字间距 1.5（标题位于封面下方仍为
-          // 视觉层级次主体；w800 与 w700 在 Roboto 上观感差异不明显，
-          // 直接上 w900（Roboto Black）保证肉眼可辨的加粗；dense 分支是
-          // 横屏左栏形态，宽度紧张不动）
-          style: (dense ? textTheme.titleMedium : textTheme.headlineSmall)
-              ?.copyWith(
-                fontWeight: dense ? FontWeight.w700 : FontWeight.w900,
-                  letterSpacing: dense ? 1.0 : 1.5,
-                  height: 1.2,
-                ),
+            // 根因说明：M3E emphasized（app_theme.dart 构建末尾
+            // M3ETypography.emphasized(base, rond: 0)）给 headlineSmall /
+            // titleMedium 注入了 fontVariations: [FontVariation('wght', 500/600)]。
+            // 可变字体的 wght 轴优先级高于 fontWeight，而
+            // TextStyle.copyWith(fontWeight:) 不会清除 fontVariations，
+            // 导致渲染字重恒为 M3E 注入值、fontWeight 加粗"不生效"。
+            // 修法：copyWith 时连同 fontVariations 一起重写——保留非 wght 轴
+            // （ROND / opsz），把 wght 轴替换为目标字重常量（w700=700.0、
+            // w900=900.0），dense 分支同理覆盖 titleMedium 注入的 600。
+            style: _titleTextStyle(textTheme, dense: dense),
             textAlign: textAlign,
           ),
         ),
@@ -1689,6 +1720,30 @@ class _FullPlayerState extends State<FullPlayer>
           ),
         ),
       ],
+    );
+  }
+
+  /// 标题 TextStyle：基于 M3E 主题字重覆盖 fontVariations。
+  ///
+  /// M3E emphasized 给 headlineSmall（wght=500）/ titleMedium（wght=600）注入了
+  /// wght 字轴，可变字体渲染时 wght 轴压过 [TextStyle.fontWeight]，而
+  /// `copyWith(fontWeight:)` 不会重置 fontVariations。因此这里在 copyWith 时
+  /// 保留非 wght 轴（ROND / opsz），并用显式数值常量重写 wght 轴：
+  /// dense（横屏左栏）= w700 → 700.0；常规 = w900 → 900.0。
+  TextStyle? _titleTextStyle(
+    TextTheme textTheme, {
+    required bool dense,
+  }) {
+    final base = dense ? textTheme.titleMedium : textTheme.headlineSmall;
+    final variations = <FontVariation>[
+      ...?base?.fontVariations?.where((v) => v.axis != 'wght'),
+      FontVariation('wght', dense ? 700.0 : 900.0),
+    ];
+    return base?.copyWith(
+      fontWeight: dense ? FontWeight.w700 : FontWeight.w900,
+      fontVariations: variations,
+      letterSpacing: dense ? 1.0 : 1.5,
+      height: 1.2,
     );
   }
 
