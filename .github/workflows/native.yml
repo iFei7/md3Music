@@ -1,0 +1,455 @@
+name: Native CI
+
+# ============================================================
+# native 分支原生 CI：构建 + 单测 + per-commit Release。
+# 触发面仅限 native 分支——ci.yml（main/lite）、stability-checks.yml
+# （rust-local-two）、main.yml（v* tag）、star-trend.yml（rust-local-force）、
+# debug-build.yml（仅手动）均不监听 native，互不误触。
+# ============================================================
+on:
+  push:
+    branches: [native]
+  pull_request:
+    branches: [native]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # release job 创建 Release / 上传资产需要
+
+concurrency:
+  group: native-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # build：原生 Release APK 构建（jniLibs 前置校验 + keystore 装配）。
+  # ============================================================
+  build:
+    name: Build native release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        # native/ 是独立 Gradle 工程根（与 Flutter 的 android/ 并存，
+        # 见 native/settings.gradle.kts 顶部注释）。所有 run 步骤相对
+        # 该目录执行；actions/* 的 path 输入仍是工作区根相对路径，
+        # 不受此默认目录影响（见下方 Upload 步骤注释）。
+        working-directory: native
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 工具链：JDK/SDK/NDK 安装方式与包版本借鉴 ci.yml
+      # （platforms;android-36 / ndk;28.2.13676358 / cmake;3.22.1
+      # 三项与 ci.yml 完全一致；build-tools 用 36.1.0——按本地 SDK
+      # 对齐，ci.yml 的 Flutter 工程用 36.0.0）。
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK & NDK
+        uses: android-actions/setup-android@v3
+        with:
+          # setup-android@v3 默认还会安装已从 SDK 仓库移除的 tools 包。
+          packages: platform-tools
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install \
+            "cmdline-tools;latest" \
+            "platforms;android-36" \
+            "build-tools;36.1.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1"
+
+      # Gradle 缓存：actions/cache ~/.gradle（借鉴 ci.yml）。
+      # wrapper 的 distributionUrl 已是腾讯 mirror
+      # （native/gradle/wrapper/gradle-wrapper.properties：
+      # mirrors.cloud.tencent.com/gradle/gradle-9.1.0-all.zip），无需改动。
+      # key 收敛到 native/ 工程的 gradle 文件：与 ci.yml 的 ** 全仓模式
+      # 不同——native 是独立工程，android/ 的改动不应使其缓存失效；
+      # 第二级 restore-key 兼容既有全仓缓存（共享 Maven 依赖预热）。
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-native-${{ hashFiles('native/**/*.gradle*', 'native/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-native-
+            gradle-${{ runner.os }}-
+
+      # ============================================================
+      # jniLibs 前置校验（硬门禁）：Rust 架构下 libkugou_server.so /
+      # libflacJNI.so 已提交进 Git（main.yml 的 Verify native libraries
+      # 思路），这里升级为体积阈值校验，防「空壳/截断 so」漏网。
+      # 阈值：arm64 libkugou_server.so ≥ 4.5MB、armeabi-v7a ≥ 3.0MB、
+      # arm64 libflacJNI.so 存在（armeabi-v7a 当前未携带 flac so，
+      # 以任务要求只校验 arm64）。缺失/过小即失败。
+      # ============================================================
+      - name: Verify jniLibs (native libraries)
+        run: |
+          set -euo pipefail
+          jni="app/src/main/jniLibs"
+          # 4.5MB = 4718592 字节；3.0MB = 3145728 字节
+          check_so() {
+            local path="$1" min_bytes="$2"
+            if [[ ! -f "$path" ]]; then
+              echo "::error::缺失预编译 so：$path"
+              exit 1
+            fi
+            local size
+            size=$(stat -c %s "$path")
+            if (( size < min_bytes )); then
+              echo "::error::$path 体积过小：${size}B < ${min_bytes}B（疑似空壳/截断文件）"
+              exit 1
+            fi
+            echo "OK $path ($(du -h "$path" | cut -f1))"
+          }
+          check_so "$jni/arm64-v8a/libkugou_server.so"   4718592
+          check_so "$jni/armeabi-v7a/libkugou_server.so" 3145728
+          flac="$jni/arm64-v8a/libflacJNI.so"
+          if [[ ! -f "$flac" ]]; then
+            echo "::error::缺失预编译 so：$flac"
+            exit 1
+          fi
+          echo "OK $flac ($(du -h "$flac" | cut -f1))"
+          echo "=== jniLibs 清单 ==="
+          ls -lh "$jni"/*/
+
+      # ============================================================
+      # keystore 装配（签名兜底，与 ci.yml / debug-build.yml 同一套机制）：
+      # 从仓库根 android/keystore/lite-release.keystore 复制（native
+      # 工程 Gradle 根为 native/，故相对路径为 ../android/keystore/），
+      # 密码/别名复用 ci.yml 的内置兜底值（md3lite / lite），让所有 run
+      # 的产物签名一致、可互相覆盖安装。
+      # 落盘约定（与 Flutter 工程 android/ 布局同构，供工程侧
+      # signingConfigs 接入后读取）：keystore.properties + app/release.keystore。
+      # 注意：native/app/build.gradle.kts 骨架期尚未配置 signingConfigs，
+      # 当前产物可能为 unsigned（Verify 步骤有 ::warning 提示，不阻断）；
+      # 正式分发应创建 'keystore' release 并配置 ANDROID_KEYSTORE_*
+      # Secrets（完整优先级链路见 ci.yml：keystore release + Secrets >
+      # 内置兜底 > debug 签名）。
+      # ============================================================
+      - name: Setup bundled signing keystore
+        run: |
+          set -euo pipefail
+          src="../android/keystore/lite-release.keystore"
+          if [[ ! -f "$src" ]]; then
+            echo "::error::内置 keystore 缺失：$src"
+            exit 1
+          fi
+          cp "$src" app/release.keystore
+          # 内容与 ci.yml / main.yml 生成的 keystore.properties 一致
+          # （ci.yml 的 heredoc 版内容带缩进，java.util.Properties 会忽略
+          # 键前空白；此处用 printf 写干净版）
+          printf 'storePassword=md3lite\nkeyPassword=md3lite\nkeyAlias=lite\nstoreFile=release.keystore\n' \
+            > keystore.properties
+          echo "签名兜底就绪：内置固定 keystore（alias=lite）"
+
+      # ============================================================
+      # 构建 Release APK。
+      # 任务名说明：native/app/build.gradle.kts 未定义 productFlavors
+      # （P0-A 未建 flavor，仅 debug/release 两个 buildType），AGP 生成
+      # 的是默认 variant——任务是 :app:assembleRelease，而不是 Flutter
+      # 工程的 assembleStandardRelease（后者需要 standard flavor 才存在）。
+      # 不做 ABI 收窄：native 工程未配 splits.abi，产物为 universal APK
+      # （含 x86 等传递 so 的问题记录在案，待工程侧处理，不在本文件改
+      # build.gradle.kts）。
+      # ============================================================
+      - name: Build release APK (assembleRelease)
+        run: ./gradlew :app:assembleRelease
+
+      # ============================================================
+      # 产物校验：借鉴 main.yml 的 Verify APKs（unzip -l 完整性 +
+      # aapt2 badging 校验 applicationId），按 native 单 universal 包
+      # 裁剪；aapt2 路径与上面安装的 build-tools;36.1.0 对应。
+      # 未接 signingConfigs 时 AGP 产出 app-release-unsigned.apk，
+      # 接入后为 app-release.apk——两种命名均兼容，unsigned 时告警不阻断。
+      # ============================================================
+      - name: Verify release APK
+        id: apk
+        run: |
+          set -euo pipefail
+          apk_dir="app/build/outputs/apk/release"
+          if [[ -f "$apk_dir/app-release.apk" ]]; then
+            src="$apk_dir/app-release.apk"
+          elif [[ -f "$apk_dir/app-release-unsigned.apk" ]]; then
+            src="$apk_dir/app-release-unsigned.apk"
+            echo "::warning::仅找到 unsigned 产物（native/app/build.gradle.kts 尚未配置 signingConfigs）；keystore 已按约定落盘，工程侧接入后即为签名包"
+          else
+            echo "::error::未找到 release APK：$apk_dir/app-release.apk 或 $apk_dir/app-release-unsigned.apk"
+            ls -lh "$apk_dir" 2>/dev/null || true
+            exit 1
+          fi
+          unzip -l "$src" > /dev/null || { echo "::error::产物损坏：$src"; exit 1; }
+          aapt2="$ANDROID_HOME/build-tools/36.1.0/aapt2"
+          apk_id=$("$aapt2" dump badging "$src" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          echo "APK: $src ($(du -h "$src" | cut -f1)) applicationId=${apk_id}"
+          [[ "$apk_id" == "com.md3music.md3music.native" ]] \
+            || { echo "::error::applicationId 异常：${apk_id}（期望 com.md3music.md3music.native）"; exit 1; }
+          echo "staged_apk=$src" >> "$GITHUB_OUTPUT"
+
+      # ⚠️ actions/upload-artifact 的 path 是工作区根相对路径，
+      # 不受 defaults.run.working-directory: native 影响，故加 native/ 前缀。
+      # 单测报告由 test job 上传（该 job 才跑测试）。
+      - name: Upload release APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-release-apk
+          path: native/${{ steps.apk.outputs.staged_apk }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # ============================================================
+  # test：Android JVM 单测 + Rust 单测。
+  # continue-on-error（job 级，观测项）：失败不阻断 build/release——
+  #   1) cargo test --locked：Rust 源码本次未改，列为观测项；
+  #   2) :app:testReleaseUnitTest：native 骨架期测试集在补齐中
+  #      （当前 app/src/test 为空），同样先作观测。
+  # 两个测试步骤各自也带 continue-on-error：job 级 continue-on-error
+  # 不改变步骤间的跳过语义（前一个失败仍会跳过后续步骤），故步骤级
+  # 显式声明，保证两个观测项都真实跑到。
+  # ============================================================
+  test:
+    name: Unit tests (Android JVM + Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 工具链与缓存参数借鉴 stability-checks.yml 的 android-jvm job
+      # （temurin 17 / setup-android@v3 / sdkmanager 包清单 /
+      # actions/cache）；build-tools 与本文件 build job 对齐用 36.1.0。
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android build packages
+        run: |
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.1.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-native-${{ hashFiles('native/**/*.gradle*', 'native/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-native-
+            gradle-${{ runner.os }}-
+
+      # ============================================================
+      # Android JVM 单测（--no-daemon --quiet 借鉴 stability-checks.yml）。
+      # 任务名适配：native 工程无 productFlavors（见 build job 注释），
+      # AGP 生成的单测任务是 :app:testReleaseUnitTest，而非 Flutter
+      # 工程的 testStandardReleaseUnitTest（那需要 standard flavor）。
+      # 直接跑即可——单测任务自行编译所需 variant，无需先 assemble
+      # （与 stability-checks 的 android-jvm job 一致）。
+      # ============================================================
+      - name: Run Android JVM unit tests
+        continue-on-error: true
+        working-directory: native
+        run: >-
+          ./gradlew :app:testReleaseUnitTest
+          --no-daemon --quiet
+
+      # 失败诊断：解析 Gradle XML 测试报告（脚本借鉴 stability-checks.yml
+      # 的 Report Android JVM test failures，报告目录按 native 工程适配）。
+      - name: Report Android JVM test failures
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report_dirs = [
+              Path("native/app/build/test-results/testReleaseUnitTest"),
+          ]
+          paths = [
+              path
+              for reports in report_dirs
+              for path in sorted(reports.glob("TEST-*.xml"))
+          ]
+          if not paths:
+              checked = ", ".join(str(path) for path in report_dirs)
+              print(f"No Gradle XML test reports found; checked: {checked}")
+          for path in paths:
+              try:
+                  root = ET.parse(path).getroot()
+              except ET.ParseError as error:
+                  print(f"Unable to parse {path}: {error}")
+                  continue
+              for case in root.iter("testcase"):
+                  failures = [*case.findall("failure"), *case.findall("error")]
+                  for failure in failures:
+                      name = f"{case.get('classname', path.stem)}.{case.get('name', 'unknown')}"
+                      print(f"FAILED {name}: {failure.get('message', '')}")
+                      if failure.text:
+                          print(failure.text)
+          PY
+
+      # ============================================================
+      # Rust 单测：参数照抄 stability-checks.yml 的 rust-core job
+      # （working-directory: kugou_api_server/rust + cargo test --locked；
+      # --locked 保证 Cargo.lock 与 Cargo.toml 一致、依赖可复现）。
+      # 观测项：Rust 源码本次未改，失败不阻断 workflow。
+      # ============================================================
+      - name: Run Rust server and API tests
+        continue-on-error: true
+        working-directory: kugou_api_server/rust
+        run: cargo test --locked
+
+      # 单测报告 artifact。两个测试步骤均为 continue-on-error，报告
+      # 可能缺失（如骨架期无测试用例），故 warn 不阻断。
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-unit-test-reports
+          path: |
+            native/app/build/test-results/testReleaseUnitTest
+            native/app/build/reports/tests/testReleaseUnitTest
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ============================================================
+  # release：仅 push 到 native 分支、且 build/test 成功后执行
+  # （test 为观测项 continue-on-error，不阻断发布；build 失败则跳过）。
+  # 版本解析：从 native/app/build.gradle.kts grep versionName；
+  # sha7 用 ${GITHUB_SHA::7}。
+  # tag：v<versionName>-native-<sha7>（per-commit 独立 tag，零清理逻辑）。
+  # 资产名一律 ASCII：MD3Native-v<versionName>-<sha7>-standard-release.apk
+  #   —— 规避两个历史坑：
+  #   1) GitHub 会把资产名中的非 ASCII 字符规范化为 '.'，中文名互相
+  #      冲突 → 422 already_exists（ci.yml 的教训），故一律 ASCII，
+  #      并对 versionName 做字符白名单门禁，从源头保证；
+  #   2) 不用 softprops/action-gh-release（overwrite_files 有 404 问题），
+  #      curl 直调 GitHub Releases API（借鉴 ci.yml 的 lite Release 步骤，
+  #      含 3 次重试 + 422 同名资产自愈清理）。
+  # ============================================================
+  release:
+    name: Publish native release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build, test]
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download release APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: native-release-apk
+          path: apk
+
+      - name: Create native Release (per-commit)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA_SHORT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${REPO}"
+          auth="Authorization: Bearer ${GITHUB_TOKEN}"
+
+          # ---- 版本解析：versionName 来自 native/app/build.gradle.kts ----
+          # 行首锚定（容忍前导空白），避免匹配到注释里的 versionName
+          ver="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' native/app/build.gradle.kts | head -1)"
+          if [[ -z "$ver" ]]; then
+            echo "::error::无法从 native/app/build.gradle.kts 解析 versionName"
+            exit 1
+          fi
+          # 资产名必须 ASCII（GitHub 会把非 ASCII 资产名规范化为 '.'，
+          # 中文名互相冲突 → 422 already_exists，ci.yml 的教训）——
+          # 这里对 versionName 做字符白名单门禁，从源头保证 tag/资产名 ASCII。
+          if [[ ! "$ver" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::versionName 含非 ASCII/不安全字符：'$ver'（发布名必须 ASCII，防 422）"
+            exit 1
+          fi
+          sha7="${SHA_SHORT::7}"
+          # tag 形如 v1.0.0-native-native-a081970（versionName 当前为
+          # 1.0.0-native；公式固定 v<versionName>-native-<sha7>，客户端
+          # 可按 -native- 截断取版本号）：版本号供客户端比较，
+          # -native-<sha7> 后缀保证每次 push 独立 tag（固定 tag 覆盖会因
+          # GitHub 资产名 GC 延迟必 422，见 ci.yml 注释）。
+          tag="v${ver}-native-${sha7}"
+          out="MD3Native-v${ver}-${sha7}-standard-release.apk"
+          echo "version=${ver} tag=${tag} asset=${out}"
+
+          # ---- 定位 build job 产物，复制为 ASCII 发布名 ----
+          # 兼容 download-artifact 直接落 path/ 或 path/<artifact-name>/
+          shopt -s nullglob
+          apks=(apk/*.apk apk/*/*.apk)
+          if (( ${#apks[@]} == 0 )); then
+            echo "::error::下载的 artifact 中没有 APK：apk/*.apk"
+            exit 1
+          fi
+          cp "${apks[0]}" "$RUNNER_TEMP/${out}"
+          echo "资产源：${apks[0]} ($(du -h "${apks[0]}" | cut -f1)) -> ${out}"
+
+          # ---- 创建 Release（prerelease；per-commit tag 永不重复）----
+          rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg out "$out" \
+            '{tag_name:$tag, target_commitish:$sha, prerelease:true,
+              name:("MD3Native v" + $ver + " (" + $tag + ")"),
+              body:("native 分支 CI 自动构建（universal release APK）。\n\n"
+                  + "- 分支: native\n- 提交: " + $sha + "\n- 版本: v" + $ver + "\n\n"
+                  + "### 下载\n"
+                  + "- **" + $out + "** — native 标准版 universal release APK\n\n"
+                  + "> 此为 CI 自动构建，非正式发布版本。")}')
+          rel_out=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" \
+            -d "$rbody" -w $'\n%{http_code}' "$api/releases") || true
+          rl_code="${rel_out##*$'\n'}"; rl_body="${rel_out%$'\n'*}"
+          echo "POST /releases (${tag}) -> HTTP ${rl_code}"
+          if [[ ! "$rl_code" =~ ^2 ]]; then
+            echo "::error::POST /releases ${tag} HTTP ${rl_code} :: ${rl_body:0:280}"
+            exit 22
+          fi
+          rel_id=$(printf '%s' "$rl_body" | jq -r '.id')
+
+          # ---- 上传资产（ASCII 名；3 次重试 + 422 同名资产自愈清理）----
+          ok=""
+          for try in 1 2 3; do
+            uresp=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/octet-stream" \
+              --data-binary "@${RUNNER_TEMP}/${out}" -w $'\n%{http_code}' \
+              "https://uploads.github.com/repos/${REPO}/releases/${rel_id}/assets?name=${out}") || true
+            ucode="${uresp##*$'\n'}"; ubody="${uresp%$'\n'*}"
+            echo "  upload ${out} -> HTTP ${ucode} (try ${try})"
+            if [[ "$ucode" =~ ^2 ]]; then ok=1; break; fi
+            echo "::error::upload ${out} try${try} HTTP ${ucode} :: ${ubody:0:280}"
+            if [[ "$ucode" == "422" ]]; then
+              # 同名资产残留：定位删除后再重试
+              aid=$(curl -sS -H "$auth" "$api/releases/${rel_id}/assets?per_page=100" \
+                | jq -r --arg n "$out" '.[] | select(.name==$n) | .id' | head -1)
+              if [[ -n "$aid" ]]; then
+                echo "  清理同名资产 #${aid} ..."
+                curl -sS -X DELETE -H "$auth" -o /dev/null \
+                  -w "  DELETE asset ${aid} -> HTTP %{http_code}\n" "$api/releases/assets/${aid}" || true
+              fi
+            fi
+            sleep 10
+          done
+          [[ -n "$ok" ]] || { echo "::error::上传 ${out} 三次均失败"; exit 22; }
+          echo "✅ Release ${tag} 已发布: https://github.com/${REPO}/releases/tag/${tag}"
