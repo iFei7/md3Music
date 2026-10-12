@@ -110,17 +110,10 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
-    // 构建产物改名：GraceMusic-v<versionName>.apk。
-    // --split-per-abi 时每个 split 追加 ABI 后缀（GraceMusic-v<versionName>-<abi>.apk），
-    // 否则多个 split 输出同名互相覆盖。
-    applicationVariants.all {
-        outputs.all {
-            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            val abi = output.getFilter(com.android.build.OutputFile.ABI)
-            output.outputFileName =
-                if (abi != null) "GraceMusic-v$versionName-$abi.apk" else "GraceMusic-v$versionName.apk"
-        }
-    }
+    // 注意：APK 产物名不能在 Gradle 层改名（Flutter CLI 按固定名 app-<abi>-
+    // <flavor>-<type>.apk 查找产物，见 flutter_tools gradle.dart listApkPaths，
+    // 且 ci.yml 的改名步骤依赖该固定名）。Release 附件最终名 GraceMusic-v*.apk
+    // 由 .github/workflows/ci.yml 上传前的 rename 步骤统一设置。
 }
 
 kotlin {

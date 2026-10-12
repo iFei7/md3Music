@@ -194,14 +194,15 @@ flutter run
 # 一键打包（Rust 交叉编译按需 + Flutter 分包；默认 release / 两个 flavor / 全部 ABI）
 .\scripts\md3.ps1 android
 
-# 输出位置（<版本> 取自 pubspec.yaml，如 5.7.0；--split-per-abi 时文件名自动追加 ABI 后缀）：
-# build/app/outputs/flutter-apk/（推荐）GraceMusic-v<版本>-arm64-v8a.apk   (arm64-v8a，推荐默认下载项)
-# build/app/outputs/flutter-apk/GraceMusic-v<版本>-armeabi-v7a.apk        (armeabi-v7a，较旧设备)
-# build/app/outputs/flutter-apk/GraceMusic-v<版本>-x86_64.apk             (x86_64，模拟器)
+# 输出位置（<版本> 取自 pubspec.yaml，如 5.7.0；CI 发版时统一改名为 GraceMusic-v*.apk）：
+# build/app/outputs/flutter-apk/app-arm64-v8a-standard-release.apk   (arm64-v8a，推荐默认下载项)
+# build/app/outputs/flutter-apk/app-armeabi-v7a-standard-release.apk (armeabi-v7a，较旧设备)
+# GitHub Release 附件名：GraceMusic-v<版本>-<时间戳>-standard-arm64.apk 等
 ```
 
-> 文件名由 `android/app/build.gradle.kts` 的 `applicationVariants.all` 输出重命名逻辑在构建期设置
-> （无 split 时为 `GraceMusic-v<versionName>.apk`；Flutter/Gradle 原生名 `app-<abi>-<flavor>-<type>.apk` 不再出现）。
+> 产物名不能在 Gradle 层改（Flutter CLI 按固定名 `app-<abi>-<flavor>-<type>.apk`
+> 查找产物）；Release 附件最终名 `GraceMusic-v*.apk` 由 `.github/workflows/ci.yml`
+> 上传前的 rename 步骤统一设置。
 
 ***
 
