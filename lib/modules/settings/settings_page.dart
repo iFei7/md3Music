@@ -97,6 +97,8 @@ class _SettingsPageState extends State<SettingsPage>
   final InAppUpdater _updater = InAppUpdater();
   // 手动检查更新进行中（入口显示加载态，防重复点击）
   bool _isCheckingUpdate = false;
+  // 更新对话框中用户选中的 APK 候选（_updater.candidates 下标，默认推荐项）
+  int _selectedApkCandidate = 0;
   // 本地 API 服务器重启中（在线音乐区块显示加载态）
   bool _isRestarting = false;
   // 诊断日志导出进行中（关于区块显示加载态，防重复点击）
@@ -2665,6 +2667,7 @@ class _SettingsPageState extends State<SettingsPage>
   Future<void> _showInAppUpdateDialog() async {
     final manifest = _updater.manifest;
     if (manifest == null) return;
+    _selectedApkCandidate = 0;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -2715,15 +2718,35 @@ class _SettingsPageState extends State<SettingsPage>
       case InAppUpdaterPhase.checking:
       case InAppUpdaterPhase.available:
         final notes = manifest.notesZh;
+        final candidates = _updater.candidates;
+        final selected = candidates.isEmpty
+            ? manifest
+            : candidates[_selectedApkCandidate.clamp(0, candidates.length - 1)];
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               '版本 ${manifest.versionName}'
-              '（build ${manifest.versionCode}）· '
-              '${_formatApkBytes(manifest.apkSize)}',
+              '${manifest.versionCode > 0 ? '（build ${manifest.versionCode}）' : ''}'
+              ' · ${_formatApkBytes(selected.apkSize)}',
             ),
+            // 多候选（不同 ABI 安装包）时展示选择，默认推荐第一项
+            if (candidates.length > 1) ...[
+              const SizedBox(height: 8),
+              for (var i = 0; i < candidates.length; i++)
+                RadioListTile<int>(
+                  value: i,
+                  groupValue: _selectedApkCandidate,
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(_apkCandidateLabel(candidates[i])),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => _selectedApkCandidate = v);
+                  },
+                ),
+            ],
             const SizedBox(height: 12),
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 260),
@@ -2745,6 +2768,15 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
+  /// 候选 APK 的人类可读名（来自附件文件名）。
+  String _apkCandidateLabel(UpdateManifest candidate) {
+    final name = candidate.apkUrl.split('/').last;
+    if (name.contains('standard-arm64')) return '标准版 64 位（推荐）';
+    if (name.contains('standard-arm32')) return '标准版 32 位（较旧设备）';
+    if (name.contains('x86_64')) return '模拟器版';
+    return name;
+  }
+
   List<Widget> _buildUpdateDialogActions(BuildContext dialogCtx) {
     switch (_updater.phase) {
       case InAppUpdaterPhase.available:
@@ -2755,8 +2787,16 @@ class _SettingsPageState extends State<SettingsPage>
           ),
           FilledButton(
             onPressed: () {
+              final candidates = _updater.candidates;
+              UpdateManifest? selected;
+              if (candidates.isNotEmpty) {
+                selected = candidates[_selectedApkCandidate.clamp(
+                  0,
+                  candidates.length - 1,
+                )];
+              }
               // ignore: discarded_futures
-              _updater.startDownload();
+              _updater.startDownload(selected);
             },
             child: const Text('下载'),
           ),

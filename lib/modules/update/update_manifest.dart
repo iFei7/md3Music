@@ -229,6 +229,64 @@ class UpdateManifest {
     );
   }
 
+  /// 从 GitHub API 的 Release 附件直接构造「隐式清单」。
+  ///
+  /// 用于 Release 未附带 latest.json 的场景：附件元数据（字节数、可选的
+  /// SHA-256 digest）由 GitHub API 本身提供，可信度等同附件 URL 本身。
+  /// 与 [parse] 的差异：
+  /// - [versionCode] 传 0（API 元数据无构建号，版本比较走 versionName）；
+  /// - [sha256] 可为空串（API 未返回 digest 时只做字节数校验）；
+  /// - [applicationId] 由调用方传入本地包名（同仓库 Release，覆盖安装的
+  ///   包名/签名一致性最终由 Android 系统兜底）。
+  factory UpdateManifest.explicit({
+    required String versionName,
+    required String applicationId,
+    required String apkUrl,
+    required int apkSize,
+    String sha256 = '',
+    required String releasePageUrl,
+    List<String> releaseNotes = const <String>[],
+  }) {
+    return UpdateManifest(
+      schemaVersion: 1,
+      applicationId: applicationId,
+      versionCode: 0,
+      versionName: versionName,
+      publishedAt: '',
+      minSdk: 0,
+      abis: const <String>[],
+      apkUrl: apkUrl,
+      apkSize: apkSize,
+      sha256: sha256,
+      releasePageUrl: releasePageUrl,
+      releaseNotes: releaseNotes.isEmpty
+          ? const <String, List<String>>{'': <String>[]}
+          : const <String, List<String>>{'zh-CN': releaseNotes},
+    );
+  }
+
+  /// 复制并替换下载目标（UI 选择不同 ABI 附件时使用）。
+  UpdateManifest copyWith({
+    String? apkUrl,
+    int? apkSize,
+    String? sha256,
+  }) {
+    return UpdateManifest(
+      schemaVersion: schemaVersion,
+      applicationId: applicationId,
+      versionCode: versionCode,
+      versionName: versionName,
+      publishedAt: publishedAt,
+      minSdk: minSdk,
+      abis: abis,
+      apkUrl: apkUrl ?? this.apkUrl,
+      apkSize: apkSize ?? this.apkSize,
+      sha256: sha256 ?? this.sha256,
+      releasePageUrl: releasePageUrl,
+      releaseNotes: releaseNotes,
+    );
+  }
+
   /// apkUrl 白名单：https、无凭据、github.com、
   /// 路径形如 `/<owner>/<repo>/releases/download/<tag>/<name>.apk`。
   ///

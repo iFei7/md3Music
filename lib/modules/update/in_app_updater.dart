@@ -23,6 +23,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'github_release_client.dart';
+import 'release_version.dart';
 import 'update_manifest.dart';
 
 /// 更新器所处阶段。
@@ -97,6 +98,7 @@ class InAppUpdater extends ChangeNotifier {
 
   InAppUpdaterPhase _phase = InAppUpdaterPhase.idle;
   UpdateManifest? _manifest;
+  List<UpdateManifest> _candidates = const <UpdateManifest>[];
   double _progress = 0;
   String _errorMessage = '';
   File? _apkFile;
@@ -108,6 +110,10 @@ class InAppUpdater extends ChangeNotifier {
 
   /// 已通过校验的更新清单（仅 [InAppUpdaterPhase.available] 之后非空）。
   UpdateManifest? get manifest => _manifest;
+
+  /// 可选的 APK 下载目标（不同 ABI / 兼容包），首个为默认推荐项。
+  /// 来自 Release 附件（按 ABI 匹配过滤）；单一附件时长度为 1。
+  List<UpdateManifest> get candidates => _candidates;
 
   /// 下载进度 0~1（仅 [InAppUpdaterPhase.downloading] 阶段有意义）。
   double get progress => _progress;
@@ -123,8 +129,11 @@ class InAppUpdater extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 检查更新：取最新 Release → 下载 latest.json → 校验 → 比对版本。
+  /// 检查更新：取最新 Release（含附件）→ 清单/隐式清单 → 比对版本。
   ///
+  /// 优先使用 Release 附件中的 latest.json（sonify 协议，字段强校验）；
+  /// 无该附件时直接用 GitHub API 的附件元数据（字节数 + 可选 SHA-256
+  /// digest）构造隐式清单，因此**任何 lite Release 都能走应用内更新**。
   /// 任何一步失败都不抛异常，返回对应结论并（在必要时）转入 error 状态。
   Future<InAppUpdateCheckResult> check() async {
     _resetToIdle();
@@ -138,39 +147,84 @@ class InAppUpdater extends ChangeNotifier {
 
       final info = await PackageInfo.fromPlatform();
       _packageName = info.packageName;
-      final localBuild = int.tryParse(info.buildNumber);
 
-      final release = await GithubReleaseClient().fetchLatest();
+      final detail = await GithubReleaseClient().fetchLatestDetail();
+      final release = detail?.info;
       if (release == null || release.tagName.isEmpty) {
         _resetToIdle();
         return InAppUpdateCheckResult.noManifest;
       }
 
-      final manifestJson = await _fetchManifestJson(release.tagName);
-      if (manifestJson == null) {
+      final assets = detail!.assets;
+      final manifestJson = await _fetchManifestJson(release.tagName, assets);
+      if (manifestJson != null) {
+        final manifest = UpdateManifest.parse(manifestJson);
+        // 清单声明的包名与本机不一致 → 无法覆盖安装，按「无清单」处理
+        if (manifest.applicationId != info.packageName) {
+          debugPrint('[InAppUpdate] 清单包名 ${manifest.applicationId} '
+              '与本机 ${info.packageName} 不一致，放弃');
+          _resetToIdle();
+          return InAppUpdateCheckResult.noManifest;
+        }
+        // 显式清单带构建号：versionCode 大于本地构建号才视为有更新；
+        // 本地构建号解析不出时宁可不提示（不误报）
+        final localBuild = int.tryParse(info.buildNumber);
+        if (localBuild == null || manifest.versionCode <= localBuild) {
+          debugPrint('[InAppUpdate] 已是最新（本地 build $localBuild，'
+              '远端 ${manifest.versionCode}）');
+          _resetToIdle();
+          return InAppUpdateCheckResult.upToDate;
+        }
+        _manifest = manifest;
+        _candidates = <UpdateManifest>[manifest];
+        _setPhase(InAppUpdaterPhase.available);
+        return InAppUpdateCheckResult.available;
+      }
+
+      // —— 隐式清单路径：从 Release 附件构造（无 latest.json 时的主路径）——
+      // 排除随身听兼容包（伪装包名 com.apple.android.music，不可覆盖安装）
+      final apks = assets
+          .where((a) =>
+              a.name.toLowerCase().endsWith('.apk') &&
+              !a.name.contains('apple-music'))
+          .toList();
+      if (apks.isEmpty) {
+        debugPrint('[InAppUpdate] Release 无可安装 APK 附件');
         _resetToIdle();
         return InAppUpdateCheckResult.noManifest;
       }
-
-      final manifest = UpdateManifest.parse(manifestJson);
-
-      // 清单声明的包名与本机不一致 → 无法覆盖安装，按「无清单」处理
-      if (manifest.applicationId != info.packageName) {
-        debugPrint('[InAppUpdate] 清单包名 ${manifest.applicationId} '
-            '与本机 ${info.packageName} 不一致，放弃');
-        _resetToIdle();
-        return InAppUpdateCheckResult.noManifest;
-      }
-
-      // 本地构建号解析不出时宁可不提示（不误报）
-      if (localBuild == null || manifest.versionCode <= localBuild) {
-        debugPrint('[InAppUpdate] 已是最新（本地 build $localBuild，'
-            '远端 ${manifest.versionCode}）');
+      // 版本比较用 versionName（tag 剥 v 前缀，parseReleaseVersion 会截断
+      // `-lite-<sha>` 后缀），隐式清单没有构建号可比较
+      if (!isNewerRelease(release.version, info.version)) {
+        debugPrint('[InAppUpdate] 已是最新（本地 ${info.version}，'
+            '远端 ${release.version}）');
         _resetToIdle();
         return InAppUpdateCheckResult.upToDate;
       }
+      // 候选排序：arm64 优先、其次 32 位；同 ABI 中 standard 优先
+      int rank(ReleaseAsset a) {
+        final n = a.name.toLowerCase();
+        if (n.contains('standard-arm64')) return 0;
+        if (n.contains('standard-arm32')) return 1;
+        return 2;
+      }
 
-      _manifest = manifest;
+      apks.sort((a, b) => rank(a).compareTo(rank(b)));
+      // 更新说明：取 Release body 的前几行非空文本（剥掉 markdown 强调符）
+      final notes = _notesFromBody(detail.body);
+      _candidates = <UpdateManifest>[
+        for (final a in apks)
+          UpdateManifest.explicit(
+            versionName: release.version,
+            applicationId: info.packageName,
+            apkUrl: a.downloadUrl,
+            apkSize: a.size,
+            sha256: a.sha256 ?? '',
+            releasePageUrl: release.htmlUrl,
+            releaseNotes: notes,
+          ),
+      ];
+      _manifest = _candidates.first;
       _setPhase(InAppUpdaterPhase.available);
       return InAppUpdateCheckResult.available;
     } on FormatException catch (error) {
@@ -184,9 +238,38 @@ class InAppUpdater extends ChangeNotifier {
     }
   }
 
-  /// 下载清单 JSON。404（该 Release 没有 latest.json）返回 null；
-  /// 其他网络错误抛异常由 [check] 统一捕获。
-  Future<String?> _fetchManifestJson(String tagName) async {
+  /// 从 Release body 提取更新说明行（最多 8 行、每行 ≤200 字符）。
+  ///
+  /// body 形如「Lite 分支 CI 自动构建。\n\n- 版本: ...\n- 提交: ...\n\n### 下载\n…」，
+  /// 「### 下载」及之后是固定下载列表，不属于更新说明，直接截断。
+  static List<String> _notesFromBody(String body) {
+    if (body.trim().isEmpty) return const <String>[];
+    final cut = body.indexOf('###');
+    final head = (cut >= 0 ? body.substring(0, cut) : body).trim();
+    if (head.isEmpty) return const <String>[];
+    final notes = <String>[];
+    for (final raw in head.split('\n')) {
+      final line = raw
+          .replaceAll('**', '')
+          .replaceAll('`', '')
+          .replaceAll(RegExp(r'^[-*\s]+'), '')
+          .trim();
+      if (line.isEmpty) continue;
+      notes.add(line.length > 200 ? line.substring(0, 200) : line);
+      if (notes.length >= 8) break;
+    }
+    return notes;
+  }
+
+  /// 下载清单 JSON：优先取附件中的 latest.json（sonify 协议）。
+  /// 不存在（该 Release 未附带清单）返回 null，由调用方走隐式清单路径。
+  Future<String?> _fetchManifestJson(
+    String tagName,
+    List<ReleaseAsset> assets,
+  ) async {
+    final hasExplicit =
+        assets.any((a) => a.name.toLowerCase() == 'latest.json');
+    if (!hasExplicit) return null;
     final uri = Uri.parse(
       'https://github.com/${GithubReleaseClient.owner}/'
       '${GithubReleaseClient.repo}/releases/download/$tagName/latest.json',
@@ -206,7 +289,7 @@ class InAppUpdater extends ChangeNotifier {
       final status = error.response?.statusCode;
       if (status != null && status >= 400 && status < 500) {
         debugPrint('[InAppUpdate] latest.json 不可用（HTTP $status），'
-            '该 Release 未附带应用内更新清单');
+            '回退为 Release 附件隐式清单');
         return null;
       }
       rethrow;
@@ -215,15 +298,18 @@ class InAppUpdater extends ChangeNotifier {
 
   /// 下载 APK 到缓存目录并完成校验。
   ///
+  /// [target] 为下载目标清单：null 时用 [_manifest]（默认推荐项）；
+  /// UI 允许用户在 [candidates] 中切换 ABI 后传入对应清单。
   /// 流程：downloading(进度) → verifying → readyToInstall，任一步失败
   /// 转入 error 并清理半成品文件。
-  Future<void> startDownload() async {
-    final manifest = _manifest;
+  Future<void> startDownload([UpdateManifest? target]) async {
+    final manifest = target ?? _manifest;
     if (manifest == null ||
         (_phase != InAppUpdaterPhase.available &&
             _phase != InAppUpdaterPhase.error)) {
       return;
     }
+    if (target != null) _manifest = target;
     _progress = 0;
     _lastNotifiedProgress = -1;
     _apkFile = null;
@@ -257,9 +343,12 @@ class InAppUpdater extends ChangeNotifier {
           '文件大小不符（实际 $length B，清单 ${manifest.apkSize} B）',
         );
       }
-      final digest = await _sha256Hex(target);
-      if (digest != manifest.sha256) {
-        throw StateError('SHA-256 校验不符');
+      // sha256 为空串（GitHub API 未返回 digest 的隐式清单）时只做字节数校验
+      if (manifest.sha256.isNotEmpty) {
+        final digest = await _sha256Hex(target);
+        if (digest != manifest.sha256) {
+          throw StateError('SHA-256 校验不符');
+        }
       }
 
       _apkFile = target;
@@ -350,6 +439,7 @@ class InAppUpdater extends ChangeNotifier {
 
   void _resetToIdle() {
     _manifest = null;
+    _candidates = const <UpdateManifest>[];
     _apkFile = null;
     _progress = 0;
     _lastNotifiedProgress = -1;

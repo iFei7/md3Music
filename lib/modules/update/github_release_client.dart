@@ -219,4 +219,159 @@ class GithubReleaseClient implements ReleaseSource {
       return null;
     }
   }
+
+  /// 查询最新 lite Release 的完整详情（含附件与说明），供应用内更新使用。
+  ///
+  /// 主链路复用 [_fetchViaApi] 已验证的列表端点（响应自带完整 assets 与 body，
+  /// 无需二次请求）；API 失败时走 HTML 回退拿到 tag，再用 `/releases/tags/<tag>`
+  /// 单条端点补齐 assets。两条链路都失败返回 null。
+  Future<ReleaseDetail?> fetchLatestDetail() async {
+    final viaApi = await _fetchDetailViaApi();
+    if (viaApi != null) return viaApi;
+    // 回退：HTML 拿 tag → 单条端点拿 assets
+    final fallback = await _fetchViaRedirect();
+    if (fallback == null) return null;
+    final single = await _fetchReleaseByTag(fallback.tagName);
+    if (single != null) return single;
+    return ReleaseDetail(info: fallback, assets: const [], body: '');
+  }
+
+  /// 主链路：`/releases` 列表端点的首条 lite 即完整 Release 对象。
+  Future<ReleaseDetail?> _fetchDetailViaApi() async {
+    try {
+      final response = await _dio.getUri<dynamic>(
+        apiLatestUri,
+        options: Options(
+          headers: {
+            'User-Agent': userAgent,
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+        ),
+      );
+      if (response.statusCode != 200 || response.data == null) return null;
+      final dynamic payload = response.data;
+      if (payload is! List) return null;
+      for (final e in payload.whereType<Map>()) {
+        final item = Map<String, dynamic>.from(e);
+        if (!isLiteTag(item['tag_name'] as String?)) continue;
+        return _detailFromApiItem(item);
+      }
+      return null;
+    } catch (error) {
+      debugPrint('[UpdateDetail] API 详情查询失败：$error');
+      return null;
+    }
+  }
+
+  /// 单条端点：`/releases/tags/<tag>`（回退链路补 assets 用）。
+  Future<ReleaseDetail?> _fetchReleaseByTag(String tag) async {
+    try {
+      final uri = Uri.parse(
+        'https://api.github.com/repos/$owner/$repo/releases/tags/$tag',
+      );
+      final response = await _dio.getUri<dynamic>(
+        uri,
+        options: Options(
+          headers: {
+            'User-Agent': userAgent,
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+        ),
+      );
+      if (response.statusCode != 200 || response.data is! Map) return null;
+      return _detailFromApiItem(Map<String, dynamic>.from(response.data));
+    } catch (error) {
+      debugPrint('[UpdateDetail] 单条端点查询失败：$error');
+      return null;
+    }
+  }
+
+  /// 从 GitHub API 的 Release JSON 对象构造 [ReleaseDetail]。
+  ReleaseDetail? _detailFromApiItem(Map<String, dynamic> item) {
+    final tagName = (item['tag_name'] as String?)?.trim();
+    if (tagName == null || tagName.isEmpty) return null;
+    final htmlUrl = (item['html_url'] as String?)?.trim();
+    final info = ReleaseInfo.fromTag(
+      tagName: tagName,
+      htmlUrl: (htmlUrl == null || htmlUrl.isEmpty)
+          ? 'https://github.com/$owner/$repo/releases/tag/$tagName'
+          : htmlUrl,
+    );
+    final assets = <ReleaseAsset>[];
+    final rawAssets = item['assets'];
+    if (rawAssets is List) {
+      for (final a in rawAssets.whereType<Map>()) {
+        final asset = Map<String, dynamic>.from(a);
+        final name = asset['name'];
+        final size = asset['size'];
+        final url = asset['browser_download_url'];
+        if (name is! String || url is! String) continue;
+        final sizeInt = size is int ? size : int.tryParse('$size');
+        if (sizeInt == null || sizeInt <= 0) continue;
+        final digestRaw = asset['digest'];
+        String? sha256;
+        if (digestRaw is String && digestRaw.startsWith('sha256:')) {
+          final hex = digestRaw.substring(7).toLowerCase();
+          if (RegExp(r'^[0-9a-f]{64}$').hasMatch(hex)) sha256 = hex;
+        }
+        assets.add(
+          ReleaseAsset(
+            name: name,
+            size: sizeInt,
+            downloadUrl: url,
+            sha256: sha256,
+          ),
+        );
+      }
+    }
+    final body = item['body'];
+    return ReleaseDetail(
+      info: info,
+      assets: assets,
+      body: body is String ? body : '',
+    );
+  }
+}
+
+/// GitHub Release 的一个附件（asset）。
+class ReleaseAsset {
+  const ReleaseAsset({
+    required this.name,
+    required this.size,
+    required this.downloadUrl,
+    this.sha256,
+  });
+
+  /// 附件文件名，形如 `GraceMusic-v5.9.0-...-standard-arm64.apk`。
+  final String name;
+
+  /// 附件精确字节数（GitHub API 直接提供）。
+  final int size;
+
+  /// 下载直链（github.com 域，302 跳 CDN 由 HTTP 客户端自动跟随）。
+  final String downloadUrl;
+
+  /// GitHub API 提供的附件 SHA-256（`sha256:<64hex>` 中的 hex 部分）；
+  /// null 表示响应未带 digest，只能做字节数校验。
+  final String? sha256;
+}
+
+/// 一次「带附件详情」的 Release 查询结果。
+class ReleaseDetail {
+  const ReleaseDetail({
+    required this.info,
+    required this.assets,
+    required this.body,
+  });
+
+  /// 基础信息（tag / version / 页面地址）。
+  final ReleaseInfo info;
+
+  /// 全部附件（含 APK）。
+  final List<ReleaseAsset> assets;
+
+  /// Release 说明原文（Markdown），用于更新说明展示。
+  final String body;
 }
