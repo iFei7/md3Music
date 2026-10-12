@@ -1000,11 +1000,10 @@ class _MD3ETransportRowState extends State<MD3ETransportRow>
     // widthFactor 是相对 playButtonSize 的比例（因为 Positioned.width = playButtonSize）
     final currentWidth = size * widthFactor;
     final currentHeight = size * heightFactor;
-    // Sonify 参考：图标几乎撑满按钮，内部只留很窄的一圈边距，系数由
-    // 原来的 0.45 / 0.50 提上来。因三键已等大（不再靠 playButtonSize
-    // 更大来补偿），此处必须保证播放键系数 > 侧键，否则播放键图标会
-    // 反而小于两侧，主次颠倒。
-    final iconSize = size * (isCenterPlay ? 0.62 : 0.58);
+    // Apple Music 参考比例（切歌图标 ≈ 播放键的 0.6）：侧键 0.61、播放键 0.64。
+    // 系数最早由 0.45 / 0.50 提上来，2026-10 真机反馈"再大一点"后二次上调。
+    // 必须保证播放键系数 > 侧键，否则播放键图标会反而小于两侧，主次颠倒。
+    final iconSize = size * (isCenterPlay ? 0.64 : 0.61);
     final label = switch (icon) {
       Icons.skip_previous => '上一首',
       Icons.skip_next => '下一首',
