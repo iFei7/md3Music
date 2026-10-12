@@ -2049,7 +2049,15 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
               _queueRevision++;
               _resetCrossfadePrepared();
               // 多首歌时删除当前故障歌曲，播放上一首（保持索引有效）
-              _playlist.removeAt(_currentIndex);
+              final failedSong = _playlist.removeAt(_currentIndex);
+              // 同步 _originalPlaylist：故障歌不应在关闭随机时被还原回队列
+              // （与 removeFromPlaylist 的删除语义一致）。
+              final failedOrigIdx = _originalPlaylist.indexWhere(
+                (s) => s.id == failedSong.id,
+              );
+              if (failedOrigIdx != -1) {
+                _originalPlaylist.removeAt(failedOrigIdx);
+              }
               _currentIndex = (_currentIndex - 1).clamp(
                 0,
                 _playlist.length - 1,
@@ -4757,6 +4765,14 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       if (!_playlist.any((s) => s.id == song.id)) {
         newSongs.add(song);
         _playlist.add(song);
+      }
+    }
+    // 同步 _originalPlaylist：新歌按队列顺序追加到尾部（按 song.id 去重，
+    // 已存在的歌不重复加）。否则 shuffle 模式追加的歌曲在关闭随机时丢失
+    // （关闭随机 = _playlist = List.from(_originalPlaylist)，见 toggleShuffle）。
+    for (final song in newSongs) {
+      if (!_originalPlaylist.any((s) => s.id == song.id)) {
+        _originalPlaylist.add(song);
       }
     }
     if (newSongs.isNotEmpty) {

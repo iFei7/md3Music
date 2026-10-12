@@ -215,7 +215,7 @@ class AudioService {
   factory AudioService() => _instance;
 
   AudioService._internal() {
-    _mainPlayer = _createPlayer(enhancer: _mainEnhancer);
+    _mainPlayer = _createPlayer();
     _activePlayer = _mainPlayer;
     _bindActiveStreams();
     _watchSessionIds(_mainPlayer);
@@ -239,10 +239,7 @@ class AudioService {
   }
 
   /// 创建播放器实例。[aux] 为交叉淡化用的辅播放器。
-  static AudioPlayer _createPlayer({
-    bool aux = false,
-    AndroidLoudnessEnhancer? enhancer,
-  }) => AudioPlayer(
+  static AudioPlayer _createPlayer({bool aux = false}) => AudioPlayer(
     // 关闭 just_audio 内置的中断处理（handleInterruptions=false）：
     // 所有音频焦点策略统一由本服务按 AudioFocusInterruptionMode 处理，
     // 避免两套逻辑叠加导致重复暂停/恢复。
@@ -261,10 +258,6 @@ class AudioService {
     // 媒体会话），并与主播放器共享同一个 audioSessionId（均衡器/频谱在
     // 淡化全程对两路音频同时生效）。
     androidAuxPlayer: aux,
-    // 音量均衡：挂一个 LoudnessEnhancer 用于放大安静歌（跨引擎、Dart 侧可靠）。
-    audioPipeline: enhancer != null
-        ? AudioPipeline(androidAudioEffects: [enhancer])
-        : null,
     // Hi-Res 码率可达 ~4600kbps，30s 缓冲区（~17MB）在高码率下极易耗尽，
     // 导致播放到 ~60s 时反复进入 rebuffer 死循环（进度条在 1:00~1:01 弹跳、
     // 无声音）。恢复 maxBuffer 到 60s 并加大 rebuffer 恢复窗口到 5s，
@@ -281,8 +274,6 @@ class AudioService {
   );
 
   /// 主播放器：始终存在，是音频焦点与 MediaSession 的持有者。
-  // 音量均衡放大用 LoudnessEnhancer（先声明，供主播放器创建时注入）。
-  final AndroidLoudnessEnhancer _mainEnhancer = AndroidLoudnessEnhancer();
   late final AudioPlayer _mainPlayer;
 
   /// 辅播放器：首次交叉淡化时才创建（未开启该功能的用户零开销）。
@@ -367,7 +358,8 @@ class AudioService {
         )
       : 0;
 
-  /// 音量均衡衰减倍率（gainDb<0 时折进音量，ExoPlayer 只能衰减；>0 留给 enhancer 放大）。
+  /// 音量均衡衰减倍率（gainDb<0 时折进音量，ExoPlayer 只能衰减；>0 留给
+  /// fork 的 NormalizationGainAudioSink 在 PCM 出口放大）。
   double _vnAttenLinear = 1.0;
 
   /// **备用（淡入方）**播放器的衰减倍率。
@@ -378,21 +370,19 @@ class AudioService {
   /// 的一类成因。降级路径：两者都只在「音量均衡」开启且该曲需要衰减时才 ≠ 1.0。
   double _vnAttenLinearStandby = 1.0;
 
-  /// 应用增益：正增益（放大）走 native LoudnessEnhancer，负增益（衰减）折进音量。
-  /// 只用一个 enhancer：主/辅播放器共享同一 audio session，一个 LoudnessEnhancer
-  /// 作用于该 session 即可覆盖两路音频（避免同 session 创建第二个 enhancer 冲突）。
+  /// 应用增益：正增益（放大）经 fork 的 NormalizationGainAudioSink 在 PCM 出口
+  /// 施加逐轨固定线性增益（可放大，AudioTrack 音量只能衰减）；负增益（衰减）
+  /// 折进播放器音量。增益=0 时 sink 线性增益为 1.0，逐样本跳过缩放，完全旁路。
+  /// fork 侧按进程内全部 sink 实例广播（主/辅播放器与后台引擎统一生效），
+  /// 与旧 LoudnessEnhancer 挂 session 覆盖两路音频的语义一致。
   Future<void> _applyGain(double gainDb) async {
     final boost = gainDb > 0 ? gainDb : 0.0;
     _vnAttenLinear = gainDb < 0 ? math.pow(10, gainDb / 20).toDouble() : 1.0;
-    // 没有正增益时不需要 LoudnessEnhancer。始终启用 0 dB enhancer 会让
-    // 小米等 ROM 把它加入音效链；反复切歌时可能与系统/用户均衡器叠加，
-    // 表现为音量突然变大。负增益已经折进播放器音量，同样保持 enhancer 关闭。
     try {
-      await _mainEnhancer.setTargetGain(boost);
-      await _mainEnhancer.setEnabled(_vnEnabled && boost > 0);
+      await _activePlayer.setNormalizationGain(boost);
     } catch (e) {
       // ignore: avoid_print
-      print('[音量均衡] enhancer apply failed: $e');
+      print('[音量均衡] normalization gain apply failed: $e');
     }
   }
 

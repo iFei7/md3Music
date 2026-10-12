@@ -132,9 +132,6 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     private ExoPlayer player;
     private volatile long latestExternalMetadataGeneration;
-    // MD3Music fork: 音量均衡（响度归一）增益装饰器。在 buildAudioSink 时创建，
-    // 通过 setNormalizationGain(gainDb) 对当前曲目设固定线性增益（可放大/衰减）。
-    private NormalizationGainAudioSink normalizationGainSink;
     private Integer audioSessionId;
     private Integer errorCode;
     private String errorMessage;
@@ -733,6 +730,15 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 loudnessEnhancerSetTargetGain(call.argument("targetGain"));
                 result.success(new HashMap<String, Object>());
                 break;
+            case "setNormalizationGain":
+                // MD3Music fork: 音量均衡——Dart 侧 setNormalizationGain(gainDb) 广播到
+                // 本进程全部 NormalizationGainAudioSink 实例（主/辅/后台引擎统一生效，
+                // 与 AudioPlaybackService 'setGainDb' 控制面同一模式）。
+                Number normGainDb = call.argument("gainDb");
+                NormalizationGainAudioSink.setGlobalGainDb(
+                        normGainDb == null ? 0.0 : normGainDb.doubleValue());
+                result.success(new HashMap<String, Object>());
+                break;
             case "androidEqualizerGetParameters":
                 result.success(equalizerAudioEffectGetParameters());
                 break;
@@ -1003,7 +1009,11 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private void ensurePlayerInitialized() {
         if (player == null) {
             // MD3Music fork: 子类化 DefaultRenderersFactory 并 override buildAudioSink()，
-            // 注入音量均衡装饰器。
+            // 注入音量均衡（响度归一）增益装饰器（包在 DefaultAudioSink 之外，
+            // 先按逐轨固定线性增益缩放 PCM，再交给下层做蝰蛇母带等处理）。
+            // 62d8b2f 曾把唯一挂载点留在已删除的 UsbAudioSinkController.wrap 里，
+            // 导致 NormalizationGainAudioSink 成为死代码、音量均衡实际失效；
+            // 这里恢复常规输出链的包装（增益=1.0 时逐样本跳过，完全旁路）。
             // 注意：本机 Media3 为 1.4.1，buildAudioSink 签名只有 3 个参数（无 enableOffload）。
             var drf = new DefaultRenderersFactory(context) {
                 @Override
@@ -1013,13 +1023,14 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     // 见 DefaultRenderersFactory:640-646），仅追加蝰蛇母带处理链。
                     // float 输出在本 fork 恒为关闭（drf.setEnableAudioFloatOutput(false)），
                     // 处理链输入恒为 16bit PCM；链位于 silence-skip/sonic 之前。
-                    return new DefaultAudioSink.Builder(ctx)
+                    AudioSink defaultSink = new DefaultAudioSink.Builder(ctx)
                             .setEnableFloatOutput(enableFloatOutput)
                             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                             .setAudioProcessorChain(
                                     new DefaultAudioSink.DefaultAudioProcessorChain(
                                             new ViperMasterProcessor()))
                             .build();
+                    return NormalizationGainAudioSink.wrap(defaultSink);
                 }
 
                 /** 供扩展渲染器（libflac，P0-5）复用同一 sink 构建逻辑。 */
