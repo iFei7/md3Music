@@ -84,6 +84,24 @@ jobs:
             gradle-${{ runner.os }}-
 
       # ============================================================
+      # jniLibs 同步（工程侧 native/scripts/sync_jnilibs.sh 的设计：
+      # so 提交进 Git、CI 不编译，构建前运行本脚本校验一致性、防漂移）。
+      # 同步源：android/app/src/main/jniLibs（Rust API 服务器 so）与
+      # third_party/just_audio/android/src/main/jniLibs（libflacJNI.so，
+      # FLAC 扩展解码）；目标：native/app/src/main/jniLibs。
+      # 任一源缺失脚本即失败（防静默缺包）；脚本若被工程侧移除则不硬
+      # 阻断（下方体积阈值校验仍是硬门禁），仅告警。
+      # ============================================================
+      - name: Sync jniLibs (pre-build consistency)
+        run: |
+          set -euo pipefail
+          if [[ -f scripts/sync_jnilibs.sh ]]; then
+            bash scripts/sync_jnilibs.sh
+          else
+            echo "::warning::未找到 scripts/sync_jnilibs.sh，跳过 jniLibs 同步（体积校验仍生效）"
+          fi
+
+      # ============================================================
       # jniLibs 前置校验（硬门禁）：Rust 架构下 libkugou_server.so /
       # libflacJNI.so 已提交进 Git（main.yml 的 Verify native libraries
       # 思路），这里升级为体积阈值校验，防「空壳/截断 so」漏网。
