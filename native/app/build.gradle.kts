@@ -10,6 +10,20 @@ plugins {
 android {
     namespace = "com.md3music.md3music"
     compileSdk = 36
+    ndkVersion = "28.2.13676358"
+
+    // P0-B：C JNI shim（libkugou_jni_shim.so）经 ndk-build 构建，按 ABI 以 -l 名称
+    // 链接预编译 libkugou_server.so（该 so 无 DT_SONAME，DT_NEEDED 须为纯库名，
+    // 运行时由 Android 链接器按 APK lib/<abi>/ 自动解析）。
+    // 注：原采用 SDK cmake 3.22.1 方案，因部分环境（本机沙箱）无法启动该 cmake——
+    // 其依赖的 api-ms-win-crt-* API-set DLL 解析失败（STATUS_DLL_NOT_FOUND），
+    // 而 NDK 自带 make/ninja 工具链验证可用，故切换 ndk-build（单文件 C 无
+    // cmake 特性需求；CI 仅需安装 NDK 即可构建）。
+    externalNativeBuild {
+        ndkBuild {
+            path = file("src/main/cpp/Android.mk")
+        }
+    }
 
     defaultConfig {
         // 与 lite（com.md3music.md3music.lite）共存安装、数据隔离；namespace/Kotlin 包路径
@@ -19,6 +33,14 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0-native"
+
+        // 只构建 jniLibs 中实际存在的 ABI（arm64-v8a / armeabi-v7a；x86 系按体积
+        // 决策排除）。Android.mk 内另有 wildcard 校验兜底缺失 ABI 的 so。
+        externalNativeBuild {
+            ndkBuild {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            }
+        }
     }
 
     compileOptions {
