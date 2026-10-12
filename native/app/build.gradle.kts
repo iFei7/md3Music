@@ -125,6 +125,10 @@ dependencies {
     // 仅 media3-common 走 Maven（同版本，供 app 侧 Kotlin 引用 UnstableApi/Player 等类型）。
     implementation(project(":media3fork"))
     implementation(libs.media3.common)
+    // LibflacAudioRenderer 的父类链（DecoderAudioRenderer → SimpleDecoderAudioRenderer）签名中
+    // 出现 androidx.media3.decoder.SimpleDecoder，须在 :app 的编译类路径上可见
+    // （:media3fork 以 implementation 声明该模块，不向消费者导出）。
+    implementation(libs.media3.decoder)
 
     // --- 图片（Coil 3 + okhttp 网络组件）---
     implementation(libs.coil.compose)
