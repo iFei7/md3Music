@@ -68,7 +68,6 @@ const List<({String label, String category, String subpage, String aliases})>
   (label: '数据迁移（修复数据混乱）', category: '缓存与数据', subpage: '', aliases: '迁移 数据 修复'),
   (label: '应用版本', category: '关于', subpage: '', aliases: '版本 检查更新'),
   (label: '新版本提醒', category: '关于', subpage: '', aliases: '更新 新版本 升级 upgrade 提醒'),
-  (label: '还原旧版本 App 图标', category: '关于', subpage: '', aliases: '图标 旧版 桌面图标 恢复'),
   (label: '更新最新版本', category: '关于', subpage: '', aliases: '更新'),
   (label: '当前渲染引擎', category: '关于', subpage: '', aliases: '渲染引擎 渲染 引擎 图形 兼容 skia impeller 构建'),
   (label: '新手教程', category: '关于', subpage: '', aliases: '教程 引导'),

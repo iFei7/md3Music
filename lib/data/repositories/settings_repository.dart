@@ -35,10 +35,6 @@ class SettingsRepository {
   static const String _keyUpdateReminderEnabled =
       'settings_update_reminder_enabled';
 
-  /// Android 桌面图标是否使用旧版图标（默认关闭，沿用当前图标）。
-  static const String _keyLegacyAppIconEnabled =
-      'settings_legacy_app_icon_enabled';
-
   /// 上次网络检查的时间戳（ms）。属于记账状态而非用户设置，故不加 settings_ 前缀。
   static const String _keyUpdateLastCheckMs = 'update_last_check_ms';
 
@@ -152,17 +148,6 @@ class SettingsRepository {
   Future<void> setUpdateReminderEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyUpdateReminderEnabled, enabled);
-  }
-
-  /// 是否还原旧版 Android 桌面图标。未设置时沿用当前图标。
-  Future<bool> getLegacyAppIconEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyLegacyAppIconEnabled) ?? false;
-  }
-
-  Future<void> setLegacyAppIconEnabled(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyLegacyAppIconEnabled, enabled);
   }
 
   /// 上次成功发起 Release 检查的时间戳（ms）；未检查过返回 0。

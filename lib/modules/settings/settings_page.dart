@@ -77,9 +77,6 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage>
     with SingleTickerProviderStateMixin {
   final SettingsRepository _settingsRepository = SettingsRepository();
-  static const MethodChannel _appIconChannel = MethodChannel(
-    'com.md3music.md3music/app_icon',
-  );
   String _wifiQuality = '128';
   String _mobileQuality = '128';
   // 蝰蛇母带处理（10 段 EQ + 限幅母带链，默认关闭）
@@ -91,8 +88,6 @@ class _SettingsPageState extends State<SettingsPage>
   bool _uploadListeningDuration = false;
   // 新版本提醒开关（默认开启，关闭后启动时不再查询 GitHub Release）
   bool _updateReminderEnabled = true;
-  // 还原旧版桌面图标（默认沿用当前图标，仅 Android 提供）
-  bool _legacyAppIconEnabled = false;
   // 上次已提醒的新版本号（形如 5.6.5，空串=无）。用于「更新最新版本」副标题提示。
   String _pendingUpdateVersion = '';
   // 本地 API 服务器重启中（在线音乐区块显示加载态）
@@ -294,8 +289,6 @@ class _SettingsPageState extends State<SettingsPage>
         .getCloseLocalMusicComments();
     final updateReminderEnabled = await _settingsRepository
         .getUpdateReminderEnabled();
-    final legacyAppIconEnabled = await _settingsRepository
-        .getLegacyAppIconEnabled();
     final pendingUpdateVersion = await _settingsRepository
         .getUpdateLastNotifiedVersion();
     final viperMasterEnabled = await _settingsRepository
@@ -311,7 +304,6 @@ class _SettingsPageState extends State<SettingsPage>
       _autoReceiveVip = autoReceiveVip;
       _uploadListeningDuration = uploadListeningDuration;
       _updateReminderEnabled = updateReminderEnabled;
-      _legacyAppIconEnabled = legacyAppIconEnabled;
       _pendingUpdateVersion = pendingUpdateVersion;
       _useDynamicColor = useDynamicColor;
       _useCoverSeedColor = useCoverSeedColor;
@@ -378,26 +370,6 @@ class _SettingsPageState extends State<SettingsPage>
       _updateReminderEnabled = value;
     });
     await _settingsRepository.setUpdateReminderEnabled(value);
-  }
-
-  /// 通过 Android activity-alias 切换桌面图标；失败时保持开关原值。
-  Future<void> _setLegacyAppIconEnabled(bool value) async {
-    HapticFeedback.lightImpact();
-    try {
-      await _appIconChannel.invokeMethod<void>('setLegacyIcon', value);
-      await _settingsRepository.setLegacyAppIconEnabled(value);
-      if (mounted) setState(() => _legacyAppIconEnabled = value);
-    } on PlatformException catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(content: Text('切换应用图标失败：${error.message ?? error.code}')),
-      );
-    } on MissingPluginException {
-      if (!mounted) return;
-      ScaffoldMessenger.maybeOf(
-        context,
-      )?.showSnackBar(const SnackBar(content: Text('当前 Android 构建不支持切换应用图标')));
-    }
   }
 
   Future<void> _loadVersion() async {
@@ -2505,19 +2477,6 @@ class _SettingsPageState extends State<SettingsPage>
             _setUpdateReminderEnabled(value);
           },
         ),
-        if (Platform.isAndroid) ...[
-          // search: 图标 旧版 桌面图标 恢复
-          SwitchListTile(
-            title: const Text('还原旧版本 App 图标'),
-            subtitle: const Text('将桌面图标切换为旧版渐变音符图标'),
-            value: _legacyAppIconEnabled,
-            onChanged: (value) {
-              // ignore: discarded_futures
-              _setLegacyAppIconEnabled(value);
-            },
-          ),
-        ],
-        // search: 更新
         ListTile(
           title: const Text('更新最新版本'),
           subtitle: Text(
