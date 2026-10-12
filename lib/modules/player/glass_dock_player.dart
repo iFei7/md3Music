@@ -62,8 +62,8 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 /// - **播放器圆钮**：点击在「圆钮 ↔ 控制小胶囊」间收敛形变（AnimatedSize）；
 ///   圆钮外周进度环订阅 [PlayerProvider.positionNotifier]（~200ms 高频通道，
 ///   禁 context.watch），中央为当前歌曲的**圆形封面缩略图**：播放中叠加
-///   半透明底 + [PlayingSpectrumIndicator] 律动图标（挂共享 60fps 节拍、
-///   仅播放中运行）；暂停时叠半透明底 + 静态 pause 图标；
+///   [PlayingSpectrumIndicator] 律动图标（挂共享 60fps 节拍、仅播放中
+///   运行）；暂停时叠静态 pause 图标（均不加蒙版，图标直接叠在封面上）；
 ///   无歌 / 封面缺失时回退音符占位；整钮 [RepaintBoundary] 隔离高频重绘；
 /// - **完整播放页往返**：openFullPlayer / close 不触碰折叠状态；关闭播放页
 ///   后 Dock 恢复「打开前的那个唯一展开组件」——状态只由用户点击驱动，
@@ -117,6 +117,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
 
   /// 展开胶囊内左侧的圆形封面缩略图直径。
   static const double _kCapsuleCoverSize = 36.0;
+
+  /// 进度环线宽（坍缩球与展开胶囊共用，环内缘紧贴封面外缘）。
+  static const double _kRingStroke = 1.5;
 
   /// 展开胶囊内封面与歌名 marquee 之间的间距。
   static const double _kCapsuleCoverGap = 8.0;
@@ -345,7 +348,7 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
         // 同导航部分：不包 AnimatedSwitcher（理由见 _buildNavPart 注释）。
         alignment: Alignment.centerRight,
         child: _controlsExpanded
-            ? _buildControlsCapsule(player, song)
+            ? _buildControlsCapsule(player, song, duration)
             : _buildCircle(song, isPlaying, duration, player),
       ),
     );
@@ -384,6 +387,11 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                       size: const Size.square(_kButtonSize),
                       painter: _ProgressRingPainter(
                         progress: progress,
+                        stroke: _kRingStroke,
+                        // 环中心线 = 20 + 0.75 = 20.75：环内缘 20 恰贴
+                        // 40dp 封面外缘（无间隙）。
+                        ringRadius:
+                            _kCircleCoverSize / 2 + _kRingStroke / 2,
                         trackColor: cs.onSurface.withValues(alpha: 0.15),
                         progressColor: cs.primary,
                       ),
@@ -391,8 +399,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                   },
                 ),
               ),
-              // 中央标识：有歌→圆形封面（播放中叠半透明底 + 律动图标；
-              // 暂停→叠半透明底 + 静态 pause）；无歌→音符占位。
+              // 中央标识：有歌→圆形封面（播放中叠律动图标；暂停叠静态
+              // pause 图标，均不加蒙版）；无歌→音符占位。
               if (song == null)
                 Icon(
                   Icons.music_note,
@@ -411,8 +419,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   /// 圆形歌曲封面：复用 [PlayerArtworkImage]（http(s):// 走 CachedNetworkImage、
   /// content:// / local:// / file:// 走内嵌封面懒加载、null / 失败回退音符占位），
   /// 外层 [ClipOval] 裁圆。仅随 song 变化重建（封面低频，不进 positionNotifier
-  /// 高频通道）。播放中叠加半透明底 + [PlayingSpectrumIndicator] 律动图标；
-  /// 暂停时叠半透明底 + 静态 pause 图标。
+  /// 高频通道）。播放中叠加 [PlayingSpectrumIndicator] 律动图标；暂停时叠
+  /// 静态 pause 图标（均不加蒙版，图标直接叠在封面上）。
   Widget _buildCircleArtwork(dynamic song, bool isPlaying, ColorScheme cs) {
     Widget cover = ClipOval(
       child: SizedBox(
@@ -454,20 +462,18 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
         ],
       );
     } else {
-      // 暂停：封面 + 半透明底 + 静态 pause 图标。
+      // 暂停：封面 + 静态 pause 图标（不加蒙版——与播放中一致，
+      // 用户反馈半透明底像白色蒙版遮挡封面）。
       cover = Stack(
         alignment: Alignment.center,
         children: [
           cover,
-          Container(
+          SizedBox(
             width: _kCircleCoverSize,
             height: _kCircleCoverSize,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: cs.surface.withValues(alpha: 0.45),
+            child: Center(
+              child: Icon(Icons.pause, size: 16, color: cs.primary),
             ),
-            child: Icon(Icons.pause, size: 16, color: cs.primary),
           ),
         ],
       );
@@ -475,9 +481,14 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     return cover;
   }
 
-  /// 展开态控制小胶囊：圆形封面缩略图 + 歌名 marquee + 上一曲 / 播放暂停 / 下一曲。
+  /// 展开态控制小胶囊：圆形封面缩略图（外周进度环，与坍缩球同一 painter）
+  /// + 歌名 marquee + 上一曲 / 播放暂停 / 下一曲。
   /// 封面与歌名点击均进入完整播放页（原「向上按钮」职责由二者承担）。
-  Widget _buildControlsCapsule(PlayerProvider player, dynamic song) {
+  Widget _buildControlsCapsule(
+    PlayerProvider player,
+    dynamic song,
+    Duration? duration,
+  ) {
     final cs = Theme.of(context).colorScheme;
     return GestureDetector(
       onTap: _toggleControls,
@@ -487,12 +498,13 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
         child: SizedBox(
           height: _kButtonSize,
           // 宽度防御：歌名 marquee 区随可用宽度压缩（上限 120，下限 0），
-          // 固定区 = 水平 padding(10) + 封面(36) + 间距(8) + 3 个按钮(120)，
-          // 保证小屏（含 320dp）下胶囊自身也不超宽。
+          // 固定区 = 水平 padding(10) + 封面含环(36 + 2×1.5) + 间距(8)
+          // + 3 个按钮(120)，保证小屏（含 320dp）下胶囊自身也不超宽。
           child: LayoutBuilder(
             builder: (context, constraints) {
               final fixedWidth = _kControlsButtonsWidth +
                   _kCapsuleCoverSize +
+                  _kRingStroke * 2 +
                   _kCapsuleCoverGap +
                   10; // 水平 padding（6 + 4）
               final marqueeWidth =
@@ -500,24 +512,65 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
               return Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // 圆形封面缩略图：点击进入播放页。
+                  // 圆形封面缩略图：点击进入播放页。外周进度环只订阅
+                  // positionNotifier（~200ms），禁 context.watch。
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: song == null ? null : () => openFullPlayer(context),
-                    child: ClipOval(
-                      child: SizedBox(
-                        width: _kCapsuleCoverSize,
-                        height: _kCapsuleCoverSize,
-                        child: PlayerArtworkImage(
-                          artworkUri: song?.artworkUri as String?,
-                          fallbackFilePath: song?.localPath as String?,
-                          fit: BoxFit.cover,
-                          iconSize: 16,
-                          backgroundColor: cs.surfaceContainerHighest,
-                          iconColor: cs.onSurfaceVariant,
-                          // 36dp 胶囊缩略图按 128px 解码
-                          decodeCap: 128,
-                        ),
+                    child: SizedBox(
+                      width: _kCapsuleCoverSize + _kRingStroke * 2,
+                      height: _kCapsuleCoverSize + _kRingStroke * 2,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          // 进度环：与坍缩球同一 painter，紧贴 36dp 封面外缘。
+                          Positioned.fill(
+                            child: ValueListenableBuilder<Duration>(
+                              valueListenable: player.positionNotifier,
+                              builder: (context, position, _) {
+                                final progress =
+                                    (duration != null &&
+                                        duration > Duration.zero)
+                                    ? (position.inMilliseconds /
+                                              duration.inMilliseconds)
+                                          .clamp(0.0, 1.0)
+                                    : 0.0;
+                                return CustomPaint(
+                                  size: Size.square(
+                                    _kCapsuleCoverSize + _kRingStroke * 2,
+                                  ),
+                                  painter: _ProgressRingPainter(
+                                    progress: progress,
+                                    stroke: _kRingStroke,
+                                    // 环中心线 = 18 + 0.75 = 18.75：
+                                    // 环内缘 18 恰贴 36dp 封面外缘（无间隙）。
+                                    ringRadius: _kCapsuleCoverSize / 2 +
+                                        _kRingStroke / 2,
+                                    trackColor:
+                                        cs.onSurface.withValues(alpha: 0.15),
+                                    progressColor: cs.primary,
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          ClipOval(
+                            child: SizedBox(
+                              width: _kCapsuleCoverSize,
+                              height: _kCapsuleCoverSize,
+                              child: PlayerArtworkImage(
+                                artworkUri: song?.artworkUri as String?,
+                                fallbackFilePath: song?.localPath as String?,
+                                fit: BoxFit.cover,
+                                iconSize: 16,
+                                backgroundColor: cs.surfaceContainerHighest,
+                                iconColor: cs.onSurfaceVariant,
+                                // 36dp 胶囊缩略图按 128px 解码
+                                decodeCap: 128,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -640,23 +693,32 @@ class _DockIconButton extends StatelessWidget {
 }
 
 /// 进度环绘制器：细轨道整环 + 主色进度弧（从 12 点方向起）。
+///
+/// [ringRadius] 由调用方计算：封面半径 + [stroke] / 2，
+/// 使环内缘恰好紧贴封面外缘（无间隙）。
 class _ProgressRingPainter extends CustomPainter {
   _ProgressRingPainter({
     required this.progress,
+    required this.stroke,
+    required this.ringRadius,
     required this.trackColor,
     required this.progressColor,
   });
 
   final double progress;
+
+  /// 环线宽。
+  final double stroke;
+
+  /// 环中心线半径（封面半径 + stroke/2 → 环内缘贴封面外缘）。
+  final double ringRadius;
   final Color trackColor;
   final Color progressColor;
 
   @override
   void paint(Canvas canvas, Size size) {
-    const stroke = 2.0;
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - stroke / 2 - 1;
-    final rect = Rect.fromCircle(center: center, radius: radius);
+    final rect = Rect.fromCircle(center: center, radius: ringRadius);
 
     final trackPaint = Paint()
       ..style = PaintingStyle.stroke
@@ -677,6 +739,8 @@ class _ProgressRingPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _ProgressRingPainter oldDelegate) {
     return oldDelegate.progress != progress ||
+        oldDelegate.stroke != stroke ||
+        oldDelegate.ringRadius != ringRadius ||
         oldDelegate.trackColor != trackColor ||
         oldDelegate.progressColor != progressColor;
   }
