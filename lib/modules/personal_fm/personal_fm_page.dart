@@ -70,20 +70,30 @@ class _PersonalFmPageState extends State<PersonalFmPage>
 
   Future<void> _restoreStrategy() async {
     final selection = await PersonalFmPagePreferences.load();
-    if (!mounted || _strategyTouched) return;
-
-    final modeIsValid = _modeOptions.any(
-      (option) => option['value'] == selection.mode,
-    );
-    final songPoolIsValid = _songPoolOptions.any(
-      (option) => option['value'] == selection.songPoolId,
-    );
-    if (!modeIsValid && !songPoolIsValid) return;
-
-    setState(() {
-      if (modeIsValid) _selectedMode = selection.mode;
-      if (songPoolIsValid) _selectedSongPoolId = selection.songPoolId;
-    });
+    if (mounted && !_strategyTouched) {
+      final modeIsValid = _modeOptions.any(
+        (option) => option['value'] == selection.mode,
+      );
+      final songPoolIsValid = _songPoolOptions.any(
+        (option) => option['value'] == selection.songPoolId,
+      );
+      if (modeIsValid || songPoolIsValid) {
+        setState(() {
+          if (modeIsValid) _selectedMode = selection.mode;
+          if (songPoolIsValid) _selectedSongPoolId = selection.songPoolId;
+        });
+      }
+    }
+    // 首刷：上次进页只恢复偏好不加载数据，页面默认空白、需手动切换风格才出
+    // 内容（旧版「点击首刷」设计）。改为偏好恢复后自动加载一次；若用户在
+    // 恢复期间已手动切过风格（_strategyTouched），_selectStrategy 已触发
+    // 加载，这里 _isLoading guard 会拦住重复请求。
+    if (mounted) {
+      if (!Provider.of<KugouProvider>(context, listen: false).isLoggedIn) {
+        return;
+      }
+      unawaited(_loadPersonalFm());
+    }
   }
 
   void _selectStrategy({String? mode, int? songPoolId}) {
@@ -915,7 +925,8 @@ class _PersonalFmPageState extends State<PersonalFmPage>
     if (_isLoading) return;
     final kugou = Provider.of<KugouProvider>(context, listen: false);
 
-    // 首次进入：列表为空，点击触发首次加载
+    // 首次进入：列表为空，点击触发首次加载。正常路径 _restoreStrategy 已
+    // 首刷，此处仅为兜底（如首刷被未登录 guard 拦下后完成登录的情况）。
     if (kugou.personalFmSongs.isEmpty) {
       await _loadPersonalFm();
       return;
