@@ -1,0 +1,6 @@
+# native 工程构建产物与本地配置，严禁提交
+build/
+.gradle/
+local.properties
+app/build/
+.cxx/

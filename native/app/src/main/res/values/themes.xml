@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 原生版全局主题：使用框架 Material 主题（android:Theme.Material.NoActionBar 系），
+         避免引入 AppCompat/Material XML 库；Compose Material3 不依赖 XML 主题属性。
+         窗口背景复用 Flutter 侧的 launch_background（冷启动占位）。 -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+</resources>
