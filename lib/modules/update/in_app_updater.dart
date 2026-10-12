@@ -287,7 +287,7 @@ class InAppUpdater extends ChangeNotifier {
     } else if (total > 0) {
       ratio = received / total;
     }
-    _progress = ratio.clamp(0.0, 1.0);
+    _progress = ratio.clamp(0.0, 1.0).toDouble();
     // 节流：进度变化不足 0.5% 不通知，避免高频 rebuild
     if (_progress - _lastNotifiedProgress >= 0.005 ||
         _progress >= 1.0) {

@@ -96,7 +96,8 @@ class UpdateManifest {
 
   /// 解析并整体校验清单 JSON。非法输入抛 [FormatException]。
   factory UpdateManifest.parse(String rawJson) {
-    if (rawJson.length > kMaxManifestBytes) {
+    // 按真实字节数（UTF-8）而非字符数判限
+    if (utf8.encode(rawJson).length > kMaxManifestBytes) {
       throw const FormatException('清单超过 256 KiB 上限');
     }
     final Object? decoded;
@@ -112,7 +113,8 @@ class UpdateManifest {
 
     final schemaVersion = _requireInt(m, 'schemaVersion');
     if (schemaVersion != 1) {
-      throw const FormatException('不支持的清单协议版本 schemaVersion=$schemaVersion');
+      // 含插值不能声明 const
+      throw FormatException('不支持的清单协议版本 schemaVersion=$schemaVersion');
     }
 
     final applicationId = _requireString(m, 'applicationId');
@@ -191,19 +193,19 @@ class UpdateManifest {
       }
       final listRaw = entry.value;
       if (listRaw is! List) {
-        throw const FormatException('releaseNotes[$locale] 必须是字符串数组');
+        throw FormatException('releaseNotes[$locale] 必须是字符串数组');
       }
       final notes = <String>[];
       for (final item in listRaw) {
         if (item is! String ||
             item.trim().isEmpty ||
             item.length > kMaxNoteLength) {
-          throw const FormatException('releaseNotes[$locale] 条目非法');
+          throw FormatException('releaseNotes[$locale] 条目非法');
         }
         notes.add(item);
       }
       if (notes.length > 100) {
-        throw const FormatException('releaseNotes[$locale] 条目过多');
+        throw FormatException('releaseNotes[$locale] 条目过多');
       }
       releaseNotes[locale] = notes;
     }
@@ -271,7 +273,7 @@ class UpdateManifest {
   /// 逐字段强类型提取：缺失或类型不符一律抛 [FormatException]。
   static int _requireInt(Map<String, dynamic> m, String key) {
     final value = m[key];
-    // JSON 整数解析为 int；容错形如 5.0 的数字（刻意收窄，杜绝动态逃逸）。
+    // 仅接受 JSON 整数（dart:convert 将其解析为 int），不接受 5.0 之类的浮点
     if (value is int) return value;
     throw FormatException('字段 $key 缺失或不是整数');
   }
