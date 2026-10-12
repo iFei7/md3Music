@@ -724,7 +724,7 @@ class _ProgressRingPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = stroke
       ..color = trackColor;
-    canvas.drawCircle(center, radius, trackPaint);
+    canvas.drawCircle(center, ringRadius, trackPaint);
 
     if (progress > 0) {
       final progressPaint = Paint()
