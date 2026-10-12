@@ -43,7 +43,7 @@
             android:id="@+id/cover_widget_title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="MD3Music"
+            android:text="Grace Music"
             android:textSize="16sp"
             android:fontFamily="sans-serif-medium"
             android:gravity="center"

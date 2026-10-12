@@ -147,7 +147,7 @@ class _OnboardingPageState extends State<OnboardingPage>
           Padding(
             padding: const EdgeInsets.only(left: AppSpacing.lg),
             child: Text(
-              'MD3Music',
+              'Grace Music',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     color: colorScheme.primary,
                     fontWeight: FontWeight.w600,

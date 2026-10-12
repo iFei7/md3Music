@@ -1,4 +1,4 @@
-# MD3Music
+# Grace Music
 
 <div align="center">
 
@@ -19,12 +19,12 @@
 </div>
 
 <p align="center">
-  <img src="img/phone/md3/Screenshot_2026-08-31-23-35-42-974_com.md3music.md3music-edit.png" width="220" alt="MD3Music Material 3 播放页" />
-  <img src="img/phone/md3/Screenshot_2026-08-31-23-35-52-228_com.md3music.md3music-edit.png" width="220" alt="MD3Music Material 3 发现页" />
-  <img src="img/phone/md3/Screenshot_2026-08-31-23-36-24-517_com.md3music.md3music-edit.png" width="220" alt="MD3Music Material 3 歌词页" />
+  <img src="img/phone/md3/Screenshot_2026-08-31-23-35-42-974_com.md3music.md3music-edit.png" width="220" alt="Grace Music Material 3 播放页" />
+  <img src="img/phone/md3/Screenshot_2026-08-31-23-35-52-228_com.md3music.md3music-edit.png" width="220" alt="Grace Music Material 3 发现页" />
+  <img src="img/phone/md3/Screenshot_2026-08-31-23-36-24-517_com.md3music.md3music-edit.png" width="220" alt="Grace Music Material 3 歌词页" />
 </p>
 
-MD3Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌入式 Rust API 服务器，无需外部服务器即可使用。支持手机/平板自适应、MD3 与 Apple Music 风格播放页、逐字歌词和多种音频输出能力。本项目仅供学习，请勿用于商业用途，详情见[免责声明](DISCLAIMER.md)。
+Grace Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌入式 Rust API 服务器，无需外部服务器即可使用。支持手机/平板自适应、MD3 与 Apple Music 风格播放页、逐字歌词和多种音频输出能力。本项目仅供学习，请勿用于商业用途，详情见[免责声明](DISCLAIMER.md)。
 
 > **版本说明**：V5 之前的所有版本与分支均已废弃并彻底删除，请勿使用过时版本。最新版请前往 [GitHub Releases](https://github.com/zzyoxml/md3Music/releases)。
 > 
@@ -40,7 +40,7 @@ MD3Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌
 
 <p align="center">
   <a href="https://kaiyuanbang.cn/zh-cn/repo/zzyoxml-md3music.html">
-    <img src="assets/star-trend.svg" alt="MD3Music 最近 90 天 GitHub Star 趋势" />
+    <img src="assets/star-trend.svg" alt="Grace Music 最近 90 天 GitHub Star 趋势" />
   </a>
 </p>
 
@@ -66,7 +66,7 @@ MD3Music 是一款基于酷狗音乐 API 的 Flutter 音乐播放器，内置嵌
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│                       MD3Music App                             │
+│                       Grace Music App                          │
 │   ┌───────────────────────┐      ┌─────────────────────────┐    │
 │   │    Flutter UI (Dart)  │      │  嵌入式 Rust API 服务器 │    │
 │   │                       │      │     (127.0.0.1)         │    │
@@ -406,7 +406,7 @@ A: 该开关仅在魅族 Flyme 机型上出现（由设备能力探测决定）�
 
 ## 👥 贡献者
 
-感谢所有为 MD3Music 做出贡献的朋友：
+感谢所有为 Grace Music 做出贡献的朋友：
 
 <p align="center">
   <a href="https://github.com/zzyoxml"><img src="https://avatars.githubusercontent.com/u/137420502?v=4&s=80" width="80" height="80" alt="zzyoxml" title="zzyoxml" /></a>

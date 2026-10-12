@@ -104,7 +104,7 @@ class DiagnosticExporter {
     final zip = await packageZip(
       sourceDir: workDir,
       outputDir: tmpRoot,
-      fileName: 'MD3Music_diagnostics_$stamp.zip',
+      fileName: 'GraceMusic_diagnostics_$stamp.zip',
     );
     try {
       workDir.deleteSync(recursive: true);
@@ -118,8 +118,8 @@ class DiagnosticExporter {
     await SharePlus.instance.share(
       ShareParams(
         files: [XFile(zip.path)],
-        subject: 'MD3Music 诊断日志',
-        text: 'MD3Music 诊断日志（包含设备信息，不包含账号数据）',
+        subject: 'Grace Music 诊断日志',
+        text: 'Grace Music 诊断日志（包含设备信息，不包含账号数据）',
       ),
     );
   }
@@ -205,7 +205,7 @@ class DiagnosticExporter {
         'ERROR=${counts[DiagnosticLogLevel.error]}';
 
     final buffer = StringBuffer()
-      ..writeln('MD3Music 分级日志摘要')
+      ..writeln('Grace Music 分级日志摘要')
       ..writeln('生成时间: ${exportTime.toIso8601String()}')
       ..writeln('统计口径: 按带级别标记的日志行统计')
       ..writeln('')
@@ -279,7 +279,7 @@ class DiagnosticExporter {
     required DateTime exportTime,
   }) {
     final buffer = StringBuffer()
-      ..writeln('MD3Music 诊断报告')
+      ..writeln('Grace Music 诊断报告')
       ..writeln('导出时间: ${exportTime.toIso8601String()}')
       ..writeln('')
       ..writeln('[应用]')

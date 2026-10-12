@@ -100,7 +100,7 @@ class GithubReleaseClient implements ReleaseSource {
   static const String repo = 'md3Music';
 
   /// GitHub 要求 User-Agent 非空，显式声明产品标识避免被拒。
-  static const String userAgent = 'MD3Music-Android';
+  static const String userAgent = 'GraceMusic-Android';
 
   /// 列表端点而非 `/latest`：lite Release 全是 prerelease，latest 端点会404。
   /// `per_page=10` 而非 1：仓库里还残留 `ci-<sha>` 形式的 Release（由另一个
