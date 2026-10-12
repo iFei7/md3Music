@@ -58,7 +58,7 @@ class PlayerSeekBar extends StatefulWidget {
   /// 是否正在播放（决定已播放段是否上色、以及自驱动 ticker 是否推进）
   final bool isPlaying;
 
-  /// MD3 皮肤：轨道 3px + 末端 stop indicator 圆点；AM 皮肤为 2px 纯细线。
+  /// MD3 皮肤：轨道 9px + 末端 stop indicator 圆点；AM 皮肤为 2px 纯细线。
   final bool md3Style;
 
   /// 播放倍速，用于自驱动推算位置（0.5x / 2x 时进度条不会走错速度）
@@ -431,11 +431,13 @@ class _SeekBarPainter extends CustomPainter {
   final List<double>? climaxRange;
 
   /// 常态轨道高度：进度条是整个底部区里最细的元素。
-  static const double _idleMd3Height = 3;
+  /// 改版加粗：MD3 常态 3→9（3 倍），与放大后的传输行/封面视觉权重匹配；
+  /// AM 皮肤的 2px 细线不受影响。
+  static const double _idleMd3Height = 9;
   static const double _idleFlatHeight = 2;
 
-  /// 拖动态轨道高度
-  static const double _dragHeight = 10;
+  /// 拖动态轨道高度：12 仍略高于常态 9，保留「按下膨胀」的层级反馈
+  static const double _dragHeight = 12;
 
   /// 已播放段与剩余段之间的间隙（MD3 expressive 的做法）
   static const double _segmentGap = 4;

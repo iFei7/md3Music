@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:m3e_core/m3e_core.dart';
+import 'package:palette_generator/palette_generator.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/layout/responsive_layout.dart';
@@ -9,6 +10,7 @@ import '../../widgets/marquee_text.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../core/utils/app_toast.dart';
+import '../../core/utils/artwork_color_extractor.dart';
 import '../../widgets/add_to_playlist_dialog.dart';
 import '../../data/models/album.dart';
 import '../../data/models/song.dart';
@@ -1182,6 +1184,14 @@ class _FullPlayerState extends State<FullPlayer>
           body: Stack(
             fit: StackFit.expand,
             children: [
+              // 封面取色渐变背景：静态装饰层，仅切歌时重算一次取色（结果有缓存），
+              // 不引入任何常驻动画/逐帧重建，符合功耗纪律；渐变叠在 surface 上，
+              // 文字仍用 onSurface 保证可读性
+              _AmbientGradient(
+                artworkUri: currentSong.artworkUri,
+                localPath: currentSong.localPath,
+                brightness: Theme.of(context).brightness,
+              ),
               ResponsiveLayout(
                 compact: (_) => _buildCompactLayout(
                   playerProvider,
@@ -1450,7 +1460,20 @@ class _FullPlayerState extends State<FullPlayer>
     ColorScheme colorScheme, {
     bool isExpanded = false,
   }) {
-    final horizontalPadding = isExpanded ? 16.0 : 32.0;
+    // 收藏状态：根据歌曲来源（本地/在线）选择对应的收藏 Provider。
+    // 原先定义在 _buildMainControls 内供传输行右端收藏键使用；收藏键上移到
+    // 标题行后随逻辑一并搬到这里（消费方只剩标题行一处，直接内联即可）。
+    final song = currentSong;
+    final isOnline = song is Song && song.isOnline;
+    final isFavorited =
+        song != null &&
+        (isOnline
+            ? context.watch<FavoritesProvider>().isFavorite(song.id)
+            : context.watch<LocalFavoritesProvider>().isFavorite(song.id));
+
+    // 封面加大：两侧留白 32→16（单侧），给封面腾出更多宽度
+    // （360dp 屏封面 328→336+）
+    final horizontalPadding = isExpanded ? 12.0 : 16.0;
     final verticalPadding = isExpanded ? 8.0 : 16.0;
     final textSpacing = isExpanded ? 8.0 : 24.0;
     final iconSize = isExpanded ? 48.0 : 64.0;
@@ -1473,11 +1496,13 @@ class _FullPlayerState extends State<FullPlayer>
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
+                  // 封面加大：宽度上限 380→420、纵向余量 72→56（标题行
+                  // 收藏/循环键上移后行高不变，封面可再多吃 16dp 高度）
                   final maxSize = (constraints.maxWidth - 32)
-                      .clamp(0.0, 380.0)
+                      .clamp(0.0, 420.0)
                       .clamp(
                         0.0,
-                        (constraints.maxHeight - 72).clamp(
+                        (constraints.maxHeight - 56).clamp(
                           0.0,
                           double.infinity,
                         ),
@@ -1531,12 +1556,59 @@ class _FullPlayerState extends State<FullPlayer>
               ),
             ),
           SizedBox(height: textSpacing),
-          // 竖屏标题居中（封面居中显示，标题与封面保持同一中轴）
-          _buildTitleBlock(
-            playerProvider,
-            currentSong,
-            colorScheme,
-            alignment: CrossAxisAlignment.center,
+          // 标题行改版：标题左对齐占满剩余宽度，收藏/播放模式键上移到同行
+          // 右端（原先分居底部传输行两端）。边键让位后传输行只剩三键，
+          // 无宽度竞争可整体放大；点击逻辑与 isFavorited 计算原样搬移。
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: _buildTitleBlock(
+                  playerProvider,
+                  currentSong,
+                  colorScheme,
+                  alignment: CrossAxisAlignment.start,
+                ),
+              ),
+              _buildEdgeAction(
+                icon: isFavorited ? Icons.favorite : Icons.favorite_border,
+                active: isFavorited,
+                onTap: song == null
+                    ? null
+                    : () {
+                        if (isFavorited) {
+                          AppHaptics.click();
+                        } else {
+                          AppHaptics.heavy();
+                        }
+                        if (isOnline) {
+                          context.read<FavoritesProvider>().toggleFavorite(
+                            song,
+                          );
+                        } else {
+                          context.read<LocalFavoritesProvider>().toggleFavorite(
+                            song.id,
+                          );
+                        }
+                      },
+                // 长按：在线歌曲弹出 AI 推荐歌曲面板
+                onLongPress: song != null && isOnline
+                    ? () => showAiRecommendSheet(context, song)
+                    : null,
+              ),
+              const SizedBox(width: 4),
+              _buildEdgeAction(
+                icon: _playModeIcon(
+                  playerProvider.shuffleEnabled,
+                  playerProvider.loopMode,
+                ),
+                active: !_isDefaultPlayMode(playerProvider),
+                onTap: () {
+                  AppHaptics.tick();
+                  playerProvider.cyclePlayMode();
+                },
+              ),
+            ],
           ),
           if (!isExpanded) const Spacer(),
         ],
@@ -1661,7 +1733,7 @@ class _FullPlayerState extends State<FullPlayer>
       position: position,
       duration: duration,
       isPlaying: playerProvider.isPlaying,
-      // MD3 皮肤：3px 轨道 + 末端 stop indicator
+      // MD3 皮肤：9px 轨道 + 末端 stop indicator
       md3Style: true,
       speed: playerProvider.speed,
       activeColor: colorScheme.primary,
@@ -1685,57 +1757,30 @@ class _FullPlayerState extends State<FullPlayer>
     );
   }
 
-  /// 传输行 —— 中央 prev/play/next，左端播放模式、右端收藏。
+  /// 传输行 —— 中央 prev/play/next，整体居中。
   ///
-  /// 播放模式把原先分开的 shuffle 与 loop 合成一个循环按钮
-  /// （不循环 → 列表循环 → 单曲循环 → 随机），传输行因此从 5 个目标回到 3 个，
-  /// 播放键得以放大；模式与收藏落在居中留下的左右空白里，不额外占纵向高度。
+  /// 播放模式与收藏键已上移到标题行右端（见 [_buildArtworkView]），
+  /// 传输行只承载三键：两侧不再有 Expanded 边缘键竞争宽度，容器得以放大。
   /// 倍速与投屏都在右上角的更多菜单里。
   Widget _buildMainControls(
     PlayerProvider playerProvider,
     ColorScheme colorScheme, {
     bool isExpanded = false,
   }) {
-    final song = playerProvider.currentSong;
-    // 根据歌曲来源（本地/在线）选择对应的收藏 Provider
-    final isOnline = song is Song && song.isOnline;
-    final isFavorited =
-        song != null &&
-        (isOnline
-            ? context.watch<FavoritesProvider>().isFavorite(song.id)
-            : context.watch<LocalFavoritesProvider>().isFavorite(song.id));
-
     return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // 左端：播放模式（不循环 → 列表循环 → 单曲循环 → 随机，单键循环切换）
-        Expanded(
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: _buildEdgeAction(
-              icon: _playModeIcon(
-                playerProvider.shuffleEnabled,
-                playerProvider.loopMode,
-              ),
-              active: !_isDefaultPlayMode(playerProvider),
-              onTap: () {
-                AppHaptics.tick();
-                playerProvider.cyclePlayMode();
-              },
-            ),
-          ),
-        ),
         // Phase 5: 上一曲/暂停/下一曲联合动画控件
         // 尺寸参考 Sonify 的 NowPlaying：去掉实心底色（裸图标）、图标撑满、
-        // 三键视觉等大。容器尺寸保持克制——控制行左右各有一个 Expanded 包裹
-        // 48dp 边缘键（播放模式 / 收藏），三键总宽每涨 1dp，两侧热区就各少
-        // 0.5dp。360dp 主流屏可用 320dp，原 212 总宽时每侧余 54dp；若按
-        // Sonify 比例放大到 300，每侧只剩 10dp，边缘键实际不可点。
-        // 故：等大 + 图标放大承担视觉升级，容器反而略收（竖屏 206 < 原 212）。
+        // 三键视觉等大。边缘键移走后无宽度竞争，两个分支统一放大到
+        // 64/64/20（原竖屏 58/58/16，总宽 206 → 232）：
+        // 360dp 屏可用 320dp，两侧各余 44dp；320dp 极窄屏可用 280dp，
+        // 仍余 24dp，均有充足安全边距。
         MD3ETransportRow(
           isPlaying: playerProvider.isPlaying,
-          sideButtonSize: isExpanded ? 50.0 : 58.0,
-          playButtonSize: isExpanded ? 50.0 : 58.0,
-          spacing: isExpanded ? 12.0 : 16.0,
+          sideButtonSize: 64.0,
+          playButtonSize: 64.0,
+          spacing: 20.0,
           onPrevious: () {
             AppHaptics.click();
             playerProvider.previous();
@@ -1752,36 +1797,6 @@ class _FullPlayerState extends State<FullPlayer>
             AppHaptics.click();
             playerProvider.next();
           },
-        ),
-        // 右端：收藏
-        Expanded(
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: _buildEdgeAction(
-              icon: isFavorited ? Icons.favorite : Icons.favorite_border,
-              active: isFavorited,
-              onTap: song == null
-                  ? null
-                  : () {
-                      if (isFavorited) {
-                        AppHaptics.click();
-                      } else {
-                        AppHaptics.heavy();
-                      }
-                      if (isOnline) {
-                        context.read<FavoritesProvider>().toggleFavorite(song);
-                      } else {
-                        context.read<LocalFavoritesProvider>().toggleFavorite(
-                          song.id,
-                        );
-                      }
-                    },
-              // 长按：在线歌曲弹出 AI 推荐歌曲面板
-              onLongPress: song != null && isOnline
-                  ? () => showAiRecommendSheet(context, song)
-                  : null,
-            ),
-          ),
         ),
       ],
     );
@@ -2776,6 +2791,168 @@ class _ZenFadeState extends State<_ZenFade> {
           child: Opacity(
             opacity: _reverse.value.clamp(0.0, 1.0),
             child: widget.child,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 封面取色渐变背景 —— 从当前歌曲封面提取 2~3 个主色，自上而下淡出到透明。
+///
+/// 为什么是 StatefulWidget：取色是异步 Future，需要用 State 字段记录「当前
+/// 封面 url」，didUpdateWidget 中 url 变了才重算（而不是每次 build 重建
+/// Future），同时为过期防护提供比对基准；纯 build 内的 FutureBuilder 无从
+/// 拿到这份记忆。
+/// 为什么不做动画：纯静态装饰，切换歌曲才重算一次（结果有缓存），不引入
+/// 任何 repeat 动画或逐帧重建，符合功耗纪律。
+class _AmbientGradient extends StatefulWidget {
+  const _AmbientGradient({
+    required this.artworkUri,
+    required this.localPath,
+    required this.brightness,
+  });
+
+  /// 歌曲封面 uri（song.artworkUri）
+  final String? artworkUri;
+
+  /// 本地音频路径（song.localPath），封面非网络图时兜底取本地封面
+  final String? localPath;
+
+  /// 当前主题亮度：深色主题下渐变更显，浅色主题更克制（保文字可读性）
+  final Brightness brightness;
+
+  @override
+  State<_AmbientGradient> createState() => _AmbientGradientState();
+}
+
+class _AmbientGradientState extends State<_AmbientGradient> {
+  /// 取色结果缓存（url → 渐变色列表）：播放器往返、反复切歌时避免重复
+  /// 解码 + PaletteGenerator 分析；上限 16 条，超出即整体清空（封面数量
+  /// 有限，整清成本可忽略，比 LRU 简单够用）。
+  static final Map<String, List<Color>> _paletteCache = {};
+
+  /// 缓存上限
+  static const int _cacheLimit = 16;
+
+  /// 最多参与渐变的颜色数
+  static const int _maxColors = 3;
+
+  /// 候选色之间允许的最小色相差（度）：保证渐变有层次而非同色系堆叠
+  static const double _minHueDistance = 30;
+
+  /// 当前生效的封面 url（归一化后）；过期防护与 didUpdateWidget 去重的基准
+  String? _resolvedUrl;
+
+  Future<List<Color>?>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolvedUrl = _resolveUrl();
+    _future = _load(_resolvedUrl);
+  }
+
+  @override
+  void didUpdateWidget(covariant _AmbientGradient oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 只在封面 url 真正变化时重算，避免每次 build 重建 Future 导致
+    // FutureBuilder 反复回到「无数据」状态闪烁
+    final url = _resolveUrl();
+    if (url != _resolvedUrl) {
+      _resolvedUrl = url;
+      _future = _load(url);
+    }
+  }
+
+  /// url 归一化：http/https 直接用；否则有本地路径时走 `file://$path`
+  /// （与 app.dart 封面取色桥接的归一化口径一致）；两者皆无则返回 null。
+  String? _resolveUrl() {
+    final uri = widget.artworkUri;
+    if (uri != null &&
+        (uri.startsWith('http://') || uri.startsWith('https://'))) {
+      return uri;
+    }
+    final local = widget.localPath;
+    if (local != null && local.isNotEmpty) return 'file://$local';
+    return null;
+  }
+
+  Future<List<Color>?> _load(String? url) async {
+    if (url == null) return null;
+    final cached = _paletteCache[url];
+    if (cached != null) return cached;
+    final startedUrl = url;
+    final palette = await ArtworkColorExtractor.loadPalette(url);
+    // 过期防护：取色期间已切歌（didUpdateWidget 已把 _resolvedUrl 换成
+    // 新值）则丢弃结果，避免旧封面的颜色叠到新歌上（参考 app.dart 同款模式）
+    if (!mounted || _resolvedUrl != startedUrl) return null;
+    if (palette == null) return null;
+    final colors = _pickColors(palette);
+    // 一个合格候选都没有：不缓存也不渲染，保持纯 surface 背景
+    if (colors == null) return null;
+    if (_paletteCache.length >= _cacheLimit) _paletteCache.clear();
+    _paletteCache[startedUrl] = colors;
+    return colors;
+  }
+
+  /// 从调色板候选中挑出至多 [_maxColors] 个合格且色相差异大的颜色；
+  /// 无合格候选时返回 null。
+  List<Color>? _pickColors(PaletteGenerator palette) {
+    // 过滤：饱和度 ≥ 0.15（去灰）、亮度 0.1~0.92（去近黑/近白）
+    final candidates = <HSLColor>[];
+    for (final c in palette.colors) {
+      final hsl = HSLColor.fromColor(c);
+      if (hsl.saturation >= 0.15 &&
+          hsl.lightness >= 0.1 &&
+          hsl.lightness <= 0.92) {
+        candidates.add(hsl);
+      }
+    }
+    if (candidates.isEmpty) return null;
+    // palette.colors 按像素占比降序：主色必入选，后续候选须与所有已选色
+    // 色相相距 ≥ 30°（环形距离）才入选
+    final picked = <HSLColor>[candidates.first];
+    for (final c in candidates.skip(1)) {
+      if (picked.length >= _maxColors) break;
+      var distinct = true;
+      for (final p in picked) {
+        var diff = (c.hue - p.hue).abs();
+        if (diff > 180) diff = 360 - diff;
+        if (diff < _minHueDistance) {
+          distinct = false;
+          break;
+        }
+      }
+      if (distinct) picked.add(c);
+    }
+    return picked.map((hsl) => hsl.toColor()).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.brightness == Brightness.dark;
+    return FutureBuilder<List<Color>?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final colors = snapshot.data;
+        if (colors == null || colors.isEmpty) return const SizedBox.shrink();
+        final c1 = colors.first;
+        // 第二色缺失时复用 c1，渐变仍是「上浓下淡」的完整形态
+        final c2 = colors.length > 1 ? colors[1] : c1;
+        // 深色主题下渐变更显（0.42/0.26），浅色主题更克制（0.28/0.16）：
+        // 浅色下 surface 仍占主导，标题 w700 onSurface 不受干扰
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                c1.withValues(alpha: isDark ? 0.42 : 0.28),
+                c2.withValues(alpha: isDark ? 0.26 : 0.16),
+                Colors.transparent,
+              ],
+            ),
           ),
         );
       },
