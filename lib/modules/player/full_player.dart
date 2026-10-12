@@ -1,8 +1,12 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:m3e_core/m3e_core.dart';
 import 'package:palette_generator/palette_generator.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/layout/responsive_layout.dart';
 import '../../core/services/equalizer_service.dart';
@@ -1471,9 +1475,10 @@ class _FullPlayerState extends State<FullPlayer>
             ? context.watch<FavoritesProvider>().isFavorite(song.id)
             : context.watch<LocalFavoritesProvider>().isFavorite(song.id));
 
-    // 封面加大：两侧留白 32→16（单侧），给封面腾出更多宽度
-    // （360dp 屏封面 328→336+）
-    final horizontalPadding = isExpanded ? 12.0 : 16.0;
+    // 封面再加大：两侧留白合计 16（单侧 8），360dp 屏封面边长可达 344；
+    // 标题行上移后 LayoutBuilder 拿到的 maxHeight 已扣除标题行高度，
+    // 纵向余量 56→48
+    final horizontalPadding = 8.0;
     final verticalPadding = isExpanded ? 8.0 : 16.0;
     final textSpacing = isExpanded ? 8.0 : 24.0;
     final iconSize = isExpanded ? 48.0 : 64.0;
@@ -1487,75 +1492,10 @@ class _FullPlayerState extends State<FullPlayer>
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           if (!isExpanded) const Spacer(),
-          if (isExpanded) ...[
-            // 用 Expanded 包一层，让 LayoutBuilder 拿到**有界**的高度：
-            // 原实现靠上下两个 Spacer 撑居中，Column 给非 flex 子级的高度约束
-            // 是 infinity，于是正方形封面只能按宽度取边长，短屏（横屏手机）
-            // 下会顶破剩余高度 → RenderFlex overflow。
-            // 改后 maxSize 同时受可用高度约束，居中由 Center 保证，长屏观感不变。
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  // 封面加大：宽度上限 380→420、纵向余量 72→56（标题行
-                  // 收藏/循环键上移后行高不变，封面可再多吃 16dp 高度）
-                  final maxSize = (constraints.maxWidth - 32)
-                      .clamp(0.0, 420.0)
-                      .clamp(
-                        0.0,
-                        (constraints.maxHeight - 56).clamp(
-                          0.0,
-                          double.infinity,
-                        ),
-                      );
-                  // 长按封面进入/退出 Zen 模式：精确 2000ms + 按压内缩与引导提示
-                  return Center(
-                    child: _wrapArtworkZenPress(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: maxSize,
-                          maxHeight: maxSize,
-                        ),
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: AnimatedScale(
-                            // 播放↔暂停一次性 scale 收敛：幅度克制（0.97↔1.0），
-                            // 300ms easeOutCubic 有限时长，无循环动画
-                            scale: playerProvider.isPlaying ? 1.0 : 0.97,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeOutCubic,
-                            child: _buildCrossfadeArtworkWrapper(
-                              currentSong,
-                              colorScheme,
-                              iconSize: iconSize,
-                              isPlaying: playerProvider.isPlaying,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ] else
-            Expanded(
-              child: AspectRatio(
-                aspectRatio: 1,
-                child: AnimatedScale(
-                  // 与封面 tab 同款：播放↔暂停一次性 scale 收敛（0.97↔1.0）
-                  scale: playerProvider.isPlaying ? 1.0 : 0.97,
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeOutCubic,
-                  child: _buildCrossfadeArtworkWrapper(
-                    currentSong,
-                    colorScheme,
-                    iconSize: iconSize,
-                    isPlaying: playerProvider.isPlaying,
-                  ),
-                ),
-              ),
-            ),
-          SizedBox(height: textSpacing),
+          // 标题行上移：歌名先于封面出现（信息优先于视觉主体）。封面仍在
+          // Expanded 内占满剩余空间，LayoutBuilder 拿到的 maxHeight 已扣除
+          // 标题行高度；居中方式不变（isExpanded 由 Center 保证，
+          // 非 isExpanded 由 Column 的 mainAxisAlignment.center + Spacer 保证）
           // 标题行改版：标题左对齐占满剩余宽度，收藏/播放模式键上移到同行
           // 右端（原先分居底部传输行两端）。边键让位后传输行只剩三键，
           // 无宽度竞争可整体放大；点击逻辑与 isFavorited 计算原样搬移。
@@ -1610,6 +1550,79 @@ class _FullPlayerState extends State<FullPlayer>
               ),
             ],
           ),
+          SizedBox(height: textSpacing),
+          if (isExpanded) ...[
+            // 用 Expanded 包一层，让 LayoutBuilder 拿到**有界**的高度：
+            // 原实现靠上下两个 Spacer 撑居中，Column 给非 flex 子级的高度约束
+            // 是 infinity，于是正方形封面只能按宽度取边长，短屏（横屏手机）
+            // 下会顶破剩余高度 → RenderFlex overflow。
+            // 改后 maxSize 同时受可用高度约束，居中由 Center 保证，长屏观感不变。
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // 封面再加大：两侧 padding 单侧 8（合计 16，360dp 屏边长
+                  // 344）、宽度上限 420→440；标题行上移后 maxHeight 已扣除
+                  // 标题行（边键 48dp、标题可能两行），纵向余量 56→48。
+                  // 360dp 竖屏核算：纵向可用 ≈ 540（屏高 800 - 顶栏 - 标题行
+                  // ~56 - 底部控制区 ~150），-48 后 492 > 344，封面仍由
+                  // 宽度主导，不会因高度收敛变小
+                  final maxSize = (constraints.maxWidth - 16)
+                      .clamp(0.0, 440.0)
+                      .clamp(
+                        0.0,
+                        (constraints.maxHeight - 48).clamp(
+                          0.0,
+                          double.infinity,
+                        ),
+                      );
+                  // 长按封面进入/退出 Zen 模式：精确 2000ms + 按压内缩与引导提示
+                  return Center(
+                    child: _wrapArtworkZenPress(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: maxSize,
+                          maxHeight: maxSize,
+                        ),
+                        child: AspectRatio(
+                          aspectRatio: 1,
+                          child: AnimatedScale(
+                            // 播放↔暂停一次性 scale 收敛：幅度克制（0.97↔1.0），
+                            // 300ms easeOutCubic 有限时长，无循环动画
+                            scale: playerProvider.isPlaying ? 1.0 : 0.97,
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeOutCubic,
+                            child: _buildCrossfadeArtworkWrapper(
+                              currentSong,
+                              colorScheme,
+                              iconSize: iconSize,
+                              isPlaying: playerProvider.isPlaying,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ] else
+            Expanded(
+              child: AspectRatio(
+                aspectRatio: 1,
+                child: AnimatedScale(
+                  // 与封面 tab 同款：播放↔暂停一次性 scale 收敛（0.97↔1.0）
+                  scale: playerProvider.isPlaying ? 1.0 : 0.97,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOutCubic,
+                  child: _buildCrossfadeArtworkWrapper(
+                    currentSong,
+                    colorScheme,
+                    iconSize: iconSize,
+                    isPlaying: playerProvider.isPlaying,
+                  ),
+                ),
+              ),
+            ),
           if (!isExpanded) const Spacer(),
         ],
       ),
@@ -1646,10 +1659,12 @@ class _FullPlayerState extends State<FullPlayer>
           // 过长歌名不换行，改优雅滚动（两端停顿 + 缓动往返 + 边缘渐隐）。
           child: GentleScrollingText(
             currentSong.displayName.toUpperCase(),
-            // MD3E v2: 大写 + 粗体 w700 + 字间距 1.5
+            // MD3E v2: 大写 + 粗体 w800 + 字间距 1.5（标题行上移成为视觉
+            // 主体后，加粗到 w800 增强信息层级；dense 分支是横屏左栏形态，
+            // 宽度紧张不动）
             style: (dense ? textTheme.titleMedium : textTheme.headlineSmall)
                 ?.copyWith(
-                  fontWeight: FontWeight.w700,
+                  fontWeight: dense ? FontWeight.w700 : FontWeight.w800,
                   letterSpacing: dense ? 1.0 : 1.5,
                   height: 1.2,
                 ),
@@ -2798,8 +2813,26 @@ class _ZenFadeState extends State<_ZenFade> {
   }
 }
 
-/// 封面取色渐变背景 —— 从当前歌曲封面提取 2~3 个主色，自上而下淡出到透明。
+/// 封面取色渐变背景 —— 从当前歌曲封面提取最多 2 个主色，做径向光晕渐变。
 ///
+/// 参考方案（安卓原生 Palette + RadialGradient + LRU/持久化缓存）的 Flutter
+/// 适配决策：
+/// - 取色：直接复用 palette_generator（即安卓 Palette 的官方 Flutter 移植），
+///   采样压缩到 128×128（loadPalette 的 sampleSize 参数），色彩分布分析
+///   128 宽已足够，解码内存/CPU 开销比 480 降一个量级。
+/// - 渐变：RadialGradient 替代 LinearGradient——径向渐变是 GPU 硬件加速
+///   最完善的形式，仅 2 个颜色点、无中间过渡色；光晕中心对准顶部封面区域，
+///   向底部自然淡出到 surface。
+/// - 层缓存：RepaintBoundary ≈ 安卓 LAYER_TYPE_HARDWARE——渐变层光栅化
+///   结果被合成器缓存，进度环/歌词等高频重绘不会波及本层，也不用每帧重画
+///   渐变。参考方案的「DrawingCache PNG 位图缓存」由此等价覆盖，不再实现。
+/// - 持久化：[_AmbientGradientStore] 以歌曲 url 为 Key 存 SharedPreferences，
+///   同一首歌二次播放直接命中跳过取色。参考方案的「system_accent1 莫奈
+///   取色」由全局已有的动态取色种子（ThemeProvider.setCoverSeedColor）覆盖，
+///   此处不重复实现。
+///
+/// 触发时机：仅切歌（url 变化）触发一次取色；进度更新走 positionNotifier
+/// 只重绘进度环层（独立 RepaintBoundary），不会触发背景层重算或重绘。
 /// 为什么是 StatefulWidget：取色是异步 Future，需要用 State 字段记录「当前
 /// 封面 url」，didUpdateWidget 中 url 变了才重算（而不是每次 build 重建
 /// Future），同时为过期防护提供比对基准；纯 build 内的 FutureBuilder 无从
@@ -2827,16 +2860,9 @@ class _AmbientGradient extends StatefulWidget {
 }
 
 class _AmbientGradientState extends State<_AmbientGradient> {
-  /// 取色结果缓存（url → 渐变色列表）：播放器往返、反复切歌时避免重复
-  /// 解码 + PaletteGenerator 分析；上限 16 条，超出即整体清空（封面数量
-  /// 有限，整清成本可忽略，比 LRU 简单够用）。
-  static final Map<String, List<Color>> _paletteCache = {};
-
-  /// 缓存上限
-  static const int _cacheLimit = 16;
-
-  /// 最多参与渐变的颜色数
-  static const int _maxColors = 3;
+  /// 最多参与渐变的颜色数：参考方案「主色 + 1 辅助色，仅 2 色渐变」——
+  /// 径向光晕 2 个颜色点已足够，色再多只会稀释层次、增加取色计算量
+  static const int _maxColors = 2;
 
   /// 候选色之间允许的最小色相差（度）：保证渐变有层次而非同色系堆叠
   static const double _minHueDistance = 30;
@@ -2880,10 +2906,16 @@ class _AmbientGradientState extends State<_AmbientGradient> {
 
   Future<List<Color>?> _load(String? url) async {
     if (url == null) return null;
-    final cached = _paletteCache[url];
+    // 持久化缓存命中：同一首歌二次播放直接返回，完全跳过取色
+    // （put 同步写内存镜像，会话内 get 即命中，无需额外的内存级 Map）
+    final cached = _AmbientGradientStore.get(url);
     if (cached != null) return cached;
     final startedUrl = url;
-    final palette = await ArtworkColorExtractor.loadPalette(url);
+    // 采样压缩到 128×128：径向光晕只需要色彩分布，不需要细节
+    final palette = await ArtworkColorExtractor.loadPalette(
+      url,
+      sampleSize: 128,
+    );
     // 过期防护：取色期间已切歌（didUpdateWidget 已把 _resolvedUrl 换成
     // 新值）则丢弃结果，避免旧封面的颜色叠到新歌上（参考 app.dart 同款模式）
     if (!mounted || _resolvedUrl != startedUrl) return null;
@@ -2891,8 +2923,8 @@ class _AmbientGradientState extends State<_AmbientGradient> {
     final colors = _pickColors(palette);
     // 一个合格候选都没有：不缓存也不渲染，保持纯 surface 背景
     if (colors == null) return null;
-    if (_paletteCache.length >= _cacheLimit) _paletteCache.clear();
-    _paletteCache[startedUrl] = colors;
+    // 写穿透持久化缓存：异步落盘，不阻塞本次渲染
+    unawaited(_AmbientGradientStore.put(startedUrl, colors));
     return colors;
   }
 
@@ -2938,24 +2970,106 @@ class _AmbientGradientState extends State<_AmbientGradient> {
         final colors = snapshot.data;
         if (colors == null || colors.isEmpty) return const SizedBox.shrink();
         final c1 = colors.first;
-        // 第二色缺失时复用 c1，渐变仍是「上浓下淡」的完整形态
+        // 第二色缺失时复用 c1，光晕仍是「中心浓、边缘淡」的完整形态
         final c2 = colors.length > 1 ? colors[1] : c1;
-        // 深色主题下渐变更显（0.42/0.26），浅色主题更克制（0.28/0.16）：
-        // 浅色下 surface 仍占主导，标题 w700 onSurface 不受干扰
-        return Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                c1.withValues(alpha: isDark ? 0.42 : 0.28),
-                c2.withValues(alpha: isDark ? 0.26 : 0.16),
-                Colors.transparent,
-              ],
+        return RepaintBoundary(
+          // RepaintBoundary ≈ 安卓 LAYER_TYPE_HARDWARE：渐变层光栅化结果被
+          // 合成器缓存，进度环/歌词等高频重绘不会波及本层，也不用每帧重画渐变
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                // 光晕中心在页面顶部（封面区域），向底部淡出到接近透明
+                center: const Alignment(0, -0.85),
+                radius: 1.4,
+                // 严格 2 个颜色点：主色浓、辅助色淡，边缘自然融入 surface
+                colors: [
+                  c1.withValues(alpha: isDark ? 0.46 : 0.30),
+                  c2.withValues(alpha: isDark ? 0.10 : 0.06),
+                ],
+                stops: const [0.0, 1.0],
+              ),
             ),
           ),
         );
       },
     );
+  }
+}
+
+/// 渐变取色持久化缓存：url → 「color1|color2」（int 值拼接）。
+///
+/// SP 全量 JSON 存储，内存镜像 + 写穿透；上限 64 条（超出按简单淘汰清
+/// 一半），同一首歌二次播放直接读缓存跳过取色。
+/// 关于参考方案的「DrawingCache PNG 位图缓存」：Flutter 侧由 RepaintBoundary
+/// 光栅缓存等价覆盖（见 [_AmbientGradient] 文档），不落地 PNG 位图；
+/// 「system_accent1 莫奈取色」由全局动态取色种子（ThemeProvider
+/// .setCoverSeedColor）覆盖，同样不在此实现。
+class _AmbientGradientStore {
+  _AmbientGradientStore._();
+
+  static const String _kKey = 'ambient_gradient_colors';
+  static const int _kLimit = 64;
+
+  /// 内存镜像：put 同步写入、get 同步读取，会话内零异步等待；
+  /// SP 只作持久化层（跨会话）。
+  static Map<String, String>? _cache;
+
+  /// 懒加载 SP 并反序列化到内存镜像；JSON 损坏时按空缓存处理（自愈）。
+  static Future<void> _ensure() async {
+    if (_cache != null) return;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final raw = sp.getString(_kKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          _cache = decoded.map(
+            (k, v) => MapEntry(k.toString(), v.toString()),
+          );
+          return;
+        }
+      }
+    } catch (_) {
+      // 损坏数据：忽略，按空缓存重新积累
+    }
+    _cache = {};
+  }
+
+  /// 同步读内存镜像；未初始化或无记录返回 null。
+  /// （UI 侧在 initState/didUpdateWidget 里同步调用即可命中，
+  /// 不需要 await 初始化——未初始化视为未命中，走取色路径补齐。）
+  static List<Color>? get(String url) {
+    final cache = _cache;
+    if (cache == null) return null;
+    final raw = cache[url];
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return raw
+          .split('|')
+          .map((s) => Color(int.parse(s)))
+          .toList(growable: false);
+    } catch (_) {
+      return null; // 单条损坏：视为未命中，取色后会覆盖写回
+    }
+  }
+
+  /// 写穿透：先写内存镜像（get 立即可见），再异步回写 SP；超出上限清一半。
+  static Future<void> put(String url, List<Color> colors) async {
+    await _ensure();
+    final cache = _cache!;
+    if (cache.length >= _kLimit) {
+      // 简单淘汰：清掉一半（插入序无业务意义，整段删除比 LRU 简单够用）
+      final keys = cache.keys.take(cache.length ~/ 2).toList();
+      for (final k in keys) {
+        cache.remove(k);
+      }
+    }
+    cache[url] = colors.map((c) => c.value.toString()).join('|');
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString(_kKey, jsonEncode(cache));
+    } catch (_) {
+      // 落盘失败不影响本次渲染，内存镜像仍在
+    }
   }
 }

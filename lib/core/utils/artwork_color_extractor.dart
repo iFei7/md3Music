@@ -56,12 +56,22 @@ class ArtworkColorExtractor {
   /// 本地封面统一经 [ResizeImage] 缩到 480 宽再解码：背景图/本地大图取色
   /// 时避免全尺寸解码的内存峰值（高清照片解码可达上百 MB，低内存设备会
   /// 闪退）；取色分析的是色彩分布，缩到 480 宽足够且结果几乎不变。
+  /// [sampleSize] 允许调用方传更小值进一步降采样（如环境渐变背景传 128）：
+  /// 取色分析的是色彩分布，128 宽已足够，解码内存与 CPU 开销再降一个量级。
   /// 任一来源加载/解码失败都返回 null（内部已捕获异常）。
-  static Future<PaletteGenerator?> loadPalette(String url) async {
+  static Future<PaletteGenerator?> loadPalette(
+    String url, {
+    int sampleSize = 480,
+  }) async {
     try {
       if (url.startsWith('http://') || url.startsWith('https://')) {
+        // 网络封面：ResizeImage 包裹 CachedNetworkImageProvider 做**解码期**
+        // 降采样（磁盘缓存不受影响，仅解码输出按 sampleSize 宽缩放）。
+        // 注：fromImageProvider 虽有 size 参数，但源码中该值只进
+        // ImageConfiguration（CachedNetworkImageProvider 不响应，不会缩放
+        // 解码结果），真正可靠的采样压缩是 ResizeImage——与本地分支同构。
         return PaletteGenerator.fromImageProvider(
-          CachedNetworkImageProvider(url),
+          ResizeImage(CachedNetworkImageProvider(url), width: sampleSize),
           maximumColorCount: 12,
         );
       }
@@ -69,7 +79,7 @@ class ArtworkColorExtractor {
       final bytes = await _loadLocalBytes(url);
       if (bytes == null) return null;
       return PaletteGenerator.fromImageProvider(
-        ResizeImage(MemoryImage(bytes), width: 480),
+        ResizeImage(MemoryImage(bytes), width: sampleSize),
         maximumColorCount: 12,
       );
     } catch (_) {
