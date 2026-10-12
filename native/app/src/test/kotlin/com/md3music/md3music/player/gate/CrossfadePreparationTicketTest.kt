@@ -1,8 +1,10 @@
 package com.md3music.md3music.player.gate
 
+import com.md3music.md3music.data.model.Song
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * [CrossfadePreparationTicket] 移植锁测试。
@@ -19,10 +21,14 @@ class CrossfadePreparationTicketTest {
         albumAudioId: String? = null,
     ) = Song(
         id = id,
-        albumId = albumId,
-        albumAudioId = albumAudioId,
+        title = "title-$id",
+        artist = "artist",
+        album = "album",
+        duration = 0.seconds,
         url = "https://media.example/$id.mp3",
         isOnline = true,
+        albumId = albumId,
+        albumAudioId = albumAudioId,
     )
 
     private val current = song("current")

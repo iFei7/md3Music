@@ -1,8 +1,10 @@
 package com.md3music.md3music.player.gate
 
+import com.md3music.md3music.data.model.Song
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * [PlaylistPrefetchTicket] 移植锁测试。
@@ -23,6 +25,10 @@ class PlaylistPrefetchTicketTest {
         isOnline: Boolean = true,
     ) = Song(
         id = id,
+        title = "title-$id",
+        artist = "artist",
+        album = "album",
+        duration = 0.seconds,
         albumId = albumId,
         albumAudioId = albumId?.let { "audio-$it" },
         url = url,

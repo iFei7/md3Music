@@ -1,5 +1,7 @@
 package com.md3music.md3music.player.gate
 
+import com.md3music.md3music.data.model.Song
+
 /**
  * 交叉淡化备用源的提交凭据，确保异步准备仍属于当前曲间过渡。
  *

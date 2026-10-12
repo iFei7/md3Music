@@ -1,5 +1,7 @@
 package com.md3music.md3music.player.gate
 
+import com.md3music.md3music.data.model.Song
+
 /**
  * 后台预取结果的提交凭据，避免过期 URL 写入后来被挪到相同索引的歌曲。
  *
