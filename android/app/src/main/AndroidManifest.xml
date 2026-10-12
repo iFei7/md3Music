@@ -73,25 +73,13 @@
                 <data android:mimeType="application/opus" />
             </intent-filter>
         </activity>
-        <!-- 两个 launcher alias 共用 MainActivity，运行时始终只启用一个，供用户切换桌面图标。 -->
+        <!-- 桌面入口 launcher alias：与 MainActivity 共用组件，始终启用这一个。 -->
         <activity-alias
             android:name=".LauncherModernIcon"
             android:targetActivity=".MainActivity"
             android:enabled="true"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:label="MD3Lite">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-        <activity-alias
-            android:name=".LauncherLegacyIcon"
-            android:targetActivity=".MainActivity"
-            android:enabled="false"
-            android:exported="true"
-            android:icon="@drawable/ic_launcher_legacy_cropped"
             android:label="MD3Lite">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -162,6 +150,25 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/music_widget_info" />
+        </receiver>
+        <!-- 桌面私人FM小组件 -->
+        <receiver
+            android:name=".PersonalFmWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.md3music.md3music.ACTION_FM_UPDATE_WIDGET" />
+                <action android:name="com.md3music.md3music.ACTION_FM_COVER_READY" />
+                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_OPEN_LOGIN" />
+                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_PLAY_PAUSE" />
+                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_TOGGLE_FAVORITE" />
+                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_SELECT_STATION" />
+                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_OPEN_TRACK" />
+                <action android:name="com.md3music.md3music.ACTION_FM_WIDGET_OPEN_PLAYER" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/personal_fm_widget_info" />
         </receiver>
         <!-- 2×2 封面播放器小组件 -->
         <receiver

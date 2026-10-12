@@ -9,6 +9,7 @@ import 'package:quick_actions/quick_actions.dart';
 import 'core/layout/responsive_layout.dart';
 import 'core/layout/ui_density.dart';
 import 'core/services/external_media_intent_service.dart';
+import 'core/services/fm_widget_sync.dart';
 import 'core/services/startup_auto_play.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/motion_constants.dart';
@@ -41,6 +42,7 @@ import 'modules/login/login_page.dart';
 import 'widgets/app_animation.dart';
 import 'modules/onboarding/onboarding_page.dart';
 import 'modules/onboarding/user_agreement_page.dart';
+import 'modules/personal_fm/personal_fm_page.dart';
 import 'modules/audiobook/audiobook_page.dart';
 import 'modules/recognition/song_recognition_page.dart';
 import 'providers/dlna_provider.dart';
@@ -223,11 +225,21 @@ class _AppViewState extends State<_AppView> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupCoverColorBridge();
       _setupBackgroundColorBridge();
+      _setupFmWidgetSync();
       // 外部调用（文件管理器「用其他应用打开」）：注册原生推送回调，
       // 并主动拉取一次冷启动期间原生侧积压的待处理音频
       // ignore: discarded_futures
       ExternalMediaIntentService.instance.start();
     });
+  }
+
+  /// 建立私人FM桌面小部件桥接：监听三个 provider 推送快照，并接上原生按钮回调。
+  void _setupFmWidgetSync() {
+    FmWidgetSync.instance.attach(
+      kugou: context.read<KugouProvider>(),
+      player: context.read<PlayerProvider>(),
+      favorites: context.read<FavoritesProvider>(),
+    );
   }
 
   /// 根据 ShortcutConfigProvider 当前配置，整体替换 Android 桌面快捷方式列表。
@@ -376,6 +388,7 @@ class _AppViewState extends State<_AppView> {
         // 发现页右上角头像点击跳转入口（push 独立路由，与底部 tab 中的实例并存无冲突）
         '/user': (_) => const UserCenterPage(),
         '/player': (_) => const FullPlayer(),
+        '/personal_fm': (_) => const PersonalFmPage(),
       },
       onGenerateRoute: (settings) {
         if (settings.name == '/onboarding') {
@@ -631,6 +644,9 @@ class _MainLayoutState extends State<_MainLayout>
       case 'favorites':
         page = const FavoritesPage();
         break;
+      case 'fm':
+        page = const PersonalFmPage();
+        break;
       case 'search':
         // Tab 模式：SearchPage 自包悬浮宿主，播放控制由底部玻璃 Dock 承载
         page = const SearchPage();
@@ -681,6 +697,15 @@ class _MainLayoutState extends State<_MainLayout>
             selected: isSelected,
             outlinedIcon: Icons.favorite_outline,
             filledIcon: Icons.favorite,
+          ),
+          label: tab.label,
+        );
+      case 'fm':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.radio_outlined,
+            filledIcon: Icons.radio,
           ),
           label: tab.label,
         );
@@ -904,6 +929,9 @@ class _MainLayoutState extends State<_MainLayout>
         break;
       case 'favorites':
         page = const FavoritesPage();
+        break;
+      case 'fm':
+        page = const PersonalFmPage();
         break;
       case 'search':
         page = const SearchPage();

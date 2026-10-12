@@ -2,10 +2,8 @@ package com.md3music.md3music
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.content.ComponentName
 import android.content.Intent
 import android.content.Context
-import android.content.pm.PackageManager
 import android.annotation.TargetApi
 import android.net.Uri
 import android.os.Build
@@ -131,8 +129,25 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         // 同步更新 intent：配置变更重建等场景下 getIntent() 也能拿到最新外部调用数据
         setIntent(intent)
+        // singleTop 复用实例时（app 已在前台/后台存活），小部件动作走这里
+        dispatchWidgetAction(intent.getStringExtra("widget_action"))
         // 外部调用（文件管理器「用其他应用打开」等）：热启动入口
         ExternalMediaBridge.onIntent(this, intent)
+    }
+
+    /// 把小部件拉起 app 携带的 widget_action 转发给 Flutter。
+    /// 目前仅处理 FM 登录卡的 openLogin（现有 music widget 的 action 仍不处理）。
+    private fun dispatchWidgetAction(action: String?) {
+        if (action != "openLogin") return
+        val engine = FlutterEngineCache.getInstance().get("md3music_engine") ?: return
+        try {
+            MethodChannel(
+                engine.dartExecutor.binaryMessenger,
+                FLOATING_CHANNEL
+            ).invokeMethod("widgetFmOpenLogin", null)
+        } catch (_: Exception) {
+            // 引擎刚创建/未跑 Dart 时转发失败：降级为仅打开 app
+        }
     }
 
     override fun onResume() {
@@ -184,25 +199,6 @@ class MainActivity : FlutterActivity() {
             // 用 Throwable 而非 Exception：NoSuchMethodError/LinkageError 是 Error，
             // 低版本设备调用高版本方法抛出的崩溃必须被吞掉而非上抛。
         }
-    }
-
-    /** 启用旧版或当前 launcher alias，并关闭另一个，避免桌面出现重复图标。 */
-    private fun setLegacyLauncherIcon(useLegacy: Boolean) {
-        val classPrefix = MainActivity::class.java.name.substringBeforeLast('.')
-        val modern = ComponentName(this, "$classPrefix.LauncherModernIcon")
-        val legacy = ComponentName(this, "$classPrefix.LauncherLegacyIcon")
-        val selected = if (useLegacy) legacy else modern
-        val disabled = if (useLegacy) modern else legacy
-        packageManager.setComponentEnabledSetting(
-            selected,
-            PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-            PackageManager.DONT_KILL_APP,
-        )
-        packageManager.setComponentEnabledSetting(
-            disabled,
-            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-            PackageManager.DONT_KILL_APP,
-        )
     }
 
     /// 复用后台（headless）FlutterEngine：线控耳机「唤醒播放」被拉起时，
@@ -274,26 +270,6 @@ class MainActivity : FlutterActivity() {
                     "getCurrent" -> result.success(
                         if (RenderEngineManager.isImpellerBuild(this)) "impeller" else "skia"
                     )
-                    else -> result.notImplemented()
-                }
-            }
-
-        // 设置页切换当前启用的 launcher alias；DONT_KILL_APP 保证图标变更不打断播放。
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.md3music.md3music/app_icon")
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "setLegacyIcon" -> {
-                        val useLegacy = call.arguments as? Boolean
-                        if (useLegacy == null) {
-                            result.error("INVALID_ARGUMENT", "enabled 必须为布尔值", null)
-                        } else {
-                            runCatching { setLegacyLauncherIcon(useLegacy) }
-                                .onSuccess { result.success(null) }
-                                .onFailure {
-                                    result.error("ICON_SWITCH_FAILED", it.message, null)
-                                }
-                        }
-                    }
                     else -> result.notImplemented()
                 }
             }

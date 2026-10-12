@@ -23,6 +23,10 @@ IconData homeTabIcon(String tabId) {
       return Icons.settings;
     case 'user':
       return Icons.person;
+    case 'fm':
+      return Icons.radio;
+    case 'audiobook':
+      return Icons.auto_stories;
     default:
       return Icons.circle;
   }
