@@ -110,6 +110,17 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    // 构建产物改名：GraceMusic-v<versionName>.apk。
+    // --split-per-abi 时每个 split 追加 ABI 后缀（GraceMusic-v<versionName>-<abi>.apk），
+    // 否则多个 split 输出同名互相覆盖。
+    applicationVariants.all {
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val abi = output.getFilter(com.android.build.OutputFile.ABI)
+            output.outputFileName =
+                if (abi != null) "GraceMusic-v$versionName-$abi.apk" else "GraceMusic-v$versionName.apk"
+        }
+    }
 }
 
 kotlin {

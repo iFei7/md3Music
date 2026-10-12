@@ -194,16 +194,14 @@ flutter run
 # 一键打包（Rust 交叉编译按需 + Flutter 分包；默认 release / 两个 flavor / 全部 ABI）
 .\scripts\md3.ps1 android
 
-# 输出位置（产物已按中文命名，便于区分；<版本> 取自 pubspec.yaml，如 5.7.0）：
-# build/app/outputs/flutter-apk/（推荐）MD3音乐-<版本>-标准版-64位.apk  (arm64-v8a，推荐默认下载项)
-# build/app/outputs/flutter-apk/MD3音乐-<版本>-标准版-32位.apk      (armeabi-v7a，较旧设备)
-# build/app/outputs/flutter-apk/MD3音乐-<版本>-标准版-模拟器.apk    (x86_64)
-# build/app/outputs/flutter-apk/MD3音乐-<版本>-3D封面版-64位.apk    (内置 3D 深度封面)
-# build/app/outputs/flutter-apk/MD3音乐-<版本>-随身听兼容版-64位.apk (Vivo 原子随身听；包名 com.apple.android.music)
+# 输出位置（<版本> 取自 pubspec.yaml，如 5.7.0；--split-per-abi 时文件名自动追加 ABI 后缀）：
+# build/app/outputs/flutter-apk/（推荐）GraceMusic-v<版本>-arm64-v8a.apk   (arm64-v8a，推荐默认下载项)
+# build/app/outputs/flutter-apk/GraceMusic-v<版本>-armeabi-v7a.apk        (armeabi-v7a，较旧设备)
+# build/app/outputs/flutter-apk/GraceMusic-v<版本>-x86_64.apk             (x86_64，模拟器)
 ```
 
-> 中文名由打包脚本在构建完成后重命名（Flutter/Gradle 内部仍用 `app-<abi>-<flavor>-<type>.apk`）。
-> 直接调用 `flutter build apk --release --flavor standard --split-per-abi` 得到的仍是英文原生名。
+> 文件名由 `android/app/build.gradle.kts` 的 `applicationVariants.all` 输出重命名逻辑在构建期设置
+> （无 split 时为 `GraceMusic-v<versionName>.apk`；Flutter/Gradle 原生名 `app-<abi>-<flavor>-<type>.apk` 不再出现）。
 
 ***
 
