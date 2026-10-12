@@ -240,6 +240,7 @@ jobs:
           set -o pipefail
           flutter build apk --release --flavor standard --split-per-abi \
             --target-platform android-arm64,android-arm \
+            --build-number="${{ github.run_number }}" \
             --obfuscate --split-debug-info=build/symbols \
             --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_standard.log"
 
@@ -249,6 +250,7 @@ jobs:
         run: |
           flutter build apk --release --flavor depth3d \
             --dart-define=ENABLE_DEPTH_3D=true --split-per-abi --target-platform android-arm64 \
+            --build-number="${{ github.run_number }}" \
             --obfuscate --split-debug-info=build/symbols \
             --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_depth3d.log"
 
@@ -267,6 +269,7 @@ jobs:
           flutter build apk --release --flavor standard --split-per-abi \
             --target-platform android-arm64 \
             --android-project-arg=md3ApplicationId=com.apple.android.music \
+            --build-number="${{ github.run_number }}" \
             --obfuscate --split-debug-info=build/symbols \
             --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_apple.log"
           mv "$standard_apk" "$apk_dir/app-apple-music-arm64-v8a-release.apk"
@@ -494,11 +497,11 @@ jobs:
           tag="v${ver}-lite-${SHA_SHORT::7}"
           stamp="$(date -u +%Y%m%d%H%M%S)"
 
-          rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg stamp "$stamp" \
+          rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg stamp "$stamp" --arg run "$GITHUB_RUN_NUMBER" \
             '{tag_name:$tag, target_commitish:$sha, prerelease:true,
               name:("Lite v" + $ver + " (" + $tag + ")"),
               body:("Lite 分支 CI 自动构建。\n\n"
-                  + "- 版本: v" + $ver + "\n- 提交: " + $sha + "\n\n"
+                  + "- 版本: v" + $ver + "\n- 提交: " + $sha + "\n- 构建号: " + $run + "\n\n"
                   + "### 下载\n"
                   + "- **GraceMusic-v" + $ver + "-" + $stamp + "-standard-arm64.apk** — 标准版 64 位（大多数现代设备，推荐）\n"
                   + "- **GraceMusic-v" + $ver + "-" + $stamp + "-standard-arm32.apk** — 标准版 32 位（较旧设备）\n"

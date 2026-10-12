@@ -193,11 +193,19 @@ class InAppUpdater extends ChangeNotifier {
         _resetToIdle();
         return InAppUpdateCheckResult.noManifest;
       }
-      // 版本比较用 versionName（tag 剥 v 前缀，parseReleaseVersion 会截断
-      // `-lite-<sha>` 后缀），隐式清单没有构建号可比较
-      if (!isNewerRelease(release.version, info.version)) {
-        debugPrint('[InAppUpdate] 已是最新（本地 ${info.version}，'
-            '远端 ${release.version}）');
+      // 双重比较：远端版本号更新 → 提示；版本号相同但远端 CI 构建号更新
+      // （CI --build-number=run_number 写入 APK，release body 标注）→ 提示。
+      // 本地 buildNumber：CI 包装的是 run_number，pubspec 本地构建是 +N。
+      final remoteBuild = _buildNumberFromBody(detail.body);
+      final localBuild = int.tryParse(info.buildNumber);
+      final versionNewer = isNewerRelease(release.version, info.version);
+      final buildNewer = remoteBuild > 0 &&
+          localBuild != null &&
+          remoteBuild > localBuild &&
+          !isNewerRelease(info.version, release.version);
+      if (!versionNewer && !buildNewer) {
+        debugPrint('[InAppUpdate] 已是最新（本地 ${info.version}'
+            '+${localBuild ?? '?'}，远端 ${release.version}+${remoteBuild > 0 ? remoteBuild : '?'}）');
         _resetToIdle();
         return InAppUpdateCheckResult.upToDate;
       }
@@ -220,6 +228,7 @@ class InAppUpdater extends ChangeNotifier {
             apkUrl: a.downloadUrl,
             apkSize: a.size,
             sha256: a.sha256 ?? '',
+            buildNumber: remoteBuild,
             releasePageUrl: release.htmlUrl,
             releaseNotes: notes,
           ),
@@ -238,12 +247,19 @@ class InAppUpdater extends ChangeNotifier {
     }
   }
 
+  /// 从 Release body 解析 CI 构建号（「- 构建号: N」行，jq 写入的 run_number）。
+  /// 旧 Release body 无此行 → 返回 0（比较退化为 versionName）。
+  static int _buildNumberFromBody(String body) {
+    final match = RegExp(r'构建号[:：]\s*(\d+)').firstMatch(body);
+    if (match == null) return 0;
+    return int.tryParse(match.group(1)!) ?? 0;
+  }
+
   /// 从 Release body 提取更新说明行（最多 8 行、每行 ≤200 字符）。
   ///
   /// body 形如「Lite 分支 CI 自动构建。\n\n- 版本: ...\n- 提交: ...\n\n### 下载\n…」，
   /// 「### 下载」及之后是固定下载列表，不属于更新说明，直接截断。
-  static List<String> _notesFromBody(String body) {
-    if (body.trim().isEmpty) return const <String>[];
+  static List<String> _notesFromBody(String body) {    if (body.trim().isEmpty) return const <String>[];
     final cut = body.indexOf('###');
     final head = (cut >= 0 ? body.substring(0, cut) : body).trim();
     if (head.isEmpty) return const <String>[];

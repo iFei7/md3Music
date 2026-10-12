@@ -244,13 +244,16 @@ class UpdateManifest {
     required String apkUrl,
     required int apkSize,
     String sha256 = '',
+    int buildNumber = 0,
     required String releasePageUrl,
     List<String> releaseNotes = const <String>[],
   }) {
     return UpdateManifest(
       schemaVersion: 1,
       applicationId: applicationId,
-      versionCode: 0,
+      // Release body 中解析出的 CI 构建号（GitHub run_number，单调递增）；
+      // 0 表示 Release 未标注（旧 Release），比较走 versionName。
+      versionCode: buildNumber,
       versionName: versionName,
       publishedAt: '',
       minSdk: 0,
