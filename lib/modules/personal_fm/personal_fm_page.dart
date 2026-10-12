@@ -108,7 +108,70 @@ class _PersonalFmPageState extends State<PersonalFmPage>
         songPoolId: _selectedSongPoolId,
       ),
     );
-    unawaited(_loadPersonalFm());
+    // 手动切风格：当前无任何播放、或正在播 FM 内容时，强制重新拉取并
+    // 起播新风格（用户切风格必然想听新内容）；正在听本地/在线其他音乐时
+    // 只刷新列表、不打断播放。
+    final player = Provider.of<PlayerProvider>(context, listen: false);
+    final kugou = Provider.of<KugouProvider>(context, listen: false);
+    final currentSong = player.currentSong;
+    final isPlayingFm = currentSong != null &&
+        kugou.personalFmAsSongs.any((s) => s.id == currentSong.id);
+    unawaited(
+      _loadPersonalFm(forceRefresh: currentSong == null || isPlayingFm),
+    );
+  }
+
+  /// 加载私人 FM 列表，并在合适的时机自动起播。
+  ///
+  /// - [forceRefresh]：手动切风格时为 true——无论内存是否已有列表都强制
+  ///   重新拉取并起播新内容（provider 的 freshness guard 因 mode 非 null
+  ///   被绕过，刷新语义只能在调用侧拦）；
+  /// - 默认 false（initState 首刷 / 播放键兜底）：列表非空直接用内存数据，
+  ///   不打网络、不整表重置；且仅当当前没有任何播放时才自动起播——
+  ///   FM 暂停中切回保持暂停，听其他音乐时不抢播放。
+  Future<void> _loadPersonalFm({bool forceRefresh = false}) async {
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+    try {
+      final player = Provider.of<PlayerProvider>(context, listen: false);
+      final kugou = Provider.of<KugouProvider>(context, listen: false);
+      // 自动起播收窄：仅当当前没有任何播放时才起播（切 tab 回来 FM 正在
+      // 播/暂停、或用户在听其他音乐，绝不打断/重播，只刷新列表）；
+      // forceRefresh（手动切风格）例外——重拉后直接起播新内容。
+      final shouldAutoPlay = forceRefresh || player.currentSong == null;
+      // 已有 FM 数据且非强制刷新时不再重复请求：切 tab 回来不打网络、
+      // 不整表重置列表（provider 的 freshness guard 因 mode 非 null 被
+      // 绕过，只能在调用侧拦）。
+      if (!forceRefresh && kugou.personalFmSongs.isNotEmpty) {
+        if (shouldAutoPlay) {
+          await _startFmPlayback(player, kugou);
+        }
+        return;
+      }
+      await kugou.getPersonalFm(
+        mode: _selectedMode,
+        songPoolId: _selectedSongPoolId,
+      );
+      if (!mounted) return;
+      if (kugou.personalFmSongs.isNotEmpty && shouldAutoPlay) {
+        await _startFmPlayback(player, kugou);
+      }
+    } catch (e) {
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+    if (mounted) _appendFmSongs();
+  }
+
+  /// 起播 FM：挂队列播完回调后整表替换队列、从第一首开始播。
+  Future<void> _startFmPlayback(
+    PlayerProvider player,
+    KugouProvider kugou,
+  ) async {
+    player.onPlaylistEnd = _onPlaylistEnd;
+    await player.playOnlinePlaylist(kugou.personalFmAsSongs, 0);
+    if (!mounted) return;
+    _updateVinylAnimation(player.isPlaying);
   }
 
   int _lastPrefetchIndex = -1;
@@ -147,34 +210,6 @@ class _PersonalFmPageState extends State<PersonalFmPage>
     _slideController.dispose();
     _scrollController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadPersonalFm() async {
-    if (_isLoading) return;
-    setState(() => _isLoading = true);
-    try {
-      await Provider.of<KugouProvider>(
-        context,
-        listen: false,
-      ).getPersonalFm(mode: _selectedMode, songPoolId: _selectedSongPoolId);
-      if (!mounted) return;
-      final kugou = Provider.of<KugouProvider>(context, listen: false);
-      if (kugou.personalFmSongs.isNotEmpty) {
-        final player = Provider.of<PlayerProvider>(context, listen: false);
-        player.onPlaylistEnd = _onPlaylistEnd;
-        await player.playOnlinePlaylist(kugou.personalFmAsSongs, 0);
-        if (!mounted) return;
-        _updateVinylAnimation(player.isPlaying);
-      }
-    } catch (e) {
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
-    if (mounted) {
-      _appendFmSongs();
-    }
   }
 
   Future<void> _onPlaylistEnd() async {

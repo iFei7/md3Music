@@ -62,9 +62,10 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 ///   见 `_buildNavPill`），保证「导航胶囊 + 播放器球」组合不超宽；
 /// - **播放器圆钮**：点击在「圆钮 ↔ 控制小胶囊」间收敛形变（AnimatedSize）；
 ///   圆钮外周进度环订阅 [PlayerProvider.positionNotifier]（~200ms 高频通道，
-///   禁 context.watch），中央为当前歌曲的**圆形封面缩略图**：播放中叠加
-///   [PlayingSpectrumIndicator] 律动图标（挂共享 60fps 节拍、仅播放中
-///   运行）；暂停时叠静态 pause 图标（均不加蒙版，图标直接叠在封面上）；
+///   禁 context.watch），中央为当前歌曲的**圆形封面缩略图**（46dp 充满
+///   圆内）：播放中叠加 [PlayingSpectrumIndicator] 律动图标（挂共享 60fps
+///   节拍、仅播放中运行）；暂停时叠静态 pause 图标（均垫一层略暗圆形
+///   遮罩，保证图标在亮色封面上可读）；
 ///   无歌 / 封面缺失时回退音符占位；整钮 [RepaintBoundary] 隔离高频重绘；
 /// - **完整播放页往返**：openFullPlayer / close 不触碰折叠状态；关闭播放页
 ///   后 Dock 恢复「打开前的那个唯一展开组件」——状态只由用户点击驱动，
@@ -113,13 +114,15 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   /// 用于小屏下计算歌名 marquee 的可压缩宽度。
   static const double _kControlsButtonsWidth = 120.0;
 
-  /// 坍缩圆中央的圆形封面直径（52dp 圆钮内、进度环内圈）。
-  static const double _kCircleCoverSize = 40.0;
+  /// 坍缩圆中央的圆形封面直径（52dp 圆钮内，充满进度环内圈，
+  /// 距按钮外缘各留 3dp）。
+  static const double _kCircleCoverSize = 46.0;
 
   /// 展开胶囊内左侧的圆形封面缩略图直径。
   static const double _kCapsuleCoverSize = 36.0;
 
-  /// 进度环线宽（坍缩球与展开胶囊共用，环内缘紧贴封面外缘）。
+  /// 进度环线宽（坍缩球与展开胶囊共用；坍缩球环贴按钮外缘、
+  /// 展开胶囊环贴封面外缘）。
   static const double _kRingStroke = 1.5;
 
   /// 展开胶囊内封面与歌名 marquee 之间的间距。
@@ -389,10 +392,11 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                       painter: _ProgressRingPainter(
                         progress: progress,
                         stroke: _kRingStroke,
-                        // 环中心线 = 20 + 0.75 = 20.75：环内缘 20 恰贴
-                        // 40dp 封面外缘（无间隙）。
+                        // 环贴按钮外缘：环中心线 = 26 − 0.75 − 0.5 =
+                        // 24.75，环外缘 25.5 < 26 不出界，环内缘 24.0
+                        // 距 46dp 封面外缘 1dp（封面充满圆内）。
                         ringRadius:
-                            _kCircleCoverSize / 2 + _kRingStroke / 2,
+                            _kButtonSize / 2 - _kRingStroke / 2 - 0.5,
                         trackColor: cs.onSurface.withValues(alpha: 0.15),
                         progressColor: cs.primary,
                       ),
@@ -401,7 +405,7 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                 ),
               ),
               // 中央标识：有歌→圆形封面（播放中叠律动图标；暂停叠静态
-              // pause 图标，均不加蒙版）；无歌→音符占位。
+              // pause 图标，均垫略暗遮罩）；无歌→音符占位。
               if (song == null)
                 Icon(
                   Icons.music_note,
@@ -421,7 +425,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   /// content:// / local:// / file:// 走内嵌封面懒加载、null / 失败回退音符占位），
   /// 外层 [ClipOval] 裁圆。仅随 song 变化重建（封面低频，不进 positionNotifier
   /// 高频通道）。播放中叠加 [PlayingSpectrumIndicator] 律动图标；暂停时叠
-  /// 静态 pause 图标（均不加蒙版，图标直接叠在封面上）。
+  /// 静态 pause 图标（两分支均垫一层略暗圆形遮罩——用户复验：直接叠图标
+  /// 在亮封面上不可读，加略暗底）。
   Widget _buildCircleArtwork(dynamic song, bool isPlaying, ColorScheme cs) {
     Widget cover = ClipOval(
       child: SizedBox(
@@ -435,46 +440,57 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
           iconSize: 20,
           backgroundColor: cs.surfaceContainerHighest,
           iconColor: cs.onSurfaceVariant,
-          // 40dp 圆钮按 128px 解码，避免全尺寸封面（RGBA 4MB+）解码浪费
+          // 46dp 圆钮按 128px 解码，避免全尺寸封面（RGBA 4MB+）解码浪费
           decodeCap: 128,
         ),
       ),
     );
     if (isPlaying) {
-      // 播放中：封面 + 律动图标（不加蒙版——用户反馈半透明底像一层白色
-      // 蒙版、遮挡封面，去掉后图标直接叠在封面上）。PlayingSpectrumIndicator
-      // 挂 PlayerFrameDriver 共享 60fps 节拍、ValueNotifier 驱动 painter
-      // 重绘（不 setState）、仅播放中运行，功耗合规。
+      // 播放中：封面 → 略暗遮罩 + 律动图标。用户复验：直接叠图标在亮
+      // 封面上不可读，加略暗底（比此前 45% surface 更暗且中性）保证
+      // 图标可读。PlayingSpectrumIndicator 挂 PlayerFrameDriver 共享
+      // 60fps 节拍、ValueNotifier 驱动 painter 重绘（不 setState）、仅
+      // 播放中运行，功耗合规。
       cover = Stack(
         alignment: Alignment.center,
         children: [
           cover,
-          SizedBox(
+          Container(
             width: _kCircleCoverSize,
             height: _kCircleCoverSize,
-            child: Center(
-              child: PlayingSpectrumIndicator(
-                color: cs.primary,
-                size: 14,
-                isPlaying: true,
-              ),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              // 略暗遮罩：亮色封面上保证图标可读；比此前 45% surface
+              // 更暗且中性。
+              color: Colors.black.withValues(alpha: 0.28),
+            ),
+            child: PlayingSpectrumIndicator(
+              color: cs.primary,
+              size: 14,
+              isPlaying: true,
             ),
           ),
         ],
       );
     } else {
-      // 暂停：封面 + 静态 pause 图标（不加蒙版——与播放中一致，
-      // 用户反馈半透明底像白色蒙版遮挡封面）。
+      // 暂停：封面 → 略暗遮罩 + 静态 pause 图标（用户复验：直接叠图标
+      // 在亮封面上不可读，加略暗底，与播放中分支一致）。
       cover = Stack(
         alignment: Alignment.center,
         children: [
           cover,
-          SizedBox(
+          Container(
             width: _kCircleCoverSize,
             height: _kCircleCoverSize,
-            child: Center(
-              child: Icon(Icons.pause, size: 16, color: cs.primary),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              // 略暗遮罩：亮色封面上保证图标可读；比此前 45% surface
+              // 更暗且中性。
+              color: Colors.black.withValues(alpha: 0.28),
             ),
+            child: Icon(Icons.pause, size: 16, color: cs.primary),
           ),
         ],
       );
@@ -695,8 +711,9 @@ class _DockIconButton extends StatelessWidget {
 
 /// 进度环绘制器：细轨道整环 + 主色进度弧（从 12 点方向起）。
 ///
-/// [ringRadius] 由调用方计算：封面半径 + [stroke] / 2，
-/// 使环内缘恰好紧贴封面外缘（无间隙）。
+/// [ringRadius] 由调用方按布局计算：展开胶囊 = 封面半径 + [stroke] / 2
+/// （环内缘贴封面外缘）；坍缩球 = 按钮半径 − [stroke] / 2 − 0.5
+/// （环贴按钮外缘，封面充满圆内）。
 class _ProgressRingPainter extends CustomPainter {
   _ProgressRingPainter({
     required this.progress,
@@ -711,7 +728,7 @@ class _ProgressRingPainter extends CustomPainter {
   /// 环线宽。
   final double stroke;
 
-  /// 环中心线半径（封面半径 + stroke/2 → 环内缘贴封面外缘）。
+  /// 环中心线半径（由调用方按布局计算，见类注释）。
   final double ringRadius;
   final Color trackColor;
   final Color progressColor;
