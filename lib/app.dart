@@ -644,6 +644,10 @@ class _MainLayoutState extends State<_MainLayout>
       case 'favorites':
         page = const FavoritesPage();
         break;
+      case 'library':
+        // 本地音乐 tab（可选 Tab，默认隐藏）：与快捷方式路由共用 LibraryPage
+        page = const LibraryPage();
+        break;
       case 'fm':
         page = const PersonalFmPage();
         break;
@@ -930,7 +934,8 @@ class _MainLayoutState extends State<_MainLayout>
   ///
   /// 旧版在此挂悬浮播放器宿主（SecondaryMiniPlayerHost，已随玻璃 Dock 改版
   /// 移除）：播放控制现由底部玻璃 Dock 常驻承载，二级路由页不再单独挂播放条。
-  /// library 路由保留：tab 链已移除，但桌面快捷方式仍经此路由打开本地音乐页。
+  /// library 路由保留：本地音乐已回归可选 Tab（默认隐藏，主页 Tab 与
+  /// 桌面快捷方式均经此路由打开本地音乐页）。
   Widget _pageForTabAsRoute(String tabId) {
     final Widget page;
     switch (tabId) {

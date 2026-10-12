@@ -15,6 +15,8 @@ IconData homeTabIcon(String tabId) {
       return Icons.home;
     case 'favorites':
       return Icons.favorite;
+    case 'library':
+      return Icons.library_music;
     case 'search':
       return Icons.search;
     case 'recognition':

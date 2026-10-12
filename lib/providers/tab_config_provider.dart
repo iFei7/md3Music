@@ -35,8 +35,8 @@ class TabItem {
 
 /// 默认 Tab 定义（lite 版：主页 / 收藏 / 我的，顺序与底部玻璃 Dock 一致）。
 ///
-/// library（本地音乐）已从 tab 链移除：入口收敛到收藏页「本地」tab 与
-/// 桌面快捷方式（`_pageForTabAsRoute` 的 library 路由仍保留）。
+/// library（本地音乐）现为可选 Tab：默认隐藏，可在设置页「主页管理」
+/// 手动开启；收藏页「本地」tab 与桌面快捷方式入口保持不变。
 const List<TabItem> kDefaultTabs = [
   TabItem(id: 'discover', label: '主页'),
   TabItem(id: 'favorites', label: '收藏'),
@@ -45,6 +45,7 @@ const List<TabItem> kDefaultTabs = [
 
 /// 可选 Tab（默认隐藏，需在设置页手动开启）。
 const List<TabItem> kOptionalTabs = [
+  TabItem(id: 'library', label: '本地音乐'),
   TabItem(id: 'fm', label: '私人FM'),
   TabItem(id: 'search', label: '搜索'),
   TabItem(id: 'recognition', label: '听歌识曲'),
@@ -59,6 +60,7 @@ const List<TabItem> kOptionalTabs = [
 const List<TabItem> kAllAvailableTabs = [
   TabItem(id: 'discover', label: '主页'),
   TabItem(id: 'favorites', label: '收藏'),
+  TabItem(id: 'library', label: '本地音乐'),
   TabItem(id: 'fm', label: '私人FM'),
   TabItem(id: 'search', label: '搜索'),
   TabItem(id: 'recognition', label: '听歌识曲'),
@@ -105,6 +107,10 @@ class TabConfigProvider extends ChangeNotifier {
       // 主页 tab 迁出（隐藏），入口收敛到收藏页「本地」tab 与快捷方式。
       // v3（FM/听书回归）：私人FM 与听书重新进入可选 Tab；「我的」统一
       // 收尾（老用户持久化 order 中它可能不在末位）。
+      // v4 起 library 恢复为可选 Tab（默认隐藏）但**不加迁移版本**：
+      // 下方追加逻辑会把「不在用户持久化 order 中的非默认 tab」自动加入
+      // _hiddenTabs——library 本就被 v2 迁移写入隐藏集合，新老用户在
+      // 主页管理中均默认关闭，用户手动打开即可，无需迁移版本升级。
       final fromVersion = await _repo.getTabConfigMigrationVersion();
       const tabConfigMigrationVersion = 3;
       if (fromVersion < 2) {

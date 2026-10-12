@@ -28,6 +28,7 @@ class _DockTab {
 const Map<String, _DockTab> _kDockTabById = {
   'discover': _DockTab('discover', Icons.home_outlined, Icons.home, '主页'),
   'favorites': _DockTab('favorites', Icons.favorite_outline, Icons.favorite, '收藏'),
+  'library': _DockTab('library', Icons.library_music_outlined, Icons.library_music, '本地音乐'),
   'user': _DockTab('user', Icons.person_outlined, Icons.person, '我的'),
   'fm': _DockTab('fm', Icons.radio_outlined, Icons.radio, '私人FM'),
   'search': _DockTab('search', Icons.search_outlined, Icons.search, '搜索'),

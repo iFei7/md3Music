@@ -118,7 +118,7 @@ class _FavoritesPageState extends State<FavoritesPage>
   @override
   void initState() {
     super.initState();
-    // 4 tab：歌单 / 专辑 / 歌手 / 本地（本地音乐面板嵌入，见 LibraryMusicPanel）
+    // 4 tab：歌单 / 本地 / 专辑 / 歌手（本地音乐面板嵌入，见 LibraryMusicPanel）
     _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(_onTabChanged);
     // 立即探测一次网络 + 每 30 秒兜底探测（dio 拦截器会同步更新
@@ -980,13 +980,13 @@ class _FavoritesPageState extends State<FavoritesPage>
                 icon: Icon(Icons.queue_music, size: 18),
                 text: '歌单',
               ),
-              Tab(height: 52, icon: Icon(Icons.album, size: 18), text: '专辑'),
-              Tab(height: 52, icon: Icon(Icons.person, size: 18), text: '歌手'),
               Tab(
                 height: 52,
                 icon: Icon(Icons.library_music, size: 18),
                 text: '本地',
               ),
+              Tab(height: 52, icon: Icon(Icons.album, size: 18), text: '专辑'),
+              Tab(height: 52, icon: Icon(Icons.person, size: 18), text: '歌手'),
             ],
           ),
         ),
@@ -1008,9 +1008,9 @@ class _FavoritesPageState extends State<FavoritesPage>
                 controller: _tabController,
                 children: [
                   _buildPlaylistsTab(),
+                  const LibraryMusicPanel(),
                   _buildAlbumsTab(),
                   _buildArtistsTab(),
-                  const LibraryMusicPanel(),
                 ],
               ),
             ),
