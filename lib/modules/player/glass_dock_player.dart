@@ -29,8 +29,10 @@ const Map<String, _DockTab> _kDockTabById = {
   'discover': _DockTab('discover', Icons.home_outlined, Icons.home, '主页'),
   'favorites': _DockTab('favorites', Icons.favorite_outline, Icons.favorite, '收藏'),
   'user': _DockTab('user', Icons.person_outlined, Icons.person, '我的'),
+  'fm': _DockTab('fm', Icons.radio_outlined, Icons.radio, '私人FM'),
   'search': _DockTab('search', Icons.search_outlined, Icons.search, '搜索'),
   'recognition': _DockTab('recognition', Icons.mic_none_outlined, Icons.mic, '听歌识曲'),
+  'audiobook': _DockTab('audiobook', Icons.auto_stories_outlined, Icons.auto_stories, '听书'),
   'settings': _DockTab('settings', Icons.settings_outlined, Icons.settings, '设置'),
 };
 
@@ -430,26 +432,23 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
       ),
     );
     if (isPlaying) {
-      // 播放中：封面 + 半透明底（与暂停态同一 45% surface 遮罩样式）+
-      // 律动图标。PlayingSpectrumIndicator 挂 PlayerFrameDriver 共享
-      // 60fps 节拍、ValueNotifier 驱动 painter 重绘（不 setState）、
-      // 仅播放中运行，功耗合规。
+      // 播放中：封面 + 律动图标（不加蒙版——用户反馈半透明底像一层白色
+      // 蒙版、遮挡封面，去掉后图标直接叠在封面上）。PlayingSpectrumIndicator
+      // 挂 PlayerFrameDriver 共享 60fps 节拍、ValueNotifier 驱动 painter
+      // 重绘（不 setState）、仅播放中运行，功耗合规。
       cover = Stack(
         alignment: Alignment.center,
         children: [
           cover,
-          Container(
+          SizedBox(
             width: _kCircleCoverSize,
             height: _kCircleCoverSize,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: cs.surface.withValues(alpha: 0.45),
-            ),
-            child: PlayingSpectrumIndicator(
-              color: cs.primary,
-              size: 14,
-              isPlaying: true,
+            child: Center(
+              child: PlayingSpectrumIndicator(
+                color: cs.primary,
+                size: 14,
+                isPlaying: true,
+              ),
             ),
           ),
         ],

@@ -647,6 +647,10 @@ class _MainLayoutState extends State<_MainLayout>
       case 'fm':
         page = const PersonalFmPage();
         break;
+      case 'audiobook':
+        // 听书 tab：与「我的页」二级入口共用同一 AudiobookPage。
+        page = const AudiobookPage();
+        break;
       case 'search':
         // Tab 模式：SearchPage 自包悬浮宿主，播放控制由底部玻璃 Dock 承载
         page = const SearchPage();
@@ -724,6 +728,15 @@ class _MainLayoutState extends State<_MainLayout>
             selected: isSelected,
             outlinedIcon: Icons.mic_none_outlined,
             filledIcon: Icons.mic,
+          ),
+          label: tab.label,
+        );
+      case 'audiobook':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.auto_stories_outlined,
+            filledIcon: Icons.auto_stories,
           ),
           label: tab.label,
         );
