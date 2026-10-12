@@ -28,6 +28,12 @@ jobs:
     name: Build native release APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # 把「本次是否真的产出了可发布的 release APK」暴露给下游 release job：
+    # 无 release 签名时本 job 走 debug 降级路径，此值为 false，release job
+    # 据此整体跳过，避免它在没有 native-release-apk 产物时因 artifact 下载
+    # 失败而把整个 workflow 拖红。
+    outputs:
+      has_release_apk: ${{ steps.signing.outputs.available }}
     defaults:
       run:
         # native/ 是独立 Gradle 工程根（与 Flutter 的 android/ 并存，
@@ -140,6 +146,45 @@ jobs:
           ls -lh "$jni"/*/
 
       # ============================================================
+      # release 签名可用性判定（优雅降级闸门）。
+      # 背景：GraceMusic 身份迁移后，app/build.gradle.kts 对「release 缺签名」
+      # fail-fast 是本地与显式发布构建的安全底线，必须原样保留；但 GitHub
+      # Secrets 目前尚未配置（发布密钥尚未生成），若让 build job 径直执行
+      # 下方的签名装配步骤，push 必红。
+      # 策略：本步骤只做「有无」判定并把结果暴露成 output，绝不去动 Gradle
+      # 语义——
+      #   齐全 → available=true，下游照常装配签名、构建 release、发 Release；
+      #   缺失 → available=false，按安全策略跳过 release 发布构建，降级跑
+      #          assembleDebug 继续验证编译完整性（不产出可分发产物、不创建
+      #          Release），CI 保持绿色。
+      # 为什么用 env: 注入 secret 而不是在 if: 里直接读 secrets：
+      #   GitHub Actions 的 if 表达式不允许 secrets 上下文（仅 github/needs/
+      #   steps/env 等有限上下文可用），而 env: 可注入后在 run 脚本里判空，
+      #   是官方推荐做法，也是本步骤能读到 Secret 的唯一途径。
+      # ============================================================
+      - name: Detect release signing availability
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [[ -n "${KEYSTORE_BASE64:-}" ]]   || missing+=" ANDROID_KEYSTORE_BASE64"
+          [[ -n "${KEYSTORE_PASSWORD:-}" ]] || missing+=" ANDROID_KEYSTORE_PASSWORD"
+          [[ -n "${KEY_ALIAS:-}" ]]         || missing+=" ANDROID_KEY_ALIAS"
+          [[ -n "${KEY_PASSWORD:-}" ]]      || missing+=" ANDROID_KEY_PASSWORD"
+          if [[ -n "$missing" ]]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GraceMusic release 签名未配置：缺少 GitHub Secrets:${missing}。按安全策略跳过 release 发布构建（本次不产出可分发 APK、不创建 Release），降级为 debug 构建以继续验证完整编译链。配置路径：仓库 Settings → Secrets and variables → Actions，添加 ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD 四项后即恢复发布构建；本地开发可改用 native/keystore.properties（注意勿提交）。"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::GraceMusic release 签名已配置（alias=${KEY_ALIAS}），将构建签名的 release 包并发布 Release。"
+          fi
+
+      # ============================================================
       # release 签名装配（从 GitHub Secrets 读取 GraceMusic 自己的 keystore）。
       # 需要在仓库 Settings → Secrets and variables → Actions 配置：
       #   ANDROID_KEYSTORE_BASE64     —— release keystore（.jks/.keystore）的 base64 编码
@@ -158,6 +203,9 @@ jobs:
       #   固定口令——那是反例，已整体移除。）
       # ============================================================
       - name: Setup release signing (GitHub Secrets)
+        # 仅在签名可用时执行（判定见上方 id: signing）；缺 Secret 时跳过，
+        # 不再因缺项而 ::error:: 退出——降级路径由下方 assembleDebug 承接。
+        if: steps.signing.outputs.available == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -196,6 +244,9 @@ jobs:
       # build.gradle.kts）。
       # ============================================================
       - name: Build release APK (assembleRelease)
+        # 与签名装配步骤同门控：无签名时 assembleRelease 会按 project 侧
+        # fail-fast 策略失败，故必须跳过，改走下方 debug 降级路径。
+        if: steps.signing.outputs.available == 'true'
         run: ./gradlew :app:assembleRelease
 
       # ============================================================
@@ -208,6 +259,9 @@ jobs:
       # ============================================================
       - name: Verify release APK
         id: apk
+        # 仅校验 release 路径的产物；降级路径改由下方 Verify debug APK 承担
+        # 同等的 applicationId 门禁。
+        if: steps.signing.outputs.available == 'true'
         run: |
           set -euo pipefail
           apk_dir="app/build/outputs/apk/release"
@@ -230,10 +284,60 @@ jobs:
       # 不受 defaults.run.working-directory: native 影响，故加 native/ 前缀。
       # 单测报告由 test job 上传（该 job 才跑测试）。
       - name: Upload release APK artifact
+        # 无 release 产物时不上传 native-release-apk，避免下游误取空产物；
+        # 降级产物在下方以独立 artifact 名 native-debug-apk 上传。
+        if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: native-release-apk
           path: native/${{ steps.apk.outputs.staged_apk }}
+          if-no-files-found: error
+          retention-days: 7
+
+      # ============================================================
+      # 降级路径（无 release 签名时执行）：跑 assembleDebug。
+      # 意义：CI 在无密钥时仍然有价值——继续验证完整编译链（Kotlin/资源/
+      # 依赖/jniLibs 打包）未回归；这是「跳过发布构建」而非「跳过全部构建」。
+      # 与上面 release 路径严格互斥：两处 if 互补（== 'true' / != 'true'），
+      # 同一时刻只会走其中一条。
+      # ============================================================
+      - name: Build debug APK (fallback, assembleDebug)
+        if: steps.signing.outputs.available != 'true'
+        run: ./gradlew :app:assembleDebug
+
+      # ============================================================
+      # 降级路径的 applicationId 门禁：debug 产物同样断言
+      # applicationId = com.gracemusic.app，保证身份迁移门禁在无密钥降级时
+      # 也不失守（与 release 路径的 Verify release APK 等价，aapt2 路径同样
+      # 对应上面安装的 build-tools;36.1.0）。
+      # ============================================================
+      - name: Verify debug APK (applicationId gate)
+        if: steps.signing.outputs.available != 'true'
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          if [[ ! -f "$apk" ]]; then
+            echo "::error::未找到 debug APK：$apk"
+            ls -lh app/build/outputs/apk/debug 2>/dev/null || true
+            exit 1
+          fi
+          unzip -l "$apk" > /dev/null || { echo "::error::产物损坏：$apk"; exit 1; }
+          aapt2="$ANDROID_HOME/build-tools/36.1.0/aapt2"
+          apk_id=$("$aapt2" dump badging "$apk" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          echo "APK: $apk ($(du -h "$apk" | cut -f1)) applicationId=${apk_id}"
+          [[ "$apk_id" == "com.gracemusic.app" ]] \
+            || { echo "::error::applicationId 异常：${apk_id}（期望 com.gracemusic.app）"; exit 1; }
+
+      # 降级产物上传为独立 artifact 名（native-debug-apk），与 release 路径的
+      # native-release-apk 严格区分，避免下游误当可发布包；if-no-files-found: error
+      # 保证「跑了降级步骤却无产物」时显式失败而非静默通过。
+      # path 同为工作区根相对路径（不受 defaults.run.working-directory 影响）。
+      - name: Upload debug APK artifact (fallback)
+        if: steps.signing.outputs.available != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-debug-apk
+          path: native/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -386,7 +490,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [build, test]
-    if: github.event_name == 'push'
+    # 双重门控：push 触发 + build job 确实产出了 release APK。
+    # 无 release 签名时 build 走 debug 降级、has_release_apk=false，本 job 整体
+    # 跳过，避免 download-artifact(native-release-apk) 因产物不存在而报错拖红。
+    if: github.event_name == 'push' && needs.build.outputs.has_release_apk == 'true'
 
     steps:
       - name: Checkout repository
