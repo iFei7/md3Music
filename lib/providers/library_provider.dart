@@ -109,7 +109,12 @@ class LibraryProvider extends ChangeNotifier {
   }
 
   /// 扫描本地音乐（使用默认目录 + 用户选择的目录，排除用户指定的文件夹）。
+  ///
+  /// 扫描进行中重复调用会直接忽略（防重入），避免并发扫描造成
+  /// 重复 IO 与状态错乱。
   Future<void> loadLocalMusic() async {
+    if (_isScanning) return;
+
     if (kIsWeb) {
       _songs = [];
       _albums = [];

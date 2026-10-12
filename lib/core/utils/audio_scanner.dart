@@ -77,9 +77,26 @@ Map<String, dynamic>? readArtworkInIsolate(String filePath) {
   return null;
 }
 
+/// Isolate 入口函数：在后台 Isolate 中递归收集目录中的音频文件路径。
+///
+/// 通过 [compute] 调用，[args] 必须可序列化（仅含简单 List/String）：
+/// - `rootDirs`：待扫描的根目录列表；
+/// - `excludedDirs`：需要排除的目录列表（含子目录）。
+/// 返回去重后的音频文件路径列表。
+///
+/// 目录遍历（listSync 递归）在文件数量大时可能耗时数秒，必须放在
+/// 后台 Isolate 执行，避免冻结主线程导致 ANR。
+List<String> collectAudioFilesInIsolate(Map<String, List<String>> args) {
+  return collectAudioFiles(
+    args['rootDirs'] ?? const [],
+    excludedDirs: args['excludedDirs'] ?? const [],
+  );
+}
+
 /// 递归收集目录中的音频文件路径。
 ///
-/// 在主 Isolate 中同步调用（文件列表收集阶段）。
+/// 仅供 [collectAudioFilesInIsolate] 在后台 Isolate 中调用，
+/// 不要在主 Isolate 直接使用（大目录会阻塞 UI 线程）。
 /// 使用 [audioExtensions] 过滤，去重后返回路径列表。
 /// [excludedDirs] 中的目录及其子目录会被跳过。
 List<String> collectAudioFiles(List<String> rootDirs, {List<String>? excludedDirs}) {

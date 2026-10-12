@@ -247,7 +247,11 @@ class LocalMusicRepository {
       }
     }
 
-    final filePaths = collectAudioFiles(scanDirs, excludedDirs: excluded);
+    // 目录遍历也在后台 Isolate 执行：大目录递归 listSync 会阻塞 UI 线程导致 ANR
+    final filePaths = await compute(collectAudioFilesInIsolate, {
+      'rootDirs': scanDirs,
+      'excludedDirs': excluded,
+    });
     debugPrint('[LocalMusicRepository] 文件系统扫描到 ${filePaths.length} 个文件');
 
     if (filePaths.isNotEmpty) {

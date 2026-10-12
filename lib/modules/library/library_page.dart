@@ -42,6 +42,18 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   Widget _buildScanFAB(BuildContext context) {
+    // 扫描进行中：FAB 显示转圈并禁用，防止重复触发扫描。
+    // 不弹任何模态遮罩，用户仍可自由切换页面（扫描在后台 Isolate 执行）。
+    if (context.watch<LibraryProvider>().isScanning) {
+      return FloatingActionButton(
+        onPressed: null,
+        child: const SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2.5),
+        ),
+      );
+    }
     // 替换为 M3E 规范的 FAB：M3EFab 默认中等尺寸的容器 56 / 图标 24 /
     // 圆角 16，配色沿用 primaryContainer + onPrimaryContainer，
     // 与本项目 floatingActionButtonTheme 原有定义一致，故无需显式传色。
@@ -165,10 +177,19 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
                 ),
                 // 扫描入口：独立路由形态由页面 FAB 承担，嵌入形态（收藏页
                 // 「本地」tab 无 Scaffold FAB）由搜索栏尾部按钮承担。
+                // 扫描中禁用并显示转圈，防止重复触发扫描。
                 IconButton(
                   tooltip: '扫描音乐',
-                  icon: const Icon(Icons.add),
-                  onPressed: () => showLibraryScanMenu(context),
+                  icon: isScanning
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.add),
+                  onPressed: isScanning
+                      ? null
+                      : () => showLibraryScanMenu(context),
                 ),
               ],
             ),
@@ -272,6 +293,11 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
 /// 扫描菜单（独立路由 FAB 与嵌入面板的扫描入口共用）。
 void showLibraryScanMenu(BuildContext context) {
   final provider = context.read<LibraryProvider>();
+  // 防重入：扫描进行中不弹菜单（入口按钮已禁用，此处兜底）
+  if (provider.isScanning) {
+    showToast('正在扫描中，请稍候');
+    return;
+  }
   showM3EModalBottomSheet(
     context: context,
     builder: (ctx) {
