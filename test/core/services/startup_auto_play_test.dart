@@ -83,8 +83,8 @@ void main() {
       }
     });
 
-    test('共 2 个音源', () {
-      expect(StartupAutoPlaySource.values, hasLength(2));
+    test('共 5 个音源：续播 + 每日推荐 + FM 三档', () {
+      expect(StartupAutoPlaySource.values, hasLength(5));
     });
   });
 

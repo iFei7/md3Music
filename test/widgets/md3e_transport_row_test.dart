@@ -333,14 +333,16 @@ void main() {
   });
 
   group('MD3ETransportRow 切歌后按压反馈', () {
-    // 查找指定 left 值的 Positioned 内的 Material
-    Material _materialAtLeft(WidgetTester tester, double left) {
-      return tester.widget<Material>(
+    // 裸图标方案（Sonify 改版）下背景恒为透明，按压反馈作用在前景图标色上
+    // （normalFg → pressedFg），故断言 Positioned 内 Icon.color 的变化。
+    // 查找指定 left 值的 Positioned 内的 Icon
+    Icon _iconAtLeft(WidgetTester tester, double left) {
+      return tester.widget<Icon>(
         find.descendant(
           of: find.byWidgetPredicate(
             (w) => w is Positioned && w.left == left,
           ),
-          matching: find.byType(Material),
+          matching: find.byType(Icon),
         ),
       );
     }
@@ -365,7 +367,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final stackCenter = tester.getCenter(find.byType(MD3ETransportRow));
-      final colorBefore = _materialAtLeft(tester, 144).color;
+      final colorBefore = _iconAtLeft(tester, 144).color;
 
       // 按下 _nextLeft 位置
       final gesture = await tester.startGesture(
@@ -374,10 +376,10 @@ void main() {
       // pump 多帧：先让 onTapDown 触发 setState，再让 _pressController forward
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 150));
-      final colorDuring = _materialAtLeft(tester, 144).color;
+      final colorDuring = _iconAtLeft(tester, 144).color;
 
       expect(colorDuring, isNot(equals(colorBefore)),
-          reason: '按下时 _buildNewNextPositioned 的 Material color 应变化（按压反馈）');
+          reason: '按下时 _buildNewNextPositioned 的图标前景色应变化（按压反馈）');
 
       await gesture.up();
       await tester.pumpAndSettle();
@@ -403,7 +405,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final stackCenter = tester.getCenter(find.byType(MD3ETransportRow));
-      final colorBefore = _materialAtLeft(tester, 0).color;
+      final colorBefore = _iconAtLeft(tester, 0).color;
 
       // 按下 _prevLeft 位置
       final gesture = await tester.startGesture(
@@ -411,10 +413,10 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 150));
-      final colorDuring = _materialAtLeft(tester, 0).color;
+      final colorDuring = _iconAtLeft(tester, 0).color;
 
       expect(colorDuring, isNot(equals(colorBefore)),
-          reason: '按下时 _buildNewPrevPositioned 的 Material color 应变化（按压反馈）');
+          reason: '按下时 _buildNewPrevPositioned 的图标前景色应变化（按压反馈）');
 
       await gesture.up();
       await tester.pumpAndSettle();

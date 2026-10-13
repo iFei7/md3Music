@@ -1504,8 +1504,20 @@ class _FullPlayerState extends State<FullPlayer>
     // 仍有界（Column 先给标题行/SizedBox 分配固定高度，剩余归 Expanded），
     // 纵向余量 56→48 的扣除保持不变
     final horizontalPadding = 8.0;
-    final verticalPadding = isExpanded ? 8.0 : 16.0;
-    final textSpacing = isExpanded ? 8.0 : 24.0;
+    // 横屏矮视口（如 800×360）下 Expanded(TabBarView) 只能分到极小的剩余
+    // 高度（竖屏参数下顶栏 56 + 底部控制区 ~230 之后剩 ~74dp），封面 tab 的
+    // 固定内容若按竖屏取值（上下 padding 16 + 标题行 + 16dp 留空，1.3 倍字
+    // 下 ≈116dp）会直接 RenderFlex overflow。横屏统一改用紧凑参数：各段
+    // 留白减半、标题走 dense 分支（titleMedium + bodySmall，见
+    // _buildTitleBlock），固定内容压到 ≈64dp（与 _buildControls /
+    // _buildMainControls 的横屏紧凑化配合，内容区可分到 ~100dp）。
+    // 竖屏各值不变。
+    final isLandscape =
+        MediaQuery.of(context).size.width > MediaQuery.of(context).size.height;
+    final verticalPadding = isLandscape
+        ? 4.0
+        : (isExpanded ? 8.0 : 16.0);
+    final textSpacing = isLandscape ? 4.0 : (isExpanded ? 8.0 : 24.0);
     final iconSize = isExpanded ? 48.0 : 64.0;
 
     return Padding(
@@ -1611,6 +1623,9 @@ class _FullPlayerState extends State<FullPlayer>
                   currentSong,
                   colorScheme,
                   alignment: CrossAxisAlignment.start,
+                  // 横屏矮视口：标题降一号（titleMedium/bodySmall），
+                  // 与下方紧凑留白配合避免固定内容顶破 tab 高度
+                  dense: isLandscape,
                 ),
               ),
               _buildEdgeAction(
@@ -1653,9 +1668,10 @@ class _FullPlayerState extends State<FullPlayer>
               ),
             ],
           ),
-          // 歌名下方多一行留空：标题行不再贴住底部控制区，配合封面上移
+          // 歌名下方留空：标题行不再贴住底部控制区，配合封面上移
           // （Alignment(0, -0.25)）形成重心偏上的 AM 风格纵向节奏。
-          const SizedBox(height: 16),
+          // 横屏矮视口减半（配合上方紧凑参数防溢出）。
+          SizedBox(height: isLandscape ? 4 : 16),
           if (!isExpanded) const Spacer(),
         ],
       ),
@@ -1757,6 +1773,11 @@ class _FullPlayerState extends State<FullPlayer>
   }) {
     final duration = playerProvider.duration ?? Duration.zero;
     final horizontalPadding = isExpanded ? 16.0 : 20.0;
+    // 横屏矮视口（如 800×360）：竖屏间距会把 Expanded(TabBarView) 挤到
+    // ~74dp，封面 tab 固定内容放不下（详见 _buildArtworkView 内注释）。
+    // 横屏把各段留白减半，给内容区多让 ~18dp。竖屏各值不变。
+    final isLandscape =
+        MediaQuery.of(context).size.width > MediaQuery.of(context).size.height;
 
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
@@ -1765,7 +1786,9 @@ class _FullPlayerState extends State<FullPlayer>
         children: [
           const PlaybackStatusFeedback(),
           // 与上方 tab 内容拉开距离：进度条拖动时时间标签会向上浮出 16px
-          SizedBox(height: isExpanded ? 4 : 8),
+          SizedBox(
+            height: isExpanded ? 4 : (isLandscape ? 4 : 8),
+          ),
           // P0: 进度条监听 positionNotifier（高频 200ms）+ provider（duration 等低频），
           // 不再因 positionStream 触发 _buildControls 整体重建
           ListenableBuilder(
@@ -1780,13 +1803,17 @@ class _FullPlayerState extends State<FullPlayer>
               colorScheme,
             ),
           ),
-          SizedBox(height: isExpanded ? 8 : 16),
+          SizedBox(
+            height: isExpanded ? 8 : (isLandscape ? 8 : 16),
+          ),
           _buildMainControls(
             playerProvider,
             colorScheme,
             isExpanded: isExpanded,
           ),
-          SizedBox(height: isExpanded ? 4 : 10),
+          SizedBox(
+            height: isExpanded ? 4 : (isLandscape ? 4 : 10),
+          ),
           _buildTabStrip(colorScheme),
         ],
       ),
@@ -1840,20 +1867,26 @@ class _FullPlayerState extends State<FullPlayer>
     ColorScheme colorScheme, {
     bool isExpanded = false,
   }) {
+    // 横屏矮视口判定（与 _buildControls / _buildArtworkView 同口径）
+    final isLandscape =
+        MediaQuery.of(context).size.width > MediaQuery.of(context).size.height;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         // Phase 5: 上一曲/暂停/下一曲联合动画控件
         // 尺寸参考 Sonify 的 NowPlaying：去掉实心底色（裸图标）、图标撑满、
-        // 三键视觉等大。边缘键移走后无宽度竞争，两个分支统一放大到
+        // 三键视觉等大。边缘键移走后无宽度竞争，竖屏统一放大到
         // 64/64/20（原竖屏 58/58/16，总宽 206 → 232）：
         // 360dp 屏可用 320dp，两侧各余 44dp；320dp 极窄屏可用 280dp，
         // 仍余 24dp，均有充足安全边距。
+        // 横屏矮视口（如 800×360）高度紧张：三键收到 56/56/16，
+        // 与 _buildControls 的横屏紧凑间距配合给内容区让高度
+        // （图标随容器等比缩放，裸图标方案视觉依旧协调）。
         MD3ETransportRow(
           isPlaying: playerProvider.isPlaying,
-          sideButtonSize: 64.0,
-          playButtonSize: 64.0,
-          spacing: 20.0,
+          sideButtonSize: isLandscape ? 56.0 : 64.0,
+          playButtonSize: isLandscape ? 56.0 : 64.0,
+          spacing: isLandscape ? 16.0 : 20.0,
           onPrevious: () {
             AppHaptics.click();
             playerProvider.previous();

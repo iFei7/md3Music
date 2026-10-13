@@ -109,18 +109,20 @@ void main() {
       isNot(contains('launchpad')),
       reason: 'LaunchPad tab 不应从持久化顺序中恢复',
     );
-    // 听书在 v3 后是合法可选 Tab（默认隐藏），应被保留在完整列表中
+    // 听书在持久化 order 中 → 「补充新增 tab」不触发 → 老用户已开启的
+    // 可选 tab 保持可见（不会被 v4 默认隐藏语义重置）
     expect(
       provider.allTabs.map((t) => t.id),
       contains('audiobook'),
       reason: '听书为可选 Tab，保留在完整列表',
     );
-    expect(provider.hiddenTabs, contains('audiobook'));
+    expect(provider.hiddenTabs, isNot(contains('audiobook')),
+        reason: '听书在持久化 order 中，属老用户已开启，保持可见');
     expect(provider.hiddenTabs, contains('library'));
     expect(
       provider.visibleTabs.map((t) => t.id).toList(),
-      ['discover', 'favorites', 'user'],
-      reason: '可见 tab 应只剩默认三项',
+      ['discover', 'favorites', 'audiobook', 'user'],
+      reason: '可见 tab 为默认三项 + 老用户已开启的听书',
     );
   });
 }
