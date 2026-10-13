@@ -1,13 +1,12 @@
 name: Build & Release Android APK
 
 # 触发条件：
-#   1. 推送 v* 标签（如 v3.2.0）→ 自动构建并发布 Release
-#   2. 手动触发（workflow_dispatch）→ 选择标签重新构建
-#   3. 不要删除/覆盖历史版本，每次发布都是追加 APK
+#   1. 手动触发（workflow_dispatch）→ 选择标签重新构建
+#   2. 原上游的「推 v* 标签自动构建」已移除：本仓 v* tag 现在全部是
+#      lite 分支的正式发版（由 ci.yml 构建发布，applicationId 带 .lite，
+#      本工作流的 Verify APKs 断言 com.md3music.md3music 必然失败）。
+#      上游历史版本的重新构建仍可通过 workflow_dispatch 指定 tag 完成。
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
