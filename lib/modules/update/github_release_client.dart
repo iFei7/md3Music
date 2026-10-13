@@ -70,17 +70,13 @@ String? parseTagFromReleasesHtml(String html) {
   return null;
 }
 
-/// GitHub Release 客户端：REST API 为主链路，HTML 页面为回退链路。
+/// GitHub Release 客户端：正式版更新检测。
 ///
-/// 为什么不用 `/releases/latest`：该端点按 GitHub 规范**排除 prerelease**，
-/// 而本仓库的 lite Release 全部标记为 prerelease（每次 push 自动发一个），
-/// 实测 `api.github.com/repos/iFei7/md3Music/releases/latest` 返回 404。
-/// 因此改用 `/releases` 列表端点：它包含 prerelease，且按发布时间倒序，
-/// 首条即最新。
-///
-/// 为什么需要回退：部分网络环境下 `api.github.com` 易超时，且未鉴权
-/// 限额 60 次/小时/IP。`github.com/<repo>/releases` 的 HTML 页面能给出
-/// 同样的 tag 名，且不消耗 API 配额。
+/// 构建发布规则（2026-10 起）：push 到 lite 发 Pre-release 开发快照；
+/// push tag `vX.Y.Z`（无连字符）发正式版并占用 GitHub Latest。
+/// 主链路直接用 `/releases/latest`：该端点只返回正式 Latest，
+/// Pre-release 天然排除——应用内「检查更新」只对正式版提示。
+/// 仓库尚无任何正式 Release 时该端点返回 404，客户端按「无更新」处理。
 class GithubReleaseClient implements ReleaseSource {
   GithubReleaseClient({Dio? dio})
     : _dio =
@@ -102,192 +98,54 @@ class GithubReleaseClient implements ReleaseSource {
   /// GitHub 要求 User-Agent 非空，显式声明产品标识避免被拒。
   static const String userAgent = 'GraceMusic-Android';
 
-  /// 列表端点而非 `/latest`：lite Release 全是 prerelease，latest 端点会404。
-  /// `per_page=10` 而非 1：仓库里还残留 `ci-<sha>` 形式的 Release（由另一个
-  /// CI 步骤产出），列表按时间倒序时它可能排在 lite 之前，需多取几条再挑。
+  /// 正式版 Latest 端点：只返回 GitHub 标记为 Latest 的非 prerelease Release。
+  /// 日常 push 的 Pre-release 快照天然被排除，客户端只对正式版做更新检测。
   static final Uri apiLatestUri = Uri.parse(
-    'https://api.github.com/repos/$owner/$repo/releases?per_page=10',
+    'https://api.github.com/repos/$owner/$repo/releases/latest',
   );
   static final Uri htmlLatestUri = Uri.parse(
     'https://github.com/$owner/$repo/releases',
   );
 
-  static final Uri _fallbackHtmlUri = Uri.parse(
-    'https://github.com/$owner/$repo/releases',
-  );
-
   final Dio _dio;
+
+  /// 查询 GitHub 标记为 Latest 的正式 Release（含附件与说明）。
+  ///
+  /// 构建发布规则（2026-10 起）：
+  /// - push 到 lite：Pre-release（tag `v<ver>-lite-<sha7>`），开发快照；
+  /// - push tag `vX.Y.Z`（无连字符）→ 正式版 + GitHub Latest；
+  ///   `vX.Y.Z-<suffix>` → Pre-release。
+  /// `/releases/latest` 端点天然只返回正式 Latest，Pre-release 一律排除，
+  /// 客户端因此只对正式版做更新检测。
+  Future<ReleaseDetail?> fetchLatestDetail() async {
+    try {
+      final response = await _dio.getUri<dynamic>(
+        apiLatestUri,
+        options: Options(
+          headers: {
+            'User-Agent': userAgent,
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+        ),
+      );
+      // 404 = 仓库尚无任何正式 Release（全是 prerelease）→ 视为无更新
+      if (response.statusCode != 200 || response.data is! Map) {
+        debugPrint('[UpdateCheck] /releases/latest HTTP ${response.statusCode}');
+        return null;
+      }
+      return _detailFromApiItem(Map<String, dynamic>.from(response.data));
+    } catch (error) {
+      debugPrint('[UpdateCheck] latest 查询失败：$error');
+      return null;
+    }
+  }
 
   @override
   Future<ReleaseInfo?> fetchLatest() async {
-    final viaApi = await _fetchViaApi();
-    if (viaApi != null) return viaApi;
-    return _fetchViaRedirect();
+    final detail = await fetchLatestDetail();
+    return detail?.info;
   }
-
-  /// 主链路：GitHub REST API。
-  Future<ReleaseInfo?> _fetchViaApi() async {
-    try {
-      final response = await _dio.getUri<dynamic>(
-        apiLatestUri,
-        options: Options(
-          headers: {
-            'User-Agent': userAgent,
-            'Accept': 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-          },
-        ),
-      );
-      if (response.statusCode != 200 || response.data == null) {
-        debugPrint('[UpdateCheck] API 返回 ${response.statusCode}，转回退链路');
-        return null;
-      }
-      // `/releases` 返回数组；`/releases/latest` 返回对象。兼容两种形状，
-      // 便于用注入的 mock Dio 直接喂对象单测。
-      final dynamic payload = response.data;
-      final List<Map<String, dynamic>> items = payload is List
-          ? payload.whereType<Map>().map(Map<String, dynamic>.from).toList()
-          : (payload is Map ? [Map<String, dynamic>.from(payload)] : const[]);
-      if (items.isEmpty) {
-        debugPrint('[UpdateCheck] API 响应为空或形状异常，转回退链路');
-        return null;
-      }
-      // 仓库里混有 `ci-<sha>` 形式的 Release（另一个 CI 步骤产出），
-      // 列表按时间倒序时它可能排在 lite 之前。挑第一个 lite tag；
-      // 无 lite tag 时返回 null 放弃本次更新提醒，绝不推荐非 lite tag。
-      Map<String, dynamic>? picked;
-      for (final e in items) {
-        if (isLiteTag(e['tag_name'] as String?)) {
-          picked = e;
-          break;
-        }
-      }
-      if (picked == null) {
-        debugPrint('[UpdateCheck] API 列表中无 lite tag，放弃本次更新提醒');
-        return null;
-      }
-      final tagName = (picked['tag_name'] as String?)?.trim();
-      if (tagName == null || tagName.isEmpty) {
-        debugPrint('[UpdateCheck] API 响应缺少 tag_name，转回退链路');
-        return null;
-      }
-      final htmlUrl = (picked['html_url'] as String?)?.trim();
-      return ReleaseInfo.fromTag(
-        tagName: tagName,
-        htmlUrl: (htmlUrl == null || htmlUrl.isEmpty)
-            ? _fallbackHtmlUri.toString()
-            : htmlUrl,
-      );
-    } catch (error) {
-      debugPrint('[UpdateCheck] API 查询失败：$error');
-      return null;
-    }
-  }
-
-  /// 回退链路：解析 releases 页面 HTML，不消耗 API 配额。
-  ///
-  /// 为什么不再用 302：`/releases/latest` 会因lite Release 全为 prerelease
-  /// 而 404（latest 端点排除 prerelease），没有 Location 头可解析。
-  /// releases 列表页里每个 release 都有 `/releases/tag/<tag>` 链接，
-  /// 取**第一个**即最新（页面已按发布时间倒序）。
-  Future<ReleaseInfo?> _fetchViaRedirect() async {
-    try {
-      final response = await _dio.getUri<String>(
-        htmlLatestUri,
-        options: Options(
-          headers: {'User-Agent': userAgent},
-          validateStatus: (_) => true,
-        ),
-      );
-      if (response.statusCode != 200 || response.data == null) {
-        debugPrint(
-          '[UpdateCheck] 回退链路 HTTP ${response.statusCode}，放弃',
-        );
-        return null;
-      }
-      final tagName = parseTagFromReleasesHtml(response.data!);
-      if (tagName == null) {
-        debugPrint('[UpdateCheck] 回退链路未从页面解析出 tag');
-        return null;
-      }
-      return ReleaseInfo.fromTag(
-        tagName: tagName,
-        htmlUrl: 'https://github.com/$owner/$repo/releases/tag/$tagName',
-      );
-    } catch (error) {
-      debugPrint('[UpdateCheck] 回退链路失败：$error');
-      return null;
-    }
-  }
-
-  /// 查询最新 lite Release 的完整详情（含附件与说明），供应用内更新使用。
-  ///
-  /// 主链路复用 [_fetchViaApi] 已验证的列表端点（响应自带完整 assets 与 body，
-  /// 无需二次请求）；API 失败时走 HTML 回退拿到 tag，再用 `/releases/tags/<tag>`
-  /// 单条端点补齐 assets。两条链路都失败返回 null。
-  Future<ReleaseDetail?> fetchLatestDetail() async {
-    final viaApi = await _fetchDetailViaApi();
-    if (viaApi != null) return viaApi;
-    // 回退：HTML 拿 tag → 单条端点拿 assets
-    final fallback = await _fetchViaRedirect();
-    if (fallback == null) return null;
-    final single = await _fetchReleaseByTag(fallback.tagName);
-    if (single != null) return single;
-    return ReleaseDetail(info: fallback, assets: const [], body: '');
-  }
-
-  /// 主链路：`/releases` 列表端点的首条 lite 即完整 Release 对象。
-  Future<ReleaseDetail?> _fetchDetailViaApi() async {
-    try {
-      final response = await _dio.getUri<dynamic>(
-        apiLatestUri,
-        options: Options(
-          headers: {
-            'User-Agent': userAgent,
-            'Accept': 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-          },
-        ),
-      );
-      if (response.statusCode != 200 || response.data == null) return null;
-      final dynamic payload = response.data;
-      if (payload is! List) return null;
-      for (final e in payload.whereType<Map>()) {
-        final item = Map<String, dynamic>.from(e);
-        if (!isLiteTag(item['tag_name'] as String?)) continue;
-        return _detailFromApiItem(item);
-      }
-      return null;
-    } catch (error) {
-      debugPrint('[UpdateDetail] API 详情查询失败：$error');
-      return null;
-    }
-  }
-
-  /// 单条端点：`/releases/tags/<tag>`（回退链路补 assets 用）。
-  Future<ReleaseDetail?> _fetchReleaseByTag(String tag) async {
-    try {
-      final uri = Uri.parse(
-        'https://api.github.com/repos/$owner/$repo/releases/tags/$tag',
-      );
-      final response = await _dio.getUri<dynamic>(
-        uri,
-        options: Options(
-          headers: {
-            'User-Agent': userAgent,
-            'Accept': 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-          },
-        ),
-      );
-      if (response.statusCode != 200 || response.data is! Map) return null;
-      return _detailFromApiItem(Map<String, dynamic>.from(response.data));
-    } catch (error) {
-      debugPrint('[UpdateDetail] 单条端点查询失败：$error');
-      return null;
-    }
-  }
-
   /// 从 GitHub API 的 Release JSON 对象构造 [ReleaseDetail]。
   ReleaseDetail? _detailFromApiItem(Map<String, dynamic> item) {
     final tagName = (item['tag_name'] as String?)?.trim();

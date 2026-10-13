@@ -3,6 +3,7 @@ name: CI Build
 on:
   push:
     branches: [main, lite]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -475,13 +476,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # lite 分支：构建成功后按 sha 独立发布 Release。
-      # tag 形如 v5.8.1-lite-a081970：带版本号供 App 内自动更新检查比较，
-      # sha 后缀保证每次 push 独立 tag。
-      # 放弃固定 tag 覆盖方案：GitHub 对刚删除 release 的资产名有异步 GC 延迟，
-      # 重传必 422 already_exists；独立 tag 名字永不重复，零清理逻辑。
-      - name: Create lite Release (per-commit)
-        if: github.event_name == 'push' && github.ref_name == 'lite'
+      # lite 分支日常构建 + tag 正式发布，双模式：
+      # - push 到 lite：Pre-release（tag v<ver>-lite-<sha7>），开发快照，不占 Latest；
+      # - push tag v*：正式发布。tag 无连字符（v5.9.1）→ 正式版 + GitHub Latest；
+      #   带连字符后缀（v5.9.1-beta）→ Pre-release。
+      # 应用内「检查更新」只认正式 latest（客户端走 /releases/latest）。
+      - name: Create lite Release (per-commit / tag release)
+        if: github.event_name == 'push' && (github.ref_name == 'lite' || startsWith(github.ref, 'refs/tags/v'))
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -491,15 +492,23 @@ jobs:
           api="https://api.github.com/repos/${REPO}"
           auth="Authorization: Bearer ${GITHUB_TOKEN}"
           ver="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1)"
-          # tag 形如 v5.8.1-lite-a081970：版本号供客户端比较，sha 后缀保证
-          # 每次 push 独立 tag（GitHub 资产名 GC 延迟会让固定 tag 覆盖方案 422）。
-          # 客户端 parseReleaseVersion 会截断 -lite-<sha> 取到 5.8.1。
-          tag="v${ver}-lite-${SHA_SHORT::7}"
           stamp="$(date -u +%Y%m%d%H%M%S)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            # 正式/tag 发布：tag 名由发布者指定（v5.9.1 = 正式 latest；v5.9.1-beta = 预发布）
+            tag="$GITHUB_REF_NAME"
+            if [[ "$tag" =~ - ]]; then is_pre=true; else is_pre=false; fi
+            title="Grace Music v${tag#v}"
+          else
+            # 日常 Pre-release：tag v<ver>-lite-<sha7>，sha 后缀保证每次 push 独立
+            # （GitHub 资产名 GC 延迟会让固定 tag 覆盖方案 422）。
+            tag="v${ver}-lite-${SHA_SHORT::7}"
+            is_pre=true
+            title="Lite v${ver} (${tag})"
+          fi
 
-          rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg stamp "$stamp" --arg run "$GITHUB_RUN_NUMBER" \
-            '{tag_name:$tag, target_commitish:$sha, prerelease:false,
-              name:("Lite v" + $ver + " (" + $tag + ")"),
+          rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg stamp "$stamp" --arg run "$GITHUB_RUN_NUMBER" --arg title "$title" --argjson pre "$is_pre" \
+            '{tag_name:$tag, target_commitish:$sha, prerelease:$pre,
+              name:$title,
               body:("Lite 分支 CI 自动构建。\n\n"
                   + "- 版本: v" + $ver + "\n- 提交: " + $sha + "\n- 构建号: " + $run + "\n\n"
                   + "### 下载\n"
@@ -597,8 +606,13 @@ jobs:
         run: flutter pub get
 
       # expanded reporter：失败用例带 文件:行号，便于注解与本地复现
+      # ⚠️ 必须显式 shell: bash：Actions 默认 bash -e 不开 pipefail，
+      # `flutter test | tee` 会吞掉测试失败退出码导致 job 假绿（2026-10 实锤：
+      # 断言过期的 client 测试从未红过）。显式声明后 bash -eo pipefail，
+      # flutter test 失败即步骤失败。
       - name: Flutter test
         run: flutter test --reporter expanded 2>&1 | tee "$RUNNER_TEMP/flutter_test.log"
+        shell: bash
 
       # 失败时把用例名经 ::error:: 写入 check-run annotations（API 匿名可读，
       # 与构建诊断同一套通道；GITHUB_STEP_SUMMARY 仅网页可见）

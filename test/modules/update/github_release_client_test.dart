@@ -6,13 +6,13 @@ void main() {
   test('仓库地址为唯一来源常量', () {
     expect(
       GithubReleaseClient.apiLatestUri.toString(),
-      'https://api.github.com/repos/zzyoxml/md3Music/releases/latest',
+      'https://api.github.com/repos/iFei7/md3Music/releases/latest',
     );
     expect(
       GithubReleaseClient.htmlLatestUri.toString(),
-      'https://github.com/zzyoxml/md3Music/releases/latest',
+      'https://github.com/iFei7/md3Music/releases',
     );
-    expect(GithubReleaseClient.userAgent, isNotEmpty);
+    expect(GithubReleaseClient.userAgent, 'GraceMusic-Android');
   });
 
   group('parseTagFromRedirectLocation', () {
