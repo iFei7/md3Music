@@ -2634,13 +2634,41 @@ class _SettingsPageState extends State<SettingsPage>
 
   /// 手动检查更新入口：优先走应用内更新（清单 → 下载 → 校验 → 安装）。
   ///
-  /// 远端 Release 未附带 latest.json 时回退为打开浏览器下载页（旧行为）。
+  /// 检查过程弹出「正在检查更新…」加载对话框（sonify 式弹窗检索体验）；
+  /// 检查完成自动关闭：有新版本 → 更新弹窗；已最新/失败 → toast；
+  /// 无清单（极旧 Release）→ 回退浏览器下载页。
   Future<void> _checkForInAppUpdate() async {
     if (_isCheckingUpdate) return;
     HapticFeedback.lightImpact();
     setState(() => _isCheckingUpdate = true);
+    // 检查对话框与结果弹窗都走 root navigator，避免结果弹窗被关闭逻辑误伤
+    final loading = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: SizedBox(
+          width: 56,
+          height: 56,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(strokeWidth: 2.5),
+              SizedBox(height: 16),
+              Text('正在检查更新…'),
+            ],
+          ),
+        ),
+      ),
+    );
     final result = await _updater.check();
-    if (!mounted) return;
+    if (!mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+      return;
+    }
+    // 关闭加载对话框（可能已因页面销毁被移除，容错）
+    Navigator.of(context, rootNavigator: true).pop();
+    await loading.catchError((_) {});
     setState(() => _isCheckingUpdate = false);
     switch (result) {
       case InAppUpdateCheckResult.available:
