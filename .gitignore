@@ -1,0 +1,7 @@
+
+# 签名材料一律不入库：android/keystore/ 曾提交过 lite 的 release keystore（已泄露），
+# 且 ci.yml/debug-build.yml 中硬编码过其口令。新密钥只经 keystore.properties（本地）或
+# GitHub Secrets 注入；主副本在私有仓 ANDROID_KEYSTORE。详见 2026-10-13 密钥整改。
+android/keystore.properties
+*.jks
+*.keystore

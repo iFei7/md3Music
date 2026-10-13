@@ -11,7 +11,7 @@ key.properties
 **/*.keystore
 **/*.jks
 
-# 例外：lite 分支内置固定签名密钥（CI 兜底用，根治覆盖安装签名冲突）。
-# 安全取舍：密码随 workflow 明文（md3lite），仅适用于个人/公开分发场景；
-# 正式分发仍应改用 'keystore' release + GitHub Secrets（优先级更高）。
-!keystore/*.keystore
+# ⚠️ 此前此处有一条例外「!keystore/*.keystore」，导致 lite 的 release keystore 连同
+# 口令（明文写在 ci.yml）被提交进公开仓，构成签名密钥泄露。2026-10-13 已移除该例外
+# 并删除 android/keystore/lite-release.keystore；该密钥就此弃用，不得再用其签名发布。
+# 签名材料只经 keystore.properties（本地，不入库）或 GitHub Secrets 注入。
