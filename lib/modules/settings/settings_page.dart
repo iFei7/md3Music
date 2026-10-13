@@ -10,7 +10,6 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/layout/page_title_alignment.dart';
 import '../../core/services/audio_service_io.dart';
@@ -33,7 +32,6 @@ import '../../core/theme/app_theme.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../onboarding/onboarding_page.dart';
 import '../onboarding/user_agreement_page.dart';
-import '../update/github_release_client.dart';
 import '../update/in_app_updater.dart';
 import '../update/update_manifest.dart';
 import '../../providers/kugou_provider.dart';
@@ -89,7 +87,7 @@ class _SettingsPageState extends State<SettingsPage>
   bool _autoReceiveVip = true;
   // 上传听歌时长（听歌等级累计上报）开关（默认关闭，用户主动开启才累计/上报）
   bool _uploadListeningDuration = false;
-  // 新版本提醒开关（默认开启，关闭后启动时不再查询 GitHub Release）
+  // 新版本提醒开关（默认开启，关闭后启动时不再检查新版本）
   bool _updateReminderEnabled = true;
   // 上次已提醒的新版本号（形如 5.6.5，空串=无）。用于「更新最新版本」副标题提示。
   String _pendingUpdateVersion = '';
@@ -2480,7 +2478,7 @@ class _SettingsPageState extends State<SettingsPage>
         // search: 更新 新版本 升级 upgrade 提醒
         SwitchListTile(
           title: const Text('新版本提醒'),
-          subtitle: const Text('启动时检查 GitHub 发布的新版本，发现后提示一次'),
+          subtitle: const Text('启动时自动检查新版本，发现后提示一次'),
           value: _updateReminderEnabled,
           onChanged: (value) {
             // ignore: discarded_futures
@@ -2488,10 +2486,10 @@ class _SettingsPageState extends State<SettingsPage>
           },
         ),
         ListTile(
-          title: const Text('更新最新版本'),
+          title: const Text('检查更新'),
           subtitle: Text(
             _pendingUpdateVersion.isEmpty
-                ? GithubReleaseClient.htmlLatestUri.toString()
+                ? '检查并安装应用内新版本'
                 : '有新版 v$_pendingUpdateVersion 可用，点击前往下载',
           ),
           leading: const Icon(Icons.system_update_outlined),
@@ -2501,7 +2499,7 @@ class _SettingsPageState extends State<SettingsPage>
                   height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Icon(Icons.open_in_new, size: 18),
+              : const Icon(Icons.cloud_download_outlined, size: 20),
           onTap: _isCheckingUpdate ? null : _checkForInAppUpdate,
         ),
         // 渲染引擎与版本号同属"当前构建的事实"，故并入版本组：
@@ -2625,18 +2623,11 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  Future<void> _openReleasesUrl() async {
-    final uri = GithubReleaseClient.htmlLatestUri;
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
-  }
-
   /// 手动检查更新入口：优先走应用内更新（清单 → 下载 → 校验 → 安装）。
   ///
   /// 检查过程弹出「正在检查更新…」加载对话框（sonify 式弹窗检索体验）；
   /// 检查完成自动关闭：有新版本 → 更新弹窗；已最新/失败 → toast；
-  /// 无清单（极旧 Release）→ 回退浏览器下载页。
+  /// 无清单（极旧 Release）→ 仅提示已最新，不暴露仓库 Release 地址。
   Future<void> _checkForInAppUpdate() async {
     if (_isCheckingUpdate) return;
     HapticFeedback.lightImpact();
@@ -2678,8 +2669,9 @@ class _SettingsPageState extends State<SettingsPage>
         showToast('当前已是最新版本');
         break;
       case InAppUpdateCheckResult.noManifest:
-        // 该 Release 未附带应用内更新清单（或包名不匹配），回退浏览器下载页
-        await _openReleasesUrl();
+        // 极旧 Release 无可安装附件（或包名不匹配）：按用户约定仅提示，
+        // 不暴露仓库 Release 地址、不跳浏览器
+        showToast('当前已是最新版本');
         break;
       case InAppUpdateCheckResult.error:
         showToast('检查更新失败：${_updater.errorMessage}', long: true);
