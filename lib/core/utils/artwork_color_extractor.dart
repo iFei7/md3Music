@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -75,10 +76,25 @@ class ArtworkColorExtractor {
         // ResizeImage，键不同，同一封面会额外多走一条下载路径，
         // 失败时尤其表现为取数路径翻倍）。因此网络封面固定 512，
         // [sampleSize] 仅作用于本地封面分支。
-        return PaletteGenerator.fromImageProvider(
-          ResizeImage(CachedNetworkImageProvider(url), width: 512),
-          maximumColorCount: 12,
-        );
+        // 不能用 PaletteGenerator.fromImageProvider：其内部监听器没有
+        // onError，封面请求失败时错误无人认领，会经 reportError 直达
+        // FlutterError（未处理异步错误，测试里即 takeException）；且
+        // completer 永不完成时其 15s 超时 Timer 不会取消，FakeAsync
+        // 测试会以「A Timer is still pending」失败。这里自行解析图像，
+        // 自带 onError 与超时（见 _resolveUiImage）。
+        final info = await _resolveUiImage(ResizeImage(
+          CachedNetworkImageProvider(url),
+          width: 512,
+        ));
+        if (info == null) return null;
+        try {
+          return await PaletteGenerator.fromImage(
+            info.image,
+            maximumColorCount: 12,
+          );
+        } finally {
+          info.dispose();
+        }
       }
       // 本地封面：统一「读字节 → ResizeImage(MemoryImage) → PaletteGenerator」
       final bytes = await _loadLocalBytes(url);
@@ -90,6 +106,37 @@ class ArtworkColorExtractor {
     } catch (_) {
       return null;
     }
+  }
+
+  /// 把 provider 解析为 [ImageInfo]；成功时所有权归调用方（用完须
+  /// [ImageInfo.dispose]），失败/15s 超时返回 null。
+  ///
+  /// 监听器必须带 [ImageStreamListener.onError]：否则图片加载错误
+  /// 没有任何 onError 认领者，[ImageStreamCompleter.reportError] 会
+  /// 上抛到 FlutterError。错误/超时路径会取消 Timer、摘除监听器，
+  /// 不在 FakeAsync 测试环境留下悬挂 Timer 或存活 completer 引用。
+  static Future<ImageInfo?> _resolveUiImage(ImageProvider<Object> provider) {
+    final stream = provider.resolve(const ImageConfiguration());
+    final completer = Completer<ImageInfo?>();
+    late final Timer timeout;
+    late final ImageStreamListener listener;
+
+    void settle(ImageInfo? info) {
+      if (completer.isCompleted) return;
+      timeout.cancel();
+      stream.removeListener(listener);
+      completer.complete(info);
+    }
+
+    // Timer 先于 addListener 创建：若 completer 已有错误，addListener
+    // 会同步重放给 onError，settle 里需要 cancel 已存在的 Timer。
+    timeout = Timer(const Duration(seconds: 15), () => settle(null));
+    listener = ImageStreamListener(
+      (ImageInfo info, bool synchronousCall) => settle(info),
+      onError: (Object error, StackTrace? stackTrace) => settle(null),
+    );
+    stream.addListener(listener);
+    return completer.future;
   }
 
   /// 读取本地封面字节；无法解析 / 文件不存在 / 无内嵌封面时返回 null。

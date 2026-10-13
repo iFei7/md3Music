@@ -74,6 +74,19 @@ class _PlayerArtworkImageState extends State<PlayerArtworkImage> {
   /// 当前正在加载的文件路径，避免重复加载同一文件
   String? _loadingPath;
 
+  /// http 分支子树缓存（键见 _buildNetworkImage）。
+  ///
+  /// 之所以缓存 widget 实例而不是每次 build 重建：OctoImage 会在
+  /// CachedNetworkImage 构造时把 provider 包进新的 ResizeImage 实例
+  /// （ResizeImage 未实现 ==），任何祖先重建都会让内部 Image 在
+  /// didUpdateWidget 里判定「换了 provider」而 re-resolve。加载失败
+  /// 的键已被 ImageCache 逐出（provider 失败即 evict），re-resolve
+  /// 等于对同一个死 URL 重新发起下载——播放页一次歌词 setState 就会
+  /// 重试一次。同参数重建直接复用同一 widget 实例，Element.updateChild
+  /// 走 identical 短路，整棵取数子树不再重建。
+  Widget? _networkChild;
+  (String, int?, BoxFit, bool, double, Color, Color)? _networkChildKey;
+
   @override
   void didUpdateWidget(PlayerArtworkImage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -195,7 +208,21 @@ class _PlayerArtworkImageState extends State<PlayerArtworkImage> {
 
     // http(s):// 在线封面：用 CachedNetworkImage（带磁盘缓存）
     if (uri.startsWith('http://') || uri.startsWith('https://')) {
-      return CachedNetworkImage(
+      return _buildNetworkImage(uri, bg, icon, iSize);
+    }
+
+    // 兜底
+    return _placeholder(bg, icon, iSize);
+  }
+
+  /// 构建 http(s) 封面子树；同参数（uri/解码上限/布局/配色）重建时复用
+  /// 缓存的同一 widget 实例，避免 OctoImage 每次新建 ResizeImage 触发
+  /// re-resolve（见 _networkChild 注释）。
+  Widget _buildNetworkImage(String uri, Color bg, Color icon, double iSize) {
+    final key = (uri, widget.decodeCap, widget.fit, widget.isFill, iSize, bg, icon);
+    if (_networkChild == null || key != _networkChildKey) {
+      _networkChildKey = key;
+      _networkChild = CachedNetworkImage(
         imageUrl: uri,
         memCacheWidth: widget.decodeCap,
         width: widget.isFill ? double.infinity : null,
@@ -205,9 +232,7 @@ class _PlayerArtworkImageState extends State<PlayerArtworkImage> {
         errorWidget: (_, _, _) => _placeholder(bg, icon, iSize),
       );
     }
-
-    // 兜底
-    return _placeholder(bg, icon, iSize);
+    return _networkChild!;
   }
 
   Widget _placeholder(Color bg, Color icon, double iconSize) {
