@@ -7,12 +7,30 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// 签名四项来源：优先 android/keystore.properties（本地开发），
+// 缺失项逐项回落环境变量 ANDROID_KEYSTORE_PATH / ANDROID_KEYSTORE_PASSWORD /
+// ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD（CI 走 GitHub Secrets 注入）。
+// 仓库不再内置任何 keystore —— 公开仓严禁密钥入库（历史教训：旧 lite 密钥
+// 随仓泄露，任何人可签出高 versionCode 包覆盖安装）。
 val keystoreProperties = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) {
         load(FileInputStream(f))
     }
 }
+
+private fun signingValue(propertyKey: String, envName: String): String? =
+    keystoreProperties.getProperty(propertyKey)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(envName)?.takeIf { it.isNotBlank() }
+
+val keystoreFile = signingValue("storeFile", "ANDROID_KEYSTORE_PATH")
+val keystoreStorePassword = signingValue("storePassword", "ANDROID_KEYSTORE_PASSWORD")
+val keystoreKeyAlias = signingValue("keyAlias", "ANDROID_KEY_ALIAS")
+val keystoreKeyPassword = signingValue("keyPassword", "ANDROID_KEY_PASSWORD")
+val keystoreReady = keystoreFile != null &&
+    keystoreStorePassword != null &&
+    keystoreKeyAlias != null &&
+    keystoreKeyPassword != null
 
 android {
     namespace = "com.md3music.md3music"
@@ -69,12 +87,18 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            if (keystoreProperties.isNotEmpty()) {
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
-                storeFile = file(keystoreProperties.getProperty("storeFile"))
-                storePassword = keystoreProperties.getProperty("storePassword")
+        // 仅当签名四项齐全时才装配 release 签名配置，避免产生 storeFile
+        // 为空的半成品配置。缺失时不在此处兜底，交由下方 whenReady 校验。
+        val storePath = keystoreFile
+        val storePwd = keystoreStorePassword
+        val keyAliasValue = keystoreKeyAlias
+        val keyPwd = keystoreKeyPassword
+        if (storePath != null && storePwd != null && keyAliasValue != null && keyPwd != null) {
+            create("release") {
+                keyAlias = keyAliasValue
+                keyPassword = keyPwd
+                storeFile = file(storePath)
+                storePassword = storePwd
             }
         }
     }
@@ -87,12 +111,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Use the persistent release signing config (if keystore.properties exists)
-            // Falls back to debug signing when keystore.properties is missing (CI / first build)
-            signingConfig = if (keystoreProperties.isNotEmpty()) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
+            // 签名四项齐全才用 release 签名。不再兜底 debug 签名：
+            // 正式包用 debug 签名会让所有旧用户无法覆盖安装，且冒牌
+            // 签名包流出本身即是安全事故；缺失时由下方 whenReady 拦截。
+            if (keystoreReady) {
+                signingConfig = signingConfigs.getByName("release")
             }
         }
         debug {
@@ -114,6 +137,24 @@ android {
     // <flavor>-<type>.apk 查找产物，见 flutter_tools gradle.dart listApkPaths，
     // 且 ci.yml 的改名步骤依赖该固定名）。Release 附件最终名 GraceMusic-v*.apk
     // 由 .github/workflows/ci.yml 上传前的 rename 步骤统一设置。
+}
+
+// 安全校验：release 打包任务（assembleXxxRelease / bundleXxxRelease）在签名
+// 四项不全时直接失败，给出可操作报错，而不是产出未签名包。仅匹配真正的
+// 打包任务 —— debug 构建（assembleXxxDebug）与单元测试（testXxxUnitTest，
+// 含 testReleaseUnitTest）不受影响。
+gradle.taskGraph.whenReady {
+    val isReleasePackaging = allTasks.any { task ->
+        Regex("^(assemble|bundle).*[Rr]elease$").matches(task.name)
+    }
+    if (isReleasePackaging && !keystoreReady) {
+        throw GradleException(
+            "Release 构建缺少签名配置：请在 android/keystore.properties 提供 " +
+                "storeFile / storePassword / keyAlias / keyPassword 四项，" +
+                "或设置环境变量 ANDROID_KEYSTORE_PATH / ANDROID_KEYSTORE_PASSWORD / " +
+                "ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD（CI 由 GitHub Secrets 注入）后重试。"
+        )
+    }
 }
 
 kotlin {
