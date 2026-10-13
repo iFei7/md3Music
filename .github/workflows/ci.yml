@@ -498,7 +498,7 @@ jobs:
           stamp="$(date -u +%Y%m%d%H%M%S)"
 
           rbody=$(jq -n --arg tag "$tag" --arg sha "$SHA_SHORT" --arg ver "$ver" --arg stamp "$stamp" --arg run "$GITHUB_RUN_NUMBER" \
-            '{tag_name:$tag, target_commitish:$sha, prerelease:true,
+            '{tag_name:$tag, target_commitish:$sha, prerelease:false,
               name:("Lite v" + $ver + " (" + $tag + ")"),
               body:("Lite 分支 CI 自动构建。\n\n"
                   + "- 版本: v" + $ver + "\n- 提交: " + $sha + "\n- 构建号: " + $run + "\n\n"
