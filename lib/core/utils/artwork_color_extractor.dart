@@ -58,6 +58,8 @@ class ArtworkColorExtractor {
   /// 闪退）；取色分析的是色彩分布，缩到 480 宽足够且结果几乎不变。
   /// [sampleSize] 允许调用方传更小值进一步降采样（如环境渐变背景传 128）：
   /// 取色分析的是色彩分布，128 宽已足够，解码内存与 CPU 开销再降一个量级。
+  /// 注意 [sampleSize] 仅对本地封面生效；网络封面固定 512 以与播放器 UI
+  /// 封面共用同一 ImageCache 键（单一取数路径，见网络分支注释）。
   /// 任一来源加载/解码失败都返回 null（内部已捕获异常）。
   static Future<PaletteGenerator?> loadPalette(
     String url, {
@@ -65,13 +67,16 @@ class ArtworkColorExtractor {
   }) async {
     try {
       if (url.startsWith('http://') || url.startsWith('https://')) {
-        // 网络封面：ResizeImage 包裹 CachedNetworkImageProvider 做**解码期**
-        // 降采样（磁盘缓存不受影响，仅解码输出按 sampleSize 宽缩放）。
-        // 注：fromImageProvider 虽有 size 参数，但源码中该值只进
-        // ImageConfiguration（CachedNetworkImageProvider 不响应，不会缩放
-        // 解码结果），真正可靠的采样压缩是 ResizeImage——与本地分支同构。
+        // 网络封面：取色 provider 的 ImageCache 键必须与播放器 UI 封面
+        // （PlayerArtworkImage memCacheWidth=512 → OctoImage 内
+        // ResizeImage.resizeIfNeeded(512, null, provider)）完全一致，
+        // 两边才会共享同一个下载/解码 completer——在线封面整页只发一次
+        // 图片取数请求（此前这里用 sampleSize=128/480 包一层独立
+        // ResizeImage，键不同，同一封面会额外多走一条下载路径，
+        // 失败时尤其表现为取数路径翻倍）。因此网络封面固定 512，
+        // [sampleSize] 仅作用于本地封面分支。
         return PaletteGenerator.fromImageProvider(
-          ResizeImage(CachedNetworkImageProvider(url), width: sampleSize),
+          ResizeImage(CachedNetworkImageProvider(url), width: 512),
           maximumColorCount: 12,
         );
       }

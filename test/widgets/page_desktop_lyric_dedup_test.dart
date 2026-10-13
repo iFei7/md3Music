@@ -177,7 +177,11 @@ void main() {
       expect(adapter.requestedFormats, containsAll(['lrc', 'krc']));
       adapter.completeLyrics();
 
-      await tester.pump(const Duration(milliseconds: 500));
+      // 蓝牙歌词当前行推送发生在暂停态 1s tick 的切行检测里：歌词提交
+      // （completeLyrics 释放响应 → DesktopLyricService 拿到共享结果）之后，
+      // 还要等下一个 tick 才会把第 0 行推给原生通道。暂停 tick 周期 1s，
+      // 这里只 pump 500ms 不够，当前行推送会缺席。
+      await tester.pump(const Duration(milliseconds: 1200));
       expect(tester.takeException(), isNull);
       expect(find.byType(FullPlayer), findsOneWidget);
       expect(

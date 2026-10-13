@@ -1123,6 +1123,12 @@ class _FullPlayerState extends State<FullPlayer>
               iconSize: iconSize,
               backgroundColor: colorScheme.surfaceContainerHighest,
               iconColor: colorScheme.onSurfaceVariant,
+              // 与旧封面层同取 512：两层 memCacheWidth 一致才会共用同一
+              // ImageCache 键（OctoImage 内 ResizeImage 包装参与键比对），
+              // 同一张在线封面只触发一次取数/解码。缺了会出现第二条
+              // 并行取数路径（见 full_player_narrow_layout_test 的
+              // requestCount==1「单一图片取数路径」断言）。
+              decodeCap: 512,
             ),
           ),
         ),
