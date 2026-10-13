@@ -84,7 +84,7 @@ void main() {
     final ctx = _build(remote: _release('v5.6.5'), currentVersion: '5.6.0');
 
     expect(await ctx.service.checkAndNotify(), UpdateCheckOutcome.notified);
-    expect(ctx.messages, ['发现新版本 v5.6.5（当前 5.6.0），可在「设置 → 关于」中更新']);
+    expect(ctx.messages, ['发现新版本 v5.6.5（当前 5.6.0），可在「设置 → 关于」中立即更新']);
 
     final repo = SettingsRepository();
     expect(await repo.getUpdateLastNotifiedVersion(), '5.6.5');
