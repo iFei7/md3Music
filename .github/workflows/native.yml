@@ -476,7 +476,7 @@ jobs:
   # sha7 用 ${GITHUB_SHA::7}。
   # tag：v<versionName>-native-<sha7>（per-commit 独立 tag，零清理逻辑；
   #   `-native-` 中缀是客户端解析版本号时依赖的既有约定，保持不变）。
-  # 资产名一律 ASCII：GraceMusic-v<versionName>-<sha7>-standard-release.apk
+  # 资产名一律 ASCII 且带 native 标记：GraceMusic-native-v<versionName>-<sha7>.apk
   #   —— 规避两个历史坑：
   #   1) GitHub 会把资产名中的非 ASCII 字符规范化为 '.'，中文名互相
   #      冲突 → 422 already_exists（ci.yml 的教训），故一律 ASCII，
@@ -536,7 +536,7 @@ jobs:
           # -native-<sha7> 后缀保证每次 push 独立 tag（固定 tag 覆盖会因
           # GitHub 资产名 GC 延迟必 422，见 ci.yml 注释）。
           tag="v${ver}-native-${sha7}"
-          out="GraceMusic-v${ver}-${sha7}-standard-release.apk"
+          out="GraceMusic-native-v${ver}-${sha7}.apk"
           echo "version=${ver} tag=${tag} asset=${out}"
 
           # ---- 定位 build job 产物，复制为 ASCII 发布名 ----
@@ -557,7 +557,7 @@ jobs:
               body:("native 分支 CI 自动构建（universal release APK）。\n\n"
                   + "- 分支: native\n- 提交: " + $sha + "\n- 版本: v" + $ver + "\n\n"
                   + "### 下载\n"
-                  + "- **" + $out + "** — native 标准版 universal release APK\n\n"
+                  + "- **" + $out + "** — native 版 universal release APK\n\n"
                   + "> 此为 CI 自动构建，非正式发布版本。")}')
           rel_out=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" \
             -d "$rbody" -w $'\n%{http_code}' "$api/releases") || true
