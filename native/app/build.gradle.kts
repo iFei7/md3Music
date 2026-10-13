@@ -112,6 +112,15 @@ android {
         }
     }
 
+    // Lint 基线：收纳既有问题，仅对新增 error 失败（warningsAsErrors 未开，warning 不阻断）。
+    // 基线共 92 条：error 级为 3 处 NewApi（PlaybackNotificationChannels 内 O+ API，
+    // 仅由已做 Build.VERSION.SDK_INT < O 守卫的 ensureCreated 调用，运行期安全；因本阶段
+    // 不改业务源码补 @RequiresApi，按 AGP 建议以基线收纳）；其余为 InlinedApi /
+    // ExportedService / UnusedResources 等 warning 级既有问题，不阻断构建。
+    lint {
+        baseline = file("lint-baseline.xml")
+    }
+
     signingConfigs {
         create("release") {
             // 仅在四项齐全时装配；缺项则留空，交由文件末尾的构建期校验显式失败——
