@@ -11,7 +11,9 @@ import '../../data/models/song.dart';
 import '../../providers/kugou_provider.dart';
 import '../../core/layout/adaptive_content_grid.dart';
 import '../../core/theme/app_dimens.dart';
+import '../../core/theme/motion_constants.dart';
 import '../../core/widgets/app_background.dart';
+import '../../core/widgets/liquid_glass_container.dart';
 import '../../providers/theme_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../services/kugou_api/cloud_song_mapper.dart';
@@ -149,21 +151,6 @@ class _SearchPageState extends State<SearchPage>
     final colorScheme = Theme.of(context).colorScheme;
     final themeProvider = context.watch<ThemeProvider>();
     final useBackgroundImage = themeProvider.useBackgroundImage;
-    // 预计算背景图 provider（与 SliverAppBar flexibleSpace 用同一 cacheWidth →
-    // ImageCache 同 key 共享解码），作为参数传入 _TabBarDelegate，
-    // 避免在 SliverPersistentHeaderDelegate.build 内 watch ThemeProvider
-    // 污染 NestedScrollView 的 sliver 链（导致 TabBarView 结果区被异常重建/覆盖）。
-    ImageProvider? tabBarBackgroundImage;
-    if (useBackgroundImage) {
-      final size = MediaQuery.sizeOf(context);
-      final cacheWidth = (size.width * MediaQuery.devicePixelRatioOf(context))
-          .round()
-          .clamp(540, 1440);
-      tabBarBackgroundImage = backgroundImageProvider(
-        themeProvider,
-        cacheWidth: cacheWidth,
-      );
-    }
 
     return Scaffold(
       body: NestedScrollView(
@@ -238,55 +225,83 @@ class _SearchPageState extends State<SearchPage>
                       : null,
                   surfaceTintColor: Colors.transparent,
                   title: SizedBox(
-                    height: 40,
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        hintText: '搜索歌曲、歌手、专辑',
-                        hintStyle: Theme.of(context).textTheme.bodyMedium
-                            ?.copyWith(color: colorScheme.onSurfaceVariant),
-                        prefixIcon: Icon(
-                          Icons.search,
-                          size: 20,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                        suffixIcon: _searchController.text.isNotEmpty
-                            ? IconButton(
-                                icon: Icon(
-                                  Icons.clear,
-                                  size: 18,
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  setState(() {
-                                    _query = '';
-                                    _hasSearched = false;
-                                  });
-                                },
-                              )
-                            : null,
-                        filled: true,
-                        fillColor: colorScheme.surfaceContainerHighest,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          borderSide: BorderSide.none,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: AppSpacing.none,
-                        ),
-                        isDense: true,
+                    height: 44,
+                    // 轻玻璃胶囊搜索框：与悬浮 Dock 同一玻璃语言（模糊只作用于
+                    // 胶囊自身区域），壁纸/背景从胶囊后透出，低干扰不抢内容。
+                    child: LiquidGlassContainer(
+                      shape: GlassShape.pill,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.xs,
                       ),
-                      textInputAction: TextInputAction.search,
-                      onSubmitted: _performSearch,
-                      onChanged: (value) {
-                        setState(() {});
-                        if (value.trim().isNotEmpty) {
-                          context.read<KugouProvider>().getSearchSuggest(
-                            value.trim(),
-                          );
-                        }
-                      },
+                      child: Center(
+                        child: TextField(
+                          controller: _searchController,
+                          decoration: InputDecoration(
+                            hintText: '搜索歌曲、歌手、专辑',
+                            hintStyle: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(color: colorScheme.onSurfaceVariant),
+                            prefixIcon: Icon(
+                              Icons.search,
+                              size: 20,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                            prefixIconConstraints: const BoxConstraints(
+                              minWidth: 40,
+                              minHeight: 40,
+                            ),
+                            // AnimatedSwitcher 让清除按钮淡入淡出（AppMotion.fast），
+                            // 空态占位保持槽位不塌缩，键盘弹出无布局跳变。
+                            suffixIcon: AnimatedSwitcher(
+                              duration: AppMotion.fast,
+                              switchInCurve: AppMotion.standardEasing,
+                              switchOutCurve: AppMotion.standardEasing,
+                              transitionBuilder: (child, animation) =>
+                                  FadeTransition(
+                                    opacity: animation,
+                                    child: child,
+                                  ),
+                              child: _searchController.text.isNotEmpty
+                                  ? IconButton(
+                                      key: const ValueKey('search_clear'),
+                                      icon: Icon(
+                                        Icons.clear,
+                                        size: 18,
+                                        color: colorScheme.onSurfaceVariant,
+                                      ),
+                                      onPressed: () {
+                                        _searchController.clear();
+                                        setState(() {
+                                          _query = '';
+                                          _hasSearched = false;
+                                        });
+                                      },
+                                    )
+                                  : const SizedBox.shrink(
+                                      key: ValueKey('search_clear_empty'),
+                                    ),
+                            ),
+                            suffixIconConstraints: const BoxConstraints(
+                              minWidth: 40,
+                              minHeight: 40,
+                            ),
+                            border: InputBorder.none,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              vertical: AppSpacing.sm,
+                            ),
+                          ),
+                          textInputAction: TextInputAction.search,
+                          onSubmitted: _performSearch,
+                          onChanged: (value) {
+                            setState(() {});
+                            if (value.trim().isNotEmpty) {
+                              context.read<KugouProvider>().getSearchSuggest(
+                                value.trim(),
+                              );
+                            }
+                          },
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -296,6 +311,8 @@ class _SearchPageState extends State<SearchPage>
                     delegate: _TabBarDelegate(
                       tabBar: TabBar(
                         controller: _tabController,
+                        // 分段标签卡内不再画分隔线，玻璃条自身提供边界。
+                        dividerColor: Colors.transparent,
                         tabs: const [
                           Tab(text: '歌曲'),
                           Tab(text: '专辑'),
@@ -305,10 +322,6 @@ class _SearchPageState extends State<SearchPage>
                           Tab(text: '歌词'),
                         ],
                       ),
-                      useBackgroundImage: useBackgroundImage,
-                      backgroundOpacity: themeProvider.backgroundOpacity,
-                      backgroundBlur: themeProvider.backgroundBlur,
-                      backgroundImage: tabBarBackgroundImage,
                     ),
                   ),
               ];
@@ -323,6 +336,7 @@ class _SearchPageState extends State<SearchPage>
   }
 
   Widget _buildEmptyState() {
+    final colorScheme = Theme.of(context).colorScheme;
     // 未输入关键词：搜索历史 + 音乐探索（从发现页迁移的内容模块）。
     // 已移除「热门搜索」及其自动网络请求。
     return ListView(
@@ -333,13 +347,22 @@ class _SearchPageState extends State<SearchPage>
       children: [
         if (_searchHistory.isNotEmpty) ...[
           Padding(
-            padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, 0),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.md,
+              AppSpacing.lg,
+              0,
+            ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('搜索历史', style: Theme.of(context).textTheme.titleMedium),
                 TextButton(
                   onPressed: _clearSearchHistory,
+                  style: TextButton.styleFrom(
+                    foregroundColor: colorScheme.onSurfaceVariant,
+                    visualDensity: VisualDensity.compact,
+                  ),
                   child: const Text('清空'),
                 ),
               ],
@@ -348,11 +371,16 @@ class _SearchPageState extends State<SearchPage>
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
             child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
               children: _searchHistory.map((history) {
+                // 低干扰 chip 语言：surfaceContainerHigh 底 + outlineVariant
+                // 描边 + 胶囊圆角（与全局 chipTheme 描边一致，收敛圆角档位）。
                 return ActionChip(
                   label: Text(history),
+                  backgroundColor: colorScheme.surfaceContainerHigh,
+                  side: BorderSide(color: colorScheme.outlineVariant),
+                  shape: const StadiumBorder(),
                   onPressed: () {
                     _searchController.text = history;
                     _performSearch(history);
@@ -413,6 +441,7 @@ class _SearchPageState extends State<SearchPage>
           ),
           title: Text(suggestion, maxLines: 1, overflow: TextOverflow.ellipsis),
           dense: true,
+          shape: RoundedRectangleBorder(borderRadius: AppRadius.mdAll),
           onTap: () {
             _searchController.text = suggestion;
             FocusManager.instance.primaryFocus?.unfocus();
@@ -633,9 +662,9 @@ class _SearchPageState extends State<SearchPage>
                 AppSpacing.md,
                 AppSpacing.sm + MediaQuery.paddingOf(context).bottom,
               ),
-              // 原 childAspectRatio 0.75、spacing 12 保持不变
+              // childAspectRatio 0.75 不变；spacing 收敛到 AppSpacing.md token
               childAspectRatio: 0.75,
-              spacing: 12,
+              spacing: AppSpacing.md,
               itemCount: results.length,
               itemBuilder: (context, index) {
                 final album = results[index];
@@ -739,6 +768,7 @@ class _SearchPageState extends State<SearchPage>
                     overflow: TextOverflow.ellipsis,
                   ),
                   subtitle: const Text('歌手'),
+                  shape: RoundedRectangleBorder(borderRadius: AppRadius.mdAll),
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
@@ -812,9 +842,9 @@ class _SearchPageState extends State<SearchPage>
                 AppSpacing.md,
                 AppSpacing.sm + MediaQuery.paddingOf(context).bottom,
               ),
-              // 原 childAspectRatio 0.75、spacing 12 保持不变
+              // childAspectRatio 0.75 不变；spacing 收敛到 AppSpacing.md token
               childAspectRatio: 0.75,
-              spacing: 12,
+              spacing: AppSpacing.md,
               itemCount: results.length,
               itemBuilder: (context, index) {
                 final pl = results[index];
@@ -969,6 +999,21 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
+  /// 状态页统一的插画式留白图标：软色圆形底座 + 低饱和图标（低干扰语言），
+  /// 加载/空/错误三态共用同一视觉锚点。
+  Widget _buildStatusIcon(IconData icon, ColorScheme colorScheme) {
+    return Container(
+      width: 88,
+      height: 88,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHigh,
+        shape: BoxShape.circle,
+      ),
+      child: Icon(icon, size: 40, color: colorScheme.onSurfaceVariant),
+    );
+  }
+
   Widget _buildErrorState(String error, VoidCallback onRetry) {
     final colorScheme = Theme.of(context).colorScheme;
     return Center(
@@ -977,19 +1022,15 @@ class _SearchPageState extends State<SearchPage>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.error_outline,
-              size: 48,
-              color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
-            ),
+            _buildStatusIcon(Icons.error_outline, colorScheme),
             const Gap(AppSpacing.md),
             Text(
               '搜索失败',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: colorScheme.onSurfaceVariant,
+                color: colorScheme.onSurface,
               ),
             ),
-            const Gap(AppSpacing.sm),
+            const Gap(AppSpacing.xxs),
             Text(
               error,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -1008,22 +1049,28 @@ class _SearchPageState extends State<SearchPage>
   Widget _buildNoResult() {
     final colorScheme = Theme.of(context).colorScheme;
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.search_off,
-            size: 48,
-            color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
-          ),
-          const Gap(AppSpacing.md),
-          Text(
-            '未找到相关结果',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: colorScheme.onSurfaceVariant,
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xxl),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildStatusIcon(Icons.search_off, colorScheme),
+            const Gap(AppSpacing.md),
+            Text(
+              '未找到相关结果',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: colorScheme.onSurface,
+              ),
             ),
-          ),
-        ],
+            const Gap(AppSpacing.xxs),
+            Text(
+              '换个关键词试试',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1149,7 +1196,8 @@ class _SearchAlbumCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
 
     return ClipRRect(
-      borderRadius: AppRadius.mdAll,
+      // 封面驱动卡片统一圆角 token（批次 1 语义档位 card=20）。
+      borderRadius: AppRadius.cardAll,
       clipBehavior: Clip.antiAlias,
       child: Material(
         color: colorScheme.surfaceContainerLow,
@@ -1173,7 +1221,12 @@ class _SearchAlbumCard extends StatelessWidget {
                     : _buildPlaceholder(colorScheme),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(10, AppSpacing.sm, 10, AppSpacing.xs),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md,
+                  AppSpacing.sm,
+                  AppSpacing.md,
+                  AppSpacing.xs,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1218,36 +1271,18 @@ class _SearchAlbumCard extends StatelessWidget {
 
 class _TabBarDelegate extends SliverPersistentHeaderDelegate {
   final TabBar tabBar;
-  /// 是否启用壁纸背景（与顶部 SliverAppBar 的 flexibleSpace 联动）。
-  final bool useBackgroundImage;
-  final double backgroundOpacity;
-  final double backgroundBlur;
-  /// 预计算的背景图 [ImageProvider]（由 SearchPage.build 传入，
-  /// 与 SliverAppBar flexibleSpace 共享 ImageCache 同 key 解码结果）。
-  /// 不在 delegate.build 内 watch ThemeProvider，避免污染 sliver 链。
-  final ImageProvider? backgroundImage;
 
-  _TabBarDelegate({
-    required this.tabBar,
-    required this.useBackgroundImage,
-    required this.backgroundOpacity,
-    required this.backgroundBlur,
-    required this.backgroundImage,
-  });
+  _TabBarDelegate({required this.tabBar});
 
   @override
-  double get minExtent => tabBar.preferredSize.height;
+  double get minExtent => tabBar.preferredSize.height + AppSpacing.xs * 2;
 
   @override
-  double get maxExtent => tabBar.preferredSize.height;
+  double get maxExtent => minExtent;
 
   @override
   bool shouldRebuild(covariant _TabBarDelegate oldDelegate) {
-    return tabBar != oldDelegate.tabBar ||
-        useBackgroundImage != oldDelegate.useBackgroundImage ||
-        backgroundOpacity != oldDelegate.backgroundOpacity ||
-        backgroundBlur != oldDelegate.backgroundBlur ||
-        backgroundImage != oldDelegate.backgroundImage;
+    return tabBar != oldDelegate.tabBar;
   }
 
   @override
@@ -1256,53 +1291,17 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    final colorScheme = Theme.of(context).colorScheme;
-    if (!useBackgroundImage || backgroundImage == null) {
-      return Container(color: colorScheme.surface, child: tabBar);
-    }
-    // 有壁纸：与顶部 SliverAppBar flexibleSpace 同结构（surface 打底 +
-    // 模糊 + 透明度 + 全屏 cover 背景图 topCenter 裁剪），tab 栏与
-    // 搜索框背景视觉连续。ClipRect 把 OverflowBox 溢出内容裁到本 sliver
-    // 区域，避免盖住下方 TabBarView 结果区。
-    final size = MediaQuery.sizeOf(context);
-    return ClipRect(
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: OverflowBox(
-              alignment: Alignment.topCenter,
-              minWidth: size.width,
-              maxWidth: size.width,
-              minHeight: size.height,
-              maxHeight: size.height,
-              child: SizedBox(
-                width: size.width,
-                height: size.height,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ColoredBox(color: colorScheme.surface),
-                    Opacity(
-                      opacity: backgroundOpacity,
-                      child: ImageFiltered(
-                        imageFilter: ui.ImageFilter.blur(
-                          sigmaX: backgroundBlur,
-                          sigmaY: backgroundBlur,
-                        ),
-                        child: Image(
-                          image: backgroundImage!,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          tabBar,
-        ],
+    // 结果分类：轻玻璃分段标签卡——与顶部玻璃搜索框同一语言，壁纸/滚动
+    // 内容从条后透出（BackdropFilter 只作用于本条区域，无全屏模糊）。
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: AppSpacing.xs,
+      ),
+      child: LiquidGlassContainer(
+        shape: GlassShape.roundedRect,
+        borderRadius: AppRadius.lg,
+        child: tabBar,
       ),
     );
   }
