@@ -1,30 +1,43 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:m3e_core/m3e_core.dart';
 import '../../core/theme/app_dimens.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/theme/squircle.dart';
+import '../../widgets/common/cover_rail.dart';
+import '../../widgets/common/liquid_glass_surface.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/md3_pull_to_refresh.dart';
 
 import '../../providers/kugou_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
-import '../../widgets/scroll_aware_app_bar.dart';
 import '../../widgets/song_list_item.dart';
 import 'home_discover_refill.dart';
+import '../album/album_detail_page.dart';
+import '../personal_fm/personal_fm_page.dart';
+import '../playlist/playlist_page.dart';
 import '../recognition/song_recognition_page.dart';
+import '../search/explore_sections.dart' show PlaylistBrowsePage, NewAlbumBrowsePage, RankDetailPage;
 import '../search/search_page.dart';
 
-/// 顶栏图标按钮（搜索 / 识曲）的尺寸：36 而不是 MD3 默认的 48，让两个图标之间
-/// 由 24dp 收到 12dp；纵向仍保留 40dp 触达高度。
-const double _kActionButtonWidth = 36.0;
-const double _kActionButtonHeight = 40.0;
-
-/// 补回按钮收窄的宽度，让最右那枚图标与屏幕边缘的距离保持不变。
-const double _kActionTrailingGap = 6.0;
-
+/// 首页 / Discover（UI 重设计批次 1，方案 §1）。
+///
+/// 结构（方案 §1.2 线框）：
+/// - [SonifyTitleScaffold] 大标题「发现」折叠顶栏（列表首 item，滚动溶解，
+///   没入后 18.5sp 小标题浮现，180ms EaseOutCubic 吸附）；
+/// - 顶栏右上搜索玻璃圆钮（42dp，Title.kt:849-873 材质）；
+/// - 列表：问候胶囊（头像 28dp + 问候语）→ 快捷入口行（FM/识曲）→ 每日推荐
+///   → 编辑精选/主题歌单/热门歌单/新碟上架/排行榜 横滑 Rail（[CoverRail]）
+///   → 刷歌推荐 → Dock 避让。
+///
+/// 既有行为保持：下拉刷新（Md3PullToRefresh）、渐进加载（Selector 分区补出）、
+/// 每日推荐/刷歌推荐分区折叠持久化、刷歌补货器（[HomeDiscoverRefill]）。
 class DiscoverPage extends StatefulWidget {
   const DiscoverPage({super.key});
 
@@ -36,13 +49,9 @@ class _DiscoverPageState extends State<DiscoverPage> {
   static const String _kDiscoverLastDateKey = 'discover_last_date';
 
   // 每日推荐区块的折叠状态（true=折叠）。SharedPreferences 存"是否折叠"。
-  //
-  // 发现页现在只剩每日推荐一块带折叠把手的分区（主题歌单/场景音乐/热门歌单/
-  // 排行榜/新碟上架已迁移到搜索空白态，见 MusicExploreSections）。
   static const String _kCollapsedDaily = 'discover_collapsed_daily';
 
-  // 刷歌推荐区块的折叠状态，键名与每日推荐同一套约定（前缀 + 分区），
-  // 这样两块共用 [_toggleCollapse] 的「prefs 存的是否折叠」语义。
+  // 刷歌推荐区块的折叠状态，键名与每日推荐同一套约定（前缀 + 分区）。
   static const String _kCollapsedHomeDiscover = 'discover_collapsed_home_discover';
 
   bool _isLoading = true;
@@ -51,14 +60,9 @@ class _DiscoverPageState extends State<DiscoverPage> {
   bool _isDailyExpanded = true;
   bool _isHomeDiscoverExpanded = true;
 
-  /// 顶栏渐变 ScrollController：与 ScrollAwareAppBar 共享，监听滚动 offset
-  final ScrollController _scrollController = ScrollController();
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
+  /// 横滑 Rail 单侧最大卡片数：上限避免一次构建过多封面卡
+  /// （provider 列表可能有一整页 30 条，首屏 10 张足够横滑）。
+  static const int _kRailMaxItems = 10;
 
   @override
   void initState() {
@@ -66,6 +70,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initIfNeeded();
       _loadCollapseStates();
+      // 横滑分区数据补拉（TTL 内静默跳过，与搜索空白态共享同一份缓存）
+      _ensureRailData();
     });
   }
 
@@ -140,6 +146,18 @@ class _DiscoverPageState extends State<DiscoverPage> {
         kugou.homeDiscoverSongs.isNotEmpty;
   }
 
+  /// 横滑分区数据补拉：编辑精选/主题歌单/热门歌单/排行榜/新碟上架。
+  /// 全部命中 provider 5 分钟 TTL 缓存即静默跳过，与搜索空白态
+  /// （MusicExploreSections）共享同一份 [KugouProvider] 数据。
+  void _ensureRailData({bool forceRefresh = false}) {
+    final kugou = context.read<KugouProvider>();
+    unawaited(kugou.getIpHome(forceRefresh: forceRefresh));
+    unawaited(kugou.getThemePlaylist(forceRefresh: forceRefresh));
+    unawaited(kugou.getPlaylist(forceRefresh: forceRefresh));
+    unawaited(kugou.getRankList(forceRefresh: forceRefresh));
+    unawaited(kugou.getTopAlbum(forceRefresh: forceRefresh));
+  }
+
   Future<void> _loadAllData() async {
     if (!mounted) return; // 页面已销毁则放弃，避免访问 context 触发 null check 崩溃
     final kugou = context.read<KugouProvider>();
@@ -151,10 +169,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
         _error = null;
       });
     }
+    // 下拉刷新触发全部分区重拉（横滑分区走 provider TTL，forceRefresh 时绕过）
+    _ensureRailData(forceRefresh: hasExistingData);
     try {
       // 渐进加载：请求并行发起，每个分区完成后立即刷新一次。
-      // 主题歌单/场景音乐/热门歌单/排行榜/新碟上架已迁到搜索空白态
-      // （MusicExploreSections 按需拉取）。
       final reqs = <Future<void>>[
         kugou.getRecommendDaily(forceRefresh: hasExistingData),
         // 刷歌推荐下拉只 forceRefresh、**不重置游标**：forceRefresh 在
@@ -199,55 +217,58 @@ class _DiscoverPageState extends State<DiscoverPage> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Scaffold(
-      appBar: ScrollAwareAppBar(
-        title: '发现',
-        tabId: 'discover',
-        scrollController: _scrollController,
-        // 公开版偏好：无壁纸时顶部恒为不透明 surface（文字区稳定）；
-        // 有壁纸时顶栏完全透明，壁纸透出与页面主体透明度上下一致
-        opaque: true,
-        titleTrailing: _buildGreetingPill(colorScheme),
-        actions: [
-          _buildActionIcon(
-            icon: Icons.search,
-            onPressed: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: _kActionTrailingGap),
-            child: _buildActionIcon(
-              icon: Icons.mic_outlined,
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SongRecognitionPage()),
-              ),
+    return Md3PullToRefresh(
+      onRefresh: _loadAllData,
+      // 页面内嵌横向滑 Rail：收窄到「depth-0 + 纵向」通知，防止横滑列表
+      // 左缘 overscroll 被误判为下拉刷新（见 [Md3PullToRefresh.notificationPredicate]）。
+      notificationPredicate: (n) =>
+          n.depth == 0 && n.metrics.axis == Axis.vertical,
+      // 渐进加载：任一分区数据就绪即退出整页转圈，先显示已获取的分区；
+      // 未就绪分区由各自 Selector 在数据到达时自动补出（空数据返回占位）。
+      child: _isLoading && !_hasAnySectionData
+          ? Scaffold(body: const Center(child: M3ELoadingIndicator()))
+          : _error != null && !_hasAnySectionData
+          ? Scaffold(body: _buildError(colorScheme))
+          : SonifyTitleScaffold(
+              title: '发现',
+              // 顶栏右侧搜索玻璃圆钮（sonify 42dp，Title.kt:849-873 材质）
+              trailing: _buildSearchGlassButton(),
+              itemCount: _kSectionCount,
+              itemBuilder: _buildListItem,
             ),
-          ),
-        ],
-      ),
-      body: Md3PullToRefresh(
-        onRefresh: _loadAllData,
-        // 渐进加载：任一分区数据就绪即退出整页转圈，先显示已获取的分区；
-        // 未就绪分区由各自 Selector 在数据到达时自动补出（空数据返回占位）。
-        child: _isLoading && !_hasAnySectionData
-            ? const Center(child: M3ELoadingIndicator())
-            : _error != null && !_hasAnySectionData
-            ? _buildError(colorScheme)
-            : CustomScrollView(
-                controller: _scrollController,
-                slivers: [
-                  _buildDailySection(colorScheme),
-                  _buildHomeDiscoverSection(colorScheme),
-                  // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度），
-                  // 让最后一个分区停在悬浮 Dock 上方、可点击。
-                  SliverToBoxAdapter(
-                    child: SizedBox(height: MediaQuery.paddingOf(context).bottom),
-                  ),
-                ],
-              ),
-      ),
     );
+  }
+
+  /// 列表 item 布局（方案 §1.2 线框顺序）。
+  static const int _kSectionCount = 10;
+
+  Widget _buildListItem(BuildContext context, int index) {
+    switch (index) {
+      case 0:
+        return _buildGreetingItem();
+      case 1:
+        return _buildQuickAccessRow();
+      case 2:
+        return _buildDailySection();
+      case 3:
+        return _buildIpHomeSection();
+      case 4:
+        return _buildThemeSection();
+      case 5:
+        return _buildPlaylistSection();
+      case 6:
+        return _buildNewAlbumSection();
+      case 7:
+        return _buildRankSection();
+      case 8:
+        return _buildHomeDiscoverSection();
+      case 9:
+        // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度），
+        // 让最后一个分区停在悬浮 Dock 上方、可点击。
+        return SizedBox(height: MediaQuery.paddingOf(context).bottom);
+      default:
+        return const SizedBox.shrink();
+    }
   }
 
   String _getGreeting() {
@@ -297,118 +318,453 @@ class _DiscoverPageState extends State<DiscoverPage> {
     );
   }
 
-  /// 三个参数缺一不可：`constraints` 定按钮尺寸，`padding` 让 24dp 的图标塞得进
-  /// 36dp 的框，`visualDensity` 改的是 MD3 垫在外面那层 48dp 的布局尺寸——不动它
-  /// 按钮画小了、占位照旧。
-  Widget _buildActionIcon({
-    required IconData icon,
-    required VoidCallback onPressed,
-  }) {
-    return IconButton(
-      visualDensity: const VisualDensity(horizontal: -3, vertical: -2),
-      constraints: const BoxConstraints.tightFor(
-        width: _kActionButtonWidth,
-        height: _kActionButtonHeight,
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-      icon: Icon(icon),
-      onPressed: onPressed,
+  /// 顶栏搜索玻璃圆钮：42dp 圆形液态玻璃（sonify Title.kt:849-873 材质，
+  /// 经 [LiquidGlassSurface] 参数化实现），图标 20dp。
+  Widget _buildSearchGlassButton() {
+    return LiquidGlassSurface(
+      shape: GlassShape.circle,
+        child: SizedBox(
+          width: 42,
+          height: 42,
+          child: IconButton(
+            // 顶满玻璃圆钮（默认 48dp 会溢出 42dp 容器）
+            constraints: const BoxConstraints.tightFor(width: 42, height: 42),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.search, size: 20),
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
+          ),
+        ),
     );
   }
 
-  /// 问候胶囊，紧跟在顶栏标题右边。宽度贴着文字长短变，上限由标题区剩下的宽度
-  /// 决定（见 [ScrollAwareAppBar.titleTrailing]），顶格时由 ellipsis 收尾。
-  Widget _buildGreetingPill(ColorScheme cs) {
-    final tt = Theme.of(context).textTheme;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 6, 10, 6),
-      decoration: ShapeDecoration(
-        color: cs.primaryContainer,
-        shape: const StadiumBorder(),
+  /// 问候胶囊：头像 28dp（左）+ 问候语/昵称（方案 §1.1「头像入问候胶囊」）。
+  /// 整体可点 → /user（未登录时用户中心自身展示登录引导）。
+  Widget _buildGreetingItem() {
+    final cs = Theme.of(context).colorScheme;
+    final sonify = SonifyColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        SonifySpacing.titleMargin, 4, SonifySpacing.titleMargin, 0,
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Selector<KugouProvider, String?>(
-              selector: (_, kugou) =>
-                  kugou.isLoggedIn ? kugou.userInfo?.nickname : null,
-              builder: (context, nickname, _) {
-                final greeting = _getGreeting();
-                return Text(
-                  nickname == null || nickname.isEmpty
-                      ? greeting
-                      : '$greeting，$nickname',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: tt.labelLarge?.copyWith(
-                    color: cs.onPrimaryContainer,
-                    fontWeight: FontWeight.w600,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: GestureDetector(
+          onTap: () => Navigator.of(context).pushNamed('/user'),
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(4, 4, 14, 4),
+            decoration: ShapeDecoration(
+              color: sonify.surfaceCard,
+              shape: const StadiumBorder(),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 头像 28dp：登录用真实头像，未登录显示默认人形占位
+                Selector<KugouProvider, String?>(
+                  selector: (_, kugou) => kugou.userInfo?.avatar,
+                  builder: (context, avatar, _) => CircleAvatar(
+                    radius: 14,
+                    backgroundColor: cs.surfaceContainerHighest,
+                    backgroundImage: (avatar != null && avatar.isNotEmpty)
+                        ? CachedNetworkImageProvider(avatar)
+                        : null,
+                    child: (avatar == null || avatar.isEmpty)
+                        ? Icon(Icons.person, size: 16, color: cs.onSurfaceVariant)
+                        : null,
                   ),
-                );
-              },
+                ),
+                const Gap(AppSpacing.sm),
+                Selector<KugouProvider, String?>(
+                  selector: (_, kugou) =>
+                      kugou.isLoggedIn ? kugou.userInfo?.nickname : null,
+                  builder: (context, nickname, _) {
+                    final greeting = _getGreeting();
+                    return Text(
+                      nickname == null || nickname.isEmpty
+                          ? greeting
+                          : '$greeting，$nickname',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: SonifyTextStyles.listItem.copyWith(
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    );
+                  },
+                ),
+              ],
             ),
           ),
-          const Gap(AppSpacing.xs),
-          Icon(Icons.music_note, size: 16, color: cs.onPrimaryContainer),
+        ),
+      ),
+    );
+  }
+
+  /// 快捷入口行：FM / 识曲，56dp squircle 9dp 卡底色块（方案 §1.3）。
+  ///
+  /// 线框中的「场景」「榜单」两块未落地：场景点击链路（场景音乐列表页）与
+  /// 榜单浏览页在数据侧均未就绪（见批次回报），避免放死入口。
+  Widget _buildQuickAccessRow() {
+    final cs = Theme.of(context).colorScheme;
+    final sonify = SonifyColors.of(context);
+    Widget block(IconData icon, String label, VoidCallback onTap) {
+      return GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: SmoothClipRRect(
+          borderRadius: BorderRadius.circular(SonifyRadius.card),
+          child: Container(
+            width: 64,
+            height: 56,
+            color: sonify.surfaceCard,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 24, color: cs.onSurface),
+                const Gap(3),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: sonify.textSecondary,
+                  ),
+                  maxLines: 1,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        SonifySpacing.titleMargin, AppSpacing.sm, SonifySpacing.titleMargin, 0,
+      ),
+      child: Row(
+        children: [
+          block(
+            Icons.radio,
+            '私人 FM',
+            () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PersonalFmPage()),
+            ),
+          ),
+          const Gap(AppSpacing.sm),
+          block(
+            Icons.mic_none,
+            '识曲',
+            () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SongRecognitionPage()),
+            ),
+          ),
         ],
       ),
     );
   }
 
+  /// 分区标题行：18sp Bold 标题 + 可选「更多」（13sp 次级灰 + 24dp primary
+  /// 右箭头，方案 §1.3）。
+  Widget _sectionHeader(String title, {VoidCallback? onMore}) {
+    final cs = Theme.of(context).colorScheme;
+    final sonify = SonifyColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        SonifySpacing.titleMargin, AppSpacing.lg, SonifySpacing.titleMargin, AppSpacing.sm,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: SonifyTextStyles.sectionTitle.copyWith(color: cs.onSurface),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (onMore != null)
+            GestureDetector(
+              onTap: onMore,
+              behavior: HitTestBehavior.opaque,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '更多',
+                    style: SonifyTextStyles.listItem.copyWith(
+                      color: sonify.textSecondary,
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, size: 24, color: cs.primary),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _railCoverImage(String? url) {
+    final cs = Theme.of(context).colorScheme;
+    if (url == null || url.isEmpty) {
+      return Container(
+        color: cs.surfaceContainerHighest,
+        child: Icon(Icons.music_note, color: cs.onSurfaceVariant),
+      );
+    }
+    return CachedNetworkImage(
+      imageUrl: url,
+      memCacheWidth: 390,
+      memCacheHeight: 390,
+      fit: BoxFit.cover,
+      placeholder: (_, _) => Container(color: cs.surfaceContainerHighest),
+      errorWidget: (_, _, _) => Container(
+        color: cs.surfaceContainerHighest,
+        child: Icon(Icons.music_note, color: cs.onSurfaceVariant),
+      ),
+    );
+  }
+
+  /// 编辑精选：消费 [KugouProvider.ipHomeData]（/top/ip 原始 JSON，无解析模型）。
+  ///
+  /// 容错解析：尝试 data.list/info 等常见键位提取「名称 + 封面」条目，
+  /// 提取不到（结构不符）时分区整体隐藏，不影响其它分区。
+  Widget _buildIpHomeSection() {
+    return Selector<KugouProvider, Map<String, dynamic>?>(
+      selector: (_, kugou) => kugou.ipHomeData,
+      builder: (context, data, _) {
+        final items = _parseIpHomeItems(data);
+        if (items.isEmpty) return const SizedBox.shrink();
+        final count = items.length.clamp(0, _kRailMaxItems);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _sectionHeader('编辑精选'),
+            CoverRail(
+              itemCount: count,
+              itemBuilder: (context, i) => CoverRailCard(
+                cover: _railCoverImage(items[i].cover),
+                title: items[i].name,
+                // /ip 详情页尚未建（getIpData 无消费页），暂为展示态
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  List<({String name, String? cover})> _parseIpHomeItems(
+    Map<String, dynamic>? raw,
+  ) {
+    if (raw == null) return const [];
+    dynamic node = raw['data'] ?? raw;
+    List? list;
+    if (node is Map) {
+      for (final key in const ['list', 'info', 'items', 'blocks', 'data']) {
+        final v = node[key];
+        if (v is List && v.isNotEmpty) {
+          list = v;
+          break;
+        }
+      }
+    } else if (node is List) {
+      list = node;
+    }
+    if (list == null) return const [];
+    final out = <({String name, String? cover})>[];
+    for (final e in list) {
+      if (e is! Map) continue;
+      final name =
+          (e['name'] ?? e['title'] ?? e['ipName'])?.toString() ?? '';
+      final cover =
+          (e['coverUrl'] ?? e['cover'] ?? e['imgUrl'] ?? e['img'] ??
+                  e['screenshot'] ?? e['pic'])
+              ?.toString();
+      if (name.isEmpty || cover == null || cover.isEmpty) continue;
+      out.add((name: name, cover: cover));
+    }
+    return out;
+  }
+
+  /// 主题歌单：横滑 Rail（自搜索空白态探索分区迁回，共享 provider 缓存）。
+  /// 主题卡暂无详情页（现状展示态，与 MusicExploreSections 一致）。
+  Widget _buildThemeSection() {
+    return Selector<KugouProvider, List<KugouThemeInfo>>(
+      selector: (_, kugou) => kugou.themePlaylistData,
+      builder: (context, themes, _) {
+        if (themes.isEmpty) return const SizedBox.shrink();
+        final count = themes.length.clamp(0, _kRailMaxItems);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _sectionHeader('主题歌单'),
+            CoverRail(
+              itemCount: count,
+              itemBuilder: (context, i) => CoverRailCard(
+                cover: _railCoverImage(themes[i].coverUrl),
+                title: themes[i].name,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 热门歌单：横滑 Rail，点击进歌单详情，「更多」进浏览页。
+  Widget _buildPlaylistSection() {
+    return Selector<KugouProvider, List<KugouPlaylistBrief>>(
+      selector: (_, kugou) => kugou.playlistList,
+      builder: (context, plist, _) {
+        if (plist.isEmpty) return const SizedBox.shrink();
+        final count = plist.length.clamp(0, _kRailMaxItems);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _sectionHeader(
+              '热门歌单',
+              onMore: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const PlaylistBrowsePage()),
+              ),
+            ),
+            CoverRail(
+              itemCount: count,
+              itemBuilder: (context, i) => CoverRailCard(
+                cover: _railCoverImage(plist[i].coverUrl),
+                title: plist[i].name,
+                subtitle: plist[i].songCount > 0
+                    ? '${plist[i].songCount}首'
+                    : null,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => PlaylistPage(playlist: plist[i].toPlaylist()),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 新碟上架：横滑 Rail，点击进专辑详情，「更多」进浏览页。
+  Widget _buildNewAlbumSection() {
+    return Selector<KugouProvider, List<KugouAlbumBrief>>(
+      selector: (_, kugou) => kugou.topAlbums,
+      builder: (context, albums, _) {
+        if (albums.isEmpty) return const SizedBox.shrink();
+        final count = albums.length.clamp(0, _kRailMaxItems);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _sectionHeader(
+              '新碟上架',
+              onMore: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const NewAlbumBrowsePage()),
+              ),
+            ),
+            CoverRail(
+              itemCount: count,
+              itemBuilder: (context, i) => CoverRailCard(
+                cover: _railCoverImage(albums[i].toAlbum().artworkUri),
+                title: albums[i].name,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        AlbumDetailPage(album: albums[i].toAlbum()),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 排行榜：横滑 Rail（提级自搜索空白态网格），点击进榜单歌曲页。
+  Widget _buildRankSection() {
+    return Selector<KugouProvider, KugouRankList?>(
+      selector: (_, kugou) => kugou.rankList,
+      builder: (context, rankList, _) {
+        final ranks = rankList?.ranks ?? const <KugouRank>[];
+        if (ranks.isEmpty) return const SizedBox.shrink();
+        final count = ranks.length.clamp(0, _kRailMaxItems);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _sectionHeader('排行榜'),
+            CoverRail(
+              itemCount: count,
+              itemBuilder: (context, i) => CoverRailCard(
+                cover: _railCoverImage(ranks[i].toAlbum().artworkUri),
+                title: ranks[i].name,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => RankDetailPage(
+                      rankId: ranks[i].id,
+                      rankName: ranks[i].name,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   /// 每日推荐：竖排前四首。
   ///
-  /// 原来是 76dp 高的横滑条，是全页最矮的区块——语义最重的内容拿到了最轻的
-  /// 视觉权重。而且卡内布局是「封面在左、文字在右」的列表项形态，被硬塞进横滑
-  /// 列表：横滑方向和卡内阅读方向一致，眼睛不知道该往哪走。
-  ///
-  /// 改成竖排后它同时打断了「五连横滑」的单一节奏，并且复用 [SongListItem]，
-  /// 顺带拿到「正在播」高亮、收藏、更多菜单（含 MV）——原来的 _DailySongCard 一个都没有。
-  /// 全部 30 首仍在标题右侧的 `›` 里。
-  Widget _buildDailySection(ColorScheme cs) {
+  /// 复用 [SongListItem]，拿到「正在播」高亮、收藏、更多菜单（含 MV）。
+  /// 全部 30 首仍在标题右侧的 `›` 里。折叠状态持久化（既有行为）。
+  Widget _buildDailySection() {
     return Selector<KugouProvider, List<KugouSongDetail>>(
       selector: (_, kugou) => kugou.recommendSongs,
       builder: (context, songs, _) {
-        if (songs.isEmpty) return const SliverToBoxAdapter(child: SizedBox());
+        if (songs.isEmpty) return const SizedBox.shrink();
         final all = songs.map((e) => e.toSong()).toList();
         final top = all.take(4).toList();
-        return SliverToBoxAdapter(
-          child: _CollapsibleSection(
-            title: '每日推荐',
-            isExpanded: _isDailyExpanded,
-            onToggle: () => _toggleCollapse(
-              prefKey: _kCollapsedDaily,
-              currentlyExpanded: _isDailyExpanded,
-              apply: (v) => _isDailyExpanded = v,
-            ),
-            trailing: IconButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const _DailyRecommendDetailPage(),
+        return _CollapsibleSection(
+          title: '每日推荐',
+          isExpanded: _isDailyExpanded,
+          onToggle: () => _toggleCollapse(
+            prefKey: _kCollapsedDaily,
+            currentlyExpanded: _isDailyExpanded,
+            apply: (v) => _isDailyExpanded = v,
+          ),
+          trailing: IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const _DailyRecommendDetailPage(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.chevron_right),
+          ),
+          child: Padding(
+            // SongListItem 自带 horizontal 10 的内边距，补 6 凑成 16dp 页边距。
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Column(
+              children: [
+                for (var i = 0; i < top.length; i++)
+                  SongListItem(
+                    song: top[i],
+                    showDuration: false,
+                    // 每日推荐：右侧仅收藏按钮（见改版计划二）。
+                    trailingActions: SongTrailingActions.favoriteOnly,
+                    onTap: () => context
+                        .read<PlayerProvider>()
+                        .playOnlinePlaylist(all, i),
                   ),
-                );
-              },
-              icon: const Icon(Icons.chevron_right),
-            ),
-            child: Padding(
-              // SongListItem 自带 horizontal 10 的内边距，补 6 凑成
-              // 与其他区块一致的 16dp 页边距。
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Column(
-                children: [
-                  for (var i = 0; i < top.length; i++)
-                    SongListItem(
-                      song: top[i],
-                      showDuration: false,
-                      // 每日推荐：右侧仅收藏按钮（见改版计划二）。
-                      trailingActions: SongTrailingActions.favoriteOnly,
-                      onTap: () => context
-                          .read<PlayerProvider>()
-                          .playOnlinePlaylist(all, i),
-                    ),
-                ],
-              ),
+              ],
             ),
           ),
         );
@@ -418,55 +774,46 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
   /// 刷歌推荐：竖排前四首，形态与 [_buildDailySection] 完全一致。
   ///
-  /// 刻意复用 [SongListItem] 而不是再造一张卡：这一块和每日推荐在视觉上是同一类
-  /// 内容（"挑几首听"），用户不该在同一个页面看到两种行样式；而复用顺带拿到
-  /// 「正在播」高亮与收藏按钮，别的都得重写一遍。
-  ///
-  /// 只渲染前 4 首：这是"刷"的第一屏，越少越像一屏；更多的一批在右侧 `›` 的
-  /// 详情页里靠上滑继续（[KugouProvider.fetchMoreHomeDiscover]）。
-  Widget _buildHomeDiscoverSection(ColorScheme cs) {
+  /// 刻意复用 [SongListItem]：与每日推荐是同一类内容（"挑几首听"），
+  /// 复用顺带拿到「正在播」高亮与收藏按钮。折叠状态持久化（既有行为）。
+  Widget _buildHomeDiscoverSection() {
     return Selector<KugouProvider, List<KugouSongDetail>>(
       selector: (_, kugou) => kugou.homeDiscoverSongs,
       builder: (context, details, _) {
-        if (details.isEmpty) return const SliverToBoxAdapter(child: SizedBox());
+        if (details.isEmpty) return const SizedBox.shrink();
         final all = details.map((e) => e.toSong()).toList();
         final top = all.take(4).toList();
-        return SliverToBoxAdapter(
-          child: _CollapsibleSection(
-            title: '刷歌推荐',
-            isExpanded: _isHomeDiscoverExpanded,
-            onToggle: () => _toggleCollapse(
-              prefKey: _kCollapsedHomeDiscover,
-              currentlyExpanded: _isHomeDiscoverExpanded,
-              apply: (v) => _isHomeDiscoverExpanded = v,
-            ),
-            trailing: IconButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const _HomeDiscoverDetailPage(),
+        return _CollapsibleSection(
+          title: '刷歌推荐',
+          isExpanded: _isHomeDiscoverExpanded,
+          onToggle: () => _toggleCollapse(
+            prefKey: _kCollapsedHomeDiscover,
+            currentlyExpanded: _isHomeDiscoverExpanded,
+            apply: (v) => _isHomeDiscoverExpanded = v,
+          ),
+          trailing: IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const _HomeDiscoverDetailPage(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.chevron_right),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Column(
+              children: [
+                for (var i = 0; i < top.length; i++)
+                  SongListItem(
+                    song: top[i],
+                    showDuration: false,
+                    // 与每日推荐一致：右侧仅收藏按钮，时长对"刷"没有参考价值。
+                    trailingActions: SongTrailingActions.favoriteOnly,
+                    onTap: () => _play(i),
                   ),
-                );
-              },
-              icon: const Icon(Icons.chevron_right),
-            ),
-            child: Padding(
-              // SongListItem 自带 horizontal 10 的内边距，补 6 凑成
-              // 与其他区块一致的 16dp 页边距。
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Column(
-                children: [
-                  for (var i = 0; i < top.length; i++)
-                    SongListItem(
-                      song: top[i],
-                      showDuration: false,
-                      // 与每日推荐一致：右侧仅收藏按钮，时长对"刷"没有参考价值。
-                      trailingActions: SongTrailingActions.favoriteOnly,
-                      // 走统一的 _play，卡片上点歌同样要装填补货器
-                      onTap: () => _play(i),
-                    ),
-                ],
-              ),
+              ],
             ),
           ),
         );
@@ -590,8 +937,8 @@ class _DailyRecommendDetailPageState extends State<_DailyRecommendDetailPage> {
 
 /// 刷歌推荐详情页：完整的一批 + 上滑增量 + 起播补货。
 ///
-/// 骨架照 [_DailyRecommendDetailPage]（Scaffold + AppBar + SecondaryMiniPlayerHost
-/// + 「播放全部」+ ListView.builder），差别只有两处：
+/// 骨架照 [_DailyRecommendDetailPage]（Scaffold + AppBar + 「播放全部」+
+/// ListView.builder），差别只有两处：
 /// - 列表会随滚动变长：底部哨兵行到距底 200px 就翻一批
 ///   （[KugouProvider.fetchMoreHomeDiscover]），翻到取不动为止；
 /// - 点任意一首都会把 [HomeDiscoverRefill] 装上，播完自动接下一批。
@@ -852,16 +1199,15 @@ class _CollapsibleSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tt = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(
+            SonifySpacing.titleMargin,
             AppSpacing.lg,
-            AppSpacing.md,
-            AppSpacing.lg,
+            SonifySpacing.titleMargin,
             AppSpacing.sm,
           ),
           child: Row(
@@ -878,8 +1224,9 @@ class _CollapsibleSection extends StatelessWidget {
                         Flexible(
                           child: Text(
                             title,
-                            style: tt.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
+                            // 分区标题 18sp Bold（方案 §0.3 排印 token）
+                            style: SonifyTextStyles.sectionTitle.copyWith(
+                              color: cs.onSurface,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,

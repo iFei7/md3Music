@@ -11,6 +11,8 @@ import '../../data/models/song.dart';
 import '../../providers/kugou_provider.dart';
 import '../../core/layout/adaptive_content_grid.dart';
 import '../../core/theme/app_dimens.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/theme/squircle.dart';
 import '../../core/widgets/app_background.dart';
 import '../../providers/theme_provider.dart';
 import '../../providers/player_provider.dart';
@@ -37,6 +39,10 @@ class SearchPage extends StatefulWidget {
 class _SearchPageState extends State<SearchPage>
     with SingleTickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
+
+  /// 搜索框聚焦态跟踪（sonify 规格：聚焦时 1.5dp primary 描边）。
+  final FocusNode _searchFocusNode = FocusNode();
+
   late TabController _tabController;
   List<String> _searchHistory = [];
   String _query = '';
@@ -58,7 +64,18 @@ class _SearchPageState extends State<SearchPage>
     super.initState();
     _tabController = TabController(length: 6, vsync: this);
     _tabController.addListener(_onTabChanged);
+    _searchFocusNode.addListener(_onFocusChanged);
     _loadSearchHistory();
+    // 恢复「热门搜索」（UI 重设计批次 1，方案 §2.1）：接口 /search/hot 一直在
+    // （KugouApiClient.getHotSearch → KugouProvider.getHotSearch，结果缓存于
+    // hotSearchKeywords），此前只是 UI 被移除。仅在缓存为空时拉一次。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final kugou = context.read<KugouProvider>();
+      if (kugou.hotSearchKeywords.isEmpty) {
+        kugou.getHotSearch();
+      }
+    });
     // 桌面工具栏搜索框提交：预填查询并在首帧后立即执行搜索。
     final q = widget.initialQuery?.trim() ?? '';
     if (q.isNotEmpty) {
@@ -69,9 +86,15 @@ class _SearchPageState extends State<SearchPage>
     }
   }
 
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     _tabController.removeListener(_onTabChanged);
+    _searchFocusNode.removeListener(_onFocusChanged);
+    _searchFocusNode.dispose();
     _searchController.dispose();
     _tabController.dispose();
     super.dispose();
@@ -237,58 +260,9 @@ class _SearchPageState extends State<SearchPage>
                         )
                       : null,
                   surfaceTintColor: Colors.transparent,
-                  title: SizedBox(
-                    height: 40,
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        hintText: '搜索歌曲、歌手、专辑',
-                        hintStyle: Theme.of(context).textTheme.bodyMedium
-                            ?.copyWith(color: colorScheme.onSurfaceVariant),
-                        prefixIcon: Icon(
-                          Icons.search,
-                          size: 20,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                        suffixIcon: _searchController.text.isNotEmpty
-                            ? IconButton(
-                                icon: Icon(
-                                  Icons.clear,
-                                  size: 18,
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  setState(() {
-                                    _query = '';
-                                    _hasSearched = false;
-                                  });
-                                },
-                              )
-                            : null,
-                        filled: true,
-                        fillColor: colorScheme.surfaceContainerHighest,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          borderSide: BorderSide.none,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: AppSpacing.none,
-                        ),
-                        isDense: true,
-                      ),
-                      textInputAction: TextInputAction.search,
-                      onSubmitted: _performSearch,
-                      onChanged: (value) {
-                        setState(() {});
-                        if (value.trim().isNotEmpty) {
-                          context.read<KugouProvider>().getSearchSuggest(
-                            value.trim(),
-                          );
-                        }
-                      },
-                    ),
-                  ),
+                  // sonify 规格（方案 §2.3）：squircle 9dp、卡底色、高 52dp、
+                  // 左放大镜 20dp、右清空钮 28dp 命中区、聚焦 1.5dp primary 描边。
+                  title: _buildSearchField(colorScheme),
                 ),
                 if (_hasSearched)
                   SliverPersistentHeader(
@@ -296,6 +270,26 @@ class _SearchPageState extends State<SearchPage>
                     delegate: _TabBarDelegate(
                       tabBar: TabBar(
                         controller: _tabController,
+                        // sonify 规格（方案 §2.3）：文字 14sp Medium，
+                        // 选中 primary / 未选次级灰，指标条 3dp 圆头。
+                        labelColor: colorScheme.primary,
+                        unselectedLabelColor: SonifyColors.of(context).textSecondary,
+                        labelStyle: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        unselectedLabelStyle: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        indicatorSize: TabBarIndicatorSize.label,
+                        indicator: UnderlineTabIndicator(
+                          borderSide: BorderSide(
+                            width: 3,
+                            color: colorScheme.primary,
+                          ),
+                          borderRadius: BorderRadius.circular(1.5),
+                        ),
                         tabs: const [
                           Tab(text: '歌曲'),
                           Tab(text: '专辑'),
@@ -322,9 +316,89 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
+  /// 搜索框（sonify 规格，方案 §2.3）：
+  /// - squircle 9dp、卡底色（surfaceCard），高 52dp，水平边距 16.5dp 由
+  ///   SliverAppBar title 布局承担；
+  /// - placeholder 16sp 次级灰；聚焦时 1.5dp primary 描边；
+  /// - 左放大镜 20dp、右清空钮 28dp 命中区。
+  /// 行为不变：textInputAction=search、onSubmitted 搜索、onChanged 实时联想。
+  Widget _buildSearchField(ColorScheme colorScheme) {
+    final sonify = SonifyColors.of(context);
+    final hasText = _searchController.text.isNotEmpty;
+    final isFocused = _searchFocusNode.hasFocus;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: SonifySpacing.cardMargin),
+      child: Container(
+        height: 52,
+        decoration: ShapeDecoration(
+          color: sonify.surfaceCard,
+          shape: SmoothRectangleBorder(
+            borderRadius: BorderRadius.circular(SonifyRadius.card),
+            side: isFocused
+                ? BorderSide(color: colorScheme.primary, width: 1.5)
+                : BorderSide.none,
+          ),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 16),
+            Icon(Icons.search, size: 20, color: sonify.textSecondary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _searchController,
+                focusNode: _searchFocusNode,
+                style: SonifyTextStyles.body.copyWith(
+                  color: colorScheme.onSurface,
+                ),
+                decoration: InputDecoration(
+                  hintText: '搜索歌曲、歌手、专辑',
+                  hintStyle: SonifyTextStyles.body.copyWith(
+                    color: sonify.textSecondary,
+                  ),
+                  border: InputBorder.none,
+                  isCollapsed: true,
+                ),
+                textInputAction: TextInputAction.search,
+                onSubmitted: _performSearch,
+                onChanged: (value) {
+                  setState(() {});
+                  if (value.trim().isNotEmpty) {
+                    context.read<KugouProvider>().getSearchSuggest(
+                      value.trim(),
+                    );
+                  }
+                },
+              ),
+            ),
+            if (hasText)
+              IconButton(
+                // 28dp 命中区（视觉 18dp 图标），顶满 52dp 行高便于点按
+                constraints: const BoxConstraints.tightFor(width: 36, height: 52),
+                padding: const EdgeInsets.only(right: 6),
+                icon: Icon(
+                  Icons.clear,
+                  size: 18,
+                  color: sonify.textSecondary,
+                ),
+                onPressed: () {
+                  _searchController.clear();
+                  setState(() {
+                    _query = '';
+                    _hasSearched = false;
+                  });
+                },
+              ),
+            if (!hasText) const SizedBox(width: 10),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildEmptyState() {
-    // 未输入关键词：搜索历史 + 音乐探索（从发现页迁移的内容模块）。
-    // 已移除「热门搜索」及其自动网络请求。
+    // 未输入关键词：搜索历史 + 热门搜索（批次 1 恢复）+ 音乐探索
+    // （从发现页迁移的内容模块，与首页共享 Rail 数据缓存）。
     return ListView(
       // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
       padding: EdgeInsets.only(
@@ -337,7 +411,7 @@ class _SearchPageState extends State<SearchPage>
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('搜索历史', style: Theme.of(context).textTheme.titleMedium),
+                Text('搜索历史', style: _kGroupHeaderStyle(context)),
                 TextButton(
                   onPressed: _clearSearchHistory,
                   child: const Text('清空'),
@@ -351,9 +425,9 @@ class _SearchPageState extends State<SearchPage>
               spacing: 8,
               runSpacing: 8,
               children: _searchHistory.map((history) {
-                return ActionChip(
-                  label: Text(history),
-                  onPressed: () {
+                return _SearchKeywordChip(
+                  label: history,
+                  onTap: () {
                     _searchController.text = history;
                     _performSearch(history);
                   },
@@ -362,8 +436,44 @@ class _SearchPageState extends State<SearchPage>
             ),
           ),
         ],
-        // 搜索历史与下方「音乐探索」之间加大间距，形成明显分段（见改版计划补充三）。
+        // 搜索历史与下方「热门搜索」之间加大间距，形成明显分段。
         if (_searchHistory.isNotEmpty) const Gap(AppSpacing.lg),
+        // 热门搜索（恢复）：/search/hot Chip 流置于历史下方；
+        // 前 3 名加 11sp 次级灰序号角标（方案 §2.3）。
+        Selector<KugouProvider, List<String>>(
+          selector: (_, kugou) => kugou.hotSearchKeywords,
+          builder: (context, hotKeywords, _) {
+            if (hotKeywords.isEmpty) return const SizedBox.shrink();
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.sm),
+                  child: Text('热门搜索', style: _kGroupHeaderStyle(context)),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (var i = 0; i < hotKeywords.length; i++)
+                        _SearchKeywordChip(
+                          label: hotKeywords[i],
+                          rank: i < 3 ? i + 1 : null,
+                          onTap: () {
+                            _searchController.text = hotKeywords[i];
+                            _performSearch(hotKeywords[i]);
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const Gap(AppSpacing.lg),
         // 音乐探索：主题歌单 / 场景音乐 / 热门歌单 / 排行榜 / 新碟上架，
         // 复用 KugouProvider 已有数据与缓存（内部数据为空时自动补拉）。
         const MusicExploreSections(),
@@ -411,7 +521,11 @@ class _SearchPageState extends State<SearchPage>
             size: 20,
             color: colorScheme.onSurfaceVariant,
           ),
-          title: Text(suggestion, maxLines: 1, overflow: TextOverflow.ellipsis),
+          // 联想 13sp，命中关键词片段用 primary 色高亮（方案 §2.3）
+          title: _buildHighlightedSuggestion(
+            suggestion,
+            _searchController.text,
+          ),
           dense: true,
           onTap: () {
             _searchController.text = suggestion;
@@ -420,6 +534,53 @@ class _SearchPageState extends State<SearchPage>
           },
         );
       },
+    );
+  }
+
+  /// 联想条目文本：包含查询词的部分以 primary 色渲染（大小写不敏感）。
+  Widget _buildHighlightedSuggestion(String suggestion, String query) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final q = query.trim();
+    final baseStyle = SonifyTextStyles.listItem.copyWith(
+      color: colorScheme.onSurface,
+    );
+    if (q.isEmpty) {
+      return Text(
+        suggestion,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: baseStyle,
+      );
+    }
+    final lower = suggestion.toLowerCase();
+    final lowerQ = q.toLowerCase();
+    final hitStyle = baseStyle.copyWith(
+      color: colorScheme.primary,
+      fontWeight: FontWeight.w500,
+    );
+    final spans = <TextSpan>[];
+    var start = 0;
+    while (true) {
+      final idx = lower.indexOf(lowerQ, start);
+      if (idx < 0) {
+        if (start < suggestion.length) {
+          spans.add(TextSpan(text: suggestion.substring(start)));
+        }
+        break;
+      }
+      if (idx > start) {
+        spans.add(TextSpan(text: suggestion.substring(start, idx)));
+      }
+      spans.add(TextSpan(
+        text: suggestion.substring(idx, idx + q.length),
+        style: hitStyle,
+      ));
+      start = idx + q.length;
+    }
+    return Text.rich(
+      TextSpan(style: baseStyle, children: spans),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
   }
 
@@ -1127,6 +1288,65 @@ class _ArtistAvatarState extends State<_ArtistAvatar> {
       ),
     );
   }
+}
+
+/// 搜索历史/热门搜索关键字 chip（sonify 规格，方案 §2.1/§2.3）：
+/// squircle 8dp、卡底色、13sp 文字；[rank] 非空时渲染 11sp 次级灰序号角标
+/// （热门搜索前 3 名）。
+class _SearchKeywordChip extends StatelessWidget {
+  final String label;
+  final int? rank;
+  final VoidCallback onTap;
+
+  const _SearchKeywordChip({
+    required this.label,
+    required this.onTap,
+    this.rank,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final sonify = SonifyColors.of(context);
+    final cs = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: ShapeDecoration(
+          color: sonify.surfaceCard,
+          shape: SmoothRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (rank != null) ...[
+              Text(
+                '$rank',
+                style: TextStyle(fontSize: 11, color: sonify.textSecondary),
+              ),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              style: SonifyTextStyles.listItem.copyWith(color: cs.onSurface),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 空态分组标题（搜索历史/热门搜索）：13sp（方案 §2.2 布局线框）。
+TextStyle _kGroupHeaderStyle(BuildContext context) {
+  final cs = Theme.of(context).colorScheme;
+  return SonifyTextStyles.listItem.copyWith(
+    color: cs.onSurface,
+    fontWeight: FontWeight.w500,
+  );
 }
 
 class _SearchAlbumCard extends StatelessWidget {

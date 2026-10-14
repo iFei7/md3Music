@@ -41,12 +41,21 @@ class Md3PullToRefresh extends StatelessWidget {
   /// 网络较慢时指示器照常停留至数据返回。
   final Duration minDisplay;
 
+  /// 滚动通知过滤（透传给 [M3EPullToRefreshIndicator]）。
+  ///
+  /// 可滚动内容里嵌有**横向**滑列表（如首页的横滑封面 Rail）时必须收窄：
+  /// 默认的 depth-0 判定分不清轴向，横滑列表在左缘的 overscroll（负值）
+  /// 会被累计成下拉距离并误触发刷新。消费方传
+  /// `(n) => n.depth == 0 && n.metrics.axis == Axis.vertical` 即可。
+  final bool Function(ScrollNotification)? notificationPredicate;
+
   const Md3PullToRefresh({
     super.key,
     required this.onRefresh,
     required this.child,
     this.springMotion = M3EMotion.expressiveEffectsDefault,
     this.minDisplay = const Duration(milliseconds: 500),
+    this.notificationPredicate,
   });
 
   @override
@@ -61,6 +70,7 @@ class Md3PullToRefresh extends StatelessWidget {
         );
       },
       springMotion: springMotion,
+      notificationPredicate: notificationPredicate,
       child: child,
     );
   }
