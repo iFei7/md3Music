@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:material_ui/material_ui.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
 import 'package:m3e_core/m3e_core.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -15,6 +16,7 @@ import '../../core/layout/page_title_alignment.dart';
 import '../../core/services/audio_service_io.dart';
 import '../../core/services/volume_normalization_service.dart';
 import '../../core/services/background_image_loader.dart';
+import '../../core/theme/squircle.dart';
 import '../../core/widgets/app_background.dart' show kDefaultWallpaperAsset;
 import '../../core/utils/app_toast.dart';
 import '../../core/services/desktop_lyric_service.dart';
@@ -152,6 +154,8 @@ class _SettingsPageState extends State<SettingsPage>
       VolumeNormalizationService.defaultReferenceLufs;
   // 播放时保持屏幕常亮开关
   bool _keepScreenOn = false;
+  // Dock 展开胶囊「左右滑切歌」开关（默认关闭，方案 §7.3 P1-1）
+  bool _dockSwipeToSwitchTrack = false;
 
   // 忽略音频焦点开关（默认开启：允许与其他应用同时播放音频）
   bool _ignoreAudioFocus = true;
@@ -273,6 +277,8 @@ class _SettingsPageState extends State<SettingsPage>
     final volumeNormalizationLufs = await _settingsRepository
         .getVolumeNormalizationReferenceLufs();
     final keepScreenOn = await _settingsRepository.getKeepScreenOn();
+    final dockSwipeToSwitchTrack = await _settingsRepository
+        .getDockSwipeToSwitchTrack();
     final ignoreAudioFocus = await _settingsRepository.getIgnoreAudioFocus();
     final audioFocusInterruptionMode = await _settingsRepository
         .getAudioFocusInterruptionMode();
@@ -332,6 +338,7 @@ class _SettingsPageState extends State<SettingsPage>
       _volumeNormalizationEnabled = volumeNormalizationEnabled;
       _volumeNormalizationLufs = volumeNormalizationLufs;
       _keepScreenOn = keepScreenOn;
+      _dockSwipeToSwitchTrack = dockSwipeToSwitchTrack;
       _ignoreAudioFocus = ignoreAudioFocus;
       _audioFocusInterruptionMode = audioFocusInterruptionMode;
       _zenCoverLongPress = zenCoverLongPress;
@@ -402,6 +409,14 @@ class _SettingsPageState extends State<SettingsPage>
     final colorScheme = Theme.of(context).colorScheme;
     final level = _level;
     final category = _categoryNamed(_activeSection);
+    // sonify 分组页底色（方案 §6.3 surfaceGroup）：自定义背景图关闭时应用；
+    // 开启时保持默认（透明 Scaffold 由全局背景覆盖层接管），不遮挡壁纸。
+    final useWallpaper = context.select<ThemeProvider, bool>(
+      (t) => t.useBackgroundImage,
+    );
+    final groupBackground = useWallpaper
+        ? null
+        : SonifyColors.of(context).surfaceGroup;
 
     return PopScope(
       // 非总览页时拦截系统返回键：逐级回退（三级→二级→总览），而非直接退出设置页
@@ -411,7 +426,11 @@ class _SettingsPageState extends State<SettingsPage>
         _onBackInvoked();
       },
       child: Scaffold(
+        backgroundColor: groupBackground,
         appBar: AppBar(
+          // 分组底色模式下顶栏同步透明，与页面底色连成一体
+          backgroundColor: groupBackground,
+          surfaceTintColor: Colors.transparent,
           leading: level == SettingsLevel.overview
               ? null
               : IconButton(
@@ -712,6 +731,16 @@ class _SettingsPageState extends State<SettingsPage>
       icon: Icons.storage_outlined,
       description: '本地服务与数据维护',
       body: _buildCacheSection,
+      // 方案 §6.1「调试收纳」：本地服务器状态/重启、数据迁移等复杂调试项
+      // 收入「开发者」三级子页，总览与二级页保持简洁。
+      subpages: [
+        SettingsSubpage(
+          title: '开发者',
+          icon: Icons.developer_mode_outlined,
+          description: '本地服务状态与数据调试工具',
+          builder: _buildDeveloperSubpage,
+        ),
+      ],
     ),
     SettingsCategory(
       title: '关于',
@@ -752,37 +781,247 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 分类总览条目列表
+  /// 分类总览条目列表（sonify 分组卡形态，方案 §6.2/§6.3）：
+  /// 顶部账号卡 → 组标题（13sp 次级灰、32dp 边距）→ 每组一张
+  /// squircle 9dp 卡（surfaceCard），卡内分类行（图标 24dp primary +
+  /// 标题 16sp Medium + 副标 13sp 次级灰 + 0.5dp 分隔线）。
   List<Widget> _buildCategoryEntries(ColorScheme colorScheme) {
     final categories = _categories;
     return [
-      _buildGroupLabel('界面与显示', colorScheme, first: true),
-      for (final c in categories.take(3)) _buildCategoryEntry(c, colorScheme),
-      _buildGroupLabel('播放与音频', colorScheme),
-      for (final c in categories.skip(3).take(2))
-        _buildCategoryEntry(c, colorScheme),
-      _buildGroupLabel('应用与管理', colorScheme),
-      for (final c in categories.skip(5).take(5))
-        _buildCategoryEntry(c, colorScheme),
-      if (categories.length > 10) ...[
-        _buildGroupLabel('更多设置', colorScheme),
-        for (final c in categories.skip(10)) _buildCategoryEntry(c, colorScheme),
-      ],
+      ..._buildAccountCard(colorScheme),
+      ..._overviewGroup(
+        '界面与显示',
+        categories.take(3).toList(),
+        colorScheme,
+        first: true,
+      ),
+      ..._overviewGroup(
+        '播放与音频',
+        categories.skip(3).take(2).toList(),
+        colorScheme,
+      ),
+      ..._overviewGroup(
+        '应用与管理',
+        categories.skip(5).take(5).toList(),
+        colorScheme,
+      ),
+      if (categories.length > 10)
+        ..._overviewGroup('更多设置', categories.skip(10).toList(), colorScheme),
     ];
   }
 
-  /// 分类条目（一级 → 二级）
-  Widget _buildCategoryEntry(
+  /// 总览分组卡：组标题 + 一张 squircle 9dp 白卡（组内条目行 + 分隔线）。
+  List<Widget> _overviewGroup(
+    String label,
+    List<SettingsCategory> categories,
+    ColorScheme colorScheme, {
+    bool first = false,
+  }) {
+    final sonify = SonifyColors.of(context);
+    return [
+      _overviewGroupLabel(label, first: first),
+      Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: SonifySpacing.cardMargin,
+        ),
+        child: DecoratedBox(
+          decoration: ShapeDecoration(
+            color: sonify.surfaceCard,
+            shape: SmoothRectangleBorder(
+              borderRadius: BorderRadius.circular(SonifyRadius.card),
+            ),
+          ),
+          child: Column(
+            children: [
+              for (var i = 0; i < categories.length; i++) ...[
+                if (i > 0) _overviewRowDivider(),
+                _buildOverviewCategoryRow(categories[i], colorScheme),
+              ],
+            ],
+          ),
+        ),
+      ),
+    ];
+  }
+
+  /// 总览组标题：13sp 次级灰、32dp 边距（方案 §6.3，Title.kt:202
+  /// ListHeader 对齐规则）。与二级/三级页共用的 [SettingsGroupHeading]
+  /// （primary 强调色）刻意区分层级：总览是「分组灰标签」，页内是「分区标题」。
+  Widget _overviewGroupLabel(String text, {bool first = false}) {
+    final sonify = SonifyColors.of(context);
+    return Semantics(
+      header: true,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          SonifySpacing.groupMargin,
+          first ? AppSpacing.md : AppSpacing.xl,
+          SonifySpacing.groupMargin,
+          AppSpacing.xs,
+        ),
+        child: Text(
+          text,
+          style: SonifyTextStyles.listItem.copyWith(
+            color: sonify.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 分组卡内行分隔线：0.5dp，左 inset 60dp（图标后对齐，iOS 分组惯例）。
+  Widget _overviewRowDivider() {
+    return Container(
+      margin: const EdgeInsets.only(left: 60),
+      height: 0.5,
+      color: Theme.of(
+        context,
+      ).colorScheme.outlineVariant.withValues(alpha: 0.6),
+    );
+  }
+
+  /// 总览分类行：图标 24dp primary + 标题 16sp Medium + 副标 13sp 次级灰，
+  /// 行高 ≥48dp（方案 §6.3）。
+  Widget _buildOverviewCategoryRow(
     SettingsCategory category,
     ColorScheme colorScheme,
   ) {
-    return _buildNavEntryTile(
-      icon: category.icon,
-      title: category.title,
-      subtitle: category.description.isEmpty ? null : category.description,
-      colorScheme: colorScheme,
+    final sonify = SonifyColors.of(context);
+    return InkWell(
       onTap: () => _openSection(category.title),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Row(
+          children: [
+            const SizedBox(width: 16),
+            Icon(category.icon, size: 24, color: colorScheme.primary),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      category.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: SonifyTextStyles.cardTitle.copyWith(
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
+                    if (category.description.isNotEmpty) ...[
+                      const Gap(1),
+                      Text(
+                        category.description,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: SonifyTextStyles.listItem.copyWith(
+                          color: sonify.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(Icons.chevron_right, size: 20, color: sonify.textSecondary),
+            const SizedBox(width: 14),
+          ],
+        ),
+      ),
     );
+  }
+
+  /// 账号卡（方案 §6.1 新增）：白卡 squircle 9dp，头像 40dp +
+  /// 昵称/「点击登录」+ 箭头，整卡可点 → /user（未登录时用户中心自身
+  /// 展示登录引导）。消费 KugouProvider 登录态（Selector 最小重建面）。
+  List<Widget> _buildAccountCard(ColorScheme colorScheme) {
+    final sonify = SonifyColors.of(context);
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(
+          SonifySpacing.cardMargin,
+          AppSpacing.sm,
+          SonifySpacing.cardMargin,
+          0,
+        ),
+        child: DecoratedBox(
+          decoration: ShapeDecoration(
+            color: sonify.surfaceCard,
+            shape: SmoothRectangleBorder(
+              borderRadius: BorderRadius.circular(SonifyRadius.card),
+            ),
+          ),
+          child: InkWell(
+            onTap: () => Navigator.of(context).pushNamed('/user'),
+            borderRadius: BorderRadius.circular(SonifyRadius.card),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  Selector<KugouProvider, String?>(
+                    selector: (_, kugou) => kugou.userInfo?.avatar,
+                    builder: (context, avatar, _) => CircleAvatar(
+                      radius: 20,
+                      backgroundColor: colorScheme.surfaceContainerHighest,
+                      backgroundImage:
+                          (avatar != null && avatar.isNotEmpty)
+                          ? CachedNetworkImageProvider(avatar)
+                          : null,
+                      child: (avatar == null || avatar.isEmpty)
+                          ? Icon(
+                              Icons.person,
+                              size: 22,
+                              color: colorScheme.onSurfaceVariant,
+                            )
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Selector<KugouProvider, (bool, String?)>(
+                      selector: (_, kugou) => (
+                        kugou.isLoggedIn,
+                        kugou.isLoggedIn ? kugou.userInfo?.nickname : null,
+                      ),
+                      builder: (context, state, _) {
+                        final (loggedIn, nickname) = state;
+                        final hasName =
+                            loggedIn && nickname != null && nickname.isNotEmpty;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              hasName ? nickname : '点击登录',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: SonifyTextStyles.cardTitle.copyWith(
+                                color: colorScheme.onSurface,
+                              ),
+                            ),
+                            Text(
+                              hasName ? '已登录' : '登录后同步收藏与歌单',
+                              style: SonifyTextStyles.listItem.copyWith(
+                                color: sonify.textSecondary,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, size: 20, color: sonify.textSecondary),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      const Gap(AppSpacing.sm),
+    ];
   }
 
   /// 三级子页入口条目（二级 → 三级）
@@ -2200,6 +2439,18 @@ class _SettingsPageState extends State<SettingsPage>
             }
           },
         ),
+        // search: 左右滑切歌 dock 滑动 切歌 换歌 手势 播放器胶囊
+        SwitchListTile(
+          title: const Text('左右滑切歌'),
+          subtitle: const Text('底部播放器胶囊上左右滑动快速切歌；默认关闭'),
+          value: _dockSwipeToSwitchTrack,
+          onChanged: (value) {
+            HapticFeedback.lightImpact();
+            setState(() => _dockSwipeToSwitchTrack = value);
+            // SettingsRepository 同步 ValueNotifier，Dock 拖拽判定即时生效
+            _settingsRepository.setDockSwipeToSwitchTrack(value);
+          },
+        ),
       ],
     );
   }
@@ -2344,13 +2595,14 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
-  /// 缓存与数据（已并入原「在线音乐」二级页的内容）。
-  Widget _buildCacheSection(ColorScheme colorScheme) {
+  /// 「开发者」三级子页：本地服务器状态/重启、数据迁移等复杂调试项
+  /// （方案 §6.1「调试收纳」，原内联在「缓存与数据」二级页）。
+  Widget _buildDeveloperSubpage(ColorScheme colorScheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const Gap(AppSpacing.sm),
         _buildGroupLabel('本地服务', colorScheme, first: true),
-        // 原「在线音乐」页内容：本地 Rust 服务器状态与重启入口
         // search: 接口 本地服务器 api 在线音乐
         ListTile(
           leading: Icon(Icons.dns, color: colorScheme.primary),
@@ -2395,18 +2647,28 @@ class _SettingsPageState extends State<SettingsPage>
             AppSpacing.sm,
           ),
         ),
-        _buildGroupLabel('存储维护', colorScheme),
-        // search: 缓存 清除
-        ListTile(
-          title: const Text('清除缓存'),
-          leading: Icon(Icons.delete_outline, color: colorScheme.error),
-          onTap: () => _showClearCacheDialog(),
-        ),
+        _buildGroupLabel('数据调试', colorScheme),
         // search: 迁移 数据 修复
         ListTile(
           title: const Text('数据迁移（修复数据混乱）'),
           leading: Icon(Icons.bug_report, color: colorScheme.tertiary),
           onTap: () => _showDataMigrationDialog(),
+        ),
+      ],
+    );
+  }
+
+  /// 缓存与数据（已并入原「在线音乐」二级页的内容）。
+  Widget _buildCacheSection(ColorScheme colorScheme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildGroupLabel('存储维护', colorScheme, first: true),
+        // search: 缓存 清除
+        ListTile(
+          title: const Text('清除缓存'),
+          leading: Icon(Icons.delete_outline, color: colorScheme.error),
+          onTap: () => _showClearCacheDialog(),
         ),
       ],
     );

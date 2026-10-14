@@ -741,6 +741,30 @@ class SettingsRepository {
   static const String _keyCloseLocalMusicComments =
       'settings_close_local_music_comments';
 
+  // ===== Dock 手势 =====
+  static const String _keyDockSwipeToSwitchTrack =
+      'settings_dock_swipe_to_switch_track';
+
+  /// Dock 展开胶囊「左右滑切歌」开关（默认关闭）。
+  /// 内存缓存走 ValueNotifier：Dock 拖拽松手判定在离散事件路径上同步读取，
+  /// 设置页修改后即时生效（无需重启或等 Dock 重建）。
+  static final ValueNotifier<bool> dockSwipeToSwitchTrack =
+      ValueNotifier<bool>(false);
+
+  /// 读取 Dock 左右滑切歌开关（默认关闭），并同步内存缓存。
+  Future<bool> getDockSwipeToSwitchTrack() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getBool(_keyDockSwipeToSwitchTrack) ?? false;
+    dockSwipeToSwitchTrack.value = v;
+    return v;
+  }
+
+  Future<void> setDockSwipeToSwitchTrack(bool value) async {
+    dockSwipeToSwitchTrack.value = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyDockSwipeToSwitchTrack, value);
+  }
+
   /// 「关闭本地音乐评论区」开关，默认开启。
   /// 开启时本地歌曲不显示播放器评论 tab，也不提供「看评论」入口；在线歌曲不受影响。
   Future<bool> getCloseLocalMusicComments() async {

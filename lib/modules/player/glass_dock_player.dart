@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../core/services/player_frame_driver.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../core/widgets/liquid_glass_container.dart';
+import '../../data/repositories/settings_repository.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/tab_config_provider.dart';
 import '../../widgets/player_artwork_image.dart';
@@ -75,7 +76,21 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 ///   播放器球」「导航球 + 播放器胶囊」两种组合均不超宽；已移除向上按钮——
 ///   点封面 / 歌名进入完整播放页（胶囊内左侧含 36dp 圆形封面缩略图，
 ///   同源可点击）；
-/// - **隐藏**：完整播放页展开（playerExpansion > 0.5）时整体移除，不产帧。
+/// - **上滑展开（P0-1 接通）**：播放器圆钮 / 胶囊加 `onVerticalDragStart/
+///   Update/End`——start 记 [playerDragOriginTop]（= 播放器按钮顶端全局 Y）
+///   并激活 [playerDragActive]（跟手覆盖层显示真实 FullPlayer）；update 按
+///   「拖拽距离 / 按钮顶端」1:1 映射 [playerExpansion]（复用 PlayerDragOverlay
+///   与 DraggablePlayerRoute 既有映射口径）；end 按 [shouldExpandPlayer]
+///   三阈值（屏高 20% / 900px/s / 6000px/s²）判定：达标则 push
+///   [fullPlayerRoute]（dragOriginTop 模式）并从当前拖拽进度 settleToFull，
+///   未达标 / 取消则覆盖层归位。song == null 或播放页已在栈中时不注册
+///   拖拽回调（不抢手势，tap 行为不变）；
+/// - **左右滑切歌（P1，默认关）**：展开胶囊 `onHorizontalDragEnd` 按
+///   primaryVelocity 判向调 previous()/next()，开关
+///   `SettingsRepository.dockSwipeToSwitchTrack`（默认关，设置→播放行为）；
+/// - **隐藏**：完整播放页展开（playerExpansion > 0.5）时整体移除，不产帧；
+///   Dock 自身上滑拖拽期间豁免（拖拽会把 expansion 推过 0.5，此时 Dock
+///   必须保持在树中维持手势事件流，视觉上由 Opacity(1-exp) 淡出）。
 class GlassDockPlayer extends StatefulWidget {
   const GlassDockPlayer({
     super.key,
@@ -128,6 +143,24 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   /// 展开胶囊内封面与歌名 marquee 之间的间距。
   static const double _kCapsuleCoverGap = 8.0;
 
+  /// 左右滑切歌的最低松手速度（px/s，|primaryVelocity| 达标才切）。
+  static const double _kSwipeSwitchVelocity = 400.0;
+
+  // ── 上滑展开拖拽状态（与 FullPlayer 顶栏下滑收起镜像的判定口径） ──
+
+  /// 向上累计拖拽距离（px，≥0）。
+  double _dragDistance = 0.0;
+
+  /// 上次事件 Y / 时间戳（速度、加速度差分估计用）。
+  double? _dragLastY;
+  Duration? _dragLastTime;
+
+  /// 上次事件向上速度（px/s，向上为正）。
+  double _dragVelocity = 0.0;
+
+  /// 当前向上加速度估计（px/s²，允许为负 = 末端减速）。
+  double _dragAcceleration = 0.0;
+
   @override
   void initState() {
     super.initState();
@@ -136,6 +169,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     // [_toggleControls] 中经 onNavExpandedChanged 回调完成。两个展开态
     // 不得同时存在，否则总宽超出屏宽。
     widget.navExpanded.addListener(_onNavExpandedChanged);
+    // 预热「左右滑切歌」开关内存缓存（设置页修改经 ValueNotifier 即时生效）
+    // ignore: discarded_futures
+    SettingsRepository().getDockSwipeToSwitchTrack();
   }
 
   @override
@@ -197,12 +233,16 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     final tabConfig = context.watch<TabConfigProvider>();
 
     // 完整播放页展开时整体隐藏（>0.5 直接移除，不产帧）。
+    // 豁免：Dock 自身上滑拖拽期间（playerDragActive）exp 会被推过 0.5，
+    // 此时必须保持在树中维持手势事件流（视觉由下方 Opacity 淡出）。
     return ValueListenableBuilder<double>(
       valueListenable: playerExpansion,
       builder: (context, exp, child) {
-        if (exp > 0.5) return const SizedBox.shrink();
+        if (exp > 0.5 && !playerDragActive.value) {
+          return const SizedBox.shrink();
+        }
         return IgnorePointer(
-          ignoring: exp > 0.2,
+          ignoring: exp > 0.2 && !playerDragActive.value,
           child: Opacity(opacity: (1.0 - exp).clamp(0.0, 1.0), child: child),
         );
       },
@@ -344,18 +384,146 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   ) {
     // RepaintBoundary 隔离：进度环 ~200ms 重绘不外溢。
     return RepaintBoundary(
-      child: AnimatedSize(
-        duration: _kMorphDuration,
-        curve: Curves.easeOutCubic,
-        // 右缘锚定：播放器恒在行尾（屏右），坍缩 ↔ 展开时右缘不动、
-        // 向左生长，不会顶出屏幕右缘。
-        // 同导航部分：不包 AnimatedSwitcher（理由见 _buildNavPart 注释）。
-        alignment: Alignment.centerRight,
-        child: _controlsExpanded
-            ? _buildControlsCapsule(player, song, duration)
-            : _buildCircle(song, isPlaying, duration, player),
+      child: Builder(
+        builder: (buttonContext) {
+          // 上滑展开（P0-1）：song == null 不注册拖拽回调（不抢手势）；
+          // 播放页已在栈中（未在栈顶）时同样不注册——tap 走 openFullPlayer
+          // 的 popUntil 回退语义，拖拽 push 会造成双实例。
+          final canDrag =
+              song != null &&
+              (activePlayerRoute == null || !activePlayerRoute!.isActive);
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragStart:
+                canDrag ? (d) => _onPlayerDragStart(buttonContext, d) : null,
+            onVerticalDragUpdate: canDrag ? _onPlayerDragUpdate : null,
+            onVerticalDragEnd: canDrag ? _onPlayerDragEnd : null,
+            onVerticalDragCancel: canDrag ? _onPlayerDragCancel : null,
+            child: AnimatedSize(
+              duration: _kMorphDuration,
+              curve: Curves.easeOutCubic,
+              // 右缘锚定：播放器恒在行尾（屏右），坍缩 ↔ 展开时右缘不动、
+              // 向左生长，不会顶出屏幕右缘。
+              // 同导航部分：不包 AnimatedSwitcher（理由见 _buildNavPart 注释）。
+              alignment: Alignment.centerRight,
+              child: _controlsExpanded
+                  ? _buildControlsCapsule(player, song, duration)
+                  : _buildCircle(song, isPlaying, duration, player),
+            ),
+          );
+        },
       ),
     );
+  }
+
+  // —— 上滑展开拖拽（P0-1：start 记 origin / update 跟手 / end 三阈值判定）——
+
+  /// 拖拽开始：记录播放器按钮顶端全局 Y（= FullPlayer 展开起点），
+  /// 激活跟手覆盖层（真实 FullPlayer，随 playerExpansion 位移/淡入）。
+  void _onPlayerDragStart(BuildContext boxContext, DragStartDetails details) {
+    // 运行时再拦一道（build 期判定与手势到达之间状态可能变化）：
+    // 无歌 / 播放页已在栈中时不启动拖拽。
+    if (context.read<PlayerProvider>().currentSong == null) return;
+    if (activePlayerRoute != null && activePlayerRoute!.isActive) return;
+    _dragDistance = 0.0;
+    _dragVelocity = 0.0;
+    _dragAcceleration = 0.0;
+    _dragLastY = details.globalPosition.dy;
+    _dragLastTime = details.sourceTimeStamp;
+    final box = boxContext.findRenderObject() as RenderBox?;
+    if (box != null && box.hasSize) {
+      playerDragOriginTop = box.localToGlobal(Offset.zero).dy;
+    }
+    playerDragActive.value = true;
+  }
+
+  /// 拖拽更新：1:1 跟手映射 playerExpansion（距离 / 按钮顶端），
+  /// 同时差分估计向上速度与加速度（供松手三阈值判定）。
+  void _onPlayerDragUpdate(DragUpdateDetails details) {
+    if (!playerDragActive.value) return;
+    _dragDistance = (_dragDistance - details.delta.dy).clamp(
+      0.0,
+      double.infinity,
+    );
+    final ts = details.sourceTimeStamp;
+    if (ts != null && _dragLastTime != null && _dragLastY != null) {
+      final dt = (ts - _dragLastTime!).inMicroseconds / 1e6;
+      if (dt > 0) {
+        // 向上为正（全局 Y 向下为正，取负）
+        final v = -(details.globalPosition.dy - _dragLastY!) / dt;
+        _dragAcceleration = (v - _dragVelocity) / dt;
+        _dragVelocity = v;
+      }
+    }
+    _dragLastY = details.globalPosition.dy;
+    _dragLastTime = ts;
+    final origin = playerDragOriginTop;
+    if (origin > 0) {
+      playerExpansion.value = (_dragDistance / origin).clamp(0.0, 1.0);
+    }
+  }
+
+  /// 拖拽松手：按 [shouldExpandPlayer] 三阈值判定（屏高 20% / 900px/s /
+  /// 6000px/s²，任一达标即展开；松手瞬间向下回拉则否决）。
+  /// 达标 → push dragOriginTop 模式路由并从当前拖拽进度 settleToFull
+  /// （覆盖层最后位置与路由首帧无缝衔接）；未达标 → 覆盖层归位。
+  void _onPlayerDragEnd(DragEndDetails details) {
+    if (!playerDragActive.value) return;
+    playerDragActive.value = false;
+    final distance = _dragDistance;
+    _dragDistance = 0.0;
+    // primaryVelocity 向下为正，换算为「向上为正」
+    final velocity = -(details.primaryVelocity ?? 0.0);
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final progress = playerExpansion.value;
+    if (shouldExpandPlayer(
+      dragDistance: distance,
+      screenHeight: screenHeight,
+      velocity: velocity,
+      acceleration: _dragAcceleration,
+    )) {
+      final route = fullPlayerRoute(
+        context,
+        dragOriginTop: playerDragOriginTop,
+        screenHeight: screenHeight,
+      );
+      Navigator.of(context, rootNavigator: true).push(route);
+      // 拖拽模式 didPush 将 controller 归零等待手势接管；此处无后续手势，
+      // 从覆盖层最后进度收敛到全屏（300ms easeOutCubic，起点连续不跳变）。
+      route.controller.value = progress.clamp(0.0, 1.0);
+      route.settleToFull();
+    } else {
+      playerExpansion.value = 0.0;
+    }
+    _dragVelocity = 0.0;
+    _dragAcceleration = 0.0;
+  }
+
+  /// 拖拽被系统取消（来电 / 手势竞争仲裁）：覆盖层归位，状态清零。
+  void _onPlayerDragCancel() {
+    if (!playerDragActive.value) return;
+    playerDragActive.value = false;
+    _dragDistance = 0.0;
+    _dragVelocity = 0.0;
+    _dragAcceleration = 0.0;
+    playerExpansion.value = 0.0;
+  }
+
+  /// 左右滑切歌（P1，默认关）：展开胶囊横向松手按 primaryVelocity 判向，
+  /// 向左甩 → 下一曲，向右甩 → 上一曲（iOS 迷你条惯例）。开关关闭时
+  /// GestureDetector 不注册回调，手势完全不占用。
+  void _onCapsuleHorizontalDragEnd(DragEndDetails details) {
+    if (!SettingsRepository.dockSwipeToSwitchTrack.value) return;
+    final velocity = details.primaryVelocity ?? 0.0;
+    if (velocity.abs() < _kSwipeSwitchVelocity) return;
+    final player = context.read<PlayerProvider>();
+    if (player.currentSong == null) return;
+    AppHaptics.tick();
+    if (velocity < 0) {
+      player.next();
+    } else {
+      player.previous();
+    }
   }
 
   /// 播放器圆钮：外周进度环 + 中央播放标识。
@@ -507,8 +675,12 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     Duration? duration,
   ) {
     final cs = Theme.of(context).colorScheme;
+    // 左右滑切歌（P1）：开关关闭时不注册 onHorizontalDragEnd，
+    // 不进手势竞技场（默认关，见 SettingsRepository.dockSwipeToSwitchTrack）。
+    final swipeEnabled = SettingsRepository.dockSwipeToSwitchTrack.value;
     return GestureDetector(
       onTap: _toggleControls,
+      onHorizontalDragEnd: swipeEnabled ? _onCapsuleHorizontalDragEnd : null,
       child: LiquidGlassContainer(
         shape: GlassShape.pill,
         padding: const EdgeInsets.fromLTRB(6, 0, 4, 0),

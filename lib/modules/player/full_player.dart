@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/layout/responsive_layout.dart';
 import '../../core/services/equalizer_service.dart';
+import '../../core/theme/app_theme.dart';
 import '../../widgets/marquee_text.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import '../../core/utils/app_haptics.dart';
@@ -1141,9 +1142,30 @@ class _FullPlayerState extends State<FullPlayer>
     return Builder(builder: _buildPlayer);
   }
 
+  /// P1-2 性能收敛（批次 3，方案 §3.3）：整页 `context.watch<PlayerProvider>()`
+  /// 收敛为 Selector——页面级重建面缩小到「切歌」这一个必要事件
+  /// （currentSong 引用变化时整页重建：tab 结构、封面、标题、取色背景都依赖它）。
+  /// 其余低频态下沉到各自消费点的局部 Selector：
+  /// - 播放/暂停（isPlaying）→ 封面缩放 [_buildArtworkView]、传输行
+  ///   [_buildMainControls]、歌词视图（compact 布局内）；
+  /// - 播放模式（随机/循环）→ 标题行右端模式键（[_buildArtworkView]）；
+  /// - 音质徽章 → 顶栏 [_buildQualityPill]；
+  /// - 收藏态 → 标题行收藏键（[_buildArtworkView]，FavoritesProvider /
+  ///   LocalFavoritesProvider 各自局部订阅）；
+  /// - 进度/时长 → 既有 ListenableBuilder（positionNotifier + provider 合并）
+  ///   局部订阅，时长改为 builder 内直读（此前闭包捕获页级 duration 变量，
+  ///   页级 watch 移除后会滞留旧值，此处一并修正）。
+  /// positionNotifier 200ms 高频通道原本就不经过页级重建（局部
+  /// ValueListenableBuilder），不受影响。
   Widget _buildPlayer(BuildContext context) {
-    final playerProvider = context.watch<PlayerProvider>();
-    final currentSong = playerProvider.currentSong;
+    return Selector<PlayerProvider, Song?>(
+      selector: (_, player) => player.currentSong,
+      builder: (context, currentSong, _) => _buildPlayerContent(currentSong),
+    );
+  }
+
+  Widget _buildPlayerContent(Song? currentSong) {
+    final playerProvider = context.read<PlayerProvider>();
     final colorScheme = Theme.of(context).colorScheme;
 
     // 初始化封面 URL（首次进入或 null→有值）
@@ -1284,21 +1306,30 @@ class _FullPlayerState extends State<FullPlayer>
                             // 用 Apple Music 风格视图（扫色 + 自驱动内插）；
                             // 无结构化歌词（_lyricMetadata 为空）时回退旧
                             // LyricsView（保底不空窗）。
+                            // 倍速/播放态经局部 Selector（P1-2）供给：
+                            // 变化只重建歌词视图，不重建 tab 容器。
                             child: _lyricMetadata.isNotEmpty
-                                ? AppleMusicLyricsView(
-                                    lyricLines: _lyricMetadata,
-                                    positionListenable:
-                                        playerProvider.positionNotifier,
-                                    adaptPosition: (position) =>
-                                        _adjustedLyricPosition(
-                                            position, currentSong),
-                                    onSeek: (duration) {
-                                      playerProvider.seek(duration);
+                                ? Selector<PlayerProvider, (double, bool)>(
+                                    selector: (_, player) =>
+                                        (player.speed, player.isPlaying),
+                                    builder: (context, state, _) {
+                                      final (speed, isPlaying) = state;
+                                      return AppleMusicLyricsView(
+                                        lyricLines: _lyricMetadata,
+                                        positionListenable:
+                                            playerProvider.positionNotifier,
+                                        adaptPosition: (position) =>
+                                            _adjustedLyricPosition(
+                                                position, currentSong),
+                                        onSeek: (duration) {
+                                          playerProvider.seek(duration);
+                                        },
+                                        // 倍速参与 Ticker 自驱动内插；
+                                        // 播放态直达（暂停立即停帧，不靠 200ms 推断）
+                                        speed: speed,
+                                        isPlaying: isPlaying,
+                                      );
                                     },
-                                    // 倍速参与 Ticker 自驱动内插；
-                                    // 播放态直达（暂停立即停帧，不靠 200ms 推断）
-                                    speed: playerProvider.speed,
-                                    isPlaying: playerProvider.isPlaying,
                                   )
                                 : LyricsView(
                                     lyrics: _lyrics,
@@ -1363,8 +1394,14 @@ class _FullPlayerState extends State<FullPlayer>
               onPressed: _collapseByButton,
             ),
             const Spacer(),
-            // MD3E v2: 顶部栏右侧 FLAC 质量徽章，点击复用 _showQualityDialog
-            _buildQualityPill(playerProvider),
+            // MD3E v2: 顶部栏右侧 FLAC 质量徽章，点击复用 _showQualityDialog。
+            // 局部 Selector：音质/切歌变化只重建徽章，不重建顶栏其余部分。
+            Selector<PlayerProvider, (Object?, String)>(
+              selector: (_, player) =>
+                  (player.currentSong, player.currentQualityLabel),
+              builder: (context, state, _) =>
+                  _buildQualityPill(state.$1, state.$2),
+            ),
             // 睡眠药丸：外层订阅 provider（模式开关，低频），内层只订阅剩余
             // 时间通道（每秒走字），可见性判定已下沉到 buildSleepTimerPill
             ListenableBuilder(
@@ -1396,11 +1433,12 @@ class _FullPlayerState extends State<FullPlayer>
   /// MD3E v2 质量徽章 — primaryContainer 背景 + StadiumBorder + 图标 + 文字。
   /// 本地歌曲：只读显示码率推断的音质，禁用点击切换。
   /// 在线歌曲：点击复用 _showQualityDialog。
-  Widget _buildQualityPill(PlayerProvider playerProvider) {
+  /// [song] / [qualityLabel] 由调用方的局部 Selector 供给（P1-2 收敛）。
+  Widget _buildQualityPill(Object? song, String qualityLabel) {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final song = playerProvider.currentSong;
     final isLocal = song is Song && !song.isOnline;
+    final playerProvider = context.read<PlayerProvider>();
     return Material(
       color: colorScheme.primaryContainer,
       shape: const StadiumBorder(),
@@ -1494,16 +1532,12 @@ class _FullPlayerState extends State<FullPlayer>
     ColorScheme colorScheme, {
     bool isExpanded = false,
   }) {
-    // 收藏状态：根据歌曲来源（本地/在线）选择对应的收藏 Provider。
+    // 收藏状态：根据歌曲来源（本地/在线）选择对应的收藏 Provider，改为
+    // 局部 Selector（P1-2 收敛）：切换收藏只重建收藏键，不再整页重建。
     // 原先定义在 _buildMainControls 内供传输行右端收藏键使用；收藏键上移到
-    // 标题行后随逻辑一并搬到这里（消费方只剩标题行一处，直接内联即可）。
+    // 标题行后随逻辑一并搬到这里（消费方只剩标题行一处）。
     final song = currentSong;
     final isOnline = song is Song && song.isOnline;
-    final isFavorited =
-        song != null &&
-        (isOnline
-            ? context.watch<FavoritesProvider>().isFavorite(song.id)
-            : context.watch<LocalFavoritesProvider>().isFavorite(song.id));
 
     // 封面再加大：两侧留白合计 16（单侧 8），360dp 屏封面边长可达 344；
     // 标题行移到封面下方后，Expanded 内的 LayoutBuilder 拿到的 maxHeight
@@ -1525,6 +1559,34 @@ class _FullPlayerState extends State<FullPlayer>
         : (isExpanded ? 8.0 : 16.0);
     final textSpacing = isLandscape ? 4.0 : (isExpanded ? 8.0 : 24.0);
     final iconSize = isExpanded ? 48.0 : 64.0;
+
+    // 收藏键构建（局部函数）：Selector builder 间共享，避免双份键体代码。
+    Widget buildFavoriteAction(bool isFavorited) {
+      return _buildEdgeAction(
+        icon: isFavorited ? Icons.favorite : Icons.favorite_border,
+        active: isFavorited,
+        onTap: song == null
+            ? null
+            : () {
+                if (isFavorited) {
+                  AppHaptics.click();
+                } else {
+                  AppHaptics.heavy();
+                }
+                if (isOnline) {
+                  context.read<FavoritesProvider>().toggleFavorite(song);
+                } else {
+                  context.read<LocalFavoritesProvider>().toggleFavorite(
+                    song.id,
+                  );
+                }
+              },
+        // 长按：在线歌曲弹出 AI 推荐歌曲面板
+        onLongPress: song != null && isOnline
+            ? () => showAiRecommendSheet(context, song)
+            : null,
+      );
+    }
 
     return Padding(
       padding: EdgeInsets.symmetric(
@@ -1574,12 +1636,19 @@ class _FullPlayerState extends State<FullPlayer>
                         ),
                         child: AspectRatio(
                           aspectRatio: 1,
-                          child: AnimatedScale(
-                            // 播放↔暂停一次性 scale 收敛：幅度克制（0.97↔1.0），
-                            // 300ms easeOutCubic 有限时长，无循环动画
-                            scale: playerProvider.isPlaying ? 1.0 : 0.97,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeOutCubic,
+                          // 局部 Selector（P1-2）：播放/暂停切换只重建缩放层，
+                          // 封面子树经 child 复用不重建。
+                          child: Selector<PlayerProvider, bool>(
+                            selector: (_, player) => player.isPlaying,
+                            builder: (context, isPlaying, child) =>
+                                AnimatedScale(
+                                  // 播放↔暂停一次性 scale 收敛：幅度克制（0.97↔1.0），
+                                  // 300ms easeOutCubic 有限时长，无循环动画
+                                  scale: isPlaying ? 1.0 : 0.97,
+                                  duration: const Duration(milliseconds: 300),
+                                  curve: Curves.easeOutCubic,
+                                  child: child,
+                                ),
                             child: _buildCrossfadeArtworkWrapper(
                               currentSong,
                               colorScheme,
@@ -1598,11 +1667,16 @@ class _FullPlayerState extends State<FullPlayer>
             Expanded(
               child: AspectRatio(
                 aspectRatio: 1,
-                child: AnimatedScale(
-                  // 与封面 tab 同款：播放↔暂停一次性 scale 收敛（0.97↔1.0）
-                  scale: playerProvider.isPlaying ? 1.0 : 0.97,
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeOutCubic,
+                // 局部 Selector（P1-2）：同封面 tab，播放/暂停只重建缩放层。
+                child: Selector<PlayerProvider, bool>(
+                  selector: (_, player) => player.isPlaying,
+                  builder: (context, isPlaying, child) => AnimatedScale(
+                    // 与封面 tab 同款：播放↔暂停一次性 scale 收敛（0.97↔1.0）
+                    scale: isPlaying ? 1.0 : 0.97,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOutCubic,
+                    child: child,
+                  ),
                   child: _buildCrossfadeArtworkWrapper(
                     currentSong,
                     colorScheme,
@@ -1634,42 +1708,36 @@ class _FullPlayerState extends State<FullPlayer>
                   dense: isLandscape,
                 ),
               ),
-              _buildEdgeAction(
-                icon: isFavorited ? Icons.favorite : Icons.favorite_border,
-                active: isFavorited,
-                onTap: song == null
-                    ? null
-                    : () {
-                        if (isFavorited) {
-                          AppHaptics.click();
-                        } else {
-                          AppHaptics.heavy();
-                        }
-                        if (isOnline) {
-                          context.read<FavoritesProvider>().toggleFavorite(
-                            song,
-                          );
-                        } else {
-                          context.read<LocalFavoritesProvider>().toggleFavorite(
-                            song.id,
-                          );
-                        }
-                      },
-                // 长按：在线歌曲弹出 AI 推荐歌曲面板
-                onLongPress: song != null && isOnline
-                    ? () => showAiRecommendSheet(context, song)
-                    : null,
-              ),
-              const SizedBox(width: 4),
-              _buildEdgeAction(
-                icon: _playModeIcon(
-                  playerProvider.shuffleEnabled,
-                  playerProvider.loopMode,
+              // 收藏键：局部 Selector（P1-2）——按歌曲来源订阅对应 Provider，
+              // 切换收藏只重建本键；键体构建收敛到上方局部函数避免双份代码。
+              if (isOnline)
+                Selector<FavoritesProvider, bool>(
+                  // isOnline 为真时 song 必非 null（流分析已提升），无需再判空
+                  selector: (_, favorites) => favorites.isFavorite(song.id),
+                  builder: (context, isFavorited, _) =>
+                      buildFavoriteAction(isFavorited),
+                )
+              else
+                Selector<LocalFavoritesProvider, bool>(
+                  selector: (_, favorites) =>
+                      song != null && favorites.isFavorite(song.id),
+                  builder: (context, isFavorited, _) =>
+                      buildFavoriteAction(isFavorited),
                 ),
-                active: !_isDefaultPlayMode(playerProvider),
-                onTap: () {
-                  AppHaptics.tick();
-                  playerProvider.cyclePlayMode();
+              const SizedBox(width: 4),
+              // 播放模式键：局部 Selector（P1-2）——随机/循环切换只重建本键。
+              Selector<PlayerProvider, (bool, AppLoopMode)>(
+                selector: (_, player) => (player.shuffleEnabled, player.loopMode),
+                builder: (context, mode, _) {
+                  final (shuffleEnabled, loopMode) = mode;
+                  return _buildEdgeAction(
+                    icon: _playModeIcon(shuffleEnabled, loopMode),
+                    active: !(shuffleEnabled && loopMode == AppLoopMode.off),
+                    onTap: () {
+                      AppHaptics.tick();
+                      context.read<PlayerProvider>().cyclePlayMode();
+                    },
+                  );
                 },
               ),
             ],
@@ -1705,6 +1773,15 @@ class _FullPlayerState extends State<FullPlayer>
     final subtitle = currentSong.album.toString().isEmpty
         ? currentSong.artist.toString()
         : '${currentSong.artist} · ${currentSong.album.toString().toUpperCase()}';
+    // 歌手行对齐 sonify（方案 §3.1）：13sp 次级灰（textSecondary token），
+    // Medium 仅保留在标题；dense（横屏矮视口）逐值保留 bodySmall。
+    final sonify = SonifyColors.of(context);
+    final subtitleStyle = (dense ? textTheme.bodySmall : textTheme.bodyMedium)
+        ?.copyWith(
+          fontSize: dense ? null : 13.0,
+          color: sonify.textSecondary,
+          fontWeight: dense ? FontWeight.w500 : FontWeight.w400,
+        );
     return Column(
       crossAxisAlignment: alignment,
       children: [
@@ -1733,11 +1810,7 @@ class _FullPlayerState extends State<FullPlayer>
           borderRadius: BorderRadius.circular(4),
           child: GentleScrollingText(
             subtitle,
-            style: (dense ? textTheme.bodySmall : textTheme.bodyMedium)
-                ?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w500,
-                ),
+            style: subtitleStyle,
             textAlign: textAlign,
           ),
         ),
@@ -1750,8 +1823,9 @@ class _FullPlayerState extends State<FullPlayer>
   /// M3E emphasized 给 headlineSmall（wght=500）/ titleMedium（wght=600）注入了
   /// wght 字轴，可变字体渲染时 wght 轴压过 [TextStyle.fontWeight]，而
   /// `copyWith(fontWeight:)` 不会重置 fontVariations。因此这里在 copyWith 时
-  /// 保留非 wght 轴（ROND / opsz），并用显式数值常量重写 wght 轴：
-  /// dense（横屏左栏）= w700 → 700.0；常规 = w900 → 900.0。
+  /// 保留非 wght 轴（ROND / opsz），并用显式数值常量重写 wght 轴。
+  /// 排版对齐 sonify（方案 §3.1）：常规分支标题 18sp Bold（dense 分支
+  /// 横屏矮视口逐值保留：titleMedium / w700 / letterSpacing 1.0）。
   TextStyle? _titleTextStyle(
     TextTheme textTheme, {
     required bool dense,
@@ -1759,10 +1833,11 @@ class _FullPlayerState extends State<FullPlayer>
     final base = dense ? textTheme.titleMedium : textTheme.headlineSmall;
     final variations = <FontVariation>[
       ...?base?.fontVariations?.where((v) => v.axis != 'wght'),
-      FontVariation('wght', dense ? 700.0 : 900.0),
+      FontVariation('wght', dense ? 700.0 : 700.0),
     ];
     return base?.copyWith(
-      fontWeight: dense ? FontWeight.w700 : FontWeight.w900,
+      fontSize: dense ? null : 18.0,
+      fontWeight: FontWeight.w700,
       fontVariations: variations,
       letterSpacing: dense ? 1.0 : 1.5,
       height: 1.2,
@@ -1777,10 +1852,9 @@ class _FullPlayerState extends State<FullPlayer>
     ColorScheme colorScheme, {
     bool isExpanded = false,
   }) {
-    final duration = playerProvider.duration ?? Duration.zero;
     final horizontalPadding = isExpanded ? 16.0 : 20.0;
     // 横屏矮视口（如 800×360）：竖屏间距会把 Expanded(TabBarView) 挤到
-    // ~74dp，封面 tab 固定内容放不下（详见 _buildArtworkView 内注释）。
+    // ~74dp，封面 tab 固定内容放不下（详见 _buildControls / _buildArtworkView 内注释）。
     // 横屏把各段留白减半，给内容区多让 ~18dp。竖屏各值不变。
     final isLandscape =
         MediaQuery.of(context).size.width > MediaQuery.of(context).size.height;
@@ -1796,7 +1870,9 @@ class _FullPlayerState extends State<FullPlayer>
             height: isExpanded ? 4 : (isLandscape ? 4 : 8),
           ),
           // P0: 进度条监听 positionNotifier（高频 200ms）+ provider（duration 等低频），
-          // 不再因 positionStream 触发 _buildControls 整体重建
+          // 不再因 positionStream 触发 _buildControls 整体重建。
+          // P1-2 收敛后时长必须在 builder 内直读：此前闭包捕获页级 duration
+          // 局部变量，provider 通知触发本 ListenableBuilder 重建时会滞留旧值。
           ListenableBuilder(
             listenable: Listenable.merge([
               playerProvider.positionNotifier,
@@ -1805,7 +1881,7 @@ class _FullPlayerState extends State<FullPlayer>
             builder: (context, _) => _buildProgressBar(
               playerProvider,
               playerProvider.position,
-              duration,
+              playerProvider.duration ?? Duration.zero,
               colorScheme,
             ),
           ),
@@ -1888,27 +1964,31 @@ class _FullPlayerState extends State<FullPlayer>
         // 横屏矮视口（如 800×360）高度紧张：三键收到 56/56/16，
         // 与 _buildControls 的横屏紧凑间距配合给内容区让高度
         // （图标随容器等比缩放，裸图标方案视觉依旧协调）。
-        MD3ETransportRow(
-          isPlaying: playerProvider.isPlaying,
-          sideButtonSize: isLandscape ? 56.0 : 64.0,
-          playButtonSize: isLandscape ? 56.0 : 64.0,
-          spacing: isLandscape ? 16.0 : 20.0,
-          onPrevious: () {
-            AppHaptics.click();
-            playerProvider.previous();
-          },
-          onPlayPause: () {
-            AppHaptics.click();
-            if (playerProvider.isPlaying) {
-              playerProvider.pause();
-            } else {
-              playerProvider.resume();
-            }
-          },
-          onNext: () {
-            AppHaptics.click();
-            playerProvider.next();
-          },
+        // isPlaying 经局部 Selector（P1-2）供给：播放/暂停只重建三键行。
+        Selector<PlayerProvider, bool>(
+          selector: (_, player) => player.isPlaying,
+          builder: (context, isPlaying, _) => MD3ETransportRow(
+            isPlaying: isPlaying,
+            sideButtonSize: isLandscape ? 56.0 : 64.0,
+            playButtonSize: isLandscape ? 56.0 : 64.0,
+            spacing: isLandscape ? 16.0 : 20.0,
+            onPrevious: () {
+              AppHaptics.click();
+              playerProvider.previous();
+            },
+            onPlayPause: () {
+              AppHaptics.click();
+              if (playerProvider.isPlaying) {
+                playerProvider.pause();
+              } else {
+                playerProvider.resume();
+              }
+            },
+            onNext: () {
+              AppHaptics.click();
+              playerProvider.next();
+            },
+          ),
         ),
       ],
     );
@@ -1984,11 +2064,6 @@ class _FullPlayerState extends State<FullPlayer>
         return Icons.repeat;
     }
   }
-
-  /// 默认模式（不循环、不随机）时按钮不着色，避免常态就有一处高亮。
-  bool _isDefaultPlayMode(PlayerProvider playerProvider) =>
-      !playerProvider.shuffleEnabled &&
-      playerProvider.loopMode == AppLoopMode.off;
 
   /// 底部导航条 —— 只做页面切换这一件事（原先与倍速/收藏混装在一条胶囊里）。
   ///
