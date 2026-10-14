@@ -3,6 +3,9 @@ package com.gracemusic.player.store
 import android.util.Log
 import androidx.annotation.MainThread
 import com.gracemusic.data.model.Song
+import com.gracemusic.data.source.LoudnessCache
+import com.gracemusic.data.source.ResolutionResult
+import com.gracemusic.data.source.SongUrlResolver
 import com.gracemusic.player.gate.CdnStallWindowDecision
 import com.gracemusic.player.gate.PlaybackProgressGate
 import com.gracemusic.player.gate.PlaybackRequestGate
@@ -93,8 +96,10 @@ annotation class StoreScope
  *   字段名即方法签名（[PlaybackEffect] 设计契约），无二次翻译；
  * - 服务类（[PlaybackEffect.StartKeepAlive] / [PlaybackEffect.StopKeepAlive]）→
  *   [PlaybackKeepAlive]（Store 侧按目标态去重，服务本身亦幂等）；
+ * - 解析类：[PlaybackEffect.ResolveSongUrl] → [SongUrlResolver]（T-P1-05，
+ *   异步执行 + 回写收尾，见 [resolveSongUrl]）；
  * - 数据/系统类 → **只登记 TODO 日志，不伪造成功**：
- *   `ResolveSongUrl`（T-P1-05 解析器）、`RetryPlayback`（T-P1-06 恢复链；
+ *   `RetryPlayback`（T-P1-06 恢复链；
  *   **归约器不产生本效果**，生产者随恢复链落地，届时语义 = 从平台位置重备）、
  *   `PersistPlaybackCursor`（T-P1-10）、`PersistFavoriteToggle` / `PersistPreference`
  *   （T-P2 数据/设置层）、`RefreshSystemNotification`（T-P1-03+ session 刷新）、
@@ -151,6 +156,8 @@ class PlaybackStore @Inject constructor(
     private val engine: PlaybackEngine,
     private val registry: PlaybackSessionRegistry,
     private val keepAlive: PlaybackKeepAlive,
+    private val songUrlResolver: SongUrlResolver,
+    private val loudnessCache: LoudnessCache,
     @StoreScope private val scope: CoroutineScope,
 ) : PlaybackSessionBridge {
 
@@ -245,6 +252,8 @@ class PlaybackStore @Inject constructor(
 
     init {
         // 顺序即契约：字段 → 监听 → 位置管线 → 看门狗 ticker → attach（KDoc「init 顺序」节）。
+        // 响度缓存一次性预热（对位 lite 启动预热 warmLoudnessCache；内部有幂等守卫）。
+        loudnessCache.warmUp()
         engine.addListener(listener)
         scope.launch {
             engine.positionFlow.collect { sample -> onPositionSample(sample) }
@@ -325,8 +334,9 @@ class PlaybackStore @Inject constructor(
     /**
      * 副作用执行器（when 穷尽 [PlaybackEffect] 全部 16 个子类型）。
      *
-     * 引擎类字段名即引擎方法签名（[PlaybackEffect] 设计契约）；数据/系统类
-     * 只登记 TODO 日志（带任务编号），**禁止伪造成功**。
+     * 引擎类字段名即引擎方法签名（[PlaybackEffect] 设计契约）；解析类投
+     * [resolveSongUrl] 异步执行；数据/系统类只登记 TODO 日志（带任务编号），
+     * **禁止伪造成功**。
      */
     private fun execute(effect: PlaybackEffect) {
         when (effect) {
@@ -362,12 +372,7 @@ class PlaybackStore @Inject constructor(
             is PlaybackEffect.SetSpeed -> engine.setSpeed(effect.speed)
             is PlaybackEffect.StartKeepAlive -> setKeepAlive(engaged = true)
             is PlaybackEffect.StopKeepAlive -> setKeepAlive(engaged = false)
-            is PlaybackEffect.ResolveSongUrl ->
-                Log.w(
-                    TAG,
-                    "ResolveSongUrl 未执行：音源解析器 TODO T-P1-05" +
-                        "（songId=${effect.song.id}, isOnline=${effect.song.isOnline}），不伪造成功",
-                )
+            is PlaybackEffect.ResolveSongUrl -> resolveSongUrl(effect.song)
 
             is PlaybackEffect.RetryPlayback ->
                 Log.w(
@@ -393,6 +398,44 @@ class PlaybackStore @Inject constructor(
 
             is PlaybackEffect.ShowMessage ->
                 Log.i(TAG, "ShowMessage 未展示：Toast 出口 TODO（message=${effect.message}）")
+        }
+    }
+
+    // ─────────────────────────── 音源解析执行器 ───────────────────────────
+
+    /**
+     * 音源解析执行器（T-P1-05）：把 [PlaybackEffect.ResolveSongUrl] 接到
+     * [SongUrlResolver]，打通「解析 → 回写 → 重备」在线播放全链路。
+     *
+     * 语义要点：
+     * - 请求音质取解析发起时的 `_state.value.audioQuality.value`（API 码，
+     *   见 [com.gracemusic.player.model.AudioQuality]）；
+     * - 解析是 suspend 网络操作，**不得在 dispatch 调用线程同步执行**——投到
+     *   [scope]（`@StoreScope`，Main.immediate）异步完成；结果一律经
+     *   `dispatch` 走归约器唯一写入路径，不在本方法直写状态；
+     * - 成功回写走 `UpdateSong(song.copy(url), actualQuality)`：归约器的
+     *   解析回写收尾自动清 `isResolvingUrl` / `manualRetryInFlight` 并重备，
+     *   实际音质（F-SRC-006）随回写进入状态；**迟到回写**（歌曲已不是当前曲）
+     *   由归约器 `updateSong` 的身份判定自然降级为纯写写（无害，url 仍入队
+     *   作缓存）；**多请求在途并发安全**——回写按 song.id 身份命中队列项，
+     *   不依赖「仍是当前曲」；
+     * - 试听 URL 也会回写重备（lite 最后手段语义：final 降级兜底接受试听）；
+     * - 失败走 `EngineError(r.message)`：Failure 文案已在 resolver 收敛为
+     *   安全文案（无 URL / 无上游细节），直接入 `resolveError`，不经
+     *   `safePlaybackErrorMessage` 二次折叠；
+     * - **Store 不写响度缓存**：[SongUrlResolver.resolve] 内部已写
+     *   [LoudnessCache.remember]，此处不重复。
+     */
+    private fun resolveSongUrl(song: Song) {
+        val requestedQuality: String = _state.value.audioQuality.value
+        scope.launch {
+            when (val result: ResolutionResult = songUrlResolver.resolve(song, requestedQuality)) {
+                is ResolutionResult.Success ->
+                    dispatch(PlaybackIntent.UpdateSong(song.copy(url = result.url), result.actualQuality))
+
+                is ResolutionResult.Failure ->
+                    dispatch(PlaybackEvent.EngineError(result.message))
+            }
         }
     }
 
@@ -537,8 +580,8 @@ class PlaybackStore @Inject constructor(
      * 播完/推进后位置基准归零（< 45s 不再评估）。
      *
      * `REFRESH_SOURCE` → `dispatch(RetryCurrent)`：本地曲目不受看门狗管辖
-     * （在线门）；在线曲目的真实换源依赖 T-P1-05 解析器，本阶段只把决策
-     * 路径接通（RetryCurrent → ResolveSongUrl TODO），不伪造播放恢复。
+     * （在线门）；在线曲目经 T-P1-05 解析器真实换源（RetryCurrent →
+     * ResolveSongUrl → 回写重备，见 [resolveSongUrl]）。
      */
     private fun observeCdnStallWindow(sample: Duration, now: Long) {
         if (!engine.isPlaying) return

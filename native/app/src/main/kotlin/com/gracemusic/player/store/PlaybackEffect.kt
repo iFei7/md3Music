@@ -79,9 +79,10 @@ sealed interface PlaybackEffect {
     /**
      * 解析当前曲目的播放地址（在线曲目走酷狗 API，云盘曲目走 /user/cloud/url）。
      *
-     * TODO T-P1-05：解析器落地前执行器只登记不执行；Store 在解析成功后经
-     * [com.gracemusic.player.state.PlaybackIntent.UpdateSong] 回写队列并重备
-     * （见 PlaybackReducer 对 UpdateSong 的「解析回写收尾」规则）。
+     * 执行器（T-P1-05 C 行）已接线：Store 经 [SongUrlResolver]（data/source）
+     * 异步解析，成功后经 [com.gracemusic.player.state.PlaybackIntent.UpdateSong]
+     * 回写队列并重备（见 PlaybackReducer 对 UpdateSong 的「解析回写收尾」规则），
+     * 失败投 `EngineError`（文案已在 resolver 收敛）。
      */
     data class ResolveSongUrl(val song: Song) : PlaybackEffect
 

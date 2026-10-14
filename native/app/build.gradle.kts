@@ -248,6 +248,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.robolectric)
+    testImplementation(libs.okhttp.mockwebserver)
 
     // --- Compose UI 测试 ---
     androidTestImplementation(platform(libs.compose.bom))

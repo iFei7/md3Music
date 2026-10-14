@@ -194,7 +194,7 @@ object PlaybackReducer {
         is PlaybackIntent.RemoveMany -> removeMany(state, intent.songIds)
         is PlaybackIntent.ReorderQueue -> reorderQueue(state, intent.oldIndex, intent.newIndex)
         is PlaybackIntent.SortQueue -> sortQueue(state, intent.by, intent.ascending)
-        is PlaybackIntent.UpdateSong -> updateSong(state, intent.song)
+        is PlaybackIntent.UpdateSong -> updateSong(state, intent.song, intent.actualQuality)
         is PlaybackIntent.ClearQueue -> clearQueue(state)
 
         // ── 播放偏好 ──
@@ -682,6 +682,9 @@ object PlaybackReducer {
      *   [ResolveSongUrl] 执行器解析成功后的回写）→ 清解析标志并按
      *   `awaitingPlaybackProgress`（起播意图的播放意愿）重备，携带当前位置
      *   作起始点。这闭合了「意图发解析 → Store 执行 → 回写 → 重备」的环路；
+     *   同时 [actualQuality] 非空时写入 `actualPlayingQuality`（F-SRC-006：
+     *   服务端回写档随解析进入状态，UI 可见降级）；null 不动现值——防其他
+     *   UpdateSong 调用方（NAS 回写 localPath 等）误清实际音质；
      * - **纯写写**（NAS 下载回写 localPath 等）：只换队列项，不重备
      *   （Dart 同样不打断播放）。
      *
@@ -690,7 +693,7 @@ object PlaybackReducer {
      * **命中判据不能用队列相等性**：[Song.equals] 仅按 id 比较，字段级更新
      * （localPath / url 回写）不改变队列的相等性结果，必须按 id 显式命中。
      */
-    private fun updateSong(state: PlaybackState, song: Song): PlaybackTransition {
+    private fun updateSong(state: PlaybackState, song: Song, actualQuality: String?): PlaybackTransition {
         if (state.queue.playlist.none { it.id == song.id }) return unchanged(state)
         val updated = state.queue.updateSong(song).queue
         val isCurrent = song.id == updated.currentSong?.id
@@ -700,6 +703,7 @@ object PlaybackReducer {
                     queue = updated,
                     isResolvingUrl = false,
                     manualRetryInFlight = false,
+                    actualPlayingQuality = actualQuality ?: state.actualPlayingQuality,
                 ),
                 Prepare(
                     song = song,

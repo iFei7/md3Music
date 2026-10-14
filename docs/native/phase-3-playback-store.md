@@ -163,7 +163,7 @@ Store 实现 `PlaybackSessionBridge`，`init` 末尾 `registry.attach(this)`（�
 
 | 能力 | 状态 | 归属/阻塞 |
 |---|---|---|
-| 在线曲目播放全链路 | **阻塞** | T-P1-05 音源解析器（`ResolveSongUrl` 效果无执行器）；本地曲目全链路真实可用 |
+| 在线曲目播放全链路 | ~~阻塞~~ **代码层已打通**（2026-10-14 T-P1-05 追记） | 解析器/网络层/回写环已落地，见 phase-3b-source-resolver.md；真机验证待用户实测 |
 | 失败自动恢复执行 | 未接 | T-P1-06（依赖 T-P1-05 + errorCode 透传）；手动 `RetryCurrent→Prepare` 已可用（本地） |
 | 音频焦点三模式运行时 | 未接 | T-P1-08（焦点事件源方案：Media3 内建 AudioFocusManager vs fork `AudioFocusEventListener` 获取路径需专门设计）；偏好意图已可归约 |
 | 交叉淡化 | 未接 | T-P1-07（辅引擎 + 票据）；T-P1-02 完成条件中的 `abortCrossfade` 项因此遗留 |
@@ -188,3 +188,5 @@ Store 实现 `PlaybackSessionBridge`，`init` 末尾 `registry.attach(this)`（�
 cd native && JAVA_HOME=~/dev-tools/jdk-17.0.20.1+1 ./gradlew :app:testDebugUnitTest      # 542 全绿（--rerun-tasks 实测）
 cd native && JAVA_HOME=~/dev-tools/jdk-17.0.20.1+1 ./gradlew :app:assembleDebug :app:lintDebug  # BUILD SUCCESSFUL，lint 0 新增 error
 ```
+
+> **2026-10-14 追记**：T-P1-05（音源解析器 + 网络层 + Rust 启动链）交付后单测 **542 → 631 全绿**，`ResolveSongUrl` 效果已有真实执行器，在线播放全链路见 `phase-3b-source-resolver.md`。

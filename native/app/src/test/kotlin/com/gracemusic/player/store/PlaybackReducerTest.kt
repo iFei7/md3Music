@@ -94,6 +94,9 @@ import org.junit.Test
  * - `SortQueue` → `SortQueue_按标题重排且当前曲跟随`（正例）/ `SortQueue_QUEUE维度无操作` /
  *   `SortQueue_不足两首无操作`（边界）
  * - `UpdateSong` → `UpdateSong_纯写写不重备` / `UpdateSong_解析回写收尾后重备当前曲`（正例）/
+ *   `UpdateSong_解析回写携带actualQuality_写入实际播放音质` /
+ *   `UpdateSong_actualQuality缺省_保持现有实际音质` /
+ *   `UpdateSong_非当前曲回写_不写实际音质` /
  *   `UpdateSong_未命中同id曲目无操作`（边界）
  * - `ClearQueue` → `ClearQueue_停机并清空队列`（正例）/ `ClearQueue_空队列上也产生停机效果`（边界）
  *
@@ -935,6 +938,51 @@ class PlaybackReducerTest {
         assertFalse(t.state.isResolvingUrl)
         assertEquals("http://cdn/o1.mp3", t.state.currentSong?.url)
         assertEquals(listOf(Prepare(resolved, 45_000, true)), t.effects)
+    }
+
+    @Test
+    fun `UpdateSong_解析回写携带actualQuality_写入实际播放音质`() {
+        // F-SRC-006：解析器回写档随 UpdateSong 进入状态（词汇表第二处增补）。
+        val song = testSong("o1")
+        val before = stateOf(listOf(song)).copy(isResolvingUrl = true, awaitingPlaybackProgress = true)
+        val resolved = testSong("o1", url = "http://cdn/o1.mp3")
+        val t = reduceIntent(before, PlaybackIntent.UpdateSong(resolved, actualQuality = "320"))
+
+        assertEquals("320", t.state.actualPlayingQuality)
+        assertFalse(t.state.isResolvingUrl)
+    }
+
+    @Test
+    fun `UpdateSong_actualQuality缺省_保持现有实际音质`() {
+        // null = 不动实际音质：防其他 UpdateSong 调用方（NAS 回写 localPath 等）误清。
+        val song = testSong("o1")
+        val before = stateOf(listOf(song)).copy(
+            isResolvingUrl = true,
+            awaitingPlaybackProgress = true,
+            actualPlayingQuality = "flac",
+        )
+        val resolved = testSong("o1", url = "http://cdn/o1.mp3")
+        val t = reduceIntent(before, PlaybackIntent.UpdateSong(resolved))
+
+        assertEquals("flac", t.state.actualPlayingQuality)
+        assertFalse(t.state.isResolvingUrl)
+    }
+
+    @Test
+    fun `UpdateSong_非当前曲回写_不写实际音质`() {
+        // 迟到回写 / 他曲回写走纯写写分支：实际音质不被污染。
+        val before = playing(onlineSongs("a", "b")).copy(
+            isResolvingUrl = true,
+            actualPlayingQuality = "high",
+        )
+        val t = reduceIntent(
+            before,
+            PlaybackIntent.UpdateSong(testSong("b", url = "http://cdn/b.mp3"), actualQuality = "320"),
+        )
+
+        assertEquals("high", t.state.actualPlayingQuality)
+        assertEquals("http://cdn/b.mp3", t.state.playlist[1].url)
+        assertTrue(t.effects.isEmpty())
     }
 
     @Test

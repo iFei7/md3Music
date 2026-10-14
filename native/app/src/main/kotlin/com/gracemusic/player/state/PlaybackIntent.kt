@@ -114,8 +114,16 @@ sealed interface PlaybackIntent {
     /** 按维度重排整个队列。Dart `sortPlaylist`。 */
     data class SortQueue(val by: PlaylistSortBy, val ascending: Boolean = true) : PlaybackIntent
 
-    /** 更新队列中同 id 歌曲的字段（回写 localPath / url）。Dart `updateSongInPlaylist`。 */
-    data class UpdateSong(val song: Song) : PlaybackIntent
+    /**
+     * 更新队列中同 id 歌曲的字段（回写 localPath / url）。Dart `updateSongInPlaylist`。
+     *
+     * [actualQuality] 是解析回写专用载荷（词汇表第二处增补，F-SRC-006：
+     * 实际播放音质随解析回写进入状态）：仅 [PlaybackEffect.ResolveSongUrl]
+     * 执行器在解析成功后的回写携带服务端回写档；其余调用方（NAS 下载回写
+     * localPath 等）保持默认 null——归约器对 null 不动现有
+     * `actualPlayingQuality`，防止误清。
+     */
+    data class UpdateSong(val song: Song, val actualQuality: String? = null) : PlaybackIntent
 
     /** 清空队列并停止播放。Dart `clearPlaylist`。 */
     data object ClearQueue : PlaybackIntent

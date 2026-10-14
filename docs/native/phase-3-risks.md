@@ -25,12 +25,12 @@
 - **R2**：`AudioPlaybackService.kt:621-623` `SuperLyricHelper.registerPublisher()` 无条件调用（minSdk 26），外层 `catch (Exception)` 捕不住 `Error` → API 24–25 可能 `NoClassDefFoundError` 崩溃。
 - **纪律**（D2-09）：两项未修复前**不得宣称 Android 7–9 全面兼容**；本阶段所有测试跑在 JVM/Robolectric（sdk=32 模拟），无真机覆盖。验证矩阵 = Android 7.0/8.x/9 真机（依赖用户设备）。
 
-## R3-04 🔴 在线音源阻塞及其下游效应（新）
+## R3-04 🟡 在线音源阻塞及其下游效应（T-P1-05 交付后降级）
 
-- **事实**：T-P1-05 音源解析器未建 → `ResolveSongUrl` 效果无执行器（仅 TODO 日志）→ **在线曲目播放链路不打通**；本地曲目（localPath）全链路真实可用。
-- **下游效应（重要）**：①看门狗对在线曲目触发 REFRESH_SOURCE → `RetryCurrent` → 归约器置 `isResolvingUrl=true`，而解析器缺失使该标志**永不收敛**（无生产者清理）——UI 会显示"解析中"卡死；②`SetAudioQuality` 切档同样置 `isResolvingUrl=true` 不收敛。
-- **缓解**：T-P1-05 落地时同步实现"解析失败/超时 → `isResolvingUrl=false` + resolveError"的收敛路径（归约器已留 `resolveError` 字段）；在看门狗触发前可加"在线曲目且无解析器则不动作"的临时守卫（**未实现，登记**）。
-- **纪律**（简报 §6）：不用虚构 URL 或测试歌曲冒充真实业务接线；不绕过 `/audio/proxy` 403 与现有鉴权；播放缓存实现前必须验证（URL 可达性、Range 支持、容量/清理规则、数据来源合法性）——D2-02。
+- **原始事实**：T-P1-05 音源解析器未建 → `ResolveSongUrl` 效果无执行器 → 在线曲目播放链路不打通；看门狗对在线曲触发会把 `isResolvingUrl` 置 true 且永不收敛。
+- **2026-10-14 状态更新（T-P1-05 交付，见 phase-3b-source-resolver.md）**：解析器已落地（降级链/三分流/响度缓存/Store 回写环），`ResolveSongUrl` 有真实执行器，回写环自动清 `isResolvingUrl` 并重备——**不收敛问题解除**；看门狗 `RetryCurrent` 现走真实重备。在线曲目播放链路**代码层打通**（631 单测含全链路测试）。
+- **遗留**：真机验证（起播/云盘/试听/弱网超时）；20028 设备重注册、20018 token 刷新、VIP `/song/url/new` 通道（无会话层，T-P2-07）；解析失败不自动跳下一首（T-P1-06 恢复链）；响度字段真机常缺（F-SRC-008，缓存常空属预期）。
+- **纪律不变**（简报 §6/D2-02）：不虚构 URL；不绕过 `/audio/proxy` 403 与鉴权；播放缓存实现前必须验证（URL 可达性、Range 支持、容量/清理规则）。
 
 ## R3-05 🟡 errorCode 透传缺口（新）
 
@@ -86,7 +86,7 @@
 | R3-01 fork 跨树耦合 | 🔴 | 开放（三道防线运行中） | T-P0-02 vendored 化 |
 | R3-02 Rust panic=abort | 🔴 | 开放（验证方案已定，工具链阻塞） | Rust 工具链可用后 |
 | R3-03 Android 7–9 两缺陷 | 🔴 | 开放（未修复前不宣称兼容） | 本地音乐/歌词模块修复时 |
-| R3-04 在线音源阻塞 + isResolvingUrl 不收敛 | 🔴 | 开放 | T-P1-05 |
+| R3-04 在线音源阻塞 + isResolvingUrl 不收敛 | 🟡 | **代码层解除**（T-P1-05 交付，真机待验） | T-P2-07 会话层 / T-P1-06 恢复链 |
 | R3-05 errorCode 透传缺口 | 🟡 | 开放 | T-P1-03/T-P1-06 |
 | R3-06 RetryPlayback 无生产者 | 🟡 | 开放（文档已改口径） | T-P1-06 |
 | R3-07 看门狗 10s 常量 | 🟡 | 开放（可校准） | 真机验证后 |
