@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:m3e_core/m3e_core.dart';
 
 import '../../core/theme/app_dimens.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_background.dart';
 import '../../data/models/playlist.dart';
@@ -20,6 +21,8 @@ import '../../widgets/song_list_item.dart';
 import '../../widgets/m3e_sort_sheet.dart';
 import '../../widgets/playlist_comments_view.dart';
 import '../../widgets/keyboard_expand_sheet.dart';
+import '../../widgets/common/multi_select_controller.dart';
+import '../../widgets/common/sonify_pill_buttons.dart';
 import 'playlist_songs_loader.dart';
 
 class PlaylistPage extends StatefulWidget {
@@ -100,9 +103,10 @@ class _PlaylistPageState extends State<PlaylistPage> {
   // 歌单介绍展开/折叠
   bool _isDescriptionExpanded = false;
 
-  // 批量选择模式
-  bool _isMultiSelectMode = false;
-  final Set<String> _selectedSongIds = {};
+  // 批量选择模式：逻辑抽为公共 MultiSelectController（方案 §4.1），
+  // 语义与原内联实现逐项一致（长按进入/取消最后一首自动退出/全选保持模式）。
+  // 本页监听 controller 触发 setState；搜索退出等页面私有行为留在本页。
+  final MultiSelectController _multiSelect = MultiSelectController();
   bool _isDeleting = false;
 
   /// 删除歌曲用的 listid（仅自己创建的歌单有效）
@@ -128,12 +132,20 @@ class _PlaylistPageState extends State<PlaylistPage> {
     _appBarCollapsed.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _multiSelect.removeListener(_onMultiSelectChanged);
+    _multiSelect.dispose();
     super.dispose();
+  }
+
+  /// 多选状态翻转 → 页面重建（对应原实现中每次选择的 setState）。
+  void _onMultiSelectChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void initState() {
     super.initState();
+    _multiSelect.addListener(_onMultiSelectChanged);
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _checkCollected();
@@ -268,59 +280,39 @@ class _PlaylistPageState extends State<PlaylistPage> {
   // ==================== 批量选择模式 ====================
 
   void _enterMultiSelectMode(String songId) {
+    // 退出搜索状态，显示全部歌曲供选择（页面私有行为，与多选状态分离）
     setState(() {
-      _isMultiSelectMode = true;
-      _selectedSongIds.clear();
-      _selectedSongIds.add(songId);
-      // 退出搜索状态，显示全部歌曲供选择
       _isSearching = false;
       _searchQuery = '';
       _searchController.clear();
       _invalidateDisplaySongs();
     });
+    // 长按进入：首个 item 自动选中（listener 触发页面 setState）
+    _multiSelect.enterSelectMode(songId);
   }
 
   void _exitMultiSelectMode() {
-    setState(() {
-      _isMultiSelectMode = false;
-      _selectedSongIds.clear();
-    });
+    _multiSelect.exitSelectMode();
   }
 
   void _toggleSongSelection(String songId) {
-    setState(() {
-      if (_selectedSongIds.contains(songId)) {
-        _selectedSongIds.remove(songId);
-        // 如果取消选中了最后一首，自动退出多选
-        if (_selectedSongIds.isEmpty) {
-          _isMultiSelectMode = false;
-        }
-      } else {
-        _selectedSongIds.add(songId);
-      }
-    });
+    // 取消最后一首选中时控制器自动退出多选
+    _multiSelect.toggle(songId);
   }
 
   void _toggleSelectAll() {
-    setState(() {
-      if (_selectedSongIds.length == _displaySongs.length) {
-        _selectedSongIds.clear();
-      } else {
-        _selectedSongIds
-          ..clear()
-          ..addAll(_displaySongs.map((s) => s.id));
-      }
-    });
+    // 未全选 → 全选当前显示列表；已全选 → 清空但保持多选模式
+    _multiSelect.toggleSelectAll(_displaySongs.map((s) => s.id));
   }
 
   // ==================== 批量下载（未移植：公开库不包含下载功能） ====================
 
   Future<void> _deleteSelectedSongs() async {
-    if (_selectedSongIds.isEmpty) return;
+    if (_multiSelect.selectedIds.isEmpty) return;
     final listid = _deleteListid;
     if (listid == null || listid.isEmpty) return;
 
-    final count = _selectedSongIds.length;
+    final count = _multiSelect.selectedIds.length;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -344,7 +336,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
 
     // 构造 fileids：优先用 fileId（>0），否则用 song.id（hash）
     final selectedSongs = _songs
-        .where((s) => _selectedSongIds.contains(s.id))
+        .where((s) => _multiSelect.selectedIds.contains(s.id))
         .toList();
     final fileids = selectedSongs
         .map((s) {
@@ -361,12 +353,11 @@ class _PlaylistPageState extends State<PlaylistPage> {
       if (result != null) {
         // 从本地列表中移除已删除的歌曲
         setState(() {
-          _songs.removeWhere((s) => _selectedSongIds.contains(s.id));
-          _isMultiSelectMode = false;
-          _selectedSongIds.clear();
-          _isDeleting = false;
+          _songs.removeWhere((s) => _multiSelect.selectedIds.contains(s.id));
           _invalidateDisplaySongs();
         });
+        _multiSelect.exitSelectMode();
+        setState(() => _isDeleting = false);
         // 通知「我的收藏」刷新歌曲数
         context.read<PlaylistCollectionNotifier>().notifyChanged();
         if (mounted) {
@@ -915,9 +906,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
         // 筛选切换/页面重建时执行，重算一次筛选即可。
         _invalidateDisplaySongs();
         return PopScope(
-          canPop: !_isMultiSelectMode,
+          canPop: !_multiSelect.isSelectMode,
           onPopInvokedWithResult: (didPop, _) {
-            if (!didPop && _isMultiSelectMode) _exitMultiSelectMode();
+            if (!didPop && _multiSelect.isSelectMode) _exitMultiSelectMode();
           },
           child: Scaffold(
             body: Column(
@@ -929,13 +920,13 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   // 歌单的元数据/封面/描述仍可见）
                   if (_error != null)
                     _buildErrorBanner(context, colorScheme, textTheme),
-                  if (_isMultiSelectMode)
+                  if (_multiSelect.isSelectMode)
                     _buildMultiSelectBar(colorScheme, textTheme),
                   Expanded(
                     child: CustomScrollView(
                       controller: _scrollController,
                       slivers: [
-                        if (!_isMultiSelectMode)
+                        if (!_multiSelect.isSelectMode)
                           // 顶栏只在折叠状态翻转（跨越阈值）时重建，
                           // 滚动中不再每帧重建（背景/标题用动画过渡）
                           ValueListenableBuilder<bool>(
@@ -950,7 +941,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                             ),
                           ),
                         // 歌单介绍（默认折叠，最多显示2行，带动画）
-                        if (!_isMultiSelectMode &&
+                        if (!_multiSelect.isSelectMode &&
                             displayPlaylist.description != null &&
                             displayPlaylist.description!.isNotEmpty)
                           SliverToBoxAdapter(
@@ -1042,7 +1033,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                             ),
                           ),
                         // 歌单内搜索栏（点击搜索图标后展开）
-                        if (!_isMultiSelectMode && _isSearching)
+                        if (!_multiSelect.isSelectMode && _isSearching)
                           SliverToBoxAdapter(
                             child: Padding(
                               padding: const EdgeInsets.fromLTRB(
@@ -1090,7 +1081,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                               ),
                             ),
                           ),
-                        if (!_isMultiSelectMode)
+                        if (!_multiSelect.isSelectMode)
                           SliverToBoxAdapter(
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
@@ -1100,7 +1091,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
                               child: Row(
                                 children: [
                                   Expanded(
-                                    child: FilledButton.icon(
+                                    // 胶囊化：48dp squircle 24dp（方案 §5.3）
+                                    child: SonifyPrimaryPillButton(
                                       onPressed: () {
                                         final songs = _displaySongs;
                                         if (songs.isNotEmpty) {
@@ -1109,15 +1101,13 @@ class _PlaylistPageState extends State<PlaylistPage> {
                                               .playOnlinePlaylist(songs, 0);
                                         }
                                       },
-                                      icon: const Icon(Icons.play_arrow),
-                                      label: Text(
-                                        '播放全部${_isSearching && _searchQuery.isNotEmpty ? ' (${_displaySongs.length})' : ''}',
-                                      ),
+                                      icon: Icons.play_arrow,
+                                      label: '播放全部${_isSearching && _searchQuery.isNotEmpty ? ' (${_displaySongs.length})' : ''}',
                                     ),
                                   ),
                                   const Gap(AppSpacing.md),
                                   Expanded(
-                                    child: OutlinedButton.icon(
+                                    child: SonifySecondaryPillButton(
                                       onPressed: () {
                                         final songs = _displaySongs;
                                         if (songs.isNotEmpty) {
@@ -1129,8 +1119,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
                                               .playOnlinePlaylist(shuffled, 0);
                                         }
                                       },
-                                      icon: const Icon(Icons.shuffle),
-                                      label: const Text('随机播放'),
+                                      icon: Icons.shuffle,
+                                      label: '随机播放',
                                     ),
                                   ),
                                   // 红心收藏按钮：搜索/发现页需要收藏功能，保留显示；
@@ -1189,7 +1179,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                           haptic: M3EHapticFeedback.light,
                           onTap: (index) {
                             final song = _displaySongs[index];
-                            if (_isMultiSelectMode) {
+                            if (_multiSelect.isSelectMode) {
                               _toggleSongSelection(song.id);
                             } else {
                               context
@@ -1202,7 +1192,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                           itemBuilder: (context, index) {
                             final song = _displaySongs[index];
                             final isHighlighted = _highlightSongId == song.id;
-                            final isSelected = _selectedSongIds.contains(
+                            final isSelected = _multiSelect.selectedIds.contains(
                               song.id,
                             );
                             return AnimatedContainer(
@@ -1211,14 +1201,14 @@ class _PlaylistPageState extends State<PlaylistPage> {
                                   ? _targetItemKey
                                   : null,
                               duration: const Duration(milliseconds: 300),
-                              color: isHighlighted && !_isMultiSelectMode
+                              color: isHighlighted && !_multiSelect.isSelectMode
                                   ? colorScheme.primaryContainer.withValues(
                                       alpha: 0.5,
                                     )
                                   : Colors.transparent,
                               child: SongListItem(
                                 song: song,
-                                isSelectMode: _isMultiSelectMode,
+                                isSelectMode: _multiSelect.isSelectMode,
                                 isSelected: isSelected,
                                 onMoreTap: () {},
                               ),
@@ -1226,7 +1216,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                           },
                         ),
                         // 搜索无结果提示
-                        if (!_isMultiSelectMode &&
+                        if (!_multiSelect.isSelectMode &&
                             _isSearching &&
                             _displaySongs.isEmpty &&
                             _songs.isNotEmpty)
@@ -1253,7 +1243,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                             ),
                           ),
                         // 离线/首次打开无缓存时：歌单歌曲为空状态
-                        if (!_isMultiSelectMode && _songs.isEmpty)
+                        if (!_multiSelect.isSelectMode && _songs.isEmpty)
                           SliverToBoxAdapter(
                             child: _buildEmptySongsHint(colorScheme, textTheme),
                           ),
@@ -1344,7 +1334,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
             },
           ),
       ],
-      // pinned 后顶栏标题：折叠后 fade-in（AnimatedOpacity 200ms 过渡）
+      // pinned 后顶栏标题：折叠后 fade-in（AnimatedOpacity 200ms 过渡）；
+      // sonify 折叠顶栏小标题规格 18.5sp Bold（Title.kt:1063-1067）
       title: AnimatedOpacity(
         duration: const Duration(milliseconds: 200),
         opacity: collapsed ? 1.0 : 0.0,
@@ -1352,7 +1343,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
           displayPlaylist.name,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+          style: SonifyTextStyles.barTitle.copyWith(
+            color: colorScheme.onSurface,
+          ),
         ),
       ),
       // 不用 FlexibleSpaceBar：折叠时不产生视差位移，壁纸层
@@ -1633,7 +1626,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
 
   /// 多选模式顶栏：关闭 / 已选 N 首 / 全选 / 删除
   Widget _buildMultiSelectBar(ColorScheme colorScheme, TextTheme textTheme) {
-    final selectedCount = _selectedSongIds.length;
+    final selectedCount = _multiSelect.selectedIds.length;
     final totalCount = _displaySongs.length;
     final allSelected = selectedCount == totalCount && totalCount > 0;
     return Container(
@@ -1684,7 +1677,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   context,
                   colorScheme,
                   selectedCount,
-                  _songs.where((s) => _selectedSongIds.contains(s.id)).toList(),
+                  _songs.where((s) => _multiSelect.selectedIds.contains(s.id)).toList(),
                 ),
                 if (widget.isUserCreated)
                   IconButton(

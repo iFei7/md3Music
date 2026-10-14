@@ -3,6 +3,8 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/theme/app_dimens.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/theme/squircle.dart';
 import '../../core/utils/app_toast.dart';
 import '../../providers/library_provider.dart';
 import '../../providers/local_favorites_provider.dart';
@@ -122,14 +124,15 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
   Widget build(BuildContext context) {
     final libraryProvider = context.watch<LibraryProvider>();
     final colorScheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
+    final sonify = SonifyColors.of(context);
     final hasMusic = libraryProvider.hasMusic;
     final isScanning = libraryProvider.isScanning;
 
     return Column(
       children: [
         if (hasMusic || isScanning) ...[
-          // 搜索栏
+          // 搜索栏：squircle 9dp 卡底材质（方案 §4.2「tab 容器 squircle 9dp 卡底色」
+          // 的同类规格，搜索条与 sonify 搜索框材质对齐）
           Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: AppSpacing.lg,
@@ -138,41 +141,45 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
             child: Row(
               children: [
                 Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    focusNode: _searchFocusNode,
-                    onTap: () {
-                      // 点击搜索框时请求焦点并弹出键盘
-                      _searchFocusNode.requestFocus();
-                    },
-                    decoration: InputDecoration(
-                      hintText: '搜索本地音乐',
-                      prefixIcon: const Icon(Icons.search, size: 20),
-                      suffixIcon: _searchController.text.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear, size: 20),
-                              onPressed: () {
-                                _searchController.clear();
-                                libraryProvider.clearSearch();
-                              },
-                            )
-                          : null,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.md,
-                        vertical: AppSpacing.sm,
+                  child: DecoratedBox(
+                    decoration: ShapeDecoration(
+                      color: colorScheme.surfaceContainerHigh,
+                      shape: SmoothRectangleBorder(
+                        borderRadius:
+                            BorderRadius.circular(SonifyRadius.card),
                       ),
-                      border: OutlineInputBorder(
-                        borderRadius: AppRadius.xlAll,
-                        borderSide: BorderSide.none,
-                      ),
-                      filled: true,
-                      fillColor: colorScheme.surfaceContainerHigh,
                     ),
-                    onChanged: (value) {
-                      libraryProvider.setSearchQuery(value);
-                      setState(() {});
-                    },
+                    child: TextField(
+                      controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      onTap: () {
+                        // 点击搜索框时请求焦点并弹出键盘
+                        _searchFocusNode.requestFocus();
+                      },
+                      decoration: InputDecoration(
+                        hintText: '搜索本地音乐',
+                        prefixIcon: const Icon(Icons.search, size: 20),
+                        suffixIcon: _searchController.text.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear, size: 20),
+                                onPressed: () {
+                                  _searchController.clear();
+                                  libraryProvider.clearSearch();
+                                },
+                              )
+                            : null,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.md,
+                          vertical: AppSpacing.sm,
+                        ),
+                        border: InputBorder.none,
+                      ),
+                      onChanged: (value) {
+                        libraryProvider.setSearchQuery(value);
+                        setState(() {});
+                      },
+                    ),
                   ),
                 ),
                 // 扫描入口：独立路由形态由页面 FAB 承担，嵌入形态（收藏页
@@ -194,25 +201,41 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
               ],
             ),
           ),
-          // TabBar
-          TabBar(
-            controller: _tabController,
-            tabs: const [
-              Tab(text: '曲目'),
-              Tab(text: '专辑'),
-              Tab(text: '艺术家'),
-              Tab(text: '文件夹'),
-              Tab(text: '收藏'),
-            ],
-            // 5 个 Tab 内容较窄，关闭滚动并居中分布到整行，
-            // 缩窄每个 Tab 内部 padding 让"收藏"也能完整显示。
-            isScrollable: false,
-            tabAlignment: TabAlignment.center,
-            padding: EdgeInsets.zero,
-            labelPadding: const EdgeInsets.symmetric(horizontal: 6),
-            labelStyle: textTheme.titleSmall,
-            unselectedLabelStyle: textTheme.titleSmall,
-            dividerColor: Colors.transparent,
+          // TabBar：squircle 9dp 分段容器（方案 §4.3「tab 行：squircle 9dp
+          // 容器内 5 tab，选中 tab 卡片式反白」），文字层级对齐 sonify。
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            child: DecoratedBox(
+              decoration: ShapeDecoration(
+                color: colorScheme.surfaceContainerHigh.withValues(alpha: 0.6),
+                shape: SmoothRectangleBorder(
+                  borderRadius: BorderRadius.circular(SonifyRadius.card),
+                ),
+              ),
+              child: TabBar(
+                controller: _tabController,
+                tabs: const [
+                  Tab(text: '曲目'),
+                  Tab(text: '专辑'),
+                  Tab(text: '艺术家'),
+                  Tab(text: '文件夹'),
+                  Tab(text: '收藏'),
+                ],
+                // 5 个 Tab 内容较窄，关闭滚动并居中分布到整行，
+                // 缩窄每个 Tab 内部 padding 让"收藏"也能完整显示。
+                isScrollable: false,
+                tabAlignment: TabAlignment.center,
+                padding: EdgeInsets.zero,
+                labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+                labelStyle: SonifyTextStyles.body.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+                unselectedLabelStyle: SonifyTextStyles.body.copyWith(
+                  color: sonify.textSecondary,
+                ),
+                dividerColor: Colors.transparent,
+              ),
+            ),
           ),
         ],
         Expanded(

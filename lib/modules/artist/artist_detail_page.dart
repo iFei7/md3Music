@@ -5,8 +5,10 @@ import 'package:m3e_core/m3e_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/theme/app_dimens.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_background.dart';
+import '../../data/models/album.dart';
 import '../../data/models/song.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/theme_provider.dart';
@@ -14,6 +16,10 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/m3e_sort_sheet.dart';
 import '../../widgets/song_list_item.dart';
+import '../../widgets/common/cover_rail.dart';
+import '../../widgets/common/multi_select_controller.dart';
+import '../../widgets/common/sonify_pill_buttons.dart';
+import '../album/album_detail_page.dart';
 
 class ArtistDetailPage extends StatefulWidget {
   final String artistId;
@@ -102,6 +108,58 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
   // 定位正在播放歌曲
   String? _highlightSongId;
 
+  // 批量选择模式：复用歌单页同款控制器（方案 §4.1 三页一致）。
+  // 歌手页无删除能力，多选顶栏仅提供退出/计数/全选。
+  final MultiSelectController _multiSelect = MultiSelectController();
+
+  // 歌手专辑横滑 Rail（方案 §5.1 接通闲置能力 getArtistAlbums）。
+  // 与歌曲列表独立加载：失败/为空时不渲染分区（不阻塞主列表）。
+  List<KugouAlbumBrief> _artistAlbums = [];
+  bool _artistAlbumsLoading = false;
+
+  /// 多选状态翻转 → 页面重建。
+  void _onMultiSelectChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _enterMultiSelectMode(String songId) {
+    setState(() {
+      _isSearching = false;
+      _searchQuery = '';
+      _searchController.clear();
+      _invalidateDisplaySongs();
+    });
+    _multiSelect.enterSelectMode(songId);
+  }
+
+  void _exitMultiSelectMode() {
+    _multiSelect.exitSelectMode();
+  }
+
+  void _toggleSongSelection(String songId) {
+    _multiSelect.toggle(songId);
+  }
+
+  void _toggleSelectAll() {
+    _multiSelect.toggleSelectAll(_displaySongs.map((s) => s.id));
+  }
+
+  /// 拉取歌手专辑（getArtistAlbums，kugou_api_client.dart:3035 既有端点）。
+  Future<void> _fetchArtistAlbums() async {
+    if (_artistAlbumsLoading) return;
+    setState(() => _artistAlbumsLoading = true);
+    try {
+      final result = await KugouApiClient().getArtistAlbums(widget.artistId);
+      if (!mounted) return;
+      setState(() {
+        _artistAlbums = result?.albums ?? const [];
+        _artistAlbumsLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _artistAlbumsLoading = false);
+    }
+  }
+
   // 缓存的过滤/排序结果
   List<Song>? _cachedDisplaySongs;
   String? _lastSearchQuery;
@@ -161,9 +219,11 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
     // 先用传入的初始关注状态（从收藏列表进入时为 true），
     // _fetchArtistSongs 获取到详情后会用接口返回值覆盖
     _isFollowing = widget.initialIsFollowed;
+    _multiSelect.addListener(_onMultiSelectChanged);
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _fetchArtistSongs();
+      _fetchArtistAlbums();
     });
   }
 
@@ -173,6 +233,8 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
     _scrollController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _multiSelect.removeListener(_onMultiSelectChanged);
+    _multiSelect.dispose();
     super.dispose();
   }
 
@@ -472,11 +534,17 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
     final useBackgroundImage =
         context.watch<ThemeProvider>().useBackgroundImage;
     final avatarUrl = _fixImageUrl(_resolvedAvatarUrl ?? widget.avatarUrl);
 
-    return Scaffold(
+    return PopScope(
+      canPop: !_multiSelect.isSelectMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _multiSelect.isSelectMode) _exitMultiSelectMode();
+      },
+      child: Scaffold(
       body: _isLoading
         ? const Center(child: M3ELoadingIndicator())
         : _error != null
@@ -484,6 +552,11 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
             : CustomScrollView(
                 controller: _scrollController,
                 slivers: [
+                  // 多选模式顶栏：关闭 / 已选 N 首 / 全选（与歌单页同结构）
+                  if (_multiSelect.isSelectMode)
+                    SliverToBoxAdapter(
+                      child: _buildMultiSelectBar(colorScheme, textTheme),
+                    ),
                   SliverAppBar(
                     expandedHeight: 240,
                     pinned: true,
@@ -558,7 +631,10 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                         widget.artistName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                        // sonify 折叠顶栏小标题规格：18.5sp Bold（Title.kt:1063-1067）
+                        style: SonifyTextStyles.barTitle.copyWith(
+                          color: colorScheme.onSurface,
+                        ),
                       ),
                     ),
                     // 不用 FlexibleSpaceBar：折叠时不产生视差位移，壁纸层
@@ -705,13 +781,15 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                       ),
                     ),
                   ),
+                  // 播放全部/随机播放/关注：集中一行操作条，胶囊化（方案 §5.3）
+                  if (!_multiSelect.isSelectMode)
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.all(AppSpacing.lg),
                       child: Row(
                         children: [
                           Expanded(
-                            child: FilledButton.icon(
+                            child: SonifyPrimaryPillButton(
                               onPressed: _displaySongs.isNotEmpty
                                   ? () {
                                       context
@@ -719,15 +797,13 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                                           .playOnlinePlaylist(_displaySongs, 0);
                                     }
                                   : null,
-                              icon: const Icon(Icons.play_arrow),
-                              label: Text(
-                                '播放全部${_isSearching && _searchQuery.isNotEmpty ? ' (${_displaySongs.length})' : ''}',
-                              ),
+                              icon: Icons.play_arrow,
+                              label: '播放全部${_isSearching && _searchQuery.isNotEmpty ? ' (${_displaySongs.length})' : ''}',
                             ),
                           ),
                           const Gap(AppSpacing.md),
                           Expanded(
-                            child: OutlinedButton.icon(
+                            child: SonifySecondaryPillButton(
                               onPressed: _displaySongs.isNotEmpty
                                   ? () {
                                       final shuffled = List<Song>.from(_displaySongs)
@@ -737,8 +813,8 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                                           .playOnlinePlaylist(shuffled, 0);
                                     }
                                   : null,
-                              icon: const Icon(Icons.shuffle),
-                              label: const Text('随机播放'),
+                              icon: Icons.shuffle,
+                              label: '随机播放',
                             ),
                           ),
                           const Gap(AppSpacing.md),
@@ -845,8 +921,8 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                         ),
                       ),
                     ),
-                  // 歌曲列表控制栏
-                  if (_songs.isNotEmpty || _isLoading)
+                  // 歌曲列表控制栏：分区标题统一 sonify 规格（18sp Bold）
+                  if (!_multiSelect.isSelectMode && (_songs.isNotEmpty || _isLoading))
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
@@ -854,13 +930,9 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                           children: [
                             Text(
                               _artistSongSort == 'hot' ? '热门歌曲' : '最新歌曲',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleSmall
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color: colorScheme.onSurface,
-                                  ),
+                              style: SonifyTextStyles.sectionTitle.copyWith(
+                                color: colorScheme.onSurface,
+                              ),
                             ),
                             if (_songs.isNotEmpty) ...[
                               const SizedBox(width: 8),
@@ -890,7 +962,7 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                       ),
                     ),
                   // 搜索栏
-                  if (_isSearching)
+                  if (_isSearching && !_multiSelect.isSelectMode)
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, 0),
@@ -930,7 +1002,7 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                       ),
                     ),
                   // 搜索无结果
-                  if (_isSearching && _displaySongs.isEmpty && _songs.isNotEmpty)
+                  if (_isSearching && !_multiSelect.isSelectMode && _displaySongs.isEmpty && _songs.isNotEmpty)
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.all(AppSpacing.xxl),
@@ -971,33 +1043,176 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                       ),
                     )
                   else
-                    SliverList(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
-                          final song = _displaySongs[index];
-                          final isHighlighted = _highlightSongId == song.id;
-                          return AnimatedContainer(
-                            duration: const Duration(milliseconds: 300),
-                            color: isHighlighted
-                                ? colorScheme.primaryContainer.withValues(alpha: 0.5)
-                                : Colors.transparent,
-                            child: SongListItem(
-                              song: song,
-                              onTap: () {
-                                context.read<PlayerProvider>().playOnlinePlaylist(
-                                      _displaySongs,
-                                      index,
-                                    );
-                              },
-                              onMoreTap: () {},
-                            ),
+                    // 歌曲列表：与歌单页同款 m3e 分段列表（Sliver 变体），
+                    // 点击/长按由列表级手势接管，长按进入多选（方案 §4.1）。
+                    SliverM3ESegmentedList(
+                      itemCount: _displaySongs.length,
+                      outerRadius: 0,
+                      innerRadius: 0,
+                      gap: 0,
+                      padding: EdgeInsets.zero,
+                      color: Colors.transparent,
+                      hoverColor: Theme.of(context).hoverColor.withValues(
+                        alpha: Theme.of(context).hoverColor.a / 2,
+                      ),
+                      focusColor: Colors.transparent,
+                      enableFeedback: false,
+                      haptic: M3EHapticFeedback.light,
+                      onTap: (index) {
+                        final song = _displaySongs[index];
+                        if (_multiSelect.isSelectMode) {
+                          _toggleSongSelection(song.id);
+                        } else {
+                          context
+                              .read<PlayerProvider>()
+                              .playOnlinePlaylist(_displaySongs, index);
+                        }
+                      },
+                      onLongPress: (index) =>
+                          _enterMultiSelectMode(_displaySongs[index].id),
+                      itemBuilder: (context, index) {
+                        final song = _displaySongs[index];
+                        final isHighlighted = _highlightSongId == song.id;
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          color: isHighlighted && !_multiSelect.isSelectMode
+                              ? colorScheme.primaryContainer.withValues(alpha: 0.5)
+                              : Colors.transparent,
+                          child: SongListItem(
+                            song: song,
+                            isSelectMode: _multiSelect.isSelectMode,
+                            isSelected: _multiSelect.isSelected(song.id),
+                            onMoreTap: () {},
+                          ),
+                        );
+                      },
+                    ),
+                  // 专辑横滑 Rail（方案 §5.1：接通闲置 getArtistAlbums；
+                  // §5.3 卡片规格 150dp 封面 + 13sp 专辑名 + 11sp 年份）
+                  if (!_multiSelect.isSelectMode && _artistAlbums.isNotEmpty) ...[
+                    SliverToBoxAdapter(
+                      child: _sectionHeader(context, '专辑'),
+                    ),
+                    SliverToBoxAdapter(
+                      child: CoverRail(
+                        itemCount: _artistAlbums.length,
+                        itemBuilder: (context, i) {
+                          final album = _artistAlbums[i];
+                          return CoverRailCard(
+                            cover: album.coverUrl != null &&
+                                    album.coverUrl!.isNotEmpty
+                                ? CachedNetworkImage(
+                                    imageUrl: album.coverUrl!,
+                                    memCacheWidth: 300,
+                                    memCacheHeight: 300,
+                                    fit: BoxFit.cover,
+                                    placeholder: (_, _) => Container(
+                                      color: colorScheme.surfaceContainerHighest,
+                                    ),
+                                    errorWidget: (_, _, _) => Container(
+                                      color: colorScheme.surfaceContainerHighest,
+                                      child: Icon(
+                                        Icons.album,
+                                        color: colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  )
+                                : Container(
+                                    color: colorScheme.surfaceContainerHighest,
+                                    child: Icon(
+                                      Icons.album,
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                            title: album.name,
+                            subtitle: album.year != null
+                                ? '${album.year}'
+                                : null,
+                            onTap: () {
+                              Navigator.of(context).push(MaterialPageRoute(
+                                builder: (_) => AlbumDetailPage(
+                                  album: Album(
+                                    id: album.id,
+                                    name: album.name,
+                                    artist: album.artist,
+                                    artworkUri: album.coverUrl,
+                                    songCount: 0,
+                                  ),
+                                ),
+                              ));
+                            },
                           );
                         },
-                        childCount: _displaySongs.length,
                       ),
                     ),
                   ],
+                  ],
                 ),
+      ),
+    );
+  }
+
+  /// 分区标题行：18sp Bold（与发现页 _sectionHeader 同规格，方案 §5.2）。
+  Widget _sectionHeader(BuildContext context, String title) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        SonifySpacing.titleMargin, AppSpacing.lg, SonifySpacing.titleMargin, AppSpacing.sm,
+      ),
+      child: Text(
+        title,
+        style: SonifyTextStyles.sectionTitle.copyWith(color: cs.onSurface),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+
+  /// 多选模式顶栏：关闭 / 已选 N 首 / 全选（与歌单页同结构）。
+  Widget _buildMultiSelectBar(ColorScheme colorScheme, TextTheme textTheme) {
+    final selectedCount = _multiSelect.selectedIds.length;
+    final totalCount = _displaySongs.length;
+    final allSelected = selectedCount == totalCount && totalCount > 0;
+    return Container(
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.xs, vertical: AppSpacing.xs),
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _exitMultiSelectMode,
+                tooltip: '退出选择',
+              ),
+              Expanded(
+                child: Text(
+                  '已选 $selectedCount 首',
+                  style: textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
+                onPressed: _toggleSelectAll,
+                tooltip: allSelected ? '取消全选' : '全选',
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

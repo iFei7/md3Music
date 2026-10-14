@@ -1,14 +1,21 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../core/utils/app_toast.dart';
+import '../../core/theme/app_dimens.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/theme/squircle.dart';
 import '../../data/models/song.dart';
 import '../../providers/player_provider.dart';
 import '../../widgets/m3e_sort_sheet.dart';
 import '../../widgets/song_list_item.dart';
+import '../../widgets/common/multi_select_controller.dart';
 
 enum SongSortBy { title, artist, dateAdded }
+
+/// 曲目列表视图形态（方案 §4.1「曲目页加切换钮」）。
+enum _SongsViewMode { list, grid }
 
 class SongsPage extends StatefulWidget {
   final List<Song> songs;
@@ -23,10 +30,19 @@ class _SongsPageState extends State<SongsPage> {
   /// 排序选择的持久化 key（记忆本地歌曲排序：切页返回后保持上次选择）。
   static const String _kSortByKey = 'local_songs_sort_by';
   static const String _kSortDescKey = 'local_songs_sort_desc';
+  /// 视图形态持久化 key（方案 §4.3：对齐 SongSortBy 的 SharedPreferences 模式）。
+  static const String _kViewModeKey = 'local_songs_view_mode';
 
   SongSortBy _sortBy = SongSortBy.title;
   // 排序方向：true=倒序(Z→A)，false=正序(A→Z)
   bool _sortDescending = false;
+  _SongsViewMode _viewMode = _SongsViewMode.list;
+
+  // 多选：复用公共 MultiSelectController（方案 §4.1，与歌单/专辑/歌手页一致）。
+  // 批量操作收敛为「播放所选」（playPlaylist 既有播放链路零改动）；
+  // 加入队列/加入歌单无既有基建，缺省（见批次回报）。
+  final MultiSelectController _multiSelect = MultiSelectController();
+
   final ScrollController _scrollController = ScrollController();
   // 定位目标项的索引与 GlobalKey：滚到位后用 ensureVisible 精确对齐。
   GlobalKey? _targetItemKey;
@@ -35,7 +51,14 @@ class _SongsPageState extends State<SongsPage> {
   @override
   void initState() {
     super.initState();
+    _multiSelect.addListener(_onMultiSelectChanged);
     _loadSortPreference();
+    _loadViewMode();
+  }
+
+  /// 多选状态翻转 → 页面重建。
+  void _onMultiSelectChanged() {
+    if (mounted) setState(() {});
   }
 
   /// 恢复上次的排序选择（读取失败/无记录时保持默认按标题）。
@@ -58,10 +81,37 @@ class _SongsPageState extends State<SongsPage> {
     await prefs.setBool(_kSortDescKey, _sortDescending);
   }
 
+  /// 恢复上次的视图形态（list/grid，读取失败保持列表）。
+  Future<void> _loadViewMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _viewMode = prefs.getString(_kViewModeKey) == 'grid'
+          ? _SongsViewMode.grid
+          : _SongsViewMode.list;
+    });
+  }
+
+  Future<void> _toggleViewMode() async {
+    setState(() {
+      _viewMode = _viewMode == _SongsViewMode.list
+          ? _SongsViewMode.grid
+          : _SongsViewMode.list;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kViewModeKey, _viewMode.name);
+  }
+
   @override
   void dispose() {
     _scrollController.dispose();
+    _multiSelect.removeListener(_onMultiSelectChanged);
+    _multiSelect.dispose();
     super.dispose();
+  }
+
+  void _playAt(List<Song> songs, int index) {
+    context.read<PlayerProvider>().playPlaylist(songs, index);
   }
 
   /// 定位当前播放歌曲并在视口中居中。
@@ -135,6 +185,36 @@ class _SongsPageState extends State<SongsPage> {
     return songs;
   }
 
+  /// 网格列数：150dp 自适应（sonify AdaptiveImageLayout.kt:9 min 尺寸语义）。
+  int _gridColumns(double width) => (width / SonifySpacing.coverRailMin)
+      .floor()
+      .clamp(2, 6);
+
+  void _onItemTap(List<Song> songs, int index) {
+    final song = songs[index];
+    if (_multiSelect.isSelectMode) {
+      _multiSelect.toggle(song.id);
+    } else {
+      _playAt(songs, index);
+    }
+  }
+
+  void _onItemLongPress(List<Song> songs, int index) {
+    final song = songs[index];
+    if (_multiSelect.isSelectMode) return;
+    _multiSelect.enterSelectMode(song.id);
+  }
+
+  /// 批量播放所选（复用 playPlaylist 既有链路）。
+  void _playSelected(List<Song> songs) {
+    final selected = songs
+        .where((s) => _multiSelect.selectedIds.contains(s.id))
+        .toList();
+    if (selected.isEmpty) return;
+    _multiSelect.exitSelectMode();
+    _playAt(selected, 0);
+  }
+
   @override
   Widget build(BuildContext context) {
     final songs = _sortedSongs;
@@ -158,8 +238,55 @@ class _SongsPageState extends State<SongsPage> {
       );
     }
 
+    final sonify = SonifyColors.of(context);
+
     return Column(
       children: [
+        // 多选模式顶栏：关闭 / 已选 N 首 / 全选 / 播放所选（与歌单页同结构）
+        if (_multiSelect.isSelectMode)
+          Container(
+            color: Theme.of(context).colorScheme.surface,
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.xs, vertical: AppSpacing.xs),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: _multiSelect.exitSelectMode,
+                  tooltip: '退出选择',
+                ),
+                Expanded(
+                  child: Text(
+                    '已选 ${_multiSelect.selectedIds.length} 首',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(
+                    _multiSelect.selectedIds.length == songs.length &&
+                            songs.isNotEmpty
+                        ? Icons.deselect
+                        : Icons.select_all,
+                  ),
+                  onPressed: () =>
+                      _multiSelect.toggleSelectAll(songs.map((s) => s.id)),
+                  tooltip: _multiSelect.selectedIds.length == songs.length &&
+                          songs.isNotEmpty
+                      ? '取消全选'
+                      : '全选',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.play_arrow),
+                  onPressed: _multiSelect.selectedIds.isNotEmpty
+                      ? () => _playSelected(songs)
+                      : null,
+                  tooltip: '播放所选',
+                ),
+              ],
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Row(
@@ -167,10 +294,23 @@ class _SongsPageState extends State<SongsPage> {
               Text(
                 '${songs.length} 首歌曲',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: sonify.textSecondary,
                     ),
               ),
               const Spacer(),
+              // 视图切换钮（方案 §4.3：grid↔list 图标切换，状态持久化）
+              if (!_multiSelect.isSelectMode)
+                IconButton(
+                  icon: Icon(
+                    _viewMode == _SongsViewMode.list
+                        ? Icons.grid_view_outlined
+                        : Icons.view_list_outlined,
+                  ),
+                  tooltip: _viewMode == _SongsViewMode.list
+                      ? '切换为网格视图'
+                      : '切换为列表视图',
+                  onPressed: _toggleViewMode,
+                ),
               IconButton(
                 icon: const Icon(Icons.shuffle),
                 tooltip: '随机播放',
@@ -184,7 +324,7 @@ class _SongsPageState extends State<SongsPage> {
               IconButton(
                 icon: const Icon(Icons.my_location),
                 tooltip: '定位当前播放',
-                onPressed: canLocate
+                onPressed: canLocate && !_multiSelect.isSelectMode
                     ? () => _scrollToCurrentSong(currentIndex)
                     : null,
               ),
@@ -219,25 +359,161 @@ class _SongsPageState extends State<SongsPage> {
           ),
         ),
         Expanded(
-          child: ListView.builder(
-            controller: _scrollController,
-            // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
-            padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
-            itemCount: songs.length,
-            itemBuilder: (context, index) {
-              return SongListItem(
-                // 定位目标项挂 GlobalKey，供 ensureVisible 精确对齐
-                key: index == _targetScrollIndex ? _targetItemKey : null,
-                song: songs[index],
-                onTap: () {
-                  context.read<PlayerProvider>().playPlaylist(songs, index);
-                },
-                onMoreTap: () {},
-              );
-            },
-          ),
+          child: _viewMode == _SongsViewMode.list
+              ? ListView.builder(
+                  controller: _scrollController,
+                  // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+                  padding: EdgeInsets.only(
+                      bottom: MediaQuery.paddingOf(context).bottom),
+                  itemCount: songs.length,
+                  itemBuilder: (context, index) {
+                    final song = songs[index];
+                    return SongListItem(
+                      // 定位目标项挂 GlobalKey，供 ensureVisible 精确对齐
+                      key: index == _targetScrollIndex ? _targetItemKey : null,
+                      song: song,
+                      isSelectMode: _multiSelect.isSelectMode,
+                      isSelected: _multiSelect.isSelected(song.id),
+                      onLongPress: () => _onItemLongPress(songs, index),
+                      onTap: () => _onItemTap(songs, index),
+                      onMoreTap: () {},
+                    );
+                  },
+                )
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    final columns = _gridColumns(constraints.maxWidth);
+                    return GridView.builder(
+                      controller: _scrollController,
+                      // 网格边缘 18dp、列距 15dp（Title.kt:419-420, 416-417）
+                      padding: const EdgeInsets.fromLTRB(
+                          SonifySpacing.gridEdge, 0, SonifySpacing.gridEdge, 0),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        crossAxisSpacing: SonifySpacing.gridH,
+                        mainAxisSpacing: SonifySpacing.gridV,
+                        childAspectRatio: 0.82,
+                      ),
+                      itemCount: songs.length,
+                      itemBuilder: (context, index) {
+                        final song = songs[index];
+                        return _SongGridCard(
+                          song: song,
+                          isSelectMode: _multiSelect.isSelectMode,
+                          isSelected: _multiSelect.isSelected(song.id),
+                          onTap: () => _onItemTap(songs, index),
+                          onLongPress: () => _onItemLongPress(songs, index),
+                        );
+                      },
+                    );
+                  },
+                ),
         ),
       ],
+    );
+  }
+}
+
+/// 曲目网格卡（方案 §4.1/§5.3 规格）：封面 squircle 10dp +
+/// 标题 13sp + 歌手 13sp 次级灰；多选模式下展示勾选态。
+class _SongGridCard extends StatelessWidget {
+  const _SongGridCard({
+    required this.song,
+    required this.isSelectMode,
+    required this.isSelected,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  final Song song;
+  final bool isSelectMode;
+  final bool isSelected;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final sonify = SonifyColors.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: SmoothClipRRect(
+              borderRadius: BorderRadius.circular(SonifyRadius.cover),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  song.artworkUri != null && song.artworkUri!.isNotEmpty
+                      ? CachedNetworkImage(
+                          imageUrl: song.artworkUri!,
+                          memCacheWidth: 300,
+                          memCacheHeight: 300,
+                          fit: BoxFit.cover,
+                          placeholder: (_, _) => Container(
+                            color: cs.surfaceContainerHighest,
+                            child: Icon(Icons.music_note,
+                                color: cs.onSurfaceVariant),
+                          ),
+                          errorWidget: (_, _, _) => Container(
+                            color: cs.surfaceContainerHighest,
+                            child: Icon(Icons.music_note,
+                                color: cs.onSurfaceVariant),
+                          ),
+                        )
+                      : Container(
+                          color: cs.surfaceContainerHighest,
+                          child:
+                              Icon(Icons.music_note, color: cs.onSurfaceVariant),
+                        ),
+                  if (isSelectMode)
+                    Positioned(
+                      top: 6,
+                      right: 6,
+                      child: Container(
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: isSelected
+                              ? cs.primary
+                              : Colors.black.withValues(alpha: 0.35),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.8),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: isSelected
+                            ? Icon(Icons.check,
+                                size: 16, color: cs.onPrimary)
+                            : null,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            song.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: SonifyTextStyles.listItem.copyWith(color: cs.onSurface),
+          ),
+          Text(
+            song.artist,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: SonifyTextStyles.listItem.copyWith(
+              color: sonify.textSecondary,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
