@@ -3,6 +3,8 @@
 // 重新生成：dart run scripts/tools/gen_settings_search_index.dart
 // 注意：设置页已两层化（子页 ≤4 的分类内联进分类 body），
 // 内联条目的 subpage 为空串；本文件已按两层化后的 UI 手动同步。
+// 批次 3：原「歌词」分类并入「外观 › 歌词显示」三级子页，
+// 相关条目的 category/subpage 已手动同步，label 与 aliases 不变。
 
 /// 设置搜索索引：label 取自各分类页 tile 的标题，category 为所属分类，
 /// subpage 为所属三级子页（空串 = 二级页内联项），
@@ -23,14 +25,15 @@ const List<({String label, String category, String subpage, String aliases})>
   (label: '按背景图莫奈取色', category: '外观', subpage: '界面背景', aliases: '莫奈 取色 动态取色 背景'),
   (label: '文字阴影', category: '外观', subpage: '界面背景', aliases: '阴影 文字 可读性 背景 壁纸'),
   (label: '界面背景', category: '外观', subpage: '界面背景', aliases: ''),
-  (label: 'ColorOS Bridge 兼容字段', category: '歌词', subpage: '', aliases: ''),
-  (label: '翻译歌词', category: '歌词', subpage: '', aliases: '翻译'),
-  (label: '罗马音歌词', category: '歌词', subpage: '', aliases: '罗马音 拼音'),
-  (label: '优先翻译（同时存在时）', category: '歌词', subpage: '', aliases: '优先 翻译'),
-  (label: '歌词推送', category: '歌词', subpage: '', aliases: ''),
-  (label: '蓝牙歌词', category: '歌词', subpage: '', aliases: '蓝牙'),
-  (label: '压缩封面图', category: '歌词', subpage: '', aliases: '蓝牙 封面 压缩'),
-  (label: '歌词同步', category: '歌词', subpage: '', aliases: '时间偏移 同步 偏移'),
+  (label: 'ColorOS Bridge 兼容字段', category: '外观', subpage: '歌词显示', aliases: ''),
+  (label: '翻译歌词', category: '外观', subpage: '歌词显示', aliases: '翻译'),
+  (label: '罗马音歌词', category: '外观', subpage: '歌词显示', aliases: '罗马音 拼音'),
+  (label: '优先翻译（同时存在时）', category: '外观', subpage: '歌词显示', aliases: '优先 翻译'),
+  (label: '歌词推送', category: '外观', subpage: '歌词显示', aliases: ''),
+  (label: '蓝牙歌词', category: '外观', subpage: '歌词显示', aliases: '蓝牙'),
+  (label: '压缩封面图', category: '外观', subpage: '歌词显示', aliases: '蓝牙 封面 压缩'),
+  (label: '歌词同步', category: '外观', subpage: '歌词显示', aliases: '时间偏移 同步 偏移'),
+  (label: '歌词显示', category: '外观', subpage: '歌词显示', aliases: '桌面歌词 歌词 推送 蓝牙 同步 偏移'),
   (label: '网络音质', category: '播放', subpage: '音质与输出', aliases: '音质 清晰度 wifi 移动'),
   (label: '自动领取VIP', category: '播放', subpage: '音质与输出', aliases: 'vip 会员 自动领取'),
   (label: '32bit 播放支持', category: '播放', subpage: '音质与输出', aliases: '32bit 无损 高解析 音质 float'),
