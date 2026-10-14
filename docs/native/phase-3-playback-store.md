@@ -28,7 +28,9 @@
 | `player/store/PlaybackTransition.kt` | 归约输出（新状态 + 效果列表） | — |
 | `player/store/PlaybackEffect.kt` | 副作用密封接口（16 个子类型，数据/系统类标注 TODO 任务编号） | — |
 | `player/store/PlaybackEngine.kt` | 引擎最小接口 + `EngineListener` | — |
-| `player/store/PlaybackStore.kt` | @Singleton 编排层（状态面/派发/效果执行/桥接/闸门管线/看门狗）+ `@StoreScope` 限定符 | — |
+| `player/store/PlaybackStore.kt` | @Singleton 编排层（状态面/派发/效果执行/桥接/闸门管线/看门狗/恢复接线）+ `@StoreScope` 限定符 | — |
+| `player/store/RecoveryOrchestrator.kt`（T-P1-06 新增） | 恢复执行器：复用 `PlaybackRecoveryBudget` + `PlaybackRecoveryFlight`，分类门 → 预算 → 单飞 → 退避/看门狗 → 派 `RetryCurrent`/`Next` | `RecoveryOrchestratorTest` |
+| `player/model/PlaybackError.kt`（T-P1-06 新增） | 错误载体 `PlaybackErrorInfo` + 纯分类 `classifyPlaybackError` + 动作映射 `recoveryActionFor` + `extractHttpStatusCode` | `RecoveryOrchestratorTest` / 适配器测试 |
 | `player/store/PlaybackKeepAlive.kt` | 保活控制器接口 + Android 实现（转发 `PlaybackKeepAliveService.start/stop`） | — |
 | `player/engine/ExoPlayerPlaybackEngineAdapter.kt` | media3 真实适配器（349 行） | — |
 | `player/state/PlaybackIntent.kt`（+13 行） | 仅新增事件 `PlaybackProgressConfirmed`（既有子类型零改动） | — |
@@ -59,7 +61,7 @@
 | `EngineDurationChanged(Duration?)` | 适配器 `onDurationChanged` | 写 `duration` |
 | `EngineMediaItemTransition(Int)` | Store 把适配器 `onCurrentSongChanged(mediaId)` 解析为队列下标 | **只确认、不采纳**：与 `currentIndex` 不符 → 过期事件忽略（§7.2） |
 | `EnginePlaybackCompleted` | 适配器 STATE_ENDED（仅一次） | 循环语义：ONE→重播 / ALL→推进 / OFF→队尾提示+停机（`nextBoundary()`） |
-| `EngineError(String)` | 适配器 `onError`（文案经 `safePlaybackErrorMessage` 收敛）过 ErrorEventGate | 原文入 `resolveError`，停机标志 |
+| `EngineError(PlaybackErrorInfo)` | 适配器 `onError(info)`（文案经 `safePlaybackErrorMessage` 收敛；`errorCode`/`errorCodeName`/`httpStatusCode` 透传，T-P1-06 B1）过 ErrorEventGate | 文案入 `resolveError`，停机标志；分类为纯函数（`info.category`） |
 | `NetworkChanged(Boolean)` | 系统网络观测（后续接入） | 写 `isWifiNetwork` |
 | `AppForegroundChanged(Boolean)` | 应用前后台观测（后续接入） | 归约层 no-op；Store 内部用于恢复门（T-P1-06） |
 | `VolumeChanged(Float)` / `LoopModeChanged(mode)` | 设置域回灌（后续接入） | 对齐内存态 |
@@ -100,7 +102,7 @@ Store 持有唯一 `PlaybackRequestGate`。播放族 12 类意图派发前 `issu
 
 `shouldHandlePlaybackErrorEvent(errorCode, isCurrentRequest, loadCompleted)` 的 `loadCompleted` 在 native 用粘性判据「自上次 invalidate 以来有过 Prepare/Play 效果执行」：native 的 seek 不触发重新装载，字面判据会压制 seek 后的中游错误（Dart seek 不触碰请求闸门，同类错误照常上浮）；且 native 无 Dart 的 setUrl Future 通道，装载阶段错误只能在本通道可见——这是对 Dart 语义的 native 适配，已登记。
 
-**errorCode 透传缺口**：适配器 `onError` 仅带收敛文案，不透传 media3 errorCode；Store 传哨兵 `ERROR_CODE_NOT_PROVIDED = -1`（≠ lite 中断码 10000000，native 无该自定义码，语义="非中断错误"）。后果：切歌中断类错误暂无法与真实错误区分，靠代次 + loadCompleted 双条件近似。透传归 T-P1-03/T-P1-06。
+**errorCode 透传缺口（T-P1-06 B1 已关闭）**：适配器 `onError` 现携带完整 `PlaybackErrorInfo`（`message`/`errorCode`/`errorCodeName`/`httpStatusCode`/`origin`/`songId`）；Store 以 `info.errorCode ?: ERROR_CODE_NOT_PROVIDED`（`-1`）过闸门（`-1` 语义保留为「未提供码」）。切歌中断类错误（`INTERRUPTED_PLAYER_LOAD_ERROR_CODE = 10000000`）现可与真实错误区分，分类经纯函数 `classifyPlaybackError`。见 phase-3-risks.md R3-05。
 
 ### 7.4 seek 乐观窗
 
@@ -122,9 +124,11 @@ Store 持有唯一 `PlaybackRequestGate`。播放族 12 类意图派发前 `issu
 |---|---|---|
 | 引擎（8） | `Prepare/Play/Pause/Stop/SeekTo/SeekBy/SetVolume/SetSpeed` | `engine.*` 同名真实调用 |
 | 服务（2） | `StartKeepAlive/StopKeepAlive` | `keepAlive.*`（Store 侧去重 + 事件路径对账，§10.2） |
-| 数据/系统（6） | `ResolveSongUrl/RetryPlayback/PersistPlaybackCursor/PersistFavoriteToggle/PersistPreference/RefreshSystemNotification/ShowMessage` | **TODO 日志 + 任务编号，不伪造成功** |
+| 数据/系统（6） | `ResolveSongUrl/PersistPlaybackCursor/PersistFavoriteToggle/PersistPreference/RefreshSystemNotification/ShowMessage` | **TODO 日志 + 任务编号，不伪造成功** |
 
-**数据/系统类效果的接线归属**（如实登记，不得当作已完成）：`ResolveSongUrl`→T-P1-05 音源解析器；`RetryPlayback`→T-P1-06 恢复链（**当前无生产者**，见 phase-3-risks.md R3-06）；`PersistPlaybackCursor`→T-P1-10；`PersistFavoriteToggle`/`PersistPreference`→P2 数据层/设置层；`RefreshSystemNotification`→T-P1-03+（需 session 访问点）；`ShowMessage`→P2 UI 出口。
+**数据/系统类效果的接线归属**（如实登记，不得当作已完成）：`ResolveSongUrl`→T-P1-05 音源解析器；`PersistPlaybackCursor`→T-P1-10；`PersistFavoriteToggle`/`PersistPreference`→P2 数据层/设置层；`RefreshSystemNotification`→T-P1-03+（需 session 访问点）；`ShowMessage`→P2 UI 出口。
+
+> **2026-10-14 变更（T-P1-06 B3）**：`PlaybackEffect.RetryPlayback` **已删除**（R3-06 选型①：恢复链决策后统一派发 `PlaybackIntent.RetryCurrent`，复用既有已验证路径，不重造功能重叠对象）；Store 执行器分支同步移除，本表数值（16 = 8+2+6）为删除后实测值。
 
 ## 9. 引擎适配层
 
@@ -132,7 +136,7 @@ Store 持有唯一 `PlaybackRequestGate`。播放族 12 类意图派发前 `issu
 - **实现**：`ExoPlayerPlaybackEngineAdapter`（`player/engine/`，349 行），构造参数只有 `AudioEngine`（DI @Singleton @MainThread，`PlayerModule.kt:89`）。
 - **单曲时间线**（与 lite `setUrl` 模型一致）：每次 `prepare` 用单个 `MediaItem`（mediaId=`Song.id`）重建时间线；**引擎循环恒关**（`AppLoopMode` KDoc），队列推进全部由 App 层负责——禁止把整个队列塞进时间线让 media3 自动推进（会绕过队尾提示/空队列停机/循环三态语义）。
 - **装载拒绝语义**：在线曲目 url 为 null 或本地两字段皆空 → 记录日志后直接返回，不投射、不伪造成功、不崩溃（`PlaybackEngine.prepare` KDoc）。本地曲目音源经 `toFileUri` 逐段 percent-encode（与 Dart `Uri.file` 逐字符一致，跨平台可测）。
-- **事件映射**：`onPlaybackStateChanged`（+STATE_ENDED→`onPlaybackCompleted`，按值去重）、`onIsPlayingChanged`、`onDurationChanged`（onEvents 汇总入口去重）、`onCurrentSongChanged`（mediaId 身份对账）、`onError`（文案收敛）。同一事实不重复转发。
+- **事件映射**：`onPlaybackStateChanged`（+STATE_ENDED→`onPlaybackCompleted`，按值去重）、`onIsPlayingChanged`、`onDurationChanged`（onEvents 汇总入口去重）、`onCurrentSongChanged`（mediaId 身份对账）、`onError(info: PlaybackErrorInfo)`（文案收敛 + `errorCode`/`errorCodeName`/`httpStatusCode` 透传，T-P1-06 B1）。同一事实不重复转发。
 - **位置采样**：200ms 节流写 `positionFlow`，仅 `isPlaying || BUFFERING` 时采样（暂停停止空转）。
 - **`seekBy`**：media3 1.4.1 无此 API（1.5.0 引入），用 `currentPosition+delta` 的 `seekTo` 实现并注释（适配器 KDoc 登记）。
 
@@ -164,7 +168,7 @@ Store 实现 `PlaybackSessionBridge`，`init` 末尾 `registry.attach(this)`（�
 | 能力 | 状态 | 归属/阻塞 |
 |---|---|---|
 | 在线曲目播放全链路 | ~~阻塞~~ **代码层已打通**（2026-10-14 T-P1-05 追记） | 解析器/网络层/回写环已落地，见 phase-3b-source-resolver.md；真机验证待用户实测 |
-| 失败自动恢复执行 | 未接 | T-P1-06（依赖 T-P1-05 + errorCode 透传）；手动 `RetryCurrent→Prepare` 已可用（本地） |
+| 失败自动恢复执行 | ~~未接~~ **代码层已交付**（2026-10-14 T-P1-06 B3/B4 追记） | `RecoveryOrchestrator`：分类门 → 单曲预算（30/60/120s 退避，仅 `transientResolution` 消耗）→ 单飞 → 派 `RetryCurrent` 重试 / 解析失败自动跳下一首；真机弱网验证待用户实测 |
 | 音频焦点三模式运行时 | 未接 | T-P1-08（焦点事件源方案：Media3 内建 AudioFocusManager vs fork `AudioFocusEventListener` 获取路径需专门设计）；偏好意图已可归约 |
 | 交叉淡化 | 未接 | T-P1-07（辅引擎 + 票据）；T-P1-02 完成条件中的 `abortCrossfade` 项因此遗留 |
 | 睡眠定时执行 / 定时剩余流 | 未接 | T-P1-09 / T-P1-04；`SetSleepTimer` 已可归约 |
@@ -180,6 +184,7 @@ Store 实现 `PlaybackSessionBridge`，`init` 末尾 `registry.attach(this)`（�
 | `PlaybackReducerTest` | 140 | 纯 JUnit（无 Android）：42 意图全覆盖 + 12 事件 + 7 类竞态 + 空队列/边界/seek 合法性/循环随机/错误恢复/重复事件/过期事件 |
 | `PlaybackStoreTest` | 33 | Robolectric 承载（TODO 效果走 `android.util.Log`，AGP mockable jar 下纯 JUnit 会抛 stub——探针实测后选用 Robolectric，编排断言不依赖 Robolectric 语义）：命令翻译表 12、attach/重放、意图→引擎序列、保活两路、位置管线、过期事件、释放、错误入口 4、Completed 语义 2、看门狗 6、StateFlow 可观察 |
 | `ExoPlayerPlaybackEngineAdapterTest` | 26 | Robolectric 真 ExoPlayer：投射 8、控制可观察 5、监听去重 5、release 安全 2、位置流 3、主线程 1、初始态 1 |
+| `RecoveryOrchestratorTest`（T-P1-06 新增） | 15 | Robolectric 承载 + 虚拟时间：退避恢复成功/预算耗尽/确定性不重试/解析失败跳歌/旧曲迟到忽略/重复错误去重/用户切歌取消/在途并发去重/单曲空队列/循环跳歌目标/作用域取消/异常不伪造成功/错误透传与中断码/换歌预算归零/分类映射 |
 | 既有回归（queue/state/session/gate/engine/model/core/theme…） | 343 | 全绿 |
 | **合计** | **542** | 40 类，0 失败 / 0 错误 / 0 跳过 |
 
@@ -190,3 +195,17 @@ cd native && JAVA_HOME=~/dev-tools/jdk-17.0.20.1+1 ./gradlew :app:assembleDebug 
 ```
 
 > **2026-10-14 追记**：T-P1-05（音源解析器 + 网络层 + Rust 启动链）交付后单测 **542 → 631 全绿**，`ResolveSongUrl` 效果已有真实执行器，在线播放全链路见 `phase-3b-source-resolver.md`。
+
+> **2026-10-14 追记（T-P1-06）**：错误透传（B1）+ 恢复执行器（B3）+ 自动跳歌（B4）交付后单测 **631 → 690 全绿**（`:app:testDebugUnitTest`，0 失败 / 0 错误 / 0 跳过；新增 `RecoveryOrchestratorTest` 15 例 + 适配器透传 2 例）。
+>
+> **恢复链数据流**：`引擎 onError(info)` / `解析失败(resolutionFailure)` → `Store.handlePlaybackFailure(info)` → `dispatch(EngineError(info))`（归约，纯函数只迁移状态）+ `RecoveryOrchestrator.onFailure(info, activeRequestGen)` → 分类门（`recoveryActionFor`）→
+> - `IGNORE`（用户取消/引擎释放）：不动作；
+> - `STOP`（认证/付费/确定性音源失效）：保留错误态等外部变化；
+> - `RETRY`（HTTP/网络/超时/可恢复内部）：`budget.tryConsume` → `flight.tryStart` → 起看门狗 → 派 `RetryCurrent`（退避 30/60/120s，仅 `transientResolution` 消耗预算，成功 `reset`）；
+> - `SKIP`（解析失败）：自动派 `Next(autoPlay=true)`，目标完全委托归约器既有循环/队尾语义。
+>
+> **并发与代次**：`PlaybackRequestGate` 代次（旧曲迟到失败丢弃）+ `PlaybackRecoveryFlight` 单飞（在途期间的重复可重试引擎错误去重，不重复消耗预算）+ `budget` 单曲重置（换歌归零）。恢复任务全部绑定 `@StoreScope`，`delay` 驱动（无 `Thread.sleep`/无界 Channel）；用户播放意图即取消旧 Flight。
+>
+> **与 Dart 的差异（登记）**：①退避不区分前后台；②失败即按退避排期（Dart 仅由网络恢复/后台定时器触发）；③无登录态判定（用 media3 `ERROR_CODE_AUTHENTICATION_EXPIRED` 替代）。详见 `RecoveryOrchestrator.kt` KDoc。
+>
+> **未接入**：`AppForegroundChanged` 无生产者（前后台不分）；`NetworkChanged` 仅由既有接线驱动（`isNetworkAvailable()` 恒 true，断网分支不可达，待 T-P2 数据/系统层）。

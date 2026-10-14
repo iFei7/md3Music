@@ -3,6 +3,7 @@ package com.gracemusic.player.store
 import com.gracemusic.player.gate.AudioFocusInterruptionMode
 import com.gracemusic.player.model.AppLoopMode
 import com.gracemusic.player.model.AudioQuality
+import com.gracemusic.player.model.PlaybackErrorInfo
 import com.gracemusic.player.model.PlaylistSortBy
 import com.gracemusic.player.model.SleepTimerMode
 import com.gracemusic.player.queue.PlaybackQueue
@@ -1485,7 +1486,7 @@ class PlaybackReducerTest {
     fun `EngineError_原始错误入状态且待推进标志清理`() {
         val before = playing(onlineSongs("a"))
             .copy(awaitingPlaybackProgress = true, isResolvingUrl = true, manualRetryInFlight = true)
-        val t = PlaybackReducer.reduce(before, PlaybackEvent.EngineError("boom"))
+        val t = PlaybackReducer.reduce(before, PlaybackEvent.EngineError(PlaybackErrorInfo("boom")))
 
         assertEquals("boom", t.state.resolveError)
         assertFalse(t.state.isResolvingUrl)
@@ -1496,10 +1497,10 @@ class PlaybackReducerTest {
 
     @Test
     fun `EngineError_空消息回落兜底文案`() {
-        val nullMsg = PlaybackReducer.reduce(playing(onlineSongs("a")), PlaybackEvent.EngineError(null))
+        val nullMsg = PlaybackReducer.reduce(playing(onlineSongs("a")), PlaybackEvent.EngineError(PlaybackErrorInfo(null)))
         assertEquals("播放失败，请重试", nullMsg.state.resolveError)
 
-        val emptyMsg = PlaybackReducer.reduce(playing(onlineSongs("a")), PlaybackEvent.EngineError(""))
+        val emptyMsg = PlaybackReducer.reduce(playing(onlineSongs("a")), PlaybackEvent.EngineError(PlaybackErrorInfo("")))
         assertEquals("播放失败，请重试", emptyMsg.state.resolveError)
     }
 

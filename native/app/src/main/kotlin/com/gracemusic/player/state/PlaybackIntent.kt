@@ -4,6 +4,7 @@ import com.gracemusic.data.model.Song
 import com.gracemusic.player.gate.AudioFocusInterruptionMode
 import com.gracemusic.player.model.AppLoopMode
 import com.gracemusic.player.model.AudioQuality
+import com.gracemusic.player.model.PlaybackErrorInfo
 import com.gracemusic.player.model.PlaylistSortBy
 import kotlin.time.Duration
 
@@ -224,8 +225,14 @@ sealed interface PlaybackEvent {
     /** 引擎播完当前曲（自然结束）。驱动 `_handlePlaybackCompleted` 的等价逻辑。 */
     data object EnginePlaybackCompleted : PlaybackEvent
 
-    /** 引擎错误。 */
-    data class EngineError(val message: String?) : PlaybackEvent
+    /**
+     * 引擎/解析错误（T-P1-06 B1：携带 [PlaybackErrorInfo] 分类信息）。
+     *
+     * 归约器只做纯状态迁移（入 [PlaybackState.resolveError]、清在途标志）；
+     * 分类经 [PlaybackErrorInfo.category] 派生（纯函数），恢复决策归 Store 的
+     * `RecoveryOrchestrator`——归约器**不**做 IO、不选恢复动作。
+     */
+    data class EngineError(val info: PlaybackErrorInfo) : PlaybackEvent
 
     /** 网络变化（WiFi 类 / 移动数据）。 */
     data class NetworkChanged(val isWifi: Boolean) : PlaybackEvent

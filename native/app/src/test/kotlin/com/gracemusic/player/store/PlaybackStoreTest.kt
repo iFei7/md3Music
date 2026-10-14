@@ -9,6 +9,7 @@ import com.gracemusic.data.source.LoudnessCache
 import com.gracemusic.data.source.LoudnessStore
 import com.gracemusic.data.source.SongUrlResolver
 import com.gracemusic.player.model.AppLoopMode
+import com.gracemusic.player.model.PlaybackErrorInfo
 import com.gracemusic.player.session.DispatchOutcome
 import com.gracemusic.player.session.PlaybackSessionRegistry
 import com.gracemusic.player.session.PlayerCommand
@@ -190,7 +191,12 @@ class PlaybackStoreTest {
         }
 
         fun emitError(message: String) {
-            listeners.forEach { it.onError(message) }
+            emitError(PlaybackErrorInfo(message = message))
+        }
+
+        /** 携带原始错误码 / HTTP 状态码的错误上报（T-P1-06 恢复链测试用）。 */
+        fun emitError(info: PlaybackErrorInfo) {
+            listeners.forEach { it.onError(info) }
         }
     }
 
@@ -858,7 +864,7 @@ class PlaybackStoreTest {
 
         // 清掉在途标志（错误事件经闸门落状态，与 Dart 恢复前的清理同效），
         // 使下一次 RetryCurrent 若发生即可被观测。
-        h.store.dispatch(PlaybackEvent.EngineError("boom"))
+        h.store.dispatch(PlaybackEvent.EngineError(PlaybackErrorInfo("boom")))
         assertFalse(h.store.state.value.isResolvingUrl)
 
         // 间隔仅 2s（< 10s 最小间隔）：停滞再现但不触发。
@@ -867,7 +873,7 @@ class PlaybackStoreTest {
         assertFalse(h.store.state.value.manualRetryInFlight)
 
         // 越过最小间隔（距上次换源 13s）：恢复触发。
-        h.store.dispatch(PlaybackEvent.EngineError("boom2"))
+        h.store.dispatch(PlaybackEvent.EngineError(PlaybackErrorInfo("boom2")))
         h.store.clock = { 20_000 }
         h.advanceTicker()
         assertTrue(h.store.state.value.manualRetryInFlight)

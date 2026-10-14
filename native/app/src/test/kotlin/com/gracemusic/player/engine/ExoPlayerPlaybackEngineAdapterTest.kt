@@ -8,6 +8,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import com.gracemusic.data.model.Song
+import com.gracemusic.player.model.PlaybackErrorInfo
+import com.gracemusic.player.model.PlaybackErrorOrigin
 import com.gracemusic.player.store.EngineListener
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
@@ -72,10 +74,30 @@ class ExoPlayerPlaybackEngineAdapterTest {
             events.add("completed")
         }
 
-        override fun onError(message: String) {
-            events.add("error:$message")
+        override fun onError(info: PlaybackErrorInfo) {
+            events.add("error:${info.message}")
         }
     }
+
+    /** 捕获完整 [PlaybackErrorInfo] 的监听者（断言 B1 原始错误码/HTTP 码透传）。 */
+    private class ErrorCaptureListener : EngineListener {
+        val infos = CopyOnWriteArrayList<PlaybackErrorInfo>()
+
+        override fun onError(info: PlaybackErrorInfo) {
+            infos.add(info)
+        }
+    }
+
+    /**
+     * 模拟 media3 `HttpDataSource.InvalidResponseCodeException`：公开的
+     * `val responseCode` 生成公开无参 `getResponseCode()`，供
+     * `extractHttpStatusCode` 的反射路径命中。
+     *
+     * 刻意**不加** `private`：反射访问检查要求声明类可访问（真实
+     * `InvalidResponseCodeException` 即公开类），私有嵌套类会让 `invoke`
+     * 抛 `IllegalAccessException` 而误判为「取不到」。
+     */
+    class FakeHttpStatusException(val responseCode: Int) : java.io.IOException()
 
     private fun song(
         id: String = "song-1",
@@ -446,6 +468,78 @@ class ExoPlayerPlaybackEngineAdapterTest {
             assertEquals(
                 listOf("error:播放失败，请重试", "error:无法获取播放链接，请重试"),
                 listener.events.toList(),
+            )
+        } finally {
+            adapter.release()
+        }
+    }
+
+    @Test
+    fun `onPlayerError_透传原始错误码与码名`() {
+        val engine = newEngine()
+        val adapter = ExoPlayerPlaybackEngineAdapter(engine)
+        val capture = ErrorCaptureListener()
+        adapter.addListener(capture)
+        try {
+            adapter.onPlayerError(
+                PlaybackException(
+                    "bad status",
+                    null,
+                    PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+                ),
+            )
+
+            val info = capture.infos.single()
+            assertEquals(
+                "media3 原始 errorCode 必须逐值透传",
+                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+                info.errorCode,
+            )
+            assertEquals(
+                "码名必须透传（media3 getErrorCodeName 实证值）",
+                "ERROR_CODE_IO_BAD_HTTP_STATUS",
+                info.errorCodeName,
+            )
+            assertNull("无 cause 时不得臆造 HTTP 状态码", info.httpStatusCode)
+            assertEquals(
+                "引擎路径来源必须为 ENGINE（解析路径才带 songId/RESOLUTION）",
+                PlaybackErrorOrigin.ENGINE,
+                info.origin,
+            )
+        } finally {
+            adapter.release()
+        }
+    }
+
+    @Test
+    fun `onPlayerError_从cause链提取HTTP状态码`() {
+        val engine = newEngine()
+        val adapter = ExoPlayerPlaybackEngineAdapter(engine)
+        val capture = ErrorCaptureListener()
+        adapter.addListener(capture)
+        try {
+            // 直接 cause 携带 responseCode。
+            adapter.onPlayerError(
+                PlaybackException(
+                    "invalid response code",
+                    FakeHttpStatusException(404),
+                    PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+                ),
+            )
+            assertEquals(404, capture.infos.single().httpStatusCode)
+
+            // 嵌套 cause 链（外层无 responseCode）也必须能取到。
+            adapter.onPlayerError(
+                PlaybackException(
+                    "wrapped",
+                    IllegalStateException("outer", FakeHttpStatusException(503)),
+                    PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+                ),
+            )
+            assertEquals(
+                "必须沿 cause 链向下提取",
+                503,
+                capture.infos.last().httpStatusCode,
             )
         } finally {
             adapter.release()

@@ -87,18 +87,6 @@ sealed interface PlaybackEffect {
     data class ResolveSongUrl(val song: Song) : PlaybackEffect
 
     /**
-     * 重新播放指定曲目（恢复链决策后的重备入口）。
-     *
-     * 目标语义：恢复链（`PlaybackRecoveryBudget` + `PlaybackRecoveryFlight`，
-     * 台本 §3.6）放行后重新 prepare——本地曲目真实可用，在线曲目依赖 T-P1-05
-     * 解析器。**当前无生产者**：归约器不产生本效果，Store 的恢复链本阶段
-     * （T-P1-02）未接线，执行器只记 TODO 日志（T-P1-06）。
-     * 待恢复链接线时必须明确生产者（二者择一：恢复链决策后派发
-     * `RetryCurrent` 意图，或由归约器产出本效果），并回写本 KDoc。
-     */
-    data class RetryPlayback(val songId: String) : PlaybackEffect
-
-    /**
      * 刷新媒体通知（封面 / 收藏态 / 播放态）。
      *
      * TODO T-P1-03+：session 刷新接线（当前由 Store 观察状态变化后代发）。

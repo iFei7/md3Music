@@ -12,6 +12,7 @@ import com.gracemusic.player.gate.PlaybackRequestGate
 import com.gracemusic.player.gate.PositionRewindGate
 import com.gracemusic.player.gate.classifyCdnStallWindow
 import com.gracemusic.player.gate.shouldHandlePlaybackErrorEvent
+import com.gracemusic.player.model.PlaybackErrorInfo
 import com.gracemusic.player.session.PlaybackSessionBridge
 import com.gracemusic.player.session.PlaybackSessionRegistry
 import com.gracemusic.player.session.PlayerCommand
@@ -22,6 +23,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,8 +44,8 @@ annotation class StoreScope
  * 播放域归约入口与编排层（MVI 的 `Store`）——台本 §3.6 契约实现。
  *
  * 职责收敛为五件事，其余一律不碰（UI / 数据 / Rust / 通知渲染各有其主）：
- * 1. **状态面**：[state] 低频快照 + [position] 高频位置流（两条通道的划分见
- *    [PlaybackState] 类 KDoc）；
+ * 1. **状态面**：[state] 低频快照 + [position] / [sleepTimerRemaining] 两条
+ *    高频通道（三条通道的划分见下方「两条高频通道」节与 [PlaybackState] 类 KDoc）；
  * 2. **派发**：意图（请求）/ 事件（已发生事实）/ [PlayerCommand]（系统层命令）
  *    三个入口，全部经 [PlaybackReducer] 唯一归约路径；
  * 3. **副作用执行**：归约产出的 [PlaybackEffect] 列表按序执行（引擎调用真发，
@@ -60,6 +62,48 @@ annotation class StoreScope
  * 因此本类**不用 Mutex**——加锁会掩盖「从后台线程派发」这类模型错误，
  * 让它们在真机上表现为难以复现的状态错位。位置收集协程与生产 DI 注入的
  * 作用域同为 `Dispatchers.Main.immediate`（见 `di/PlayerModule.kt`）。
+ *
+ * ## 两条高频通道（T-P1-04；对位 lite `positionNotifier` / `sleepTimerRemainingNotifier`）
+ * Dart 的 `ChangeNotifier` 只有「全量通知」一种粒度，位置流每 ~200ms 全量重建会让
+ * 整页抖动（player_provider.dart:533-537 的 P0 注释）。native 的 [PlaybackState]
+ * 是 `data class` + `MutableStateFlow`，本可天然按值去重，但**位置/倒计时每秒都在变**，
+ * 写进 [state] 就等于每秒发射一次整状态——故仍按 Dart 的通道划分，把两类高频数据
+ * 移出低频快照：
+ *
+ * | 通道 | 生产者 | 数据类型 | 消费者 | 频率 |
+ * |---|---|---|---|---|
+ * | [state] | 归约器（唯一写路径） | [PlaybackState] | 页面级/列表级 UI | 低频（切歌/暂停/seek/错误） |
+ * | [position] | [onPositionSample]（引擎 `positionFlow` 采集） | [Duration] | 进度条/歌词 | ~200ms（引擎采样） |
+ * | [sleepTimerRemaining] | [runSleepTimerTicker]（自有 1s ticker） | `Duration?` | 睡眠药丸倒计时 | 1s |
+ *
+ * **单一权威入口不破**：两条高频通道都**不写** [PlaybackState]——[state] 仍只由
+ * [PlaybackReducer] 归约产出。高频通道只承载「高频数据」本身（位置值 / 剩余时间值），
+ * 是 [state] 中 [PlaybackState.position] / [PlaybackState.sleepTimerRemaining]
+ * 两个低频快照字段的**实时镜像**：快照字段供「读取时刻一致性」使用（切歌/暂停/seek
+ * 基准），高频通道供逐帧渲染使用。
+ *
+ * **`sleepTimerRemaining` ticker 生命周期**（对位 player_provider.dart:5279-5324）：
+ * - **启动**：派发 [PlaybackIntent.SetSleepTimer] 且 `duration != null` → 通道立即写
+ *   `duration`（Dart 同款「设置即满额」），并启动一个 `delay(1s)` 循环协程；
+ * - **暂停 / 恢复**：**无此状态**——睡眠定时是墙钟倒计时，播放暂停/恢复、切歌、
+ *   [PlaybackIntent.Stop] 都**不**打断（Dart 的 `Timer.periodic` 只挂在
+ *   `setSleepTimer` / 到点 / `dispose` 三处，见 :5280/:5303/:5832）；
+ * - **取消**：`SetSleepTimer(null)` → 取消 Job + 通道写 `null`（Dart `_scheduleSleepNotifier(null)`）；
+ * - **到点**：ticker 自行停止 + 通道写 `null`（Dart 同），**不暂停播放、不改
+ *   `sleepTimerMode`**——到点执行语义（暂停 / `END_OF_TRACK` 迁移 / 勾选偏好）
+ *   属 **T-P1-09**，此处只留 `TODO(T-P1-09)` 日志；
+ * - **释放**：ticker 绑定注入的 [scope]（生产 `@StoreScope` = `Dispatchers.Main.immediate`），
+ *   作用域取消（进程级拆卸 / Service 销毁）即释放；无界资源（无边界 Channel /
+ *   永久不可取消协程）一律禁止。
+ *
+ * **时钟与虚拟时间**：ticker 的等待用 `delay`（测试的 `TestScope` 虚拟时间驱动），
+ * 剩余量由 `deadline = clock() + duration` 与 `clock()` 之差算出（对位 Dart 的
+ * `_sleepTimerEndTime.difference(DateTime.now())`）——比「每 tick 减 1s」更抗调度抖动，
+ * 且 [clock] 已是既有测试注入点（与 CDN 看门狗同一取向）。
+ *
+ * **与 T-P1-09 的边界**：本阶段只交付「通道 + 定时器生命周期」。到点**不**暂停、
+ * **不**迁移模式、**不**执行 `stopAfterTimerEnds`；`state.sleepTimerRemaining`
+ * 在到点后停在设置值（不随秒刷新），到点后的状态收敛由 T-P1-09 经归约器完成。
  *
  * ## init 顺序（attach 必须最后）
  * 1. 初始化 [state] / [position] 与内部字段（闸门、代次、时钟、保活对账态）；
@@ -89,7 +133,7 @@ annotation class StoreScope
  * | `SetPlayWhenReady(true)` | `Resume` | |
  * | `SetPlayWhenReady(false)` | `Pause` | |
  *
- * ## 效果执行器（when 穷尽 16 个子类型）
+ * ## 效果执行器（when 穷尽 15 个子类型）
  * - 引擎类（[PlaybackEffect.Prepare] / [PlaybackEffect.Play] / [PlaybackEffect.Pause] /
  *   [PlaybackEffect.Stop] / [PlaybackEffect.SeekTo] / [PlaybackEffect.SeekBy] /
  *   [PlaybackEffect.SetVolume] / [PlaybackEffect.SetSpeed]）→ `engine.*` 同名调用，
@@ -99,11 +143,11 @@ annotation class StoreScope
  * - 解析类：[PlaybackEffect.ResolveSongUrl] → [SongUrlResolver]（T-P1-05，
  *   异步执行 + 回写收尾，见 [resolveSongUrl]）；
  * - 数据/系统类 → **只登记 TODO 日志，不伪造成功**：
- *   `RetryPlayback`（T-P1-06 恢复链；
- *   **归约器不产生本效果**，生产者随恢复链落地，届时语义 = 从平台位置重备）、
  *   `PersistPlaybackCursor`（T-P1-10）、`PersistFavoriteToggle` / `PersistPreference`
  *   （T-P2 数据/设置层）、`RefreshSystemNotification`（T-P1-03+ session 刷新）、
  *   `ShowMessage`（Toast 出口）。
+ *   **`RetryPlayback` 已删除**（T-P1-06 R3-06 选型①：恢复链决策后派发
+ *   `PlaybackIntent.RetryCurrent`，复用既有路径，无需专用效果）。
  *
  * ## 闸门管线（Store 私有；调用点与 lite `player_provider.dart` 逐条对应）
  * - **PlaybackRequestGate**（代次主轴）：播放族意图（装载起播 / 传输恢复 /
@@ -120,20 +164,20 @@ annotation class StoreScope
  *   时机在 Prepare / Play 效果执行处（baseline = 效果执行后 `state.position`，
  *   对应 Dart `_setUrlAndPlay` 的 `seekTo ?? 0`）。
  * - **PlaybackErrorEventGate**（错误入口）：`shouldHandlePlaybackErrorEvent(
- *   errorCode, isCurrentRequest, loadCompleted)`。**errorCode 透传缺口**：
- *   适配器 `onError` 仅带收敛文案、不透传 media3 errorCode，故传哨兵
- *   [ERROR_CODE_NOT_PROVIDED]（≠ lite 中断码 10000000：native 无该自定义码，
- *   语义 = 非中断错误）；透传登记 T-P1-03/T-P1-06。`loadCompleted` 判据见
- *   [loadCompleted] 字段 KDoc（对 Dart setUrl Future 通道的 native 适配）。
+ *   errorCode, isCurrentRequest, loadCompleted)`。T-P1-06 B1 起 errorCode 由适配器
+ *   经 [PlaybackErrorInfo] 透传（拿不到才用哨兵 [ERROR_CODE_NOT_PROVIDED]）；
+ *   切歌中断码 10000000（`INTERRUPTED_PLAYER_LOAD_ERROR_CODE`）被闸门直接忽略。
+ *   `loadCompleted` 判据见 [loadCompleted] 字段 KDoc。
  * - **PlaybackStallPolicy**（CDN 看门狗）：自有 ticker 协程每 ~2s 评估一次
  *   （不挂位置采集通道——StateFlow 合并相等值，位置冻结即无新采样，见
  *   [runCdnStallWatchdog]），`REFRESH_SOURCE` → `dispatch(RetryCurrent)`
  *   （带最小间隔 + 每曲重试上限防循环）。常量逐值对应 lite
  *   player_provider.dart:411-446/1877（见伴生）。
  * - **PlaybackRecoveryBudget + PlaybackRecoveryFlight**（自动恢复链）：
- *   **本阶段不接**——恢复链的重新解析依赖 T-P1-05 解析器，且错误码透传缺口
- *   使其无法区分可重试失败；手动恢复已由 `RetryCurrent` → Prepare 效果覆盖
- *   （本地曲目真实可用）。API 与 Dart 链 B 顺序（先预算后单飞）见交回报告。
+ *   T-P1-06 已接线——[RecoveryOrchestrator] 复用二者做「分类 → 预算 → 单飞 →
+ *   派 `RetryCurrent` / 自动跳歌」的决策与执行；错误分类经
+ *   [com.gracemusic.player.model.classifyPlaybackError]（纯函数）。退避与看门狗
+ *   定时器绑 [scope]，见 [RecoveryOrchestrator] KDoc。
  *
  * ## EngineListener 桥接（内部监听，全部主线程回调）
  * - `onPlaybackStateChanged` / `onDurationChanged` / `onPlaybackCompleted` →
@@ -143,12 +187,16 @@ annotation class StoreScope
  * - `onCurrentSongChanged(songId)` → 在**当前队列**中解析下标（找不到 /
  *   null → 丢弃并记日志）→ `EngineMediaItemTransition(index)`，归约器按身份
  *   对账丢弃过期 transition（快速切歌的迟到回调不会把状态拽回旧曲）；
- * - `onError(message)` → 过 ErrorEventGate 后才投 `EngineError`。
+ * - `onError(info)` → 过 ErrorEventGate 后才经 [handlePlaybackFailure] 投
+ *   `EngineError` 并驱动 [RecoveryOrchestrator] 恢复链。
  *
  * ## 生命周期
- * 进程级单例，不随 Activity/Composable 重建；UI 只订阅 [state] / [position]
- * 并发意图。**本类不 release 引擎**（进程存续）；release 仅测试与显式拆卸路径
- * （适配器 release 后回调全部丢弃，见 `ExoPlayerPlaybackEngineAdapter`）。
+ * 进程级单例，不随 Activity/Composable 重建；UI 只订阅 [state] / [position] /
+ * [sleepTimerRemaining] 并发意图。**本类不 release 引擎**（进程存续）；release
+ * 仅测试与显式拆卸路径（适配器 release 后回调全部丢弃，见
+ * `ExoPlayerPlaybackEngineAdapter`）。睡眠定时 ticker 与位置收集协程同绑 [scope]，
+ * 作用域取消即释放；引擎 release **无** Store 可见信号（`EngineListener` 无释放
+ * 回调），故引擎释放不单独取消 ticker——登记为待收敛项（见交回报告）。
  */
 @Singleton
 @MainThread
@@ -178,6 +226,20 @@ class PlaybackStore @Inject constructor(
      */
     val position: StateFlow<Duration> = _position.asStateFlow()
 
+    private val _sleepTimerRemaining = MutableStateFlow<Duration?>(null)
+
+    /**
+     * 高频睡眠定时剩余流（每秒一跳；`null` = 无进行中的倒计时）。
+     *
+     * 由 [runSleepTimerTicker] 每秒写一次；设置定时时立即写满额 `duration`
+     * （对位 Dart `setSleepTimer` 的 `_scheduleSleepNotifier(duration)`，
+     * player_provider.dart:5296），取消或到点时写 `null`（Dart 同，
+     * `_scheduleSleepNotifier(null)`）。**本通道不写 [PlaybackState]**：
+     * `state.sleepTimerRemaining` 只是低频快照（设置那一刻的值），
+     * 每秒走字只走高频道，避免整页状态抖动（T-P1-04 通道划分）。
+     */
+    val sleepTimerRemaining: StateFlow<Duration?> = _sleepTimerRemaining.asStateFlow()
+
     // ─────────────────────────── 内部字段 ───────────────────────────
 
     /**
@@ -189,6 +251,14 @@ class PlaybackStore @Inject constructor(
     internal var clock: () -> Long = { System.currentTimeMillis() }
 
     private val listener: EngineListener = StoreEngineListener()
+
+    /**
+     * 自动恢复执行器（T-P1-06 B3）：复用预算 / 单飞 / 代次，只读事实、只派意图。
+     *
+     * 与 [listener] 同为 Store 私有；状态写入仍只经 [PlaybackReducer]（唯一写路径）。
+     * 生命周期绑 [scope]（`@StoreScope`）：作用域取消即释放其退避 / 看门狗协程。
+     */
+    private val recovery = RecoveryOrchestrator(scope, StoreRecoveryHost())
 
     // —— 闸门（Store 私有，不进归约器）——
     private val requestGate = PlaybackRequestGate()
@@ -224,6 +294,17 @@ class PlaybackStore @Inject constructor(
 
     /** 保活对账态（Store 侧去重；服务本身幂等，两路驱动不重复触达）。 */
     private var keepAliveEngaged: Boolean = false
+
+    /**
+     * 睡眠定时倒计时 ticker 的 Job（`null` = 无进行中的倒计时）。
+     *
+     * 生命周期见类 KDoc「两条高频通道」节：`SetSleepTimer(d)` 启动、
+     * `SetSleepTimer(null)` 取消、到点自停、作用域取消即释放。Job 自身即
+     * 「身份」——重设时先取消旧 Job 再启新 Job，取消是协作式的（`delay`
+     * 抛 `CancellationException`），且 Store 全程主线程串行，故不存在
+     * 「旧 ticker 迟到写入」的窗口，无需第二套代次体系。
+     */
+    private var sleepTimerTicker: Job? = null
 
     // —— CDN 看门狗状态（Dart player_provider.dart:411-447 字段镜像）——
     /** 最近一次装载（Prepare 效果）时刻；装载保护窗 [LOAD_GUARD_WINDOW_MS] 内不看门狗。 */
@@ -272,14 +353,25 @@ class PlaybackStore @Inject constructor(
      * 播放族意图派发前 `issue()` 记代次（使在途装载/解析失效）；
      * [PlaybackIntent.Stop] 处理后 `invalidate()`。归约 → 发布状态 → 按序执行
      * 效果，全部在调用线程同步完成（主线程串行）。
+     *
+     * [PlaybackIntent.SetSleepTimer] 额外驱动高频倒计时 ticker 的启停
+     * （见类 KDoc「两条高频通道」节）——**ticker 不写 [PlaybackState]**，
+     * 只写 [sleepTimerRemaining] 高频通道，归约器仍是状态的唯一写路径。
      */
     fun dispatch(intent: PlaybackIntent) {
+        if (isRecoveryCancellingIntent(intent)) {
+            // 用户意图立即取消旧恢复任务（R3-06 / B4 边界；编排器自派发不触发，见 RecoveryOrchestrator）。
+            recovery.onUserPlaybackIntent()
+        }
         if (isPlaybackRequestIntent(intent)) {
             activeRequestGen = requestGate.issue()
         }
         apply(PlaybackReducer.reduce(_state.value, intent))
         if (intent is PlaybackIntent.Stop) {
             invalidatePlaybackRequest()
+        }
+        if (intent is PlaybackIntent.SetSleepTimer) {
+            reconcileSleepTimerTicker(intent.duration)
         }
     }
 
@@ -292,6 +384,18 @@ class PlaybackStore @Inject constructor(
      */
     fun dispatch(event: PlaybackEvent) {
         apply(PlaybackReducer.reduce(_state.value, event))
+        // T-P1-06 B3 恢复链的外部触发与成功收敛（状态迁移已在上面完成，此处只驱动编排器）。
+        when (event) {
+            is PlaybackEvent.EngineIsPlayingChanged ->
+                if (event.isPlaying) recovery.onPlaybackHealthy()
+
+            is PlaybackEvent.PlaybackProgressConfirmed -> recovery.onPlaybackHealthy()
+            is PlaybackEvent.NetworkChanged -> recovery.onExternalRecoveryTrigger()
+            is PlaybackEvent.AppForegroundChanged ->
+                if (!event.backgrounded) recovery.onExternalRecoveryTrigger()
+
+            else -> Unit
+        }
     }
 
     /**
@@ -374,13 +478,6 @@ class PlaybackStore @Inject constructor(
             is PlaybackEffect.StopKeepAlive -> setKeepAlive(engaged = false)
             is PlaybackEffect.ResolveSongUrl -> resolveSongUrl(effect.song)
 
-            is PlaybackEffect.RetryPlayback ->
-                Log.w(
-                    TAG,
-                    "RetryPlayback 未执行：恢复链 TODO T-P1-06" +
-                        "（归约器不产生本效果、生产者随恢复链落地；songId=${effect.songId}）",
-                )
-
             is PlaybackEffect.RefreshSystemNotification ->
                 Log.w(TAG, "RefreshSystemNotification 未执行：session 通知刷新 TODO T-P1-03+")
 
@@ -434,7 +531,7 @@ class PlaybackStore @Inject constructor(
                     dispatch(PlaybackIntent.UpdateSong(song.copy(url = result.url), result.actualQuality))
 
                 is ResolutionResult.Failure ->
-                    dispatch(PlaybackEvent.EngineError(result.message))
+                    handlePlaybackFailure(PlaybackErrorInfo.resolutionFailure(result.message, song.id))
             }
         }
     }
@@ -485,23 +582,64 @@ class PlaybackStore @Inject constructor(
             dispatch(PlaybackEvent.EnginePlaybackCompleted)
         }
 
-        override fun onError(message: String) {
+        override fun onError(info: PlaybackErrorInfo) {
             val isCurrentRequest = requestGate.isCurrent(activeRequestGen)
             val shouldHandle = shouldHandlePlaybackErrorEvent(
-                errorCode = ERROR_CODE_NOT_PROVIDED,
+                // T-P1-06 B1：透传原始 errorCode（拿不到才用哨兵）；切歌中断码
+                // 10000000 在此被闸门直接忽略（良性信号）。
+                errorCode = info.errorCode ?: ERROR_CODE_NOT_PROVIDED,
                 isCurrentRequest = isCurrentRequest,
                 loadCompleted = loadCompleted,
             )
             if (shouldHandle) {
-                dispatch(PlaybackEvent.EngineError(message))
+                handlePlaybackFailure(info)
             } else {
                 Log.w(
                     TAG,
                     "错误事件被 PlaybackErrorEventGate 过滤" +
-                        "（isCurrentRequest=$isCurrentRequest, loadCompleted=$loadCompleted）：$message",
+                        "（errorCode=${info.errorCode}, isCurrentRequest=$isCurrentRequest, " +
+                        "loadCompleted=$loadCompleted）：${info.message}",
                 )
             }
         }
+    }
+
+    /**
+     * 失败处理公共入口（T-P1-06 B1/B3）：先把错误落入状态（唯一写路径），再交恢复执行器决策。
+     *
+     * 两条失败来源都经此收口：引擎监听（过 ErrorEventGate 后）与音源解析失败
+     * （`SongUrlResolver`，无 platform errorCode、带曲目身份）。
+     *
+     * 顺序要点：**先归约错误事件、后决策**——错误态（`resolveError` / 标志清理）
+     * 先对用户可见，恢复决策（重试 / 跳歌 / 停止）再在其上发生；归约器保持纯函数，
+     * 恢复动作全部由 [RecoveryOrchestrator] 经意图派发完成。
+     */
+    private fun handlePlaybackFailure(info: PlaybackErrorInfo) {
+        val gen = activeRequestGen
+        dispatch(PlaybackEvent.EngineError(info))
+        recovery.onFailure(info, gen)
+    }
+
+    /**
+     * 恢复执行器的宿主视图（T-P1-06 B3）：只读事实 + 派意图，不写状态、不碰引擎。
+     */
+    private inner class StoreRecoveryHost : RecoveryHost {
+
+        override fun isRequestCurrent(gen: Int): Boolean = requestGate.isCurrent(gen)
+
+        override fun currentSong(): Song? = _state.value.currentSong
+
+        override fun playlistSize(): Int = _state.value.playlist.size
+
+        override fun isResolvingUrl(): Boolean = _state.value.isResolvingUrl
+
+        /**
+         * native 尚无连接可用性监测（connectivity 属 T-P2 数据/系统层）→ 固定可用。
+         * 即 `NETWORK_UNAVAILABLE` 分类分支暂不可达（登记于 RecoveryOrchestrator KDoc）。
+         */
+        override fun isNetworkAvailable(): Boolean = true
+
+        override fun dispatchIntent(intent: PlaybackIntent) = dispatch(intent)
     }
 
     // ─────────────────────────── 位置管线 ───────────────────────────
@@ -548,6 +686,65 @@ class PlaybackStore @Inject constructor(
         val baseline = _state.value.position
         progressGate.begin(activeRequestGen, baseline)
         rewindGate.arm(floor = baseline, now = clock())
+    }
+
+    // ───────────────────── 睡眠定时剩余通道（T-P1-04） ─────────────────────
+
+    /**
+     * 睡眠定时倒计时通道的启停（唯一入口；由 [dispatch] 的 `SetSleepTimer` 驱动）。
+     *
+     * - [duration] 非 null：取消旧 ticker → 通道立即写满额 → 启新 ticker；
+     * - [duration] 为 null：取消 ticker → 通道写 `null`。
+     *
+     * **不做**到点执行（暂停 / `SleepTimerMode` 迁移 / `stopAfterTimerEnds`）——
+     * 那属 T-P1-09。**不**在切歌 / [PlaybackIntent.Stop] / 暂停恢复时调用：
+     * 睡眠定时是墙钟倒计时（Dart `Timer.periodic` 同，player_provider.dart:5297-5320）。
+     */
+    private fun reconcileSleepTimerTicker(duration: Duration?) {
+        cancelSleepTimerTicker()
+        if (duration == null) {
+            _sleepTimerRemaining.value = null
+            return
+        }
+        // 设置即写满额（Dart setSleepTimer 的 _scheduleSleepNotifier(duration)）。
+        _sleepTimerRemaining.value = duration
+        val deadlineMs = clock() + duration.inWholeMilliseconds
+        val job = scope.launch { runSleepTimerTicker(deadlineMs) }
+        sleepTimerTicker = job
+        // 到点自停（或被取消）后清引用，维持「null = 无进行中的倒计时」不变量；
+        // 身份比对防止被后续重设的新 Job 覆盖（Store 主线程串行，无并发窗口）。
+        job.invokeOnCompletion { if (sleepTimerTicker === job) sleepTimerTicker = null }
+    }
+
+    /** 取消 ticker 并清引用（幂等；取消后旧协程不再有任何写入）。 */
+    private fun cancelSleepTimerTicker() {
+        sleepTimerTicker?.cancel()
+        sleepTimerTicker = null
+    }
+
+    /**
+     * 睡眠定时 ticker：每 [SLEEP_TIMER_TICK_INTERVAL_MS] 写一次剩余时间，
+     * 到点（剩余 ≤ 0）写 `null` 并自停。
+     *
+     * 剩余量 = `deadlineMs - clock()`（对位 Dart `_sleepTimerEndTime.difference(now)`，
+     * 抗调度抖动）；等待用 `delay`（测试经 `TestScope` 虚拟时间驱动，无 sleep）。
+     * 到点分支只「停 ticker + 写 null」，**不**暂停、**不**迁移模式（T-P1-09）。
+     */
+    private suspend fun runSleepTimerTicker(deadlineMs: Long) {
+        while (currentCoroutineContext().isActive) {
+            delay(SLEEP_TIMER_TICK_INTERVAL_MS)
+            val leftMs = deadlineMs - clock()
+            if (leftMs <= 0L) {
+                _sleepTimerRemaining.value = null
+                Log.w(
+                    TAG,
+                    "睡眠定时到点：ticker 停止、通道写 null；" +
+                        "到点执行（暂停 / END_OF_TRACK 迁移 / stopAfterTimerEnds）TODO T-P1-09",
+                )
+                return
+            }
+            _sleepTimerRemaining.value = leftMs.milliseconds
+        }
     }
 
     // ─────────────────────────── CDN 看门狗 ───────────────────────────
@@ -698,6 +895,22 @@ class PlaybackStore @Inject constructor(
         else -> false
     }
 
+    /**
+     * 恢复取消类意图判定（T-P1-06）：用户主动播放意图 + 暂停 / 停止 / 清空队列
+     * 都会取消旧恢复任务（Dart `_resetAbnormalRetry`，player_provider.dart:2138-2145）。
+     *
+     * `PauseForSeek`（拖动进度条前置暂停）**不**在此列——它是瞬态手势，不应打断
+     * 待处理恢复。
+     */
+    private fun isRecoveryCancellingIntent(intent: PlaybackIntent): Boolean = when (intent) {
+        is PlaybackIntent.Pause,
+        is PlaybackIntent.Stop,
+        is PlaybackIntent.ClearQueue,
+        -> true
+
+        else -> isPlaybackRequestIntent(intent)
+    }
+
     /** 保活目标态切换（Store 侧去重；服务幂等，意图效果路径与事件对账路径共用）。 */
     private fun setKeepAlive(engaged: Boolean) {
         if (keepAliveEngaged == engaged) return
@@ -715,12 +928,11 @@ class PlaybackStore @Inject constructor(
         const val TAG = "PlaybackStore"
 
         /**
-         * errorCode 透传缺口哨兵：适配器 `onError` 仅带收敛文案、不透传
-         * media3 errorCode（登记 T-P1-03/T-P1-06）。
+         * errorCode 透传缺口的**兜底哨兵**：适配器已透传 media3 `errorCode`
+         * （T-P1-06 B1），仅当引擎未提供码时用本哨兵。
          *
          * ≠ [com.gracemusic.player.gate.INTERRUPTED_PLAYER_LOAD_ERROR_CODE]
-         * （10000000）：native 无该自定义中断码，本哨兵语义 = 「非中断错误」，
-         * 不过早拦截——能否区分切歌中断要等 errorCode 透传落地。
+         * （10000000）：本哨兵语义 = 「未提供错误码」，不过早拦截。
          */
         const val ERROR_CODE_NOT_PROVIDED = -1
 
@@ -761,5 +973,11 @@ class PlaybackStore @Inject constructor(
          * [PlaybackStore.position]，故收敛为 1s。
          */
         const val SNAPSHOT_REFRESH_INTERVAL_MS = 1_000L
+
+        /**
+         * 睡眠定时 ticker 的走字间隔（毫秒）。Dart `Timer.periodic(Duration(seconds: 1))`
+         * （player_provider.dart:5297）——每秒一次，与低频快照节流同量级但**走独立通道**。
+         */
+        const val SLEEP_TIMER_TICK_INTERVAL_MS = 1_000L
     }
 }

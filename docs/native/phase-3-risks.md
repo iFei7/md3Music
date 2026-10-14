@@ -29,19 +29,27 @@
 
 - **原始事实**：T-P1-05 音源解析器未建 → `ResolveSongUrl` 效果无执行器 → 在线曲目播放链路不打通；看门狗对在线曲触发会把 `isResolvingUrl` 置 true 且永不收敛。
 - **2026-10-14 状态更新（T-P1-05 交付，见 phase-3b-source-resolver.md）**：解析器已落地（降级链/三分流/响度缓存/Store 回写环），`ResolveSongUrl` 有真实执行器，回写环自动清 `isResolvingUrl` 并重备——**不收敛问题解除**；看门狗 `RetryCurrent` 现走真实重备。在线曲目播放链路**代码层打通**（631 单测含全链路测试）。
-- **遗留**：真机验证（起播/云盘/试听/弱网超时）；20028 设备重注册、20018 token 刷新、VIP `/song/url/new` 通道（无会话层，T-P2-07）；解析失败不自动跳下一首（T-P1-06 恢复链）；响度字段真机常缺（F-SRC-008，缓存常空属预期）。
+- **遗留**：真机验证（起播/云盘/试听/弱网超时）；20028 设备重注册、20018 token 刷新、VIP `/song/url/new` 通道（无会话层，T-P2-07）；~~解析失败不自动跳下一首（T-P1-06 恢复链）~~（**T-P1-06 已交付**：解析失败 → `RecoveryOrchestrator` 自动跳下一首 + 退避恢复）；响度字段真机常缺（F-SRC-008，缓存常空属预期）。
 - **纪律不变**（简报 §6/D2-02）：不虚构 URL；不绕过 `/audio/proxy` 403 与鉴权；播放缓存实现前必须验证（URL 可达性、Range 支持、容量/清理规则）。
 
-## R3-05 🟡 errorCode 透传缺口（新）
+## R3-05 ✅ 已关闭：errorCode 透传缺口（新 → T-P1-06 关闭）
 
-- **事实**：适配器 `onError(message)` 仅带收敛文案，不透传 media3 `PlaybackException.errorCode`；Store 给 ErrorEventGate 传哨兵 `-1`（≠ lite 中断码 10000000，native 无该自定义码）。
-- **后果**：切歌中断类错误暂无法与真实错误区分，只能靠「代次 + 粘性 loadCompleted」双条件近似（已实现且测试覆盖）；恢复链的错误分类（`classifyPlaybackRecoveryFailure` 读 HTTP/平台错误码）无法工作。
-- **缓解**：T-P1-03/T-P1-06 增补 `onError(message, errorCode)` 透传（适配器 + EngineListener 签名扩展，属既有文件的小改，需同步更新适配器测试）。
+- **原始事实**：适配器 `onError(message)` 仅带收敛文案，不透传 media3 `PlaybackException.errorCode`；Store 给 ErrorEventGate 传哨兵 `-1`（≠ lite 中断码 10000000，native 无该自定义码）。
+- **后果**：切歌中断类错误暂无法与真实错误区分，只能靠「代次 + 粘性 loadCompleted」双条件近似；恢复链的错误分类（`classifyPlaybackRecoveryFailure` 读 HTTP/平台错误码）无法工作。
+- **2026-10-14 关闭（T-P1-06 B1 交付）**：透传链路已补齐并测试覆盖——
+  1. 新增错误载体 `com.gracemusic.player.model.PlaybackErrorInfo`（`message`/`errorCode`/`errorCodeName`/`httpStatusCode`/`origin`/`songId`）；
+  2. `EngineListener.onError(info: PlaybackErrorInfo)`（**载体类型选型**，非 `onError(message, errorCode)` 形参扩展：Kotlin 接口默认参数要求实现方签名逐字一致，形参扩展会一次性打断全部实现且后续加字段再打断）；
+  3. 适配器 `onPlayerError` 透传 `error.errorCode` / `error.errorCodeName`，并从 `cause` 链反射提取 `httpStatusCode`（`:app` 不引 media3-datasource，反射取不到即 null，不臆造）；
+  4. `PlaybackEvent.EngineError(info)` 携带分类信息，`classifyPlaybackError` 为**纯函数**（无 IO/Android 依赖），`recoveryActionFor` 给出「8 类 → 恢复动作」映射；
+  5. 中断码 `10000000` 归 `USER_CANCELED → IGNORE`，不再靠 `-1` 哨兵近似。
+- **测试证据**：`ExoPlayerPlaybackEngineAdapterTest.onPlayerError_透传原始错误码与码名`、`onPlayerError_从cause链提取HTTP状态码`、`RecoveryOrchestratorTest.错误透传_错误码到达决策入口且中断码被忽略`、`错误分类与恢复动作映射`。
+- **遗留**：真机下 media3 错误码分布需实测复核（弱网/失效链接/切歌）。
 
-## R3-06 🟡 RetryPlayback 效果无生产者（新）
+## R3-06 ✅ 已关闭：RetryPlayback 效果无生产者（新 → T-P1-06 关闭）
 
-- **事实**：`PlaybackEffect.RetryPlayback(songId)` 已定义且执行器只记 TODO 日志，但**归约器与 Store 均不产生它**（手动恢复走 `RetryCurrent→Prepare`；看门狗走 `RetryCurrent`）。效果 KDoc 已改写为现状。
-- **遗留**：T-P1-06 接恢复链时必须二择一并回写文档：①恢复链决策后派发 `RetryCurrent` 意图（则本效果应删除或改语义）；②由归约器产出本效果（则 Store 执行器接引擎重备）。
+- **原始事实**：`PlaybackEffect.RetryPlayback(songId)` 已定义且执行器只记 TODO 日志，但**归约器与 Store 均不产生它**（手动恢复走 `RetryCurrent→Prepare`；看门狗走 `RetryCurrent`）。
+- **2026-10-14 关闭（T-P1-06 B3，二择一取选型 ①）**：恢复链决策后统一派发 `PlaybackIntent.RetryCurrent` 意图（复用既有已验证路径 `RetryCurrent → ResolveSongUrl / Prepare → UpdateSong → 重备`），据此 **`PlaybackEffect.RetryPlayback` 已删除**（无生产者、语义与 `RetryCurrent` 重叠）。执行器分支、KDoc 与 `phase-3-playback-store.md` 效果清单同步更新。
+- **测试证据**：`RecoveryOrchestratorTest` 全部重试类用例均经 `RetryCurrent` 驱动（`恢复_短暂网络故障后按退避重试成功` 等）。
 
 ## R3-07 🟡 看门狗最小间隔为 native 新增常量（新）
 
@@ -87,8 +95,8 @@
 | R3-02 Rust panic=abort | 🔴 | 开放（验证方案已定，工具链阻塞） | Rust 工具链可用后 |
 | R3-03 Android 7–9 两缺陷 | 🔴 | 开放（未修复前不宣称兼容） | 本地音乐/歌词模块修复时 |
 | R3-04 在线音源阻塞 + isResolvingUrl 不收敛 | 🟡 | **代码层解除**（T-P1-05 交付，真机待验） | T-P2-07 会话层 / T-P1-06 恢复链 |
-| R3-05 errorCode 透传缺口 | 🟡 | 开放 | T-P1-03/T-P1-06 |
-| R3-06 RetryPlayback 无生产者 | 🟡 | 开放（文档已改口径） | T-P1-06 |
+| R3-05 errorCode 透传缺口 | ✅ | **已关闭**（T-P1-06 B1 交付，载体类型透传） | — |
+| R3-06 RetryPlayback 无生产者 | ✅ | **已关闭**（T-P1-06 B3，选型①：派 `RetryCurrent`，效果已删） | — |
 | R3-07 看门狗 10s 常量 | 🟡 | 开放（可校准） | 真机验证后 |
 | R3-08 attach 时机/缓冲容量 | 🟡 | 开放（KDoc 已登记） | T-P1-10/11 |
 | R3-09 保活两路驱动 | 🟢 | 已缓解 | 真机复核 |

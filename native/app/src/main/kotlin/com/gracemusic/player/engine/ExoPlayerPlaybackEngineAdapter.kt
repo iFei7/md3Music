@@ -11,6 +11,8 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import com.gracemusic.data.model.Song
+import com.gracemusic.player.model.PlaybackErrorInfo
+import com.gracemusic.player.model.extractHttpStatusCode
 import com.gracemusic.player.model.safePlaybackErrorMessage
 import com.gracemusic.player.store.EngineListener
 import com.gracemusic.player.store.PlaybackEngine
@@ -246,7 +248,15 @@ class ExoPlayerPlaybackEngineAdapter(
         // 文案经 safePlaybackErrorMessage 收敛；原始 message 为 null/空时用兜底折叠值
         // （与 safePlaybackErrorMessage 的 else 分支一致，绝不外泄原始异常细节）。
         val message = safePlaybackErrorMessage(error.message) ?: FALLBACK_ERROR_MESSAGE
-        listeners.forEach { it.onError(message) }
+        // T-P1-06 B1：透传原始错误码/码名与 HTTP 状态码（后者从 cause 链取，取不到 null），
+        // 供恢复决策入口分类；分类为纯函数，在消费侧（Store/归约器）计算。
+        val info = PlaybackErrorInfo(
+            message = message,
+            errorCode = error.errorCode,
+            errorCodeName = error.errorCodeName,
+            httpStatusCode = extractHttpStatusCode(error.cause),
+        )
+        listeners.forEach { it.onError(info) }
     }
 
     override fun onEvents(player: Player, events: Player.Events) {

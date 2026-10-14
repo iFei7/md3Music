@@ -1,6 +1,7 @@
 package com.gracemusic.player.store
 
 import com.gracemusic.data.model.Song
+import com.gracemusic.player.model.PlaybackErrorInfo
 import kotlin.time.Duration
 
 /**
@@ -140,10 +141,15 @@ interface EngineListener {
     fun onPlaybackCompleted() {}
 
     /**
-     * 播放错误（文案经 `safePlaybackErrorMessage` 收敛，绝不外泄 URL/堆栈）。
+     * 播放错误（T-P1-06 B1：透传错误码与分类，文案经 `safePlaybackErrorMessage`
+     * 收敛，绝不外泄 URL/堆栈/Token）。
+     *
+     * [PlaybackErrorInfo] 携带原始 `errorCode` / `errorCodeName` / `httpStatusCode`
+     * 与语义分类，供恢复决策入口（`RecoveryOrchestrator`）区分可重试网络错误、
+     * 确定性音源失效、解码错误、用户取消等；`message` 仍是已收敛文案。
      *
      * 装载被拒绝（无音源）**不**走本通道——那是调用方的输入问题，
      * 引擎只记录日志（见 [PlaybackEngine.prepare]）。
      */
-    fun onError(message: String) {}
+    fun onError(info: PlaybackErrorInfo) {}
 }

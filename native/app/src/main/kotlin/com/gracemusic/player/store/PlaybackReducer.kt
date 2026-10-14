@@ -3,6 +3,7 @@ package com.gracemusic.player.store
 import com.gracemusic.data.model.Song
 import com.gracemusic.player.model.AppLoopMode
 import com.gracemusic.player.model.AudioQuality
+import com.gracemusic.player.model.PlaybackErrorInfo
 import com.gracemusic.player.model.PlaylistSortBy
 import com.gracemusic.player.model.SleepTimerMode
 import com.gracemusic.player.model.afterStopAfterCurrentTrackDisabled
@@ -233,7 +234,7 @@ object PlaybackReducer {
         is PlaybackEvent.EngineDurationChanged -> PlaybackTransition(state.copy(duration = event.duration))
         is PlaybackEvent.EngineMediaItemTransition -> mediaItemTransition(state, event.mediaItemIndex)
         is PlaybackEvent.EnginePlaybackCompleted -> playbackCompleted(state)
-        is PlaybackEvent.EngineError -> engineError(state, event.message)
+        is PlaybackEvent.EngineError -> engineError(state, event.info)
         is PlaybackEvent.NetworkChanged -> networkChanged(state, event.isWifi)
         is PlaybackEvent.AppForegroundChanged -> unchanged(state)
         is PlaybackEvent.VolumeChanged -> unchanged(state)
@@ -968,8 +969,8 @@ object PlaybackReducer {
      *    OFF → 提示 + 停机；其余 → 推进（ALL 队尾绕回队首，见类 KDoc 差异项 2）。
      *
      * 异常结束的重试计数（`_abnormalEndRetries`）与故障歌曲摘除不在
-     * [PlaybackState] 字段内，归 Store 恢复链（`PlaybackRecoveryBudget` +
-     * `PlaybackRecoveryFlight` + [RetryPlayback]），此处只做纯状态迁移。
+     * [PlaybackState] 字段内，归 Store 恢复链（`RecoveryOrchestrator`，
+     * T-P1-06），此处只做纯状态迁移。
      */
     private fun playbackCompleted(state: PlaybackState): PlaybackTransition {
         if (state.queue.isEmpty) return unchanged(state)
@@ -1049,7 +1050,7 @@ object PlaybackReducer {
     }
 
     /**
-     * 引擎错误（Dart player errorStream 处理器，player_provider.dart:1649-1710；
+     * 引擎/解析错误（Dart player errorStream 处理器，player_provider.dart:1649-1710；
      * 入口过滤 `shouldHandlePlaybackErrorEvent` 归 Store 闸门，台本 §3.6）。
      *
      * 原始错误串入 [PlaybackState.resolveError]（上屏必须走
@@ -1057,11 +1058,15 @@ object PlaybackReducer {
      * （Dart 硬编码同一串，避免平台细节外泄）。isPlaying 不写（规则 1）；
      * `_failedPlaybackPosition`（断点续播基准）不在状态字段内，由 Store 的
      * 恢复链持有。
+     *
+     * **纯函数约束（T-P1-06 B1）**：本函数只做状态迁移，不做 IO、不选恢复动作。
+     * [PlaybackErrorInfo.category] 虽为派生属性，但分类函数是纯函数；恢复决策
+     * （重试 / 跳歌 / 停止）归 Store 的 `RecoveryOrchestrator`。
      */
-    private fun engineError(state: PlaybackState, message: String?): PlaybackTransition = PlaybackTransition(
+    private fun engineError(state: PlaybackState, info: PlaybackErrorInfo): PlaybackTransition = PlaybackTransition(
         state.copy(
             isResolvingUrl = false,
-            resolveError = message?.takeIf { it.isNotEmpty() } ?: DEFAULT_PLAYBACK_ERROR,
+            resolveError = info.message?.takeIf { it.isNotEmpty() } ?: DEFAULT_PLAYBACK_ERROR,
             awaitingPlaybackProgress = false,
             manualRetryInFlight = false,
         ),
@@ -1072,7 +1077,8 @@ object PlaybackReducer {
      *
      * 同值 → no-op；变更只写 [PlaybackState.isWifiNetwork]。音质重读
      * （`_loadQualityForNetwork`）与失败重试（`_retryFailedPlayback`）归
-     * Store 侧流水线（台本 §3.6：恢复链经预算/单飞闸门后发 [RetryPlayback]）。
+     * Store 侧流水线（台本 §3.6：恢复链经预算/单飞闸门后派发
+     * `PlaybackIntent.RetryCurrent`，见 `RecoveryOrchestrator`）。
      */
     private fun networkChanged(state: PlaybackState, isWifi: Boolean): PlaybackTransition {
         if (state.isWifiNetwork == isWifi) return unchanged(state)
