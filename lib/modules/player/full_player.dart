@@ -12,6 +12,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/layout/responsive_layout.dart';
 import '../../core/services/equalizer_service.dart';
+import '../../core/theme/app_dimens.dart';
+import '../../core/theme/motion_constants.dart';
 import '../../widgets/marquee_text.dart';
 import '../../core/utils/local_lyric_loader.dart';
 import '../../core/utils/app_haptics.dart';
@@ -396,7 +398,7 @@ class _FullPlayerState extends State<FullPlayer>
             mainAxisSize: MainAxisSize.min,
             children: [
               Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppSpacing.lg),
                 child: Text(
                   '选择歌手',
                   style: Theme.of(context).textTheme.titleMedium,
@@ -510,7 +512,7 @@ class _FullPlayerState extends State<FullPlayer>
     _artworkFadeReverse = ReverseAnimation(_artworkFadeAnimation);
     _artworkFadeController.value = 1.0;
     _zenController = AnimationController(
-      duration: const Duration(milliseconds: 400),
+      duration: M3ExpressiveMotion.defaultDuration,
       vsync: this,
     );
     _zenAnimation = CurvedAnimation(
@@ -884,11 +886,11 @@ class _FullPlayerState extends State<FullPlayer>
         child: Opacity(
           opacity: opacity,
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(AppRadius.lg),
             child: Container(
               color: Colors.black.withValues(alpha: 0.6),
               alignment: Alignment.center,
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(AppSpacing.sm),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -914,7 +916,7 @@ class _FullPlayerState extends State<FullPlayer>
                       ],
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   Text(
                     _zenMode ? '继续长按退出 Zen 模式' : '继续长按进入 Zen 模式',
                     textAlign: TextAlign.center,
@@ -1331,7 +1333,9 @@ class _FullPlayerState extends State<FullPlayer>
           _ZenFade(
             animation: _zenAnimation,
             child: Padding(
-              padding: EdgeInsets.only(bottom: _zenMode ? 16 : bottomPadding),
+              padding: EdgeInsets.only(
+                bottom: _zenMode ? AppSpacing.lg : bottomPadding,
+              ),
               child: _buildControls(
                 playerProvider,
                 colorScheme,
@@ -1355,7 +1359,10 @@ class _FullPlayerState extends State<FullPlayer>
       onVerticalDragEnd: _onTopBarDragEnd,
       onVerticalDragCancel: _onTopBarDragCancel,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
         child: Row(
           children: [
             IconButton(
@@ -1410,7 +1417,10 @@ class _FullPlayerState extends State<FullPlayer>
         onLongPress: () => _showVolumeDialog(playerProvider),
         customBorder: const StadiumBorder(),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm,
+            vertical: AppSpacing.xs,
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1419,7 +1429,7 @@ class _FullPlayerState extends State<FullPlayer>
                 size: 14,
                 color: colorScheme.onPrimaryContainer,
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: AppSpacing.xs),
               Text(
                 // 本地歌曲显示基于码率推断的音质标签
                 playerProvider.currentQualityLabel,
@@ -1452,7 +1462,7 @@ class _FullPlayerState extends State<FullPlayer>
         final side = constraints.hasBoundedWidth ? constraints.maxWidth : 0.0;
         return Container(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(AppRadius.lg),
             boxShadow: [
               BoxShadow(
                 // 封面不透明（PlayerArtworkImage 有 surfaceContainerHighest 底色），
@@ -1464,12 +1474,12 @@ class _FullPlayerState extends State<FullPlayer>
             ],
           ),
           foregroundDecoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(AppRadius.lg),
             // 内描边：沿 ClipRRect 同圆角，白色 10% 勾勒轮廓（简化 Sonify 两道 outline）。
             border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
           ),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(AppRadius.lg),
             child: Stack(
               fit: StackFit.expand,
               children: [
@@ -1660,7 +1670,7 @@ class _FullPlayerState extends State<FullPlayer>
                     ? () => showAiRecommendSheet(context, song)
                     : null,
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: AppSpacing.xs),
               _buildEdgeAction(
                 icon: _playModeIcon(
                   playerProvider.shuffleEnabled,
@@ -1710,7 +1720,7 @@ class _FullPlayerState extends State<FullPlayer>
       children: [
         InkWell(
           onTap: () => _navigateToAlbum(currentSong as Song),
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(AppRadius.xs),
           // 过长歌名不换行，改优雅滚动（两端停顿 + 缓动往返 + 边缘渐隐）。
           child: GentleScrollingText(
             currentSong.displayName.toUpperCase(),
@@ -1727,10 +1737,10 @@ class _FullPlayerState extends State<FullPlayer>
             textAlign: textAlign,
           ),
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: AppSpacing.xxs),
         InkWell(
           onTap: () => _navigateToAlbum(currentSong as Song),
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(AppRadius.xs),
           child: GentleScrollingText(
             subtitle,
             style: (dense ? textTheme.bodySmall : textTheme.bodyMedium)
@@ -2088,12 +2098,15 @@ class _FullPlayerState extends State<FullPlayer>
       builder: (context) {
         return Dialog(
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28),
+            borderRadius: BorderRadius.circular(AppRadius.sheet),
           ),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 280),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.xl,
+                vertical: 20,
+              ),
               child: StatefulBuilder(
                       builder: (context, setState) {
                   final volume = playerProvider.volume;
@@ -2111,11 +2124,11 @@ class _FullPlayerState extends State<FullPlayer>
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
-                          vertical: 4,
+                          vertical: AppSpacing.xs,
                         ),
                         decoration: BoxDecoration(
                           color: colorScheme.primary.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(999),
+                          borderRadius: BorderRadius.circular(AppRadius.full),
                         ),
                         child: Text(
                           '应用音量',
@@ -2126,9 +2139,9 @@ class _FullPlayerState extends State<FullPlayer>
                           ),
                         ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: AppSpacing.md),
                       Icon(icon, size: 32, color: colorScheme.primary),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: AppSpacing.sm),
                       M3ESlider(
                         value: volume,
                         // 不传 divisions = 无级调节（无节点）
@@ -2147,7 +2160,7 @@ class _FullPlayerState extends State<FullPlayer>
                         '$percent%',
                         style: Theme.of(context).textTheme.labelMedium,
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: AppSpacing.xs),
                       Text(
                         '普通播放音量（重启后保留）',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -2178,13 +2191,13 @@ class _FullPlayerState extends State<FullPlayer>
 
             return Dialog(
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(28),
+                borderRadius: BorderRadius.circular(AppRadius.sheet),
               ),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 320),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
+                    horizontal: AppSpacing.xl,
                     vertical: 20,
                   ),
                   child: Column(
@@ -2195,7 +2208,7 @@ class _FullPlayerState extends State<FullPlayer>
                         '播放速度',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: AppSpacing.sm),
                       Text(
                         '${speeds[currentIndex]}x',
                         style: Theme.of(context).textTheme.headlineMedium
@@ -2204,7 +2217,7 @@ class _FullPlayerState extends State<FullPlayer>
                               fontWeight: FontWeight.bold,
                             ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: AppSpacing.lg),
                       // 横条滑块
                       M3ESlider(
                         value: currentIndex.toDouble(),
@@ -2240,7 +2253,7 @@ class _FullPlayerState extends State<FullPlayer>
                           );
                         }).toList(),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: AppSpacing.lg),
                       // 关闭按钮
                       TextButton(
                         onPressed: () => Navigator.pop(context),
@@ -2390,16 +2403,16 @@ class _FullPlayerState extends State<FullPlayer>
                 // 均衡器 / 定时关闭 / 投屏：同一行三格宫格，上方 icon 下方文字
                 Container(
                   margin: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 4,
+                    horizontal: AppSpacing.lg,
+                    vertical: AppSpacing.xs,
                   ),
                   decoration: BoxDecoration(
                     color: colorScheme.surfaceContainerHighest.withValues(
                       alpha: 0.5,
                     ),
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(AppRadius.lg),
                   ),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
                   child: Row(
                     children: [
                       ListenableBuilder(
@@ -2506,14 +2519,22 @@ class _FullPlayerState extends State<FullPlayer>
                 Container(
                   width: 32,
                   height: 4,
-                  margin: const EdgeInsets.only(top: 12, bottom: 4),
+                  margin: const EdgeInsets.only(
+                    top: AppSpacing.md,
+                    bottom: AppSpacing.xs,
+                  ),
                   decoration: BoxDecoration(
                     color: colorScheme.outline.withValues(alpha: 0.4),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                  padding: const EdgeInsets.fromLTRB(
+                    20,
+                    AppSpacing.sm,
+                    20,
+                    AppSpacing.xs,
+                  ),
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
@@ -2571,7 +2592,12 @@ class _FullPlayerState extends State<FullPlayer>
               // 全部使用主题标准色（onSurface / onSurfaceVariant / primary），
               // 由主题自动适配深色/浅色模式，不做手写黑白。
               return Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                padding: const EdgeInsets.fromLTRB(
+                  20,
+                  AppSpacing.lg,
+                  20,
+                  20,
+                ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2580,7 +2606,7 @@ class _FullPlayerState extends State<FullPlayer>
                       child: Container(
                         width: 32,
                         height: 4,
-                        margin: const EdgeInsets.only(bottom: 12),
+                        margin: const EdgeInsets.only(bottom: AppSpacing.md),
                         decoration: BoxDecoration(
                           color: colorScheme.outline.withValues(alpha: 0.4),
                           borderRadius: BorderRadius.circular(2),
@@ -2593,7 +2619,7 @@ class _FullPlayerState extends State<FullPlayer>
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: AppSpacing.xs),
                     Text(
                       '楼中楼回复字号 = 楼主 − 3',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -2611,7 +2637,7 @@ class _FullPlayerState extends State<FullPlayer>
                             color: colorScheme.onSurface,
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: AppSpacing.sm),
                         Text(
                           '${display.commentFontSize.toStringAsFixed(0)} 号',
                           style: TextStyle(
@@ -2630,18 +2656,18 @@ class _FullPlayerState extends State<FullPlayer>
                       label: display.commentFontSize.toStringAsFixed(0),
                       onChanged: (v) => display.setCommentFontSize(v),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
                     // 楼中楼预览
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
+                        horizontal: AppSpacing.md,
                         vertical: 10,
                       ),
                       decoration: BoxDecoration(
                         color: colorScheme.surfaceContainerHighest.withValues(
                           alpha: 0.4,
                         ),
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(AppRadius.md),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2661,7 +2687,7 @@ class _FullPlayerState extends State<FullPlayer>
                                   color: Colors.grey,
                                 ),
                               ),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: AppSpacing.sm),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2674,7 +2700,7 @@ class _FullPlayerState extends State<FullPlayer>
                                         fontWeight: FontWeight.w500,
                                       ),
                                     ),
-                                    const SizedBox(height: 2),
+                                    const SizedBox(height: AppSpacing.xxs),
                                     Text(
                                       '这是一条楼主评论的内容示例。',
                                       style: TextStyle(
@@ -2693,12 +2719,12 @@ class _FullPlayerState extends State<FullPlayer>
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 10,
-                              vertical: 8,
+                              vertical: AppSpacing.sm,
                             ),
                             decoration: BoxDecoration(
                               color: colorScheme.surfaceContainerHighest
                                   .withValues(alpha: 0.3),
-                              borderRadius: BorderRadius.circular(8),
+                              borderRadius: BorderRadius.circular(AppRadius.sm),
                             ),
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2746,7 +2772,7 @@ class _FullPlayerState extends State<FullPlayer>
                         ],
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.lg),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
@@ -2754,7 +2780,7 @@ class _FullPlayerState extends State<FullPlayer>
                           onPressed: () => display.resetToDefault(),
                           child: const Text('恢复默认'),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: AppSpacing.sm),
                         FilledButton(
                           onPressed: () => Navigator.pop(sheetCtx),
                           child: const Text('完成'),
@@ -2785,8 +2811,8 @@ class _FullPlayerState extends State<FullPlayer>
       children: [
         Positioned.fill(child: child),
         Positioned(
-          right: 8,
-          bottom: 4,
+          right: AppSpacing.sm,
+          bottom: AppSpacing.xs,
           child: ListenableBuilder(
             listenable: Md3LyricPreferences.instance,
             builder: (context, _) {
