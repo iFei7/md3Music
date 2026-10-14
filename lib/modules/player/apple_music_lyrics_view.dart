@@ -303,8 +303,9 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     final viewport = _scrollController.position.viewportDimension;
     if (viewport <= 0) return;
 
-    // 行高估算未含「当前行展开的副文本」，锚定误差约一个副行高，
-    // 黄金分割锚定位有足够余量，不做精确测量（避免常驻 TextPainter 开销）。
+    // 行高按非当前态（26px）测量，与非当前行渲染严格一致：行 j 的锚定
+    // 偏移 = 之前各行（均为非当前态）的实际高度之和，无系统性累积误差。
+    // 当前行自身膨胀（32px + 副文本）只影响其下方行，不影响自身 top。
     final target =
         _topPadding + _lineTopOffsets[index] - viewport * _anchorViewportRatio;
     // clamp 返回 num，jumpTo/animateTo 需要 double，显式收窄
@@ -396,9 +397,16 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
 
   // ===== 行高估算（仅滚动偏移用，渲染行高由内容自适应）=====
 
-  /// 用 TextPainter 按**当前行样式**（32 / w900，最大字号）测量主行高度。
-  /// 不含当前行展开的翻译/罗马音副行（仅当前行显示），锚定误差见
-  /// [_scrollToLine] 注释。
+  /// 用 TextPainter 按**非当前行样式**（26 / w700）测量主行高度。
+  ///
+  /// 为什么不用当前行样式（32 / w900）测：锚定行 j 的滚动偏移 = 行
+  /// 0..j-1 的实际高度之和，而这些行此刻均为非当前态（26 / w700）。
+  /// 若按 32px 测，每行系统性高估约 7.8px（26×1.3=33.8 vs 32×1.3=41.6，
+  /// 长行在 32px 下多换行时更多），随行号线性累积——几十行的歌曲累计
+  /// 数百 px，滚动目标逐渐超前，当前行播到后半段被推出视窗顶部（滚动
+  /// 漂移的根因）。当前行自身按 32px 渲染的膨胀（含副文本展开）只影响
+  /// 其下方行的位置，不影响其自身 top 的锚定，因此无需计入。
+  /// 不含当前行展开的翻译/罗马音副行（仅当前行显示，且只影响其下方）。
   void _ensureLayout(double width) {
     if (!_layoutDirty && _layoutWidth == width) return;
     _layoutDirty = false;
@@ -410,11 +418,12 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
       final painter = TextPainter(
         text: TextSpan(
           text: text,
+          // 与 _otherTextStyle / AnimatedDefaultTextStyle 非当前态严格一致
           style: TextStyle(
-            fontSize: _currentFontSize,
+            fontSize: _otherFontSize,
             height: _lineHeightFactor,
-            fontWeight: FontWeight.w900,
-            fontVariations: const [FontVariation('wght', 900.0)],
+            fontWeight: FontWeight.w700,
+            fontVariations: const [FontVariation('wght', 700.0)],
           ),
         ),
         textDirection: TextDirection.ltr,
