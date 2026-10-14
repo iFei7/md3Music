@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:m3e_core/m3e_core.dart';
 
 import '../../core/theme/app_dimens.dart';
+import '../../core/theme/motion_constants.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_background.dart';
 import '../../data/models/playlist.dart';
@@ -112,10 +113,16 @@ class _PlaylistPageState extends State<PlaylistPage> {
   /// 用于 SliverAppBar pinned 后 fade-in 显示歌单名称
   final ScrollController _scrollController = ScrollController();
 
-  /// 顶栏折叠阈值：原渐变区间 offset ∈ [224, 284]（224 = 280 - kToolbarHeight，
-  /// +60 为渐变完成点）。改为阈值切换 + 动画过渡后，SliverAppBar 只在跨越
-  /// 该阈值时重建一次（而非每帧），滚动中主线程不再承担 SliverAppBar 重建。
-  static const double _appBarFoldThreshold = 280 - kToolbarHeight + 60;
+  /// 大封面头图展开高度（批次 3 重构：沉浸式头图 + 滚动折叠）
+  static const double _expandedHeight = 440;
+
+  /// 头图内大封面的最大边长
+  static const double _maxCoverSize = 250;
+
+  /// 顶栏折叠阈值：原渐变区间 offset ∈ [384, 444]（384 = _expandedHeight -
+  /// kToolbarHeight，+60 为渐变完成点）。改为阈值切换 + 动画过渡后，SliverAppBar
+  /// 只在跨越该阈值时重建一次（而非每帧），滚动中主线程不再承担 SliverAppBar 重建。
+  static const double _appBarFoldThreshold = 440 - kToolbarHeight + 60;
 
   /// 折叠状态（offset 越过 [_appBarFoldThreshold] 后为 true）：
   /// ValueNotifier 只在该状态翻转时通知，SliverAppBar 仅重建 1-2 次/滚屏。
@@ -437,8 +444,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
     }
 
     // SliverChildBuilderDelegate 懒构建：目标项在视口外时没有 RenderObject，
-    // ensureVisible 拿不到位置。头部 slivers（SliverAppBar 280 + 歌单介绍 +
-    // 搜索框 + 播放按钮行等）收缩后约 240px 高；粗滚取「欠滚」保守位置
+    // ensureVisible 拿不到位置。头部 slivers（SliverAppBar 440 + 歌单介绍 +
+    // 搜索框 + 操作条等）收缩后约 240px 高；粗滚取「欠滚」保守位置
     // （宁少勿多），让目标项落在视口下方附近再分步下滚命中。
     // 行高按 72 估算：实际行高更大时欠滚（向下补找），实际行高更小时会
     // 滚过头（目标项停在视口上方且从未构建，GlobalKey 拿不到 context）——
@@ -949,6 +956,40 @@ class _PlaylistPageState extends State<PlaylistPage> {
                               collapsed,
                             ),
                           ),
+                        // 标题区（批次 3：从头图内移到内容区，折叠时由工具栏标题接棒）
+                        if (!_isMultiSelectMode)
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                AppSpacing.lg,
+                                AppSpacing.md,
+                                AppSpacing.lg,
+                                AppSpacing.none,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    displayPlaylist.name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: textTheme.headlineMedium?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const Gap(AppSpacing.xs),
+                                  Text(
+                                    '${displayPlaylist.creator ?? ''} · ${_songs.length} 首',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: textTheme.labelMedium?.copyWith(
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                         // 歌单介绍（默认折叠，最多显示2行，带动画）
                         if (!_isMultiSelectMode &&
                             displayPlaylist.description != null &&
@@ -1001,9 +1042,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                                             turns: _isDescriptionExpanded
                                                 ? 0.5
                                                 : 0,
-                                            duration: const Duration(
-                                              milliseconds: 200,
-                                            ),
+                                            duration: AppMotion.fast,
                                             child: Icon(
                                               Icons.keyboard_arrow_down,
                                               size: 20,
@@ -1015,9 +1054,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                                       ),
                                       const Gap(AppSpacing.sm),
                                       AnimatedSize(
-                                        duration: const Duration(
-                                          milliseconds: 250,
-                                        ),
+                                        duration: AppMotion.medium,
                                         curve: Curves.easeInOut,
                                         alignment: Alignment.topCenter,
                                         clipBehavior: Clip.hardEdge,
@@ -1091,33 +1128,50 @@ class _PlaylistPageState extends State<PlaylistPage> {
                             ),
                           ),
                         if (!_isMultiSelectMode)
+                          // 操作条（批次 3）：播放全部 / 随机播放 / 收藏 集中一行，
+                          // surfaceContainerHigh 层次底 + 胶囊形，热区 ≥44dp
                           SliverToBoxAdapter(
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: AppSpacing.lg,
                                 vertical: AppSpacing.sm,
                               ),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: FilledButton.icon(
-                                      onPressed: () {
-                                        final songs = _displaySongs;
-                                        if (songs.isNotEmpty) {
-                                          context
-                                              .read<PlayerProvider>()
-                                              .playOnlinePlaylist(songs, 0);
-                                        }
-                                      },
-                                      icon: const Icon(Icons.play_arrow),
-                                      label: Text(
-                                        '播放全部${_isSearching && _searchQuery.isNotEmpty ? ' (${_displaySongs.length})' : ''}',
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: AppSpacing.sm,
+                                  vertical: AppSpacing.xs,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.surfaceContainerHigh
+                                      .withValues(
+                                        alpha: useBackgroundImage ? 0.72 : 1.0,
+                                      ),
+                                  borderRadius:
+                                      BorderRadius.circular(AppRadius.full),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: FilledButton.icon(
+                                        onPressed: () {
+                                          final songs = _displaySongs;
+                                          if (songs.isNotEmpty) {
+                                            context
+                                                .read<PlayerProvider>()
+                                                .playOnlinePlaylist(songs, 0);
+                                          }
+                                        },
+                                        icon: const Icon(Icons.play_arrow),
+                                        label: Text(
+                                          '播放全部${_isSearching && _searchQuery.isNotEmpty ? ' (${_displaySongs.length})' : ''}',
+                                        ),
+                                        style: FilledButton.styleFrom(
+                                          minimumSize: const Size(64, 44),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  const Gap(AppSpacing.md),
-                                  Expanded(
-                                    child: OutlinedButton.icon(
+                                    const Gap(AppSpacing.xs),
+                                    IconButton.filledTonal(
                                       onPressed: () {
                                         final songs = _displaySongs;
                                         if (songs.isNotEmpty) {
@@ -1130,29 +1184,30 @@ class _PlaylistPageState extends State<PlaylistPage> {
                                         }
                                       },
                                       icon: const Icon(Icons.shuffle),
-                                      label: const Text('随机播放'),
+                                      tooltip: '随机播放',
                                     ),
-                                  ),
-                                  // 红心收藏按钮：搜索/发现页需要收藏功能，保留显示；
-                                  // 「我收藏」和「我创建的歌单」可通过长按删除，隐藏红心。
-                                  if (!widget.isInMyFavorites &&
-                                      !widget.isUserCreated) ...[
-                                    const Gap(AppSpacing.md),
-                                    IconButton.filledTonal(
-                                      onPressed: _isCollected
-                                          ? _uncollectPlaylist
-                                          : _collectPlaylist,
-                                      icon: Icon(
-                                        _isCollected
-                                            ? Icons.favorite
-                                            : Icons.favorite_border,
-                                        color: _isCollected
-                                            ? colorScheme.error
-                                            : null,
+                                    // 红心收藏按钮：搜索/发现页需要收藏功能，保留显示；
+                                    // 「我收藏」和「我创建的歌单」可通过长按删除，隐藏红心。
+                                    if (!widget.isInMyFavorites &&
+                                        !widget.isUserCreated) ...[
+                                      const Gap(AppSpacing.xs),
+                                      IconButton.filledTonal(
+                                        onPressed: _isCollected
+                                            ? _uncollectPlaylist
+                                            : _collectPlaylist,
+                                        icon: Icon(
+                                          _isCollected
+                                              ? Icons.favorite
+                                              : Icons.favorite_border,
+                                          color: _isCollected
+                                              ? colorScheme.error
+                                              : null,
+                                        ),
+                                        tooltip: _isCollected ? '取消收藏' : '收藏',
                                       ),
-                                    ),
+                                    ],
                                   ],
-                                ],
+                                ),
                               ),
                             ),
                           ),
@@ -1282,7 +1337,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
     bool collapsed,
   ) {
     return SliverAppBar(
-      expandedHeight: 280,
+      expandedHeight: _expandedHeight,
       pinned: true,
       // 背景图模式：顶栏恒透明——flexibleSpace 是普通 Stack
       // （非 FlexibleSpaceBar，折叠时不产生视差位移，壁纸层顶部
@@ -1344,9 +1399,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
             },
           ),
       ],
-      // pinned 后顶栏标题：折叠后 fade-in（AnimatedOpacity 200ms 过渡）
+      // pinned 后顶栏标题：折叠后 fade-in（AnimatedOpacity 快档过渡）
       title: AnimatedOpacity(
-        duration: const Duration(milliseconds: 200),
+        duration: AppMotion.fast,
         opacity: collapsed ? 1.0 : 0.0,
         child: Text(
           displayPlaylist.name,
@@ -1409,19 +1464,20 @@ class _PlaylistPageState extends State<PlaylistPage> {
       child: ClipRect(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // 折叠时 flexibleSpace 高度从 224px 缩到 0：封面随可用高度平滑
-            // 缩放（140 → 0）而非固定 140 被视口上边界截断，同时不触发
-            // RenderFlex overflowed；可用高度不足以容纳封面+文字时隐藏文字。
-            // 可用高度需同时扣除 SafeArea 顶部 inset（状态栏）与 padding 上下 64，
-            // 否则折叠过程中 coverSize 会按偏大的高度计算，超出 Row 真实可用高度
-            // 触发 RenderFlex overflow（曾出现最多 12px 的下方溢出）。
+            // 大封面头图（批次 3 重构）：封面居中沉浸式展示，折叠时随可用
+            // 高度平滑缩小并淡出。全程 Positioned 定高、无 Flex 布局，不会
+            // 触发 RenderFlex overflow；标题移至头图下方内容区，折叠后由
+            // 工具栏标题渐现接棒。壁纸层顶部固定裁剪、与主体背景对齐。
             final safeTop = MediaQuery.paddingOf(context).top;
-            final availH = (constraints.maxHeight - 64 - safeTop)
+            // 内容区高度：扣除状态栏与工具栏，折叠过程中平滑收缩到 0
+            final availH = (constraints.maxHeight - kToolbarHeight - safeTop)
                 .clamp(0.0, constraints.maxHeight);
-            final coverSize = availH.clamp(0.0, 140.0);
-            // 标题透明度连续映射：可用高度充足时全显示（1.0），折叠到阈值
-            // 以下时淡出（0.0），实现平滑淡出而非折叠瞬间直接消失。
-            final textOpacity = ((availH - 100) / 22).clamp(0.0, 1.0);
+            // 大封面：高度充足时保持最大边长，折叠时随可用高度缩小
+            final coverSize = (availH - AppSpacing.xl)
+                .clamp(0.0, _maxCoverSize)
+                .clamp(0.0, constraints.maxWidth - 2 * AppSpacing.lg);
+            // 折叠后半段淡出封面，与工具栏标题渐现衔接，减少视觉跳动
+            final coverOpacity = (availH / 140.0).clamp(0.0, 1.0);
             return Stack(
               fit: StackFit.expand,
               children: [
@@ -1445,101 +1501,65 @@ class _PlaylistPageState extends State<PlaylistPage> {
                       ],
                     ),
                   ),
-                  child: SafeArea(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.xl,
-                        AppSpacing.xxxl,
-                        AppSpacing.xl,
-                        AppSpacing.lg,
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          ClipRRect(
-                            borderRadius: AppRadius.mdAll,
-                            child: SizedBox(
-                              width: coverSize,
-                              height: coverSize,
-                              child: displayPlaylist.artworkUri != null
-                                  ? CachedNetworkImage(
-                                      imageUrl: displayPlaylist.artworkUri!,
-                                      memCacheWidth: 420,
-                                      memCacheHeight: 420,
-                                      fit: BoxFit.cover,
-                                      placeholder: (_, _) => Container(
-                                        color:
-                                            colorScheme.surfaceContainerHighest,
-                                        child: Icon(
-                                          Icons.queue_music,
-                                          size: 48,
-                                          color: colorScheme.onSurfaceVariant,
-                                        ),
-                                      ),
-                                      errorWidget: (_, _, _) => Container(
-                                        color:
-                                            colorScheme.surfaceContainerHighest,
-                                        child: Icon(
-                                          Icons.queue_music,
-                                          size: 48,
-                                          color: colorScheme.onSurfaceVariant,
-                                        ),
-                                      ),
-                                    )
-                                  : Container(
-                                      color:
-                                          colorScheme.surfaceContainerHighest,
+                ),
+                // 大封面：工具栏下方居中，随折叠缩小/淡出
+                Positioned(
+                  top: kToolbarHeight + AppSpacing.sm,
+                  left: 0,
+                  right: 0,
+                  height: coverSize,
+                  child: Center(
+                    child: Opacity(
+                      opacity: coverOpacity,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: AppRadius.cardAll,
+                          boxShadow: [
+                            BoxShadow(
+                              color: colorScheme.scrim.withValues(alpha: 0.35),
+                              blurRadius: 24,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: AppRadius.cardAll,
+                          child: SizedBox(
+                            width: coverSize,
+                            height: coverSize,
+                            child: displayPlaylist.artworkUri != null
+                                ? CachedNetworkImage(
+                                    imageUrl: displayPlaylist.artworkUri!,
+                                    memCacheWidth: 420,
+                                    memCacheHeight: 420,
+                                    fit: BoxFit.cover,
+                                    placeholder: (_, _) => Container(
+                                      color: colorScheme.surfaceContainerHighest,
                                       child: Icon(
                                         Icons.queue_music,
                                         size: 48,
                                         color: colorScheme.onSurfaceVariant,
                                       ),
                                     ),
-                            ),
-                          ),
-                          const SizedBox(width: 20),
-                          Expanded(
-                            // 文字区可视高度随 availH 收缩：超出部分由 ClipRect
-                            // 裁掉并配合淡出（opacity），封面缩小时不会残留文字
-                            // 超出 Row 实际高度而触发 RenderFlex overflow（黄条）。
-                            child: SizedBox(
-                              height: availH,
-                              child: Align(
-                                alignment: Alignment.bottomLeft,
-                                child: ClipRect(
-                                  child: Opacity(
-                                    opacity: textOpacity,
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          displayPlaylist.name,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.fade,
-                                          style: textTheme.headlineSmall
-                                              ?.copyWith(
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                        ),
-                                        const Gap(AppSpacing.xs),
-                                        Text(
-                                          '${displayPlaylist.creator ?? ''} · ${_songs.length} 首',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: textTheme.labelMedium?.copyWith(
-                                            color: colorScheme.onSurfaceVariant,
-                                          ),
-                                        ),
-                                      ],
+                                    errorWidget: (_, _, _) => Container(
+                                      color: colorScheme.surfaceContainerHighest,
+                                      child: Icon(
+                                        Icons.queue_music,
+                                        size: 48,
+                                        color: colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  )
+                                : Container(
+                                    color: colorScheme.surfaceContainerHighest,
+                                    child: Icon(
+                                      Icons.queue_music,
+                                      size: 48,
+                                      color: colorScheme.onSurfaceVariant,
                                     ),
                                   ),
-                                ),
-                              ),
-                            ),
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
