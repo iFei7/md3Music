@@ -115,7 +115,8 @@ class LyricsViewState extends State<LyricsView> {
 
   void _onPointerUp(PointerUpEvent _) {
     _cancelResumeTimer();
-    _resumeAutoScrollTimer = Timer(const Duration(seconds: 3), () {
+    // 用户停止交互 5 秒后恢复自动跟随（与 Apple Music 视图规格一致）
+    _resumeAutoScrollTimer = Timer(const Duration(seconds: 5), () {
       if (mounted) {
         _userTouching = false;
         _forceScroll = true;
@@ -386,22 +387,29 @@ class LyricsViewState extends State<LyricsView> {
     final viewportHeight = _scrollController.position.viewportDimension;
     if (viewportHeight <= 0) return;
 
-    // 行高自适应后各行高度不同，用累计偏移定位当前行顶部
+    // 行高自适应后各行高度不同，用累计偏移定位当前行顶部；
+    // 锚定点在 0.618 黄金分割线（距顶 0.382 视口高度），与 AM 视图一致
     final targetOffset =
-        _topPadding + _lineTopOffsets[index] - viewportHeight * 0.4;
+        _topPadding + _lineTopOffsets[index] - viewportHeight * 0.382;
     final clampedOffset =
         targetOffset.clamp(0.0, _scrollController.position.maxScrollExtent);
 
     if (jump) {
       _scrollController.jumpTo(clampedOffset);
     } else {
+      // 时长随距离伸缩（与 AM 视图同规格）：远距离回滚不显得急促
+      final distance =
+          (clampedOffset - _scrollController.position.pixels).abs();
       _scrollController.animateTo(
         clampedOffset,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
+        duration: Duration(
+          milliseconds: (350 + (distance / viewportHeight * 150).round())
+              .clamp(350, 800),
+        ),
+        curve: Curves.easeOutCubic,
       );
     }
-    // 首次定位已完成，后续行进中的行切换保持 300ms 平滑滚动
+    // 首次定位已完成，后续行进中的行切换保持平滑滚动（时长随距离伸缩）
     _initialJumpDone = true;
   }
 

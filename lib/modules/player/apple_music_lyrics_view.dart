@@ -25,8 +25,9 @@ import '../../widgets/md3_lyric_preferences.dart';
 ///   `上次上报锚点 + 墙钟差 * speed` 自驱动内插，每次上报重设锚点校正漂移。
 ///   功耗纪律：暂停时不推进不重绘；TabBarView 切走时子树被销毁、Ticker 随之
 ///   dispose，无常驻动画。
-/// - 滚动：当前行锚定到视口上部约 1/3（animateTo 300ms easeOut，首次 jumpTo）；
-///   用户手动滚动后暂停自动跟随 3 秒。
+/// - 滚动：当前行锚定到 0.618 黄金分割线（距视口顶部 0.382 视口高度，即
+///   「屏幕中间偏上」），animateTo 平滑跟行（首次 jumpTo）；用户交互期间
+///   自动滚动完全让权，停止交互 5 秒后平滑回到当前播放行。
 /// - 点击行 → [AppleMusicLyricsView.onSeek]（传该行显示轴 startTime，与旧
 ///   LyricsView 的 seek 方向保持一致，由 full_player 统一下发 seek）。
 class AppleMusicLyricsView extends StatefulWidget {
@@ -73,16 +74,20 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
   static const double _lineVerticalPadding = 10;
   // 副文本（翻译/罗马音）相对主行的字号比例
   static const double _subScale = 0.55;
-  // 用户手动滚动后恢复自动跟随的等待时长
-  static const Duration _followResumeDelay = Duration(seconds: 3);
-  // 首尾空白占视口高度比例（当前行可锚定到视口上部 1/3）
-  static const double _edgeViewportRatio = 0.35;
-  // 当前行锚定点距视口顶部的比例
-  static const double _anchorViewportRatio = 1 / 3;
+  // 用户停止交互（手指离开且滚动结束）后恢复自动跟随的等待时长
+  static const Duration _followResumeDelay = Duration(seconds: 5);
+  // 首尾空白占视口高度比例：与锚定比例一致，首/末行也能精确锚定
+  static const double _edgeViewportRatio = 0.382;
+  // 当前行锚定点距视口顶部的比例：0.618 黄金分割线 = 距顶 0.382 视口高度
+  // （1 - 0.618），即「屏幕中间偏上」
+  static const double _anchorViewportRatio = 0.382;
 
   final ScrollController _scrollController = ScrollController();
   late final Ticker _ticker;
   Timer? _resumeFollowTimer;
+  // 用户手指是否按在歌词列表上（触摸期间自动滚动完全让权，避免与手势
+  // 同时驱动滚动位置——旧实现定时器从拖动起手计时，到点会抢跑）
+  bool _userTouching = false;
 
   /// 按startTime 升序的显示副本（parser 输出应已有序，这里保险再排一次）。
   List<LyricLine> _lines = const [];
@@ -135,7 +140,9 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
       _rebuildLines();
       _layoutDirty = true;
       _currentIndex = -1;
-      _initialJumpDone = false;
+      // 仅在自动跟随中才重新「首定位」（jump）；用户浏览中切歌不打断其
+      // 视口，由恢复计时到期后平滑回滚到新歌当前行
+      if (_follow) _initialJumpDone = false;
       _applyDisplayPosition(_anchorMs);
     }
     if (oldWidget.speed != widget.speed ||
@@ -228,7 +235,8 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
       setState(() => _currentIndex = newIndex);
       _updateProgress(posMs);
       _syncTicker();
-      if (_follow && newIndex >= 0) {
+      // 手势让权：用户触摸中或已暂停跟随（浏览中）时不自动滚动
+      if (_follow && !_userTouching && newIndex >= 0) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
             _scrollToLine(newIndex, jump: !_initialJumpDone);
@@ -296,7 +304,7 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     if (viewport <= 0) return;
 
     // 行高估算未含「当前行展开的副文本」，锚定误差约一个副行高，
-    // 视口 1/3 锚定位有足够余量，不做精确测量（避免常驻 TextPainter 开销）。
+    // 黄金分割锚定位有足够余量，不做精确测量（避免常驻 TextPainter 开销）。
     final target =
         _topPadding + _lineTopOffsets[index] - viewport * _anchorViewportRatio;
     // clamp 返回 num，jumpTo/animateTo 需要 double，显式收窄
@@ -307,37 +315,83 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     if (jump) {
       _scrollController.jumpTo(clamped);
     } else {
+      // 时长随距离伸缩：350ms 起步，每多一个视口高度 +150ms，上限 800ms，
+      // 远距离回滚也不显得急促
+      final distance = (clamped - _scrollController.position.pixels).abs();
+      final duration = Duration(
+        milliseconds: (350 + (distance / viewport * 150).round())
+            .clamp(350, 800),
+      );
       _scrollController.animateTo(
         clamped,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
+        duration: duration,
+        curve: Curves.easeOutCubic,
       );
     }
     _initialJumpDone = true;
   }
 
-  /// 用户手动滚动（拖动起手或惯性方向非 idle）后暂停自动跟随 3 秒。
-  /// 注意：程序 animateTo 触发的 ScrollStartNotification 携带
-  /// dragDetails == null，不会误判为用户滚动。
+  /// 用户手动滚动后暂停自动跟随；停止交互 5 秒（[_followResumeDelay]）后
+  /// 平滑回到当前播放行。
+  ///
+  /// 时序设计（修复「歌词跑得非常快」）：
+  /// - 跟随暂停的恢复计时从**停止交互**（手指离开且滚动彻底结束）起算，
+  ///   而不是从拖动起手起算——旧实现 3 秒定时器从拖动开始计时，用户仍在
+  ///   触摸/浏览时到点即 animateTo：framework 的 beginActivity 会 dispose
+  ///   在途 drag（scroll_position_with_single_context.dart），表现为列表
+  ///   被抢走；若拖动与动画并存则 applyUserOffset 与动画同时驱动位置，
+  ///   速度叠加。
+  /// - 程序 animateTo 的 ScrollStartNotification 不带 dragDetails，且
+  ///   DrivenScrollActivity 属 isScrolling、不更新 userScrollDirection，
+  ///   均不会误判为用户滚动。
+  void _onPointerDown(PointerDownEvent _) {
+    // 手指按下即让权：取消在途的恢复计时，触摸期间不发生任何自动滚动
+    _userTouching = true;
+    _resumeFollowTimer?.cancel();
+  }
+
+  void _onPointerUp(PointerUpEvent _) {
+    _userTouching = false;
+    _armResumeFollowTimerIfNeeded();
+  }
+
+  void _onPointerCancel(PointerCancelEvent _) {
+    // 手势被其他手势仲裁接管（如 TabBarView 横滑）：等同抬起处理
+    _userTouching = false;
+    _armResumeFollowTimerIfNeeded();
+  }
+
   bool _onScrollNotification(ScrollNotification notification) {
-    final isUserDrag =
-        notification is ScrollStartNotification &&
-            notification.dragDetails != null;
-    final isUserFling = notification is UserScrollNotification &&
-        notification.direction != ScrollDirection.idle;
-    if (isUserDrag || isUserFling) {
-      _resumeFollowTimer?.cancel();
+    if (notification is ScrollStartNotification &&
+        notification.dragDetails != null) {
+      // 用户拖动起手：立即让权（程序 animateTo 不带 dragDetails）
       _follow = false;
-      _resumeFollowTimer = Timer(_followResumeDelay, () {
-        if (!mounted) return;
-        _follow = true;
-        // 恢复跟随：立即滚回当前行
-        if (_currentIndex >= 0) {
-          _scrollToLine(_currentIndex, jump: false);
-        }
-      });
+      _resumeFollowTimer?.cancel();
+    } else if (notification is UserScrollNotification &&
+        notification.direction != ScrollDirection.idle) {
+      // 桌面滚轮（pointerScroll）等无 PointerDown 的用户滚动：同样让权
+      _follow = false;
+      _resumeFollowTimer?.cancel();
+    } else if (notification is ScrollEndNotification && !_userTouching) {
+      // 滚动彻底结束（含惯性滑行收尾）且手指已离开：启动 5 秒失焦计时；
+      // 程序滚动结束时 _follow 已为 true，此分支天然跳过
+      _armResumeFollowTimerIfNeeded();
     }
     return false;
+  }
+
+  /// 已处于「用户暂停跟随」状态时，启动（或重启）恢复计时。
+  void _armResumeFollowTimerIfNeeded() {
+    if (_follow) return;
+    _resumeFollowTimer?.cancel();
+    _resumeFollowTimer = Timer(_followResumeDelay, () {
+      if (!mounted) return;
+      _follow = true;
+      // 平滑回滚到当前播放行（不瞬跳）；期间行已推进则取此刻最新行
+      if (_currentIndex >= 0) {
+        _scrollToLine(_currentIndex, jump: false);
+      }
+    });
   }
 
   // ===== 行高估算（仅滚动偏移用，渲染行高由内容自适应）=====
@@ -519,18 +573,25 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
         builder: (context, constraints) {
           final width = constraints.maxWidth - 48; // 水平 padding 24*2
           _ensureLayout(width);
-          // 首尾各留视口高度 35% 的空白：首行可锚定到视口上部 1/3 处
+          // 首尾各留视口高度 38.2% 的空白：首行可精确锚定到 0.618 分割线
           _topPadding = constraints.maxHeight * _edgeViewportRatio;
           return NotificationListener<ScrollNotification>(
             onNotification: _onScrollNotification,
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: EdgeInsets.symmetric(
-                vertical: _topPadding,
-                horizontal: 24,
+            // Listener 捕获指针按下/抬起：触摸期间自动滚动完全让权，
+            // 停止交互后 5 秒才恢复跟随（见 _onScrollNotification）
+            child: Listener(
+              onPointerDown: _onPointerDown,
+              onPointerUp: _onPointerUp,
+              onPointerCancel: _onPointerCancel,
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: EdgeInsets.symmetric(
+                  vertical: _topPadding,
+                  horizontal: 24,
+                ),
+                itemCount: _lines.length,
+                itemBuilder: (context, index) => _buildLine(context, index),
               ),
-              itemCount: _lines.length,
-              itemBuilder: (context, index) => _buildLine(context, index),
             ),
           );
         },
