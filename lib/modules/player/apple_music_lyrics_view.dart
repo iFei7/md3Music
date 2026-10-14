@@ -342,7 +342,14 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
 
   // ===== 行高估算（仅滚动偏移用，渲染行高由内容自适应）=====
 
-  /// 用 TextPainter 按**当前行样式**（32 / w900，最大字号）测量主行高度。
+  /// 用 TextPainter 按**非当前行样式**（26 / w700 / wght700，与
+  /// [_otherTextStyle] 逐字段一致）测量主行高度。
+  ///
+  /// 必须用非当前态测量：锚定行 j 的偏移 = 行 0..j-1 高度和，而这些行
+  /// 此刻均渲染为非当前态（26 / w700）；若按当前行样式（32 / w900）测量，
+  /// 每行系统性高估 32×1.3 − 26×1.3 ≈ 7.8px（长行在 32px 下多换行时更多），
+  /// 误差随行号线性累积，数十行歌曲累计数百 px，会把当前行推出视窗。
+  /// 当前行自身 32px 膨胀只影响其下方行的实际偏移，不影响自身 top 锚定。
   /// 不含当前行展开的翻译/罗马音副行（仅当前行显示），锚定误差见
   /// [_scrollToLine] 注释。
   void _ensureLayout(double width) {
@@ -357,10 +364,10 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
         text: TextSpan(
           text: text,
           style: TextStyle(
-            fontSize: _currentFontSize,
+            fontSize: _otherFontSize,
             height: _lineHeightFactor,
-            fontWeight: FontWeight.w900,
-            fontVariations: const [FontVariation('wght', 900.0)],
+            fontWeight: FontWeight.w700,
+            fontVariations: const [FontVariation('wght', 700.0)],
           ),
         ),
         textDirection: TextDirection.ltr,
