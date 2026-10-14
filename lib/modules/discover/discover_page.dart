@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:m3e_core/m3e_core.dart';
 import '../../core/theme/app_dimens.dart';
+import '../../core/theme/motion_constants.dart';
 import '../../widgets/md3_pull_to_refresh.dart';
 
 import '../../providers/kugou_provider.dart';
@@ -207,14 +208,9 @@ class _DiscoverPageState extends State<DiscoverPage> {
         // 公开版偏好：无壁纸时顶部恒为不透明 surface（文字区稳定）；
         // 有壁纸时顶栏完全透明，壁纸透出与页面主体透明度上下一致
         opaque: true,
-        titleTrailing: _buildGreetingPill(colorScheme),
+        // 问候与搜索已下沉到页面主体的主标题区与低干扰搜索胶囊
+        //（见 [_buildHeader] / [_buildSearchCapsule]），顶栏只保留识曲入口。
         actions: [
-          _buildActionIcon(
-            icon: Icons.search,
-            onPressed: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
-          ),
           Padding(
             padding: const EdgeInsets.only(right: _kActionTrailingGap),
             child: _buildActionIcon(
@@ -237,6 +233,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
             : CustomScrollView(
                 controller: _scrollController,
                 slivers: [
+                  _buildHeader(colorScheme),
+                  _buildSearchCapsule(),
                   _buildDailySection(colorScheme),
                   _buildHomeDiscoverSection(colorScheme),
                   // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度），
@@ -316,42 +314,116 @@ class _DiscoverPageState extends State<DiscoverPage> {
     );
   }
 
-  /// 问候胶囊，紧跟在顶栏标题右边。宽度贴着文字长短变，上限由标题区剩下的宽度
-  /// 决定（见 [ScrollAwareAppBar.titleTrailing]），顶格时由 ellipsis 收尾。
-  Widget _buildGreetingPill(ColorScheme cs) {
+  /// 顶部问候区（主标题层级）。
+  ///
+  /// 原来是顶栏里一枚 primaryContainer 问候胶囊——问候语语义最重，却拿着
+  /// 最小的字号挤在标题旁边。现在下沉到页面主体：
+  /// - 左侧是品牌音符图标占位（纯视觉，不引入登录；已登录时昵称出现在副标行）；
+  /// - 时间问候（早/午/晚）作为 headline 主标题；
+  /// - 昵称（无账号时为品牌文案「发现好音乐」）作为 onSurfaceVariant 副标。
+  Widget _buildHeader(ColorScheme cs) {
     final tt = Theme.of(context).textTheme;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 6, 10, 6),
-      decoration: ShapeDecoration(
-        color: cs.primaryContainer,
-        shape: const StadiumBorder(),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.md,
+        AppSpacing.lg,
+        AppSpacing.md,
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          Flexible(
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHigh,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.music_note, size: 24, color: cs.primary),
+          ),
+          const Gap(AppSpacing.md),
+          Expanded(
             child: Selector<KugouProvider, String?>(
               selector: (_, kugou) =>
                   kugou.isLoggedIn ? kugou.userInfo?.nickname : null,
               builder: (context, nickname, _) {
-                final greeting = _getGreeting();
-                return Text(
-                  nickname == null || nickname.isEmpty
-                      ? greeting
-                      : '$greeting，$nickname',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: tt.labelLarge?.copyWith(
-                    color: cs.onPrimaryContainer,
-                    fontWeight: FontWeight.w600,
-                  ),
+                final hasNickname = nickname != null && nickname.isNotEmpty;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _getGreeting(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: tt.headlineSmall?.copyWith(
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      hasNickname ? nickname : '发现好音乐',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: tt.bodyMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 );
               },
             ),
           ),
-          const Gap(AppSpacing.xs),
-          Icon(Icons.music_note, size: 16, color: cs.onPrimaryContainer),
         ],
+      ),
+    );
+  }
+
+  /// 低干扰搜索胶囊：surfaceContainerHigh 底 + 1px 描边，占位文字用
+  /// onSurfaceVariant 弱化。点击进搜索页，与原顶栏搜索图标行为一致。
+  Widget _buildSearchCapsule() {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        0,
+        AppSpacing.lg,
+        AppSpacing.sm,
+      ),
+      child: Material(
+        color: cs.surfaceContainerHigh,
+        shape: StadiumBorder(
+          side: BorderSide(
+            color: cs.outlineVariant,
+            width: AppGlass.borderStrokeWidth,
+          ),
+        ),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.md,
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.search, size: 20, color: cs.onSurfaceVariant),
+                const Gap(AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    '搜索歌曲、歌手、歌单',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: tt.bodyLarge?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -391,10 +463,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
               },
               icon: const Icon(Icons.chevron_right),
             ),
-            child: Padding(
-              // SongListItem 自带 horizontal 10 的内边距，补 6 凑成
-              // 与其他区块一致的 16dp 页边距。
-              padding: const EdgeInsets.symmetric(horizontal: 6),
+            // 分区卡片底座：surfaceContainerLow 梯队 + 1px 描边（见 [_SectionCard]）。
+            child: _SectionCard(
               child: Column(
                 children: [
                   for (var i = 0; i < top.length; i++)
@@ -450,10 +520,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
               },
               icon: const Icon(Icons.chevron_right),
             ),
-            child: Padding(
-              // SongListItem 自带 horizontal 10 的内边距，补 6 凑成
-              // 与其他区块一致的 16dp 页边距。
-              padding: const EdgeInsets.symmetric(horizontal: 6),
+            // 分区卡片底座：surfaceContainerLow 梯队 + 1px 描边（见 [_SectionCard]）。
+            child: _SectionCard(
               child: Column(
                 children: [
                   for (var i = 0; i < top.length; i++)
@@ -831,6 +899,34 @@ class _HomeDiscoverDetailPageState extends State<_HomeDiscoverDetailPage> {
   }
 }
 
+/// 分区卡片底座：统一本页的卡片语言——radiusCard 圆角、surfaceContainerLow
+/// 底色、1px outlineVariant 描边。层次靠表面梯队与细描边表达，不用投影
+/// （低干扰：深色下重阴影只会糊成一片，surfaceContainer 逐档递进更干净）。
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      // SongListItem 自带 horizontal 10 的内边距，补 6 凑成 16dp 页边距。
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: AppRadius.cardAll,
+        border: Border.all(
+          color: cs.outlineVariant,
+          width: AppGlass.borderStrokeWidth,
+        ),
+      ),
+      child: child,
+    );
+  }
+}
+
 /// 可折叠 section 容器：
 /// - 标题行左侧可点击区域（标题 + chevron 图标）触发 onToggle 折叠/展开
 /// - 标题行右侧可放额外 widget（如"查看更多"按钮）
@@ -886,9 +982,10 @@ class _CollapsibleSection extends StatelessWidget {
                           ),
                         ),
                         const Gap(AppSpacing.xs),
+                        // 折叠箭头旋转属于微反馈，走快档（150ms）。
                         AnimatedRotation(
                           turns: isExpanded ? 0.5 : 0,
-                          duration: const Duration(milliseconds: 200),
+                          duration: AppMotion.fast,
                           child: Icon(
                             Icons.expand_more,
                             color: cs.onSurfaceVariant,
@@ -903,12 +1000,14 @@ class _CollapsibleSection extends StatelessWidget {
             ],
           ),
         ),
+        // 整块分区显隐属于常规状态切换，走中档 250ms + M3 standard 曲线
+        //（AppMotion 档位，克制不花哨）。
         AnimatedCrossFade(
-          duration: const Duration(milliseconds: 200),
+          duration: AppMotion.medium,
           crossFadeState: isExpanded
               ? CrossFadeState.showFirst
               : CrossFadeState.showSecond,
-          sizeCurve: Curves.easeInOut,
+          sizeCurve: AppMotion.standardEasing,
           firstChild: child,
           secondChild: const SizedBox(width: double.infinity),
         ),
