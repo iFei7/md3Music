@@ -230,4 +230,17 @@ sealed interface PlaybackEvent {
 
     /** 循环模式由外部（设置页）改变，需与队列状态对齐。 */
     data class LoopModeChanged(val mode: AppLoopMode) : PlaybackEvent
+
+    /**
+     * 平台位置首次真实推进已确认（清理 [PlaybackState.awaitingPlaybackProgress]）。
+     *
+     * 由 PlaybackStore 订阅引擎位置流、经 `PlaybackProgressGate` 判定「本次
+     * 请求基线之后首次真实前进」后投递；**不得由引擎直接产生**——引擎只上报
+     * 位置采样（[EnginePositionChanged]），「是否算真实推进」是闸门语义，
+     * 归 Store。理由见 `PlaybackState.kt` KDoc：`awaitingPlaybackProgress`
+     * 在 Dart 侧依赖 `_playbackProgressGate.isPending(request)`（闸门对象 +
+     * 请求号），native 把它收敛成状态字段并由本事件清理，同时避免 Store
+     * 绕过归约器直写状态（违反唯一写入方）。
+     */
+    data object PlaybackProgressConfirmed : PlaybackEvent
 }
