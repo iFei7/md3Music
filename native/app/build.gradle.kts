@@ -194,6 +194,9 @@ dependencies {
     // --- Compose（BOM 统一版本）---
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.material3)
+    // material3 1.4.0 起不再传递携带图标集：主壳 tab 图标 / 空态图标依赖
+    // 默认集（Icons.Filled/Outlined 的 core 图标），版本由 compose-bom 管控。
+    implementation(libs.compose.material.icons.core)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)

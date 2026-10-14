@@ -50,6 +50,11 @@ compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling
 compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+# material3 1.4.0 起不再传递携带 material-icons-core：tab/空态图标需要
+# 默认集（Home/Favorite/Person 等），版本由 compose-bom 管控。
+# 登记遗留：material-icons-extended 未引入（体积考量），extended 专属图标
+# （如 CloudOff）以默认集近似替代，见 DiscoverScreen KDoc。
+compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
 
 # --- AndroidX 基础 ---
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

@@ -1,7 +1,15 @@
 package com.gracemusic.ui
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -10,8 +18,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.gracemusic.core.responsive.LocalWindowSizeClass
 import com.gracemusic.core.responsive.rememberWindowSizeClass
+import com.gracemusic.core.theme.Md3Motion
 import com.gracemusic.core.ui.AppBackground
-import com.gracemusic.feature.home.HomeScreen
+import com.gracemusic.feature.home.MainScaffold
 import com.gracemusic.feature.library.LibraryScreen
 import com.gracemusic.feature.onboarding.OnboardingScreen
 import com.gracemusic.feature.personalfm.PersonalFmScreen
@@ -20,6 +29,8 @@ import com.gracemusic.feature.playlist.PlaylistScreen
 import com.gracemusic.feature.search.SearchScreen
 import com.gracemusic.feature.settings.SettingsScreen
 import com.gracemusic.feature.user.UserScreen
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 
 /**
  * 路由表（P0-C 骨架）。
@@ -84,23 +95,37 @@ internal fun Md3MusicNavHost(navController: NavHostController) {
         navController = navController,
         startDestination = Routes.HOME,
     ) {
-        // TODO(P3): 转场对齐 lite（当前用 NavHost 默认淡入淡出）：
-        //   - `/` 主页用 _UpFadeMainRoute：FullPlayer(/player) push 时主页
-        //     向上偏移 15% + 淡出（仅 FullPlayer 生效，playerExpansion > 0.5）；
+        // 转场对齐 lite（P3-A1 落地，替代 P0-C 默认淡入淡出）：
+        //   - `/` ↔ `/player`：FullPlayer 300ms 淡入 + 从 15% 屏高上滑
+        //     （lite _UpFadeMainRoute，playerExpansion > 0.5 生效的语义由
+        //     路由转场近似——拖拽跟手 P3-D，登记偏离台本 §2）；
         //   - `/onboarding`：fade + emphasisDuration(600ms)；
-        //   - `/playlist`：fade；
-        //   - 二级页面内嵌 AppBackground 随页面位移入场（_BgSafeFadeForwardsBuilder）。
-        // TODO(P3): `/` 主页承载底部 tab（discover/favorites/library/fm/search/
-        //   recognition/settings/user，见 lite _buildPageForTab 与 TabConfigProvider），
-        //   P0-C 先以单占位屏呈现。
-        composable(Routes.HOME) {
-            HomeScreen()
+        //   - `/playlist`：fade 400ms；
+        //   - 二级页面内嵌 AppBackground 随页面位移入场（_BgSafeFadeForwardsBuilder）
+        //     仍留 P3-D（背景系统未接线）。
+        composable(
+            Routes.HOME,
+            enterTransition = { homeEnterTransition(initialState) },
+            // 登记偏离：lite 仅在被 FullPlayer 覆盖时 up-fade（playerExpansion
+            // 判定），Compose Navigation 无法在 exit 中取「即将覆盖的页」的
+            // 展开度，简化为 HOME exit 恒 up-fade 300ms（-15% 位移 + 淡出）。
+            exitTransition = { homeExitTransition() },
+        ) {
+            MainScaffold(
+                onOpenFullPlayer = { navController.navigate(route = Routes.PLAYER) },
+            )
         }
-        composable(Routes.ONBOARDING) {
+        composable(
+            Routes.ONBOARDING,
+            enterTransition = { fadeIn(animationSpec = Md3Motion.emphasizedTween()) },
+            exitTransition = { fadeOut(animationSpec = Md3Motion.emphasizedTween()) },
+        ) {
             OnboardingScreen()
         }
         composable(
             route = Routes.PLAYLIST_ROUTE,
+            enterTransition = { fadeIn(animationSpec = Md3Motion.expressiveTween()) },
+            exitTransition = { fadeOut(animationSpec = Md3Motion.expressiveTween()) },
             arguments = listOf(
                 navArgument(Routes.ARG_PLAYLIST_ID) {
                     type = NavType.StringType
@@ -123,7 +148,11 @@ internal fun Md3MusicNavHost(navController: NavHostController) {
         composable(Routes.USER) {
             UserScreen()
         }
-        composable(Routes.PLAYER) {
+        composable(
+            Routes.PLAYER,
+            enterTransition = { playerEnterTransition() },
+            exitTransition = { playerExitTransition() },
+        ) {
             PlayerScreen()
         }
         composable(Routes.PERSONAL_FM) {
@@ -131,3 +160,54 @@ internal fun Md3MusicNavHost(navController: NavHostController) {
         }
     }
 }
+
+// ==================== 主壳 / 播放器转场（P3-A1） ====================
+// 常量与曲线取自 Md3Motion；300ms 为 lite FullPlayer 转场时长
+// （Md3Motion 无对应常量，core/theme/Motion.kt 不在本任务改动范围，
+// 收敛为本文件私有常量）。
+
+private const val FullPlayerTransitionMillis = 300
+
+/** FullPlayer 屏高位移比例 15%（lite `_UpFadeMainRoute`）。 */
+private const val FullPlayerSlideFraction = 0.15f
+
+private fun playerFadeSpec() = tween<Float>(
+    durationMillis = FullPlayerTransitionMillis,
+    easing = Md3Motion.EmphasizedEasing,
+)
+
+private fun playerSlideSpec() = tween<IntOffset>(
+    durationMillis = FullPlayerTransitionMillis,
+    easing = Md3Motion.EmphasizedEasing,
+)
+
+/** PLAYER enter：淡入 + 从 15% 屏高下方上滑（lite FullPlayer 打开）。 */
+private fun playerEnterTransition(): EnterTransition =
+    slideInVertically(animationSpec = playerSlideSpec()) { full: Int ->
+        (full * FullPlayerSlideFraction).roundToInt()
+    } + fadeIn(animationSpec = playerFadeSpec())
+
+/** PLAYER exit：反向（淡出 + 滑回屏下方 15%）。 */
+private fun playerExitTransition(): ExitTransition =
+    slideOutVertically(animationSpec = playerSlideSpec()) { full: Int ->
+        (full * FullPlayerSlideFraction).roundToInt()
+    } + fadeOut(animationSpec = playerFadeSpec())
+
+/**
+ * HOME enter：从 PLAYER 返回时自上方 -15% 下滑 + 淡入（up-fade 的反向）；
+ * 其余进入（冷启动 / onboarding 返回）保持默认淡入 400ms。
+ */
+private fun homeEnterTransition(initialState: NavBackStackEntry): EnterTransition =
+    if (initialState.destination.route == Routes.PLAYER) {
+        slideInVertically(animationSpec = playerSlideSpec()) { full: Int ->
+            -(full * FullPlayerSlideFraction).roundToInt()
+        } + fadeIn(animationSpec = playerFadeSpec())
+    } else {
+        fadeIn(animationSpec = Md3Motion.expressiveTween())
+    }
+
+/** HOME exit：恒 up-fade 300ms（-15% 上移 + 淡出，登记偏离见使用处注释）。 */
+private fun homeExitTransition(): ExitTransition =
+    slideOutVertically(animationSpec = playerSlideSpec()) { full: Int ->
+        -(full * FullPlayerSlideFraction).roundToInt()
+    } + fadeOut(animationSpec = playerFadeSpec())
