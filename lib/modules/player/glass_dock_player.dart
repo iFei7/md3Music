@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../core/services/player_frame_driver.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../core/widgets/liquid_glass_container.dart';
+import '../../data/repositories/settings_repository.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/tab_config_provider.dart';
 import '../../widgets/player_artwork_image.dart';
@@ -70,6 +71,15 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 /// - **完整播放页往返**：openFullPlayer / close 不触碰折叠状态；关闭播放页
 ///   后 Dock 恢复「打开前的那个唯一展开组件」——状态只由用户点击驱动，
 ///   关闭后即为打开前状态，符合单展开不变量，无额外恢复路径。
+/// - **Dock 手势**（播放器区域，坍缩球 / 展开胶囊两态均生效）：
+///   · 上滑展开完整播放页——复用 shouldExpandPlayer 的阈值口径
+///     （屏高 20% 距离 / 900px/s 速度），走 openFullPlayer tap 模式转场；
+///   · 左右滑切歌——受设置开关「Dock 左右滑切歌」控制（默认关闭防
+///     误触），滑左下一曲 / 滑右上一曲，64dp 距离或 800px/s 速度任一达标；
+///   · 无歌（song == null）时不注册拖拽回调，不抢占手势竞技场，
+///     页面滚动可穿透，与现状一致。
+/// - **键盘避让**：viewInsets.bottom > 0（输入法弹出）时整体移除，
+///   归零后原样恢复（与播放页隐藏同一口径，离散显隐）。
 /// - **布局固定**：行恒为 [导航部分, 8, 播放器(Flexible)]——左侧悬浮导航、
 ///   右侧悬浮播放器，位置恒定不互换；单展开不变量保证「导航胶囊 +
 ///   播放器球」「导航球 + 播放器胶囊」两种组合均不超宽；已移除向上按钮——
@@ -185,8 +195,80 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     widget.onNavExpandedChanged(!next);
   }
 
+  // —— Dock 手势（上滑展开播放页 / 左右滑切歌）——
+
+  /// 上滑拖拽累计距离（向上为正，逻辑 px）与 drag start 时的屏幕高度快照。
+  double _swipeUpDistance = 0;
+  double _swipeUpScreenHeight = 0;
+
+  /// 左右滑累计水平位移（右为正，逻辑 px）。
+  double _swipeHorizontalDistance = 0;
+
+  /// 手势起点：清零累计量、快照屏幕高度（供上滑阈值按屏高比例判定）。
+  void _onDockDragStart(DragStartDetails details) {
+    _swipeUpDistance = 0;
+    _swipeHorizontalDistance = 0;
+    _swipeUpScreenHeight = MediaQuery.sizeOf(context).height;
+  }
+
+  void _onDockDragUpdate(DragUpdateDetails details) {
+    _swipeUpDistance -= details.delta.dy;
+    _swipeHorizontalDistance += details.delta.dx;
+  }
+
+  /// 手势终点判定：
+  /// - **上滑展开完整播放页**：复用 [shouldExpandPlayer] 的既有阈值口径
+  ///   （屏高 20% 距离 / 900px/s 速度，任一达标即展开；加速度通道无数据
+  ///   传 0），与原 MiniPlayer 拖拽展开同源。走 openFullPlayer 的 tap 模式
+  ///   转场（300ms 淡入 + 上滑），不做 1:1 跟手，动画克制；
+  /// - **左右滑切歌**：设置开关（SettingsRepository.dockSwipeSwitchTrack，
+  ///   默认关闭防误触）打开才生效。滑左（dx<0）→ 下一曲，滑右（dx>0）→
+  ///   上一曲，阈值 64dp 距离或 800px/s 速度任一达标。
+  ///
+  /// 上滑达标时提前 return，不再判定水平分量；两条路径互斥、无重复触发。
+  void _onDockDragEnd(DragEndDetails details) {
+    final upDistance = _swipeUpDistance;
+    final horizontalDistance = _swipeHorizontalDistance;
+    final screenHeight = _swipeUpScreenHeight;
+    _swipeUpDistance = 0;
+    _swipeHorizontalDistance = 0;
+
+    final player = context.read<PlayerProvider>();
+    if (player.currentSong == null) return;
+
+    if (shouldExpandPlayer(
+      dragDistance: upDistance,
+      screenHeight: screenHeight,
+      velocity: -details.velocity.pixelsPerSecond.dy,
+      acceleration: 0,
+    )) {
+      openFullPlayer(context);
+      return;
+    }
+
+    if (!SettingsRepository.dockSwipeSwitchTrack.value) return;
+    const distanceThreshold = 64.0;
+    const velocityThreshold = 800.0;
+    final vx = details.velocity.pixelsPerSecond.dx;
+    if (horizontalDistance <= -distanceThreshold || vx < -velocityThreshold) {
+      AppHaptics.tick();
+      player.next();
+    } else if (horizontalDistance >= distanceThreshold ||
+        vx > velocityThreshold) {
+      AppHaptics.tick();
+      player.previous();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    // 键盘弹出时整体隐藏：Dock 悬浮于页面之上，会浮在输入法上方遮挡
+    // 输入区（搜索页等文本输入场景）；viewInsets 归零后原样恢复。
+    // 与完整播放页隐藏（exp > 0.5 直接移除）同一口径，离散显隐不产过渡帧。
+    if (MediaQuery.viewInsetsOf(context).bottom > 0) {
+      return const SizedBox.shrink();
+    }
+
     final player = context.watch<PlayerProvider>();
     final song = player.currentSong;
     final isPlaying = player.isPlaying;
@@ -369,6 +451,14 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: song == null ? null : _toggleControls,
+      // 上滑展开播放页 / 左右滑切歌（有歌才参与手势竞技场，见
+      // _onDockDragEnd 注释）。
+      onVerticalDragStart: song == null ? null : _onDockDragStart,
+      onVerticalDragUpdate: song == null ? null : _onDockDragUpdate,
+      onVerticalDragEnd: song == null ? null : _onDockDragEnd,
+      onHorizontalDragStart: song == null ? null : _onDockDragStart,
+      onHorizontalDragUpdate: song == null ? null : _onDockDragUpdate,
+      onHorizontalDragEnd: song == null ? null : _onDockDragEnd,
       child: LiquidGlassContainer(
         shape: GlassShape.circle,
         child: SizedBox(
@@ -509,6 +599,15 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     final cs = Theme.of(context).colorScheme;
     return GestureDetector(
       onTap: _toggleControls,
+      // 与坍缩球同一套手势：上滑展开播放页 / 左右滑切歌（判定见
+      // _onDockDragEnd；胶囊内按钮的点击由各自 IconButton 优先接管，
+      // 不受拖拽影响）。
+      onVerticalDragStart: song == null ? null : _onDockDragStart,
+      onVerticalDragUpdate: song == null ? null : _onDockDragUpdate,
+      onVerticalDragEnd: song == null ? null : _onDockDragEnd,
+      onHorizontalDragStart: song == null ? null : _onDockDragStart,
+      onHorizontalDragUpdate: song == null ? null : _onDockDragUpdate,
+      onHorizontalDragEnd: song == null ? null : _onDockDragEnd,
       child: LiquidGlassContainer(
         shape: GlassShape.pill,
         padding: const EdgeInsets.fromLTRB(6, 0, 4, 0),

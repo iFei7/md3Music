@@ -681,6 +681,30 @@ class SettingsRepository {
     await prefs.setBool(_keyShowQualityDowngradeToast, value);
   }
 
+  // ===== 悬浮 Dock 手势 =====
+  static const String _keyDockSwipeSwitchTrack =
+      'settings_dock_swipe_switch_track';
+
+  /// 「Dock 左右滑切歌」开关（内存缓存，供 Dock 同步读取，模式同
+  /// [lyricTimeOffsetMs]）。默认关闭：悬浮 Dock 空间小，避免误触；
+  /// 开启后在 Dock 播放器上左右滑动切上一曲/下一曲。
+  static final ValueNotifier<bool> dockSwipeSwitchTrack =
+      ValueNotifier<bool>(false);
+
+  /// 读取「Dock 左右滑切歌」开关，并同步内存缓存。
+  Future<bool> getDockSwipeSwitchTrack() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getBool(_keyDockSwipeSwitchTrack) ?? false;
+    dockSwipeSwitchTrack.value = value;
+    return value;
+  }
+
+  Future<void> setDockSwipeSwitchTrack(bool value) async {
+    dockSwipeSwitchTrack.value = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyDockSwipeSwitchTrack, value);
+  }
+
   // ===== 记忆播放状态 =====
   static const String _keyRestoreMemory = 'settings_restore_memory';
 

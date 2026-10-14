@@ -153,6 +153,10 @@ class _SettingsPageState extends State<SettingsPage>
   // 播放时保持屏幕常亮开关
   bool _keepScreenOn = false;
 
+  // Dock 左右滑切歌开关（默认关闭，避免误触；开启后在悬浮 Dock
+  // 播放器上左右滑动切上一曲/下一曲）
+  bool _dockSwipeSwitchTrack = false;
+
   // 忽略音频焦点开关（默认开启：允许与其他应用同时播放音频）
   bool _ignoreAudioFocus = true;
   // 音频焦点中断策略（默认：保持播放）
@@ -303,6 +307,8 @@ class _SettingsPageState extends State<SettingsPage>
         .getViperMasterEnabled();
     final viperTapeQualityEnabled = await _settingsRepository
         .getViperTapeQualityEnabled();
+    final dockSwipeSwitchTrack = await _settingsRepository
+        .getDockSwipeSwitchTrack();
 
     setState(() {
       _wifiQuality = wifiQuality;
@@ -332,6 +338,7 @@ class _SettingsPageState extends State<SettingsPage>
       _volumeNormalizationEnabled = volumeNormalizationEnabled;
       _volumeNormalizationLufs = volumeNormalizationLufs;
       _keepScreenOn = keepScreenOn;
+      _dockSwipeSwitchTrack = dockSwipeSwitchTrack;
       _ignoreAudioFocus = ignoreAudioFocus;
       _audioFocusInterruptionMode = audioFocusInterruptionMode;
       _zenCoverLongPress = zenCoverLongPress;
@@ -2041,6 +2048,19 @@ class _SettingsPageState extends State<SettingsPage>
               _pauseFadeEnabled = value;
             });
             _settingsRepository.setPauseFadeEnabled(value);
+          },
+        ),
+        // search: Dock 左右滑 切歌 滑动切换 上一曲 下一曲 悬浮 播放器 手势 误触
+        SwitchListTile(
+          title: const Text('Dock 左右滑切歌'),
+          subtitle: const Text(
+            '在底部悬浮 Dock 的播放器上左右滑动切换上一曲/下一曲；默认关闭',
+          ),
+          value: _dockSwipeSwitchTrack,
+          onChanged: (value) {
+            HapticFeedback.lightImpact();
+            setState(() => _dockSwipeSwitchTrack = value);
+            _settingsRepository.setDockSwipeSwitchTrack(value);
           },
         ),
         // search: 歌曲淡入淡出 交叉淡化 crossfade 渐入渐出 叠加 衔接 无缝 过渡
