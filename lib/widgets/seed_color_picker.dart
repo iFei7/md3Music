@@ -6,8 +6,8 @@ import '../core/theme/app_theme.dart';
 
 /// 预设种子色 + 自定义颜色选择面板。
 ///
-/// 8 格圆形网格（4 列 × 2 行）：前 7 格为预设色，最后 1 格（第二排最右）为
-/// 「自定义颜色」圆形调色盘，点击打开 HSV 色轮自定义取色。
+/// 4 列圆形网格：前 N 格为预设色（sonify 重设计后含 sonify 红，共 9 色），
+/// 最后 1 格为「自定义颜色」圆形调色盘，点击打开 HSV 色轮自定义取色。
 class SeedColorPicker extends StatelessWidget {
   /// 当前选中的颜色（用于高亮显示）。
   final Color currentColor;
@@ -37,9 +37,11 @@ class SeedColorPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    // 前 7 个预设色 + 最后 1 个自定义槽
-    final presets = AppTheme.presetSeedColors.take(7).toList();
-    const total = 8;
+    // 全部预设色 + 最后 1 个自定义槽。
+    // sonify 重设计批次 0：预设色增至 9 个（sonify 红 #F54047 置于索引 0），
+    // 改为全量展示，避免重排后尾部颜色被 take(7) 截断丢失。
+    final presets = AppTheme.presetSeedColors;
+    final total = presets.length + 1;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       child: Column(
@@ -115,7 +117,7 @@ class SeedColorPicker extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '前 7 色取自 Material 3 官方 Theme Builder 的 key tone 40；最后一项为自定义取色',
+            '预设色取自 Material 3 官方 Theme Builder 的 key tone 40（sonify 红为默认）；最后一项为自定义取色',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),

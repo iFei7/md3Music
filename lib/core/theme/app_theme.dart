@@ -43,11 +43,18 @@ class _BgSafeFadeForwardsBuilder extends PageTransitionsBuilder {
 class AppTheme {
   AppTheme._();
 
-  /// 8 个预设种子色，取自 Material 3 官方 Theme Builder 的 key tone 40。
-  /// 顺序：色环顺序（蓝→紫→青→绿→黄→橙→红→粉）。
-  /// 索引 0 是默认色，与 [defaultSeedColor] 保持一致。
+  /// 预设种子色（sonify 红 + Material 3 官方 Theme Builder 的 key tone 40）。
+  ///
+  /// sonify 重设计（批次 0，方案 §0.2/§9.1）：sonify 红 #F54047 置于索引 0
+  /// 作为新默认（对应深色模式 #E64366 由 [sonifyPrimaryDark] 承载），原默认蓝
+  /// #0061A4 降为备选；其余 7 色保持原有顺序不变。
+  ///
+  /// **兼容性说明**：手动种子色以 ARGB 整数持久化（theme_provider.dart
+  /// `manual_seed_color`），不存索引——重排预设色后，已显式选择过颜色的用户
+  /// 主题不受任何影响；仅"从未手动选过色"的用户默认观感从蓝变为 sonify 红。
   static const List<Color> presetSeedColors = [
-    Color(0xFF0061A4), // 蓝（默认）
+    Color(0xFFF54047), // sonify 红（新默认，索引 0）
+    Color(0xFF0061A4), // 蓝（原默认，降为备选）
     Color(0xFF6750A4), // 紫（M3 默认）
     Color(0xFF006A6A), // 青绿
     Color(0xFF386A20), // 绿
@@ -57,9 +64,18 @@ class AppTheme {
     Color(0xFF984061), // 粉
   ];
 
-  /// 默认种子色（蓝色），用于未启用系统主题色且未手动选择时的兜底。
+  /// 默认种子色（sonify 红 #F54047，方案 §0.2 色板表 colorPrimary 浅色值，
+  /// 出处 ref-sonify `ui/theme/Color.kt:8`）。
+  /// 用于未启用系统主题色且未手动选择时的兜底。
   /// 必须独立定义为 const，不能引用 [presetSeedColors] 的索引（非常量表达式）。
-  static const Color defaultSeedColor = Color(0xFF0061A4);
+  static const Color defaultSeedColor = Color(0xFFF54047);
+
+  /// sonify 主色深色模式取值 #E64366（Color.kt:9）。
+  ///
+  /// 浅/深模式的种子色是同一个（种子色经 ColorScheme.fromSeed 按亮度各自展开
+  /// tonal 色阶），此常量供未来按亮度区分"品牌原色"的直用场景（如播放页
+  /// 强调色徽章）按需取用；本批次全局主色仍统一走 ColorScheme.primary。
+  static const Color sonifyPrimaryDark = Color(0xFFE64366);
 
   // CJK 字体回退链 - 按平台优先级排序:
   // 1) Web 浏览器(Windows + Edge) 优先用系统自带的 "Microsoft YaHei" (无需下载)
@@ -372,6 +388,8 @@ class AppTheme {
             padding: EdgeInsets.zero,
           ),
         ),
+        // sonify 语义色槽位（批次 0 新增，纯增量注册，不影响既有视觉）。
+        SonifyColors.fromScheme(colorScheme, isLight: isLight),
       ],
     );
   }
@@ -600,4 +618,230 @@ class AppTheme {
     // rond 固定 0：不引入圆角字轴，避免改变字形。
     return emphasized ? M3ETypography.emphasized(base, rond: 0) : base;
   }
+}
+
+/// sonify 语义色槽位（UI 重设计批次 0，方案 §0.2/§0.3 色板表）。
+///
+/// 设计模型与 sonify 一致（`ui/theme/Color.kt:8-18`、`Theme.kt:20-38`）：
+/// **只有主色随主题（种子色）变化，中性槽位固定为白/黑两极**——用户自定义
+/// 种子色时全 app 继续生效（等价于 sonify 换主色的假设场景）。
+///
+/// 槽位与 sonify 取值对照：
+/// | 槽位 | 浅色 | 深色 | sonify 出处 |
+/// |---|---|---|---|
+/// | [primary] | 种子色派生（默认 #F54047） | 种子色派生（深色阶，源值 #E64366） | Color.kt:8-9 |
+/// | [background] | #FFFFFF | #000000 | Color.kt:12-13 |
+/// | [onBackground] | #000000 | #FFFFFF | Theme.kt:23/33 反色映射 |
+/// | [textSecondary] | #88878E | #8E8D93 | Color.kt:10-11（headline） |
+/// | [surfaceGroup] | #F2F1F6 | #000002 | Color.kt:15-16（settingBack） |
+/// | [surfaceCard] | #FFFFFF | #1C1C1E | Color.kt:17-18（settingContainerBack） |
+/// | [scrim] | 黑 α0.5 | 白 α0.5 | Title.kt:1145（subTitle alpha 0.5） |
+///
+/// 注意：本批次（0）纯新增，不改变任何既有页面的取色路径——既有页面继续用
+/// `ColorScheme`；后续批次把页面逐个切到这些槽位。
+class SonifyColors extends ThemeExtension<SonifyColors> {
+  const SonifyColors({
+    required this.primary,
+    required this.background,
+    required this.onBackground,
+    required this.textSecondary,
+    required this.surfaceGroup,
+    required this.surfaceCard,
+    required this.scrim,
+  });
+
+  /// 主色：跟随种子色（保证 lite 的种子色/莫奈/封面取色/手动选择全链路继续生效）。
+  /// 默认种子色即 sonify 红 #F54047（见 [AppTheme.defaultSeedColor]）。
+  final Color primary;
+
+  /// 页面底色：纯白 / 纯黑（sonify 白黑两极模型，区别于 M3 灰阶多档）。
+  final Color background;
+
+  /// 页面底色上的文字/图标色（onBackground 反色映射）。
+  final Color onBackground;
+
+  /// 次级文字/占位/辅助说明色。
+  final Color textSecondary;
+
+  /// 分组页底色（设置系整页背景，iOS 分组风）。
+  final Color surfaceGroup;
+
+  /// 分组卡底色（设置白卡 / 播放页内嵌卡）。
+  ///
+  /// OLED 纯黑模式下（lite 特色，保留共存）：后续批次消费此槽位时应回退到
+  /// `surfaceContainerHigh #111111 / Highest #1A1A1A`（app_theme.dart OLED
+  /// 覆盖值），与 sonify #1C1C1E 同语义（差 1 个灰阶，取 lite 现值避免回归）。
+  final Color surfaceCard;
+
+  /// 玻璃下内容淡出用的蒙层色（Title.kt:1145 alpha 0.5 语义）。
+  final Color scrim;
+
+  /// 由 [ColorScheme] 构建：primary 派生自种子色，中性槽位按亮度取 sonify 固定值。
+  factory SonifyColors.fromScheme(ColorScheme scheme, {required bool isLight}) {
+    return SonifyColors(
+      primary: scheme.primary,
+      background: isLight ? const Color(0xFFFFFFFF) : const Color(0xFF000000),
+      onBackground: isLight ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+      textSecondary:
+          isLight ? const Color(0xFF88878E) : const Color(0xFF8E8D93),
+      surfaceGroup:
+          isLight ? const Color(0xFFF2F1F6) : const Color(0xFF000002),
+      surfaceCard:
+          isLight ? const Color(0xFFFFFFFF) : const Color(0xFF1C1C1E),
+      scrim: isLight
+          ? Colors.black.withValues(alpha: 0.5)
+          : Colors.white.withValues(alpha: 0.5),
+    );
+  }
+
+  /// 从上下文取槽位；未注册（如测试用裸 MaterialApp）时按当前亮度兜底构造。
+  static SonifyColors of(BuildContext context) {
+    final theme = Theme.of(context);
+    final ext = theme.extension<SonifyColors>();
+    if (ext != null) return ext;
+    return SonifyColors.fromScheme(
+      theme.colorScheme,
+      isLight: theme.brightness == Brightness.light,
+    );
+  }
+
+  @override
+  SonifyColors lerp(SonifyColors other, double t) {
+    if (identical(this, other)) return this;
+    return SonifyColors(
+      primary: Color.lerp(primary, other.primary, t)!,
+      background: Color.lerp(background, other.background, t)!,
+      onBackground: Color.lerp(onBackground, other.onBackground, t)!,
+      textSecondary: Color.lerp(textSecondary, other.textSecondary, t)!,
+      surfaceGroup: Color.lerp(surfaceGroup, other.surfaceGroup, t)!,
+      surfaceCard: Color.lerp(surfaceCard, other.surfaceCard, t)!,
+      scrim: Color.lerp(scrim, other.scrim, t)!,
+    );
+  }
+
+  @override
+  SonifyColors copyWith({
+    Color? primary,
+    Color? background,
+    Color? onBackground,
+    Color? textSecondary,
+    Color? surfaceGroup,
+    Color? surfaceCard,
+    Color? scrim,
+  }) {
+    return SonifyColors(
+      primary: primary ?? this.primary,
+      background: background ?? this.background,
+      onBackground: onBackground ?? this.onBackground,
+      textSecondary: textSecondary ?? this.textSecondary,
+      surfaceGroup: surfaceGroup ?? this.surfaceGroup,
+      surfaceCard: surfaceCard ?? this.surfaceCard,
+      scrim: scrim ?? this.scrim,
+    );
+  }
+}
+
+/// sonify 字体排印 token（方案 §0.3 排印表）。
+///
+/// 与 lite 既有 `_buildTextTheme`（M3 梯度 + M3E 可变字体强调）**并行共存**：
+/// 一级页大标题等 sonify 形态的文本直接取本类的独立样式，不走 M3 display
+/// 梯度；M3E 强调排版继续用于播放页歌名（lite 特色，不回退）。
+///
+/// 颜色不写死：调用处用 `copyWith(color:)` 绑定 [SonifyColors] /
+/// `ColorScheme.onSurface`，保证背景图/深浅色模式全兼容。
+///
+/// 字重规则（方案 §0.3）：Medium 为主、Bold 用于标题、禁用 w600 以上。
+/// 字体族不指定：跟随全局 ThemeData.fontFamily（含用户自定义字体切换）。
+abstract final class SonifyTextStyles {
+  /// 页面大标题（一级页列表首 item）：35sp Bold，lineHeight 40。
+  /// 出处：Title.kt:1135-1140。
+  static const TextStyle largeTitle = TextStyle(
+    fontSize: 35,
+    fontWeight: FontWeight.w700,
+    height: 40 / 35,
+    letterSpacing: 0,
+  );
+
+  /// 折叠后顶栏小标题：18.5sp Bold。
+  /// 出处：Title.kt:1063-1067。
+  static const TextStyle barTitle = TextStyle(
+    fontSize: 18.5,
+    fontWeight: FontWeight.w700,
+  );
+
+  /// 正文基准：16sp，lineHeight 21，letterSpacing 0.0618sp。
+  /// 出处：Type.kt:9-14。
+  static const TextStyle body = TextStyle(
+    fontSize: 16,
+    fontWeight: FontWeight.w400,
+    height: 21 / 16,
+    letterSpacing: 0.0618,
+  );
+
+  /// 列表次级文本：13sp（全应用最高频字号，sonify 全仓 31 处）。
+  static const TextStyle listItem = TextStyle(
+    fontSize: 13,
+    fontWeight: FontWeight.w400,
+  );
+
+  /// 卡片标题：16sp Medium（字重统计 Medium 26 处最多）。
+  static const TextStyle cardTitle = TextStyle(
+    fontSize: 16,
+    fontWeight: FontWeight.w500,
+  );
+
+  /// 分区标题：18sp Bold（统计 18 处，Bold 17 处）。
+  static const TextStyle sectionTitle = TextStyle(
+    fontSize: 18,
+    fontWeight: FontWeight.w700,
+  );
+}
+
+/// sonify 间距 / 布局 token（方案 §0.3 间距表）。
+abstract final class SonifySpacing {
+  /// 卡片水平外边距：16.5dp。出处：YosRoundColumn.kt:22（defaultPadding）。
+  static const double cardMargin = 16.5;
+
+  /// 大标题/内容水平边距：20dp。出处：Title.kt:203（titleHorizontalPadding）。
+  static const double titleMargin = 20;
+
+  /// 设置/资料库分组标题边距：32dp。出处：Title.kt:202 注释。
+  static const double groupMargin = 32;
+
+  /// 网格列间距：15dp。出处：Title.kt:416-417。
+  static const double gridH = 15;
+
+  /// 网格行间距：20dp。出处：Title.kt:416-417。
+  static const double gridV = 20;
+
+  /// 网格边缘内边距：18dp。出处：Title.kt:419-420。
+  static const double gridEdge = 18;
+
+  /// 顶栏高度：54dp。出处：Title.kt:989。
+  static const double topBar = 54;
+
+  /// 自适应网格最小图尺寸：150dp。出处：AdaptiveImageLayout.kt:9。
+  static const double coverRailMin = 150;
+
+  /// 列表底部避让（迷你条+导航）：sonify 134dp（Title.kt:197）。
+  /// **lite 实际避让以 app.dart 的 MediaQuery padding 注入为准（现值更高），
+  /// 消费时以注入值优先，此 token 仅作 sonify 参照，勿直接硬编码进列表。**
+  static const double bottomClearanceReference = 134;
+}
+
+/// sonify 动效 token（方案 §0.3 动效表）。
+abstract final class SonifyMotion {
+  /// 大标题折叠吸附：180ms EaseOutCubic。出处：Title.kt:745-753。
+  static const Duration collapseSnap = Duration(milliseconds: 180);
+  static const Curve collapseSnapCurve = Curves.easeOutCubic;
+
+  /// 顶栏背景/小标题淡入出：120ms。出处：Title.kt:952-953, 1050-1060。
+  static const Duration barFade = Duration(milliseconds: 120);
+
+  /// 玻璃圆钮材质切换：150ms。出处：Title.kt:940-941。
+  static const Duration glassAlpha = Duration(milliseconds: 150);
+
+  /// 折叠大标题透明度公式增益：`1 + offset/height × 1.8`，clamp 0~1。
+  /// 出处：Title.kt:588-589。
+  static const double collapseAlphaGain = 1.8;
 }

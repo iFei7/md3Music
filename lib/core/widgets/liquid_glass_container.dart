@@ -1,6 +1,9 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:material_ui/material_ui.dart';
+
+import '../../widgets/common/liquid_glass_surface.dart';
+
+export '../../widgets/common/liquid_glass_surface.dart'
+    show GlassShape, LiquidGlassSurface;
 
 /// 液态玻璃容器（悬浮 Dock 底座）。
 ///
@@ -15,6 +18,12 @@ import 'package:material_ui/material_ui.dart';
 /// **静态组件、零动画**：所有动效（展开/坍缩/形变）由外层
 /// [GlassDockPlayer] 用收敛型动画驱动，本组件只负责一次绘制。
 /// 支持胶囊（pill）/ 圆形（circle）/ 圆角矩形三种外形。
+///
+/// sonify 重设计批次 0：实现已抽到参数化的 [LiquidGlassSurface]
+/// （lib/widgets/common/liquid_glass_surface.dart），本组件保留原有构造签名
+/// 并以**默认参数**委托——blur 18 / fillAlpha 0.12 / 高光描边开 / 投影关，
+/// 与抽取前逐项一致，Dock 视觉与行为不变（坍缩球几何/进度环/28% 遮罩等
+/// 近期打磨不回退）。
 class LiquidGlassContainer extends StatelessWidget {
   const LiquidGlassContainer({
     super.key,
@@ -44,162 +53,17 @@ class LiquidGlassContainer extends StatelessWidget {
   /// 叠色不透明度（0.10–0.15 推荐区间，保证内容可读）。
   final double fillAlpha;
 
-  /// 按外形裁剪（同时裁掉模糊层与描边的溢出）。
-  ///
-  /// 胶囊形的圆角取**实际渲染高度**的一半（StadiumBorder 语义），由
-  /// [ClipRRect.clipper] 在布局完成后按真实尺寸计算。不能用
-  /// `LayoutBuilder` 的 `constraints.maxHeight`：Dock 场景
-  /// （`Positioned(bottom)` → `Align` → `Row`）传下来的是**无界高度（∞）**，
-  /// `BorderRadius.circular(∞)` 会让 ClipRRect 退化为矩形裁剪，
-  /// 叠色 / 模糊按矩形漏出（装机实测 bug）。
-  Widget _clip(Widget child) {
-    switch (shape) {
-      case GlassShape.circle:
-        return ClipOval(child: child);
-      case GlassShape.pill:
-        return ClipRRect(
-          clipper: const _StadiumClipper(),
-          child: child,
-        );
-      case GlassShape.roundedRect:
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(borderRadius),
-          child: child,
-        );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final fill = cs.surface.withValues(alpha: fillAlpha);
-    final borderColor = cs.onSurface;
-
-    return _clip(
-      Stack(
-        children: [
-          // 背景模糊：只作用于被 Clip 裁剪的容器区域。
-          Positioned.fill(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-              child: const SizedBox.expand(),
-            ),
-          ),
-          // 半透明叠色：玻璃的"体色"。
-          Positioned.fill(child: ColoredBox(color: fill)),
-          // 1px 渐变描边 + 顶部内侧高光线。
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(
-                painter: _GlassBorderPainter(
-                  shape: shape,
-                  borderRadius: borderRadius,
-                  borderColor: borderColor,
-                ),
-              ),
-            ),
-          ),
-          // 内容。
-          Padding(padding: padding, child: child),
-        ],
-      ),
+    return LiquidGlassSurface(
+      shape: shape,
+      borderRadius: borderRadius,
+      padding: padding,
+      blurSigma: blurSigma,
+      fillAlpha: fillAlpha,
+      showHighlightBorder: true,
+      showShadow: false,
+      child: child,
     );
-  }
-}
-
-/// 玻璃容器外形。
-enum GlassShape { pill, circle, roundedRect }
-
-/// 胶囊形（Stadium）裁剪器：按实际渲染尺寸取圆角（高度一半），
-/// 不依赖布局约束，无界高度下也不会退化。
-class _StadiumClipper extends CustomClipper<RRect> {
-  const _StadiumClipper();
-
-  @override
-  RRect getClip(Size size) => RRect.fromRectAndRadius(
-        Offset.zero & size,
-        Radius.circular(size.height / 2),
-      );
-
-  @override
-  bool shouldReclip(_StadiumClipper oldClipper) => false;
-}
-
-/// 玻璃描边绘制器：
-/// - 外缘 1px 线性渐变描边（左上高光 → 右下渐隐）；
-/// - 顶部内侧高光线（上缘细亮线，左右渐隐）。
-class _GlassBorderPainter extends CustomPainter {
-  _GlassBorderPainter({
-    required this.shape,
-    required this.borderRadius,
-    required this.borderColor,
-  });
-
-  final GlassShape shape;
-  final double borderRadius;
-  final Color borderColor;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final isCircle = shape == GlassShape.circle;
-    final radius = isCircle
-        ? size.height / 2
-        : (shape == GlassShape.pill ? size.height / 2 : borderRadius);
-
-    // 描边渐变：左上白高光 → 右下渐隐（混入 onSurface 保证暗色主题可感知）。
-    final shader = LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: [
-        Colors.white.withValues(alpha: 0.35),
-        borderColor.withValues(alpha: 0.06),
-      ],
-    ).createShader(rect);
-
-    final borderPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
-      ..shader = shader;
-
-    if (isCircle) {
-      canvas.drawOval(rect.deflate(0.5), borderPaint);
-    } else {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(rect.deflate(0.5), Radius.circular(radius)),
-        borderPaint,
-      );
-    }
-
-    // 顶部内侧高光线：上缘 1px 细线，左右向内收进后渐隐。
-    final highlightShader = LinearGradient(
-      begin: Alignment.centerLeft,
-      end: Alignment.centerRight,
-      colors: [
-        Colors.transparent,
-        Colors.white.withValues(alpha: 0.28),
-        Colors.transparent,
-      ],
-      stops: const [0.0, 0.5, 1.0],
-    ).createShader(rect);
-
-    final highlightPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
-      ..shader = highlightShader;
-
-    final inset = isCircle ? size.width / 4 : radius * 0.8;
-    canvas.drawLine(
-      Offset(inset, 1),
-      Offset(size.width - inset, 1),
-      highlightPaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _GlassBorderPainter oldDelegate) {
-    return oldDelegate.shape != shape ||
-        oldDelegate.borderRadius != borderRadius ||
-        oldDelegate.borderColor != borderColor;
   }
 }
