@@ -27,7 +27,12 @@ class ThemeProvider extends ChangeNotifier {
   static const String _textShadowKey = 'use_text_shadow';
   static const String _textShadowBlurKey = 'text_shadow_blur';
 
-  ThemeMode _themeMode = ThemeMode.system;
+  // 默认深色（UI 重设计·批次 1）：仅对「从未设置过主题」的新用户生效。
+  // 持久化语义：_loadThemeMode 里 SharedPreferences.getInt(_key) 返回 null
+  // 表示从未写入 → 保持这里的深色默认；用户一旦在设置页显式选择过
+  // （包括手动选过「跟随系统」），savedIndex 非 null 会覆盖此初始值，
+  // 既有用户的偏好不受影响，设置页仍可随时切回浅色/跟随系统。
+  ThemeMode _themeMode = ThemeMode.dark;
   bool _useDynamicColor = false;
   Color? _systemSeedColor;
   // 封面动态取色：根据当前播放歌曲封面颜色动态改变全局主题色。

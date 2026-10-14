@@ -2,6 +2,8 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:material_ui/material_ui.dart';
 
+import '../theme/app_dimens.dart';
+
 /// 液态玻璃容器（悬浮 Dock 底座）。
 ///
 /// 视觉分层（自下而上）：
@@ -12,6 +14,11 @@ import 'package:material_ui/material_ui.dart';
 ///    模拟玻璃边缘的受光面；
 /// 4. 顶部内侧高光线：玻璃上缘的一条细亮线。
 ///
+/// 视觉参数已全部收编到 [AppGlass] token（UI 重设计·批次 1）：描边参数在
+/// paint 路径按深浅色引用 token 组，构造默认值为与 [AppGlass.dark] 逐项
+/// 相等的字面量（Dart 构造默认值无法引用实例字段，见参数处注释），
+/// 现有渲染零变化；深浅色参数组见 [AppGlass.dark] / [AppGlass.light]
+/// （当前取值相同，等价基线）。
 /// **静态组件、零动画**：所有动效（展开/坍缩/形变）由外层
 /// [GlassDockPlayer] 用收敛型动画驱动，本组件只负责一次绘制。
 /// 支持胶囊（pill）/ 圆形（circle）/ 圆角矩形三种外形。
@@ -22,6 +29,8 @@ class LiquidGlassContainer extends StatelessWidget {
     this.shape = GlassShape.pill,
     this.borderRadius = 0,
     this.padding = EdgeInsets.zero,
+    // 默认值与 AppGlass.dark token 逐项相等（构造默认值必须是常量字面量，
+    // 无法直接引用实例字段；改 token 时需同步这里，AppGlass 注释已标注）。
     this.blurSigma = 18,
     this.fillAlpha = 0.12,
   });
@@ -87,7 +96,8 @@ class LiquidGlassContainer extends StatelessWidget {
           ),
           // 半透明叠色：玻璃的"体色"。
           Positioned.fill(child: ColoredBox(color: fill)),
-          // 1px 渐变描边 + 顶部内侧高光线。
+          // 1px 渐变描边 + 顶部内侧高光线（参数按深浅色取 token 组，
+          // 当前两组等价，渲染与收编前逐项一致）。
           Positioned.fill(
             child: IgnorePointer(
               child: CustomPaint(
@@ -95,6 +105,7 @@ class LiquidGlassContainer extends StatelessWidget {
                   shape: shape,
                   borderRadius: borderRadius,
                   borderColor: borderColor,
+                  params: AppGlass.of(cs.brightness),
                 ),
               ),
             ),
@@ -133,11 +144,15 @@ class _GlassBorderPainter extends CustomPainter {
     required this.shape,
     required this.borderRadius,
     required this.borderColor,
+    required this.params,
   });
 
   final GlassShape shape;
   final double borderRadius;
   final Color borderColor;
+
+  /// 玻璃描边参数（来自 [AppGlass] token，深浅色各一组）。
+  final GlassParams params;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -152,14 +167,14 @@ class _GlassBorderPainter extends CustomPainter {
       begin: Alignment.topLeft,
       end: Alignment.bottomRight,
       colors: [
-        Colors.white.withValues(alpha: 0.35),
-        borderColor.withValues(alpha: 0.06),
+        Colors.white.withValues(alpha: params.borderHighlightAlpha),
+        borderColor.withValues(alpha: params.borderFadeAlpha),
       ],
     ).createShader(rect);
 
     final borderPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
+      ..strokeWidth = AppGlass.borderStrokeWidth
       ..shader = shader;
 
     if (isCircle) {
@@ -177,7 +192,7 @@ class _GlassBorderPainter extends CustomPainter {
       end: Alignment.centerRight,
       colors: [
         Colors.transparent,
-        Colors.white.withValues(alpha: 0.28),
+        Colors.white.withValues(alpha: params.topHighlightAlpha),
         Colors.transparent,
       ],
       stops: const [0.0, 0.5, 1.0],
@@ -185,7 +200,7 @@ class _GlassBorderPainter extends CustomPainter {
 
     final highlightPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
+      ..strokeWidth = AppGlass.borderStrokeWidth
       ..shader = highlightShader;
 
     final inset = isCircle ? size.width / 4 : radius * 0.8;
@@ -200,6 +215,7 @@ class _GlassBorderPainter extends CustomPainter {
   bool shouldRepaint(covariant _GlassBorderPainter oldDelegate) {
     return oldDelegate.shape != shape ||
         oldDelegate.borderRadius != borderRadius ||
-        oldDelegate.borderColor != borderColor;
+        oldDelegate.borderColor != borderColor ||
+        oldDelegate.params != params;
   }
 }

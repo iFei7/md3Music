@@ -91,10 +91,10 @@ class AppTheme {
   }
 
   static ThemeData get darkTheme {
-    final colorScheme = ColorScheme.fromSeed(
+    final colorScheme = _tuneDarkColorScheme(ColorScheme.fromSeed(
       seedColor: defaultSeedColor,
       brightness: Brightness.dark,
-    );
+    ));
     return _buildTheme(colorScheme, Brightness.dark);
   }
 
@@ -141,10 +141,10 @@ class AppTheme {
     NavigationDestinationLabelBehavior labelBehavior =
         NavigationDestinationLabelBehavior.alwaysHide,
   }) {
-    var colorScheme = ColorScheme.fromSeed(
+    var colorScheme = _tuneDarkColorScheme(ColorScheme.fromSeed(
       seedColor: seedColor,
       brightness: Brightness.dark,
-    );
+    ));
     if (useOledBlack) {
       colorScheme = colorScheme.copyWith(
         surface: Colors.black,
@@ -164,6 +164,40 @@ class AppTheme {
       fontFamily: fontFamily,
       emphasized: emphasized,
       labelBehavior: labelBehavior,
+    );
+  }
+
+  /// 深色配色打磨：低干扰表面层级（UI 重设计·批次 1）。
+  ///
+  /// `ColorScheme.fromSeed` 的深色 surface 是带种子色相的近黑灰，
+  /// 不同种子下色相/明度会漂移。这里统一覆盖为**近黑带微暖紫**的固定
+  /// 表面梯队，让深色模式"黑得稳"：背景足够沉（封面驱动设计的底座），
+  /// 容器三档层次清晰但不刺眼；primary/secondary 等彩色角色不动——
+  /// 品牌色仍由种子色（莫奈/封面/手动）驱动，降低饱和**面积**靠的是
+  /// 表面层级收敛而非直接改 primary（改色值会破坏 M3 对比度保证）。
+  ///
+  /// 对比度（WCAG AA）：onSurface 取 M3 深色中性 tone 90（#E6E1E9），
+  /// 对 surface（#0E0D13）对比度约 15:1；onSurfaceVariant 取 tone 80
+  /// （#C8C3D0），约 9:1——正文（≥14sp 要求 4.5:1）全部大幅达标。
+  ///
+  /// 调用顺序：fromSeed → 本方法 → OLED 纯黑覆盖（darkThemeFromSeed 内），
+  /// 因此开启 OLED 纯黑时本方法的手工表面值会被纯黑再次覆盖，两开关可叠加。
+  static ColorScheme _tuneDarkColorScheme(ColorScheme scheme) {
+    return scheme.copyWith(
+      // 页面/Scaffold 底色：近黑带一丝暖紫（R>G>B 微偏移），比纯灰更耐看。
+      surface: const Color(0xFF0E0D13),
+      surfaceContainerLowest: const Color(0xFF09080D),
+      // 容器三档：Low（底板/弹层）→ Medium（卡片）→ High/Highest
+      // （悬浮件/滑轨），逐档 +6% 亮度递进，层级可辨但不发灰。
+      surfaceContainerLow: const Color(0xFF15141B),
+      surfaceContainer: const Color(0xFF1A1922),
+      surfaceContainerHigh: const Color(0xFF252430),
+      surfaceContainerHighest: const Color(0xFF302F3B),
+      // 前景：M3 深色标准中性 tone，保证各表面上的 AA 对比度。
+      onSurface: const Color(0xFFE6E1E9),
+      onSurfaceVariant: const Color(0xFFC8C3D0),
+      // 分隔线/描边：跟随新的表面明度压暗一档，避免线框在近黑底上过亮。
+      outlineVariant: const Color(0xFF2B2A35),
     );
   }
 
