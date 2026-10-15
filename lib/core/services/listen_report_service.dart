@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/kugou_api/kugou_api_client.dart';
@@ -142,12 +143,10 @@ class ListenReportService {
         deviceModel: _deviceModel,
         systemVersion: _systemVersion,
       );
-      // ignore: avoid_print
-      print('[CSCC] start 上报 mixsongid=$mixsongid resp=$resp');
+      debugPrint('[CSCC] start 上报 mixsongid=$mixsongid resp=$resp');
     } catch (e) {
       // 事件不重试：失败即放弃，等下一次 start 重新建会话
-      // ignore: avoid_print
-      print('[CSCC] start 上报失败 mixsongid=$mixsongid err=$e');
+      debugPrint('[CSCC] start 上报失败 mixsongid=$mixsongid err=$e');
     }
   }
 
@@ -158,16 +157,14 @@ class ListenReportService {
     final segmentUid = _segmentUserid;
     final currentUid = KugouApiClient().userid;
     if (segmentUid != null && segmentUid != currentUid) {
-      // ignore: avoid_print
-      print(
+      debugPrint(
         '[CSCC] 丢弃 end（账号已切换）$segment '
         '段账号=$segmentUid 当前账号=$currentUid',
       );
       return;
     }
     if (!segment.reachesThreshold(minReportableMs)) {
-      // ignore: avoid_print
-      print('[CSCC] 跳过 end（时长不足）${segment.durationMs}ms < $minReportableMs');
+      debugPrint('[CSCC] 跳过 end（时长不足）${segment.durationMs}ms < $minReportableMs');
       return;
     }
     try {
@@ -179,11 +176,9 @@ class ListenReportService {
         deviceModel: _deviceModel,
         systemVersion: _systemVersion,
       );
-      // ignore: avoid_print
-      print('[CSCC] end 上报 $segment resp=$resp');
+      debugPrint('[CSCC] end 上报 $segment resp=$resp');
     } catch (e) {
-      // ignore: avoid_print
-      print('[CSCC] end 上报失败 $segment err=$e');
+      debugPrint('[CSCC] end 上报失败 $segment err=$e');
     }
   }
 

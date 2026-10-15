@@ -9,6 +9,7 @@ import '../../providers/kugou_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/album_card.dart';
+import '../../widgets/common/cover_rail.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/song_list_item.dart';
 import '../album/album_detail_page.dart';
@@ -60,80 +61,50 @@ class _MusicExploreSectionsState extends State<MusicExploreSections> {
       ],
     );
   }
-  /// 主题歌单：横滑方卡（130 宽），展示态，无「更多」入口。
+  /// 横滑 Rail 单侧最大卡片数（与发现页 [_kRailMaxItems] 同值）。
+  static const int _kRailMaxItems = 10;
+
+  /// 主题歌单：横滑 Rail（共享 [CoverRail]，与发现页主题歌单同款双消费），
+  /// 展示态，无「更多」入口，主题卡暂无详情页。
   Widget _buildThemeSection() {
     return Selector<KugouProvider, List<KugouThemeInfo>>(
       selector: (_, kugou) => kugou.themePlaylistData,
       builder: (context, themes, _) {
         if (themes.isEmpty) return const SizedBox.shrink();
-        final cs = Theme.of(context).colorScheme;
+        final count = themes.length.clamp(0, _kRailMaxItems);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const _SectionHeader(title: '主题歌单'),
-            SizedBox(
-              height: 166,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-                itemCount: themes.length,
-                itemBuilder: (context, i) => Padding(
-                  padding: const EdgeInsets.only(right: AppSpacing.md),
-                  child: SizedBox(
-                    width: 130,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: AppRadius.lgAll,
-                        color: cs.surfaceContainerLow,
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          AspectRatio(
-                            aspectRatio: 1,
-                            child: CachedNetworkImage(
-                              imageUrl: themes[i].coverUrl ?? '',
-                              memCacheWidth: 390,
-                              memCacheHeight: 390,
-                              fit: BoxFit.cover,
-                              placeholder: (_, _) => _coverPlaceholder(cs),
-                              errorWidget: (_, _, _) => _coverPlaceholder(cs),
-                            ),
-                          ),
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  themes[i].name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleSmall
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.w500,
-                                        color: cs.onSurface,
-                                      ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
+            CoverRail(
+              itemCount: count,
+              itemBuilder: (context, i) => CoverRailCard(
+                cover: _railCoverImage(context, themes[i].coverUrl),
+                title: themes[i].name,
               ),
             ),
           ],
         );
       },
+    );
+  }
+
+  /// Rail 封面图：空 URL 用占位，正图与发现页同规格（390 方缓存）。
+  static Widget _railCoverImage(BuildContext context, String? url) {
+    final cs = Theme.of(context).colorScheme;
+    if (url == null || url.isEmpty) {
+      return Container(
+        color: cs.surfaceContainerHighest,
+        child: Icon(Icons.music_note, color: cs.onSurfaceVariant),
+      );
+    }
+    return CachedNetworkImage(
+      imageUrl: url,
+      memCacheWidth: 390,
+      memCacheHeight: 390,
+      fit: BoxFit.cover,
+      placeholder: (_, _) => Container(color: cs.surfaceContainerHighest),
+      errorWidget: (_, _, _) => _coverPlaceholder(cs),
     );
   }
 
@@ -446,21 +417,21 @@ class _SectionHeader extends StatelessWidget {
 }
 
 /// 2 列小封面网格：每格「小方封面（左）+ 标题/曲数（右）」，与每日推荐的
-/// 列表项形态一致，两两并排。最多展示 [maxItems] 个，其余在标题「›」里查看。
+/// 列表项形态一致，两两并排。最多展示 6 个，其余在标题「›」里查看。
 class _CompactAlbumGrid extends StatelessWidget {
   const _CompactAlbumGrid({
     required this.albums,
     required this.onTap,
-    this.maxItems = 6,
   });
+
+  static const int _kMaxItems = 6;
 
   final List<Album> albums;
   final ValueChanged<int> onTap;
-  final int maxItems;
 
   @override
   Widget build(BuildContext context) {
-    final count = albums.length < maxItems ? albums.length : maxItems;
+    final count = albums.length < _kMaxItems ? albums.length : _kMaxItems;
     return LayoutBuilder(
       builder: (context, c) {
         const columns = 2;

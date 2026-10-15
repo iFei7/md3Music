@@ -15,12 +15,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/services/audio_service.dart';
 import '../core/services/audio_service_io.dart'
     hide AudioService, createAudioSource;
-import '../core/services/automix/automix_analysis.dart';
 import '../core/services/automix/automix_analysis_store.dart';
 import '../core/services/automix/automix_analyzer.dart';
 import '../core/services/automix/automix_planner.dart';
 import '../core/services/audio_source_load_deadline.dart';
-import '../core/services/desktop_lyric_service.dart';
 import '../core/services/diagnostic_logger.dart';
 import '../core/services/home_widget_service.dart';
 import '../core/services/listening_grade_service.dart';
@@ -1548,7 +1546,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
             _audioService?.processingState !=
                 just_audio.ProcessingState.completed &&
             !_handlingCompletion) {
-          print(
+          debugPrint(
             '[PlaybackCompleted] position >= duration but not completed, '
             'triggering completion manually (pos=${position.inSeconds}s '
             'dur=${duration.inSeconds}s)',
@@ -1891,15 +1889,14 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     // 之前对外的流仍来自旧播放器（这样界面显示的才是听到的那首）。此时切歌
     // 已由淡化流程接管，这里必须放行，否则会额外再跳一首。
     if (_crossfadeStarting || _audioService?.isCrossfading == true) {
-      // ignore: avoid_print
-      print('[Crossfade] 忽略 completed：淡化进行中');
+      debugPrint('[Crossfade] 忽略 completed：淡化进行中');
       return;
     }
     // Windows 误报 completed 防护：just_audio_windows 在 setUrl() 加载新源时，
     // 旧源会异步补发一次 completed，若距上次加载源 < 窗口则判为误报并忽略，
     // 避免"播放列表点歌总自动跳到下一首"。真实播完一首歌必然远超该窗口。
     if (DateTime.now().difference(_lastUrlLoadStarted) < _urlLoadGuardWindow) {
-      print(
+      debugPrint(
         '[PlaybackCompleted] ignored: within ${_urlLoadGuardWindow} of url '
         'load (likely spurious completed on Windows)',
       );
@@ -2480,8 +2477,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       _crossfadeDuration = Duration(seconds: seconds);
       if (!enabled) _resetCrossfadePrepared();
       if (changed) {
-        // ignore: avoid_print
-        print('[Crossfade] 设置已加载 enabled=$enabled seconds=$seconds');
+        debugPrint('[Crossfade] 设置已加载 enabled=$enabled seconds=$seconds');
       }
       final automix = await settings.getAutomixEnabled();
       _automixEnabled = automix;
@@ -2493,8 +2489,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         _ensureAutomixAnalysis();
       }
     } catch (e) {
-      // ignore: avoid_print
-      print('[Crossfade] 读取设置失败: $e');
+      debugPrint('[Crossfade] 读取设置失败: $e');
     }
   }
 
@@ -2518,8 +2513,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     final key = '${_currentSong?.id}|$msg';
     if (_lastCrossfadeDiag == key) return;
     _lastCrossfadeDiag = key;
-    // ignore: avoid_print
-    print('[Crossfade] $msg');
+    debugPrint('[Crossfade] $msg');
   }
 
   /// 丢弃已预加载的下一首（切歌 / 拖动进度条 / 关闭开关等）。
@@ -2561,8 +2555,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     final nextUrl = next == null ? null : await _resolveAutomixUrl(next);
     // 解析期间用户可能关掉了开关
     if (!_automixEnabled) return;
-    // ignore: avoid_print
-    print('[Automix] 预热分析 current=${current.id}'
+    debugPrint('[Automix] 预热分析 current=${current.id}'
         '(${currentUrl == null ? "无地址" : "就绪"}) '
         'next=${next?.id ?? '-'}'
         '(${next == null ? "-" : nextUrl == null ? "无地址" : "就绪"})');
@@ -2783,8 +2776,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       targetSong: targetSong,
     );
     _crossfadePreparing = true;
-    // ignore: avoid_print
-    print('[Crossfade] prepare 开始 nextIndex=$nextIndex');
+    debugPrint('[Crossfade] prepare 开始 nextIndex=$nextIndex');
     try {
       var song = targetSong;
       String? quality;
@@ -2799,8 +2791,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           return;
         }
         if (result == null || result.url.isEmpty) {
-          // ignore: avoid_print
-          print(
+          debugPrint(
             '[Crossfade] prepare 放弃：下一首无播放链接 '
             'track=${_diagnosticTrackIdentity(song)}',
           );
@@ -2816,8 +2807,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         return;
       }
       if (url == null || url.isEmpty) {
-        // ignore: avoid_print
-        print(
+        debugPrint(
           '[Crossfade] prepare 放弃：地址解析失败 '
           'track=${_diagnosticTrackIdentity(song)}',
         );
@@ -2846,8 +2836,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         automixRate: _speed == 1.0 ? (_activePlan?.incomingRate ?? 1.0) : 1.0,
       );
       if (ok != true) {
-        // ignore: avoid_print
-        print('[Crossfade] prepare 放弃：备用播放器加载失败');
+        debugPrint('[Crossfade] prepare 放弃：备用播放器加载失败');
         return;
       }
       if (!_isCrossfadePreparationCurrent(ticket)) {
@@ -2858,11 +2847,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       _crossfadePreparedSong = song;
       _crossfadePreparedQuality = quality;
       _crossfadeFromSongId = fromSongId;
-      // ignore: avoid_print
-      print('[Crossfade] prepared index=$nextIndex title=${song.title}');
+      debugPrint('[Crossfade] prepared index=$nextIndex title=${song.title}');
     } catch (e) {
-      // ignore: avoid_print
-      print('[Crossfade] prepare 异常: $e');
+      debugPrint('[Crossfade] prepare 异常: $e');
     } finally {
       if (prepareGeneration == _crossfadePrepareGeneration) {
         _crossfadePreparing = false;
@@ -2902,8 +2889,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     );
     _automixPlan = plan;
     _automixPlanSongId = current.id;
-    // ignore: avoid_print
-    print('[Automix] plan ${plan.strategy.name} '
+    debugPrint('[Automix] plan ${plan.strategy.name} '
         'out=${out?.bpm.toStringAsFixed(1) ?? '-'} '
         'in=${incoming?.bpm.toStringAsFixed(1) ?? '-'} '
         'fade=${plan.fadeDuration.inSeconds}s '
@@ -2975,8 +2961,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         _fetchClimaxData();
       }
     } catch (e) {
-      // ignore: avoid_print
-      print('[Crossfade] 启动失败: $e');
+      debugPrint('[Crossfade] 启动失败: $e');
     } finally {
       if (runGeneration == _crossfadeRunGeneration) {
         _crossfadePreparedIndex = null;
@@ -2997,8 +2982,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (index < 0 ||
         index >= _playlist.length ||
         _playlist[index].id != song.id) {
-      // ignore: avoid_print
-      print('[Crossfade] crossover 放弃：列表已变化');
+      debugPrint('[Crossfade] crossover 放弃：列表已变化');
       return;
     }
     _abnormalEndRetries = 0;
@@ -3969,8 +3953,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       // 恢复音量设置（下次播放时使用）
       // 取证：暂停淡出收尾会直接把音量拉回 _volume。若它发生在交叉淡化期间
       // （未被 _fadeToken 拦住），听感正是「音量突然变大」。
-      // ignore: avoid_print
-      print('[VolAudit] 暂停淡出收尾 tokenOk=${fadeToken == _fadeToken} '
+      debugPrint('[VolAudit] 暂停淡出收尾 tokenOk=${fadeToken == _fadeToken} '
           '目标=${_volume.toStringAsFixed(3)} '
           '播放器当前=${target.volume.toStringAsFixed(3)}');
       if (fadeToken == _fadeToken) target.setVolume(_volume);
@@ -4154,8 +4137,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     // 压回低位——听感正是"渐出渐入反过来"。pause() 已先 abortCrossfade，
     // 此处斜坡仍在跑，守卫必须为只读（不能 abort，否则淡化被取消）。
     if (_crossfadeStarting || _audioService?.isCrossfading == true) {
-      // ignore: avoid_print
-      print('[Fade] resume 跳过淡入：淡化进行中');
+      debugPrint('[Fade] resume 跳过淡入：淡化进行中');
       if (!_isPlaybackRequestCurrent(playbackRequest)) return;
       await _audioService?.playCommand();
       if (!_isPlaybackRequestCurrent(playbackRequest)) return;
@@ -4191,8 +4173,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         target.setVolume(targetVolume * i / steps);
       }
       // 取证：暂停淡入收尾同样会把音量一次性拉到 targetVolume。
-      // ignore: avoid_print
-      print('[VolAudit] 暂停淡入收尾 superseded=$superseded '
+      debugPrint('[VolAudit] 暂停淡入收尾 superseded=$superseded '
           'tokenOk=${token == _fadeToken} '
           '目标=${targetVolume.toStringAsFixed(3)} '
           '播放器当前=${target.volume.toStringAsFixed(3)}');
@@ -4595,8 +4576,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       _currentSong = _playlist[nextIndex];
       _resolveError = null;
       // 诊断日志：next 切歌
-      // ignore: avoid_print
-      print('[D切歌] next: _currentIndex=$_currentIndex');
+      debugPrint('[D切歌] next: _currentIndex=$_currentIndex');
       _updatePosition(Duration.zero); // 切歌时重置位置，避免恢复时跳到上一首的进度
       _recordHistory(_currentSong!);
       _updateNotification();
@@ -4704,8 +4684,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     _currentSong = _playlist[index];
     _resolveError = null;
     // 诊断日志：切歌目标
-    // ignore: avoid_print
-    print('[D切歌] playSongAt index=$index 实际_currentIndex=$_currentIndex');
+    debugPrint('[D切歌] playSongAt index=$index 实际_currentIndex=$_currentIndex');
     _updatePosition(Duration.zero);
     _recordHistory(_currentSong!);
     _saveState();

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 import 'package:m3e_core/m3e_core.dart';
@@ -364,7 +365,7 @@ class _SignInCalendarPageState extends State<SignInCalendarPage> {
                 assetKey: 'assets/web/verify_captcha.html',
                 onCreated: (controller) => captchaController = controller,
                 onMessage: (data) {
-                  print('[CAPTCHA] channel: $data');
+                  debugPrint('[CAPTCHA] channel: $data');
                   if (data == '__READY__') {
                     // 页面 JS 就绪信号：注入 txappid 拉起验证码（比 onPageFinished 更可靠）
                     injectInitCaptcha();

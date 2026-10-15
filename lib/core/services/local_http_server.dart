@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
+
 /// 把本地音频文件通过 HTTP 暴露到局域网，供 DLNA 渲染设备拉流。
 ///
 /// 单例服务，仅在 Android 平台启用（由 main.dart 控制）。
@@ -46,15 +48,13 @@ class LocalHttpServer {
         _port = port;
         _lanIp = await _resolveLanIp();
         _server!.listen(_handleRequest);
-        // ignore: avoid_print
-        print('LocalHttpServer started on $_lanIp:$_port');
+        debugPrint('LocalHttpServer started on $_lanIp:$_port');
         return;
       } catch (_) {
         // 端口被占用，尝试下一个
       }
     }
-    // ignore: avoid_print
-    print('LocalHttpServer failed to bind any port in $_candidatePorts');
+    debugPrint('LocalHttpServer failed to bind any port in $_candidatePorts');
   }
 
   /// 停止服务器。

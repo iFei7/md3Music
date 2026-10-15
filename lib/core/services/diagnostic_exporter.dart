@@ -321,7 +321,7 @@ class DiagnosticExporter {
     }
     final encoded = ZipEncoder().encode(archive);
     final out = File('${outputDir.path}/$fileName');
-    out.writeAsBytesSync(encoded ?? const []);
+    out.writeAsBytesSync(encoded);
     return out;
   }
 

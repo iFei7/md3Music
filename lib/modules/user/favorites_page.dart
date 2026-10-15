@@ -494,7 +494,7 @@ class _FavoritesPageState extends State<FavoritesPage>
       }
 
       if (list != null && list.isNotEmpty) {
-        final filtered = list!
+        final filtered = list
             .where((e) {
               final json = e as Map<String, dynamic>;
               final type = json['type'] as int? ?? 0;
@@ -506,7 +506,7 @@ class _FavoritesPageState extends State<FavoritesPage>
             .toList();
         final now = DateTime.now();
         // 判断是否还有更多：返回条数等于请求页大小则可能还有下一页
-        _hasMorePlaylists = list!.length >= _playlistPageSize;
+        _hasMorePlaylists = list.length >= _playlistPageSize;
         setState(() {
           _playlists = filtered;
           _isLoadingPlaylists = false;
@@ -562,7 +562,7 @@ class _FavoritesPageState extends State<FavoritesPage>
       }
 
       if (list != null && list.isNotEmpty) {
-        final filtered = list!
+        final filtered = list
             .where((e) {
               final json = e as Map<String, dynamic>;
               final type = json['type'] as int? ?? 0;
@@ -573,7 +573,7 @@ class _FavoritesPageState extends State<FavoritesPage>
             .map((e) => KugouPlaylistBrief.fromJson(e as Map<String, dynamic>))
             .toList();
         _playlistPage = nextPage;
-        _hasMorePlaylists = list!.length >= _playlistPageSize;
+        _hasMorePlaylists = list.length >= _playlistPageSize;
         setState(() {
           _playlists.addAll(filtered);
           _isLoadingMorePlaylists = false;
@@ -617,7 +617,7 @@ class _FavoritesPageState extends State<FavoritesPage>
       }
 
       if (list != null && list.isNotEmpty) {
-        final albums = list!
+        final albums = list
             .where((e) {
               final json = e as Map<String, dynamic>;
               final type = json['type'] as int? ?? 0;
@@ -706,7 +706,7 @@ class _FavoritesPageState extends State<FavoritesPage>
       }
 
       if (list != null && list.isNotEmpty) {
-        final artists = list!.map((e) => e as Map<String, dynamic>).toList();
+        final artists = list.map((e) => e as Map<String, dynamic>).toList();
         final now = DateTime.now();
         setState(() {
           _artists = artists;

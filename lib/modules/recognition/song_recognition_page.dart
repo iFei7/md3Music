@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:audio_session/audio_session.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -127,7 +128,7 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
     }
 
     _attemptCount++;
-    print('[SongRecognition] === 第 $_attemptCount 轮，已用 ${elapsed}s / ${_maxTotalDuration}s ===');
+    debugPrint('[SongRecognition] === 第 $_attemptCount 轮，已用 ${elapsed}s / ${_maxTotalDuration}s ===');
 
     final dir = await getTemporaryDirectory();
     final filePath = '${dir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.wav';
@@ -190,7 +191,7 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
     try {
       path = await _recorder.stop();
     } catch (e) {
-      print('[SongRecognition] stop recorder error: $e');
+      debugPrint('[SongRecognition] stop recorder error: $e');
     }
 
     _pulseController.stop();
@@ -222,7 +223,7 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       if (!exists) return false;
 
       final fileBytes = await file.readAsBytes();
-      await file.delete().catchError((_) {});
+      await file.delete().catchError((_) => file);
 
       if (fileBytes.isEmpty) return false;
 
@@ -238,13 +239,13 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       if (rustResult != null) {
         pcmData = rustResult.pcm;
         maxAmplitude = rustResult.maxAmplitude;
-        print('[SongRecognition] rust pcm: len=${pcmData.length} (${_targetSampleRate}Hz) maxAmp=$maxAmplitude');
+        debugPrint('[SongRecognition] rust pcm: len=${pcmData.length} (${_targetSampleRate}Hz) maxAmp=$maxAmplitude');
       } else {
         // 降级：Dart 实现（原逻辑）
         final rawPcm = _extractPcmFromWav(fileBytes);
-        print('[SongRecognition] fileBytes=${fileBytes.length}, rawPcm=${rawPcm.length} (${_recordSampleRate}Hz)');
+        debugPrint('[SongRecognition] fileBytes=${fileBytes.length}, rawPcm=${rawPcm.length} (${_recordSampleRate}Hz)');
         pcmData = downsamplePcm(rawPcm, _recordSampleRate, _targetSampleRate);
-        print('[SongRecognition] dart pcm fallback: ${pcmData.length} bytes (${_targetSampleRate}Hz)');
+        debugPrint('[SongRecognition] dart pcm fallback: ${pcmData.length} bytes (${_targetSampleRate}Hz)');
         maxAmplitude = computeMaxAmplitude(pcmData);
         if (maxAmplitude >= kSilenceAmplitudeThreshold) {
           pcmData = normalizeGain(pcmData, maxAmplitude);
@@ -252,9 +253,9 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       }
 
       // 检查音量（静音段跳过）
-      print('[SongRecognition] maxAmplitude=$maxAmplitude');
+      debugPrint('[SongRecognition] maxAmplitude=$maxAmplitude');
       if (maxAmplitude < kSilenceAmplitudeThreshold) {
-        print('[SongRecognition] 本段为静音，跳过');
+        debugPrint('[SongRecognition] 本段为静音，跳过');
         return false;
       }
 
@@ -263,7 +264,7 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
 
       if (!mounted || !_isLooping) return false;
 
-      print('[SongRecognition] 第 $_attemptCount 轮响应: $response');
+      debugPrint('[SongRecognition] 第 $_attemptCount 轮响应: $response');
 
       if (response != null && hasSongData(response)) {
         setState(() {
@@ -274,7 +275,7 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       }
       return false;
     } catch (e) {
-      print('[SongRecognition] 识别出错: $e');
+      debugPrint('[SongRecognition] 识别出错: $e');
       return false;
     }
   }
@@ -493,7 +494,7 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       }
     } else if (responseData is Map) {
       audioInfo = Map<String, dynamic>.from(responseData);
-    } else if (data is Map) {
+    } else {
       audioInfo = data;
     }
 

@@ -67,12 +67,12 @@ class FloatingRecognitionService {
 
   /// 在 app 启动时（main 中）调用：注册原生回调
   void registerNativeCallbacks() {
-    print('[FloatingRecognition] registerNativeCallbacks called');
+    debugPrint('[FloatingRecognition] registerNativeCallbacks called');
     _channel.setMethodCallHandler((call) async {
       switch (call.method) {
         case 'onProjectionResult':
           final granted = call.arguments as bool? ?? false;
-          print('[FloatingRecognition] onProjectionResult granted=$granted');
+          debugPrint('[FloatingRecognition] onProjectionResult granted=$granted');
           if (!granted) {
             _setStatus('未授权，无法捕获系统音频');
           }
@@ -81,7 +81,7 @@ class FloatingRecognitionService {
           final pcm = call.arguments is Uint8List
               ? call.arguments as Uint8List
               : Uint8List(0);
-          print('[FloatingRecognition] onSegmentCaptured len=${pcm.length}');
+          debugPrint('[FloatingRecognition] onSegmentCaptured len=${pcm.length}');
           await _handleSegment(pcm);
           break;
         case 'onFloatingAction':
@@ -179,11 +179,11 @@ class FloatingRecognitionService {
     if (rustResult != null) {
       normalizedPcm = rustResult.pcm;
       maxAmplitude = rustResult.maxAmplitude;
-      print('[FloatingRecognition] 第 $_attemptCount 段 rust maxAmplitude=$maxAmplitude');
+      debugPrint('[FloatingRecognition] 第 $_attemptCount 段 rust maxAmplitude=$maxAmplitude');
     } else {
       // 降级：Dart 实现（原逻辑）
       maxAmplitude = computeMaxAmplitude(pcm);
-      print('[FloatingRecognition] 第 $_attemptCount 段 maxAmplitude=$maxAmplitude');
+      debugPrint('[FloatingRecognition] 第 $_attemptCount 段 maxAmplitude=$maxAmplitude');
       normalizedPcm = maxAmplitude >= kSilenceAmplitudeThreshold
           ? normalizeGain(pcm, maxAmplitude)
           : pcm;
@@ -191,7 +191,7 @@ class FloatingRecognitionService {
 
     // 静音检测
     if (maxAmplitude < kSilenceAmplitudeThreshold) {
-      print('[FloatingRecognition] 本段为静音，跳过');
+      debugPrint('[FloatingRecognition] 本段为静音，跳过');
       _continueOrFail();
       return;
     }
@@ -201,7 +201,7 @@ class FloatingRecognitionService {
       final api = KugouApiClient();
       final response = await api.audioMatch(normalizedPcm);
       if (response != null && hasSongData(response)) {
-        print('[FloatingRecognition] 识别命中');
+        debugPrint('[FloatingRecognition] 识别命中');
         _lastResult = response;
         await _setResult(response);
         await _stopCapture();
@@ -209,7 +209,7 @@ class FloatingRecognitionService {
         _continueOrFail();
       }
     } catch (e) {
-      print('[FloatingRecognition] 识别出错: $e');
+      debugPrint('[FloatingRecognition] 识别出错: $e');
       _continueOrFail();
     }
   }
@@ -292,12 +292,12 @@ class FloatingRecognitionService {
   void _playLastResult() {
     final ctx = appNavigatorKey.currentContext;
     if (ctx == null || _lastResult == null) {
-      print('[FloatingRecognition] play ignored: ctx=$ctx lastResult=${_lastResult != null}');
+      debugPrint('[FloatingRecognition] play ignored: ctx=$ctx lastResult=${_lastResult != null}');
       return;
     }
     // _lastResult 是完整 audioMatch response，需先解析出歌曲信息
     final audioInfo = _extractAudioInfo(_lastResult!);
-    print('[FloatingRecognition] play with audioInfo=$audioInfo');
+    debugPrint('[FloatingRecognition] play with audioInfo=$audioInfo');
     if (audioInfo == null) return;
     playRecognizedSong(ctx, audioInfo);
   }

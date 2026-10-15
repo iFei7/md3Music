@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -339,8 +340,7 @@ class AudioService {
     _vnLufs = lufs;
     // 只测了响度、没测真峰值 → 不做峰值钳制（calcGainDb 的 peakDb 传 null）
     _vnPeakDb = null;
-    // ignore: avoid_print
-    print(
+    debugPrint(
       '[音量均衡] 采用 AutoMix 实测响度 ${lufs.toStringAsFixed(1)}dBFS '
       '（上游未提供，参考 ${_vnReferenceLufs.toStringAsFixed(1)}）',
     );
@@ -381,8 +381,7 @@ class AudioService {
     try {
       await _activePlayer.setNormalizationGain(boost);
     } catch (e) {
-      // ignore: avoid_print
-      print('[音量均衡] normalization gain apply failed: $e');
+      debugPrint('[音量均衡] normalization gain apply failed: $e');
     }
   }
 
@@ -596,8 +595,7 @@ class AudioService {
     // 一次性拉到 _userVolume —— 听感正是「切歌时音量突然变大」。
     // 这条日志是坐实/排除该路径的唯一判据（abort 自身只打 crossed=…，看不出触发原因）。
     if (_crossfading) {
-      // ignore: avoid_print
-      print('[VolAudit] 淡化中收到焦点变化 focusChange=$focusChange '
+      debugPrint('[VolAudit] 淡化中收到焦点变化 focusChange=$focusChange '
           'mode=${_interruptionMode.name} playing=${_activePlayer.playing}');
     }
     if (_interruptionMode == AudioFocusInterruptionMode.keepPlaying) {
@@ -606,8 +604,7 @@ class AudioService {
       // native 对 LOSS 正常走 Media3 DO_NOT_PLAY；此处同步 Dart 状态并留痕，
       // 确认独占中断事件是否可达（小米可能直接 interrupt AudioTrack 不派发事件）。
       if (focusChange == -1) {
-        // ignore: avoid_print
-        print(
+        debugPrint(
           '[AudioFocus] keepPlaying LOSS, playing=${_activePlayer.playing}',
         );
         abortCrossfade();
@@ -646,8 +643,7 @@ class AudioService {
       await session.setActive(false);
     } catch (e) {
       // P2-2: 焦点/会话配置失败必须留痕，否则无法用 logcat 排障
-      // ignore: avoid_print
-      print('[AudioFocus] configure audio session failed: $e');
+      debugPrint('[AudioFocus] configure audio session failed: $e');
     }
   }
 
@@ -740,8 +736,7 @@ class AudioService {
     if (_crossfading) {
       // 取证：用户报「切歌时音量突然变大」，需要能区分「外部改音量被忽略」
       // 与「外部绕开这里直接写播放器」。这条日志是前者的判据。
-      // ignore: avoid_print
-      print('[VolAudit] setVolume(${_userVolume.toStringAsFixed(3)}) 淡化中被忽略');
+      debugPrint('[VolAudit] setVolume(${_userVolume.toStringAsFixed(3)}) 淡化中被忽略');
       return;
     }
     await _activePlayer.setVolume(_userVolume * _vnAttenLinear);
@@ -926,8 +921,7 @@ class AudioService {
         if (generation != _crossfadePrepareGeneration) return false;
       }
       final isAux = standby != _mainPlayer;
-      // ignore: avoid_print
-      print('[Crossfade] 预加载到${isAux ? '辅' : '主'}播放器 …');
+      debugPrint('[Crossfade] 预加载到${isAux ? '辅' : '主'}播放器 …');
       await standby.setVolume(0);
       if (generation != _crossfadePrepareGeneration) {
         await _releaseStaleCrossfadePreparation(standby);
@@ -962,15 +956,13 @@ class AudioService {
         return false;
       }
       _preparedPlayer = standby;
-      // ignore: avoid_print
-      print('[Crossfade] 预加载完成 dur=${loaded?.inSeconds}s');
+      debugPrint('[Crossfade] 预加载完成 dur=${loaded?.inSeconds}s');
       return true;
     } catch (e) {
       if (generation == _crossfadePrepareGeneration) {
         _preparedPlayer = null;
       }
-      // ignore: avoid_print
-      print('[Crossfade] prepare 失败: $e');
+      debugPrint('[Crossfade] prepare 失败: $e');
       return false;
     } finally {
       turn.complete();
@@ -1025,8 +1017,7 @@ class AudioService {
     _crossedOver = true; // MD3Music fork：fade 起点即视为已过交叉点，循环内不再切换
     _fadingOutPlayer = outgoing;
     _fadingInPlayer = incoming;
-    // ignore: avoid_print
-    print(
+    debugPrint(
       '[Crossfade] start dur=${duration.inMilliseconds}ms vol=$targetVolume',
     );
     try {
@@ -1053,8 +1044,7 @@ class AudioService {
           // 取证：斜坡被中止 = 有别的路径（abortCrossfade / 已过交叉点的暂停收尾 /
           // 手动切歌）接管了这两个播放器。若用户听到「音量突然变大」，
           // 这条日志与紧随其后的 VolAudit 一起能定位是谁写的音量。
-          // ignore: avoid_print
-          print('[Crossfade] ⚠ 斜坡被中止（token 失效）'
+          debugPrint('[Crossfade] ⚠ 斜坡被中止（token 失效）'
               ' t=${(DateTime.now().difference(started).inMilliseconds / (totalMs <= 0 ? 1 : totalMs)).clamp(0.0, 1.0).toStringAsFixed(2)}');
           return;
         }
@@ -1094,8 +1084,7 @@ class AudioService {
               ? ' ⚠音量偏差 out实际=${actualOut.toStringAsFixed(2)}'
                   ' in实际=${actualIn.toStringAsFixed(2)}'
               : '';
-          // ignore: avoid_print
-          print(
+          debugPrint(
             '[Crossfade] t=${t.toStringAsFixed(3)} '
             '$outLabel(out)=${expectedOut.toStringAsFixed(2)} '
             '$inLabel(in)=${expectedIn.toStringAsFixed(2)}$driftNote',
@@ -1107,8 +1096,7 @@ class AudioService {
       // 用 _userVolume 而非入口捕获的 targetVolume：斜坡进行中用户调过音量
       // 时（AudioService.setVolume 淡化中只更新 _userVolume 提前返回），
       // 结束以最新音量收尾，否则会回跳淡化开始时的旧音量
-      // ignore: avoid_print
-      print(
+      debugPrint(
         '[Crossfade] 收尾 setVolume 后 activeIsMain=' +
             (_activePlayer == _mainPlayer).toString(),
       );
@@ -1117,16 +1105,13 @@ class AudioService {
       _vnAttenLinear = _vnAttenLinearStandby;
       await incoming.setVolume(_userVolume * _vnAttenLinear);
       await _retireFadedPlayer(outgoing);
-      // ignore: avoid_print
-      print(
+      debugPrint(
         '[Crossfade] 收尾 retire 后 activeIsMain=' +
             (_activePlayer == _mainPlayer).toString(),
       );
-      // ignore: avoid_print
-      print('[Crossfade] done');
+      debugPrint('[Crossfade] done');
     } catch (e) {
-      // ignore: avoid_print
-      print('[Crossfade] start 失败: $e');
+      debugPrint('[Crossfade] start 失败: $e');
     } finally {
       if (token == _crossfadeToken) {
         _setCrossfading(false);
@@ -1142,13 +1127,11 @@ class AudioService {
     _crossedOver = true;
     _activePlayer = incoming;
     _bindActiveStreams();
-    // ignore: avoid_print
-    print('[Crossfade] crossover：当前歌曲切给新歌');
+    debugPrint('[Crossfade] crossover：当前歌曲切给新歌');
     try {
       onCrossover?.call();
     } catch (e) {
-      // ignore: avoid_print
-      print('[Crossfade] crossover 回调失败: $e');
+      debugPrint('[Crossfade] crossover 回调失败: $e');
     }
   }
 
@@ -1187,8 +1170,7 @@ class AudioService {
           return m?.group(1) ?? l.trim().split(' ').first;
         })
         .join(' <- ');
-    // ignore: avoid_print
-    print('[Crossfade] aborted crossed=$crossed 调用方: $caller');
+    debugPrint('[Crossfade] aborted crossed=$crossed 调用方: $caller');
     final discard = crossed ? outgoing : incoming;
     if (discard != null && discard != _activePlayer) {
       // 记录 in-flight 的 retire 链，prepareCrossfade 复用该播放器前 await 它

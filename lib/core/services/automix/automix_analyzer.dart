@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'automix_analysis.dart';
@@ -53,14 +54,12 @@ class AutomixAnalyzer {
     // 队列里尚未解析播放地址的歌（url 为空）：这不是「分析失败」，是「还没准备好」，
     // 因此**不记入 _failedKeys**，等地址就绪后的新一次调用再正常走。
     if (url.isEmpty) {
-      // ignore: avoid_print
-      print('[Automix] 跳过（无播放地址）$key');
+      debugPrint('[Automix] 跳过（无播放地址）$key');
       return null;
     }
     final cached = await _store.read(key);
     if (cached != null) {
-      // ignore: avoid_print
-      print('[Automix] 命中缓存 $key bpm=${cached.bpm.toStringAsFixed(1)} '
+      debugPrint('[Automix] 命中缓存 $key bpm=${cached.bpm.toStringAsFixed(1)} '
           'conf=${cached.confidence.toStringAsFixed(2)}');
       return cached;
     }
@@ -88,8 +87,7 @@ class AutomixAnalyzer {
       final window = await _decodeHead(url: url, windowMs: windowMs);
       if (window == null || window.pcm.isEmpty) {
         _failedKeys.add(key);
-        // ignore: avoid_print
-        print('[Automix] 解码失败（空 PCM）$key 耗时=${stopwatch.elapsedMilliseconds}ms');
+        debugPrint('[Automix] 解码失败（空 PCM）$key 耗时=${stopwatch.elapsedMilliseconds}ms');
         return null;
       }
       final env = onsetEnvelope(window.pcm, sampleRate: window.sampleRate);
@@ -97,8 +95,7 @@ class AutomixAnalyzer {
       final detected = detectBpm(env, frameRate: frameRate);
       if (detected.bpm <= 0) {
         _failedKeys.add(key);
-        // ignore: avoid_print
-        print('[Automix] 没测出稳定节拍 $key '
+        debugPrint('[Automix] 没测出稳定节拍 $key '
             '样本=${window.pcm.length} sr=${window.sampleRate} '
             '包络帧=${env.length} 耗时=${stopwatch.elapsedMilliseconds}ms');
         return null;
@@ -126,8 +123,7 @@ class AutomixAnalyzer {
         windowMs: windowMs,
         analyzedAtMs: DateTime.now().millisecondsSinceEpoch,
       );
-      // ignore: avoid_print
-      print('[Automix] 分析完成 $key bpm=${analysis.bpm.toStringAsFixed(1)} '
+      debugPrint('[Automix] 分析完成 $key bpm=${analysis.bpm.toStringAsFixed(1)} '
           'conf=${analysis.confidence.toStringAsFixed(2)} '
           '首拍=${analysis.firstBeatSec.toStringAsFixed(2)}s '
           '密度=${analysis.rhythmDensity.toStringAsFixed(2)} '
@@ -139,8 +135,7 @@ class AutomixAnalyzer {
       return analysis;
     } catch (e) {
       _failedKeys.add(key);
-      // ignore: avoid_print
-      print('[Automix] 分析异常 $key: $e 耗时=${stopwatch.elapsedMilliseconds}ms');
+      debugPrint('[Automix] 分析异常 $key: $e 耗时=${stopwatch.elapsedMilliseconds}ms');
       return null;
     }
   }
@@ -153,7 +148,7 @@ class AutomixAnalyzer {
     if (_channel != null && !Platform.isAndroid) return null;
     final args = <String, dynamic>{'uri': url, 'windowMs': windowMs};
     final raw = _handler != null
-        ? await _handler!(MethodCall('decodeHead', args))
+        ? await _handler(MethodCall('decodeHead', args))
         : await _channel!.invokeMethod<Map<dynamic, dynamic>>('decodeHead', args);
     if (raw is! Map) return null;
     final sr = raw['sampleRate'];

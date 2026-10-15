@@ -279,8 +279,7 @@ class _FullPlayerState extends State<FullPlayer>
     final collapse =
         _topBarDragDistance >= threshold ||
         downVelocity > kPlayerFlingVelocityThreshold;
-    // ignore: avoid_print
-    print(
+    debugPrint(
       '[TopBar] end dist=$_topBarDragDistance thr=$threshold vel=$downVelocity collapse=$collapse v=${route.controller.value}',
     );
     if (collapse) {
@@ -573,8 +572,7 @@ class _FullPlayerState extends State<FullPlayer>
       vsync: this,
       initialIndex: next.indexAfterChangeFrom(oldIndex),
     );
-    // ignore: avoid_print
-    print(
+    debugPrint(
       '[PlayerTab] md length=${next.length} '
       'cover=${next.hasCover} comments=${next.hasComments} '
       'local=$isLocalSong index=${_tabController.index}',
@@ -2632,7 +2630,7 @@ class _FullPlayerState extends State<FullPlayer>
   }
 
   /// 评论显示设置：调节楼主 / 楼中楼字体大小。
-  /// 楼中楼字号 = 楼主 - 1（自动计算，不暴露独立设置）。
+  /// 楼中楼字号 = 楼主 - 3（自动计算，不暴露独立设置）。
   void _showCommentDisplaySheet(BuildContext rootContext) {
     showM3EModalBottomSheet(
       context: rootContext,

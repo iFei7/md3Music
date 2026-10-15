@@ -70,7 +70,7 @@ Future<void> _main() async {
     try {
       requestPermissions();
     } catch (e) {
-      print('Request permissions error (ignored): $e');
+      debugPrint('Request permissions error (ignored): $e');
     }
   });
 }
@@ -304,7 +304,7 @@ Future<void> requestPermissions() async {
     try {
       await Permission.notification.request();
     } catch (e) {
-      print('Notification permission request failed: $e');
+      debugPrint('Notification permission request failed: $e');
     }
   }
 }

@@ -5,7 +5,6 @@ import 'package:just_audio/just_audio.dart' as just_audio;
 import 'package:md3music/data/models/song.dart';
 import 'package:md3music/data/repositories/history_repository.dart';
 import 'package:md3music/providers/player_provider.dart';
-import 'package:md3music/widgets/md3e_transport_row.dart';
 import 'package:md3music/widgets/playback_status_feedback.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';

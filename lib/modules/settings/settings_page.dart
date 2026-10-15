@@ -2501,7 +2501,7 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 「列表与交互」三级子页：本地音乐评论区、MiniPlayer 滑动切歌、歌单排序。
+  /// 「列表与交互」三级子页：本地音乐评论区、收藏歌单排序。
   Widget _buildListInteractionSubpage(ColorScheme colorScheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

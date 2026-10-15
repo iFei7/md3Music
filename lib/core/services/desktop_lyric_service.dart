@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../data/repositories/settings_repository.dart';
 import '../../data/models/song.dart';
 import '../../main.dart';
 import '../../providers/favorites_provider.dart';
@@ -59,7 +58,6 @@ class DesktopLyricService {
 
   PlayerProvider? _player;
   KugouProvider? _kugou;
-  final SettingsRepository _settings = SettingsRepository();
 
   // 蓝牙歌词开关：通过 MediaSession 元数据替换在车机等设备显示歌词
   bool _bluetoothLyricEnabled = false;

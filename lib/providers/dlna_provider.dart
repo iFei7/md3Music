@@ -130,13 +130,11 @@ class DlnaProvider extends ChangeNotifier {
     notifyListeners();
     try {
       await _service.startSearch();
-      // ignore: avoid_print
-      print('[DLNA] startSearch ok');
+      debugPrint('[DLNA] startSearch ok');
     } catch (e) {
       _state = DlnaCastState.error;
       _errorMessage = '搜索失败：$e';
-      // ignore: avoid_print
-      print('[DLNA] startSearch error: $e');
+      debugPrint('[DLNA] startSearch error: $e');
       notifyListeners();
     }
   }
@@ -261,13 +259,11 @@ class DlnaProvider extends ChangeNotifier {
       notifyListeners();
       // 探测设备支持的传输动作（Pause/Seek），驱动 UI 隐藏/降级
       _refreshSupportedActions();
-      // ignore: avoid_print
-      print('[DLNA] castSong ok song=${song.displayName}');
+      debugPrint('[DLNA] castSong ok song=${song.displayName}');
     } catch (e) {
       _state = DlnaCastState.error;
       _errorMessage = e is DlnaServiceException ? e.message : '投屏出错：$e';
-      // ignore: avoid_print
-      print('[DLNA] castSong error: $e');
+      debugPrint('[DLNA] castSong error: $e');
       notifyListeners();
     }
   }
@@ -309,13 +305,11 @@ class DlnaProvider extends ChangeNotifier {
       notifyListeners();
       // 探测设备支持的传输动作（Pause/Seek），驱动 UI 隐藏/降级
       _refreshSupportedActions();
-      // ignore: avoid_print
-      print('[DLNA] castMv ok title=$title');
+      debugPrint('[DLNA] castMv ok title=$title');
     } catch (e) {
       _state = DlnaCastState.error;
       _errorMessage = e is DlnaServiceException ? e.message : '投屏出错：$e';
-      // ignore: avoid_print
-      print('[DLNA] castMv error: $e');
+      debugPrint('[DLNA] castMv error: $e');
       notifyListeners();
     }
   }
@@ -333,8 +327,7 @@ class DlnaProvider extends ChangeNotifier {
     } on DlnaServiceException catch (e) {
       // 单次操作失败仅提示，不退出投屏态；真实掉线由看门狗兜住
       _errorMessage = e.message;
-      // ignore: avoid_print
-      print('[DLNA] play error: ${e.message}');
+      debugPrint('[DLNA] play error: ${e.message}');
     }
     notifyListeners();
   }
@@ -349,8 +342,7 @@ class DlnaProvider extends ChangeNotifier {
       await _service.stopCurrent();
       _isPlaying = false;
       _errorMessage = null;
-      // ignore: avoid_print
-      print('[DLNA] pause 降级 stopCurrent: ${e.message}');
+      debugPrint('[DLNA] pause 降级 stopCurrent: ${e.message}');
     }
     notifyListeners();
   }
@@ -372,8 +364,7 @@ class DlnaProvider extends ChangeNotifier {
     _castTitle = null;
     _errorMessage = null;
     _supportedActions = {};
-    // ignore: avoid_print
-    print('[DLNA] stop -> idle wasPlayingBefore=$_wasPlayingBefore');
+    debugPrint('[DLNA] stop -> idle wasPlayingBefore=$_wasPlayingBefore');
     notifyListeners();
   }
 
@@ -407,8 +398,7 @@ class DlnaProvider extends ChangeNotifier {
   /// 探测设备支持的传输动作（Pause/Seek 等），驱动 UI 隐藏/降级。
   Future<void> _refreshSupportedActions() async {
     _supportedActions = await _service.getSupportedActions();
-    // ignore: avoid_print
-    print('[DLNA] supportedActions=${_supportedActions.join(',')}');
+    debugPrint('[DLNA] supportedActions=${_supportedActions.join(',')}');
     notifyListeners();
   }
 
@@ -508,15 +498,12 @@ class DlnaProvider extends ChangeNotifier {
       _wasPlayingBefore = false;
       try {
         context.read<PlayerProvider>().resume();
-        // ignore: avoid_print
-        print('[DLNA] restoreLocalPlayback resume ok');
+        debugPrint('[DLNA] restoreLocalPlayback resume ok');
       } catch (_) {
-        // ignore: avoid_print
-        print('[DLNA] restoreLocalPlayback resume error');
+        debugPrint('[DLNA] restoreLocalPlayback resume error');
       }
     } else {
-      // ignore: avoid_print
-      print('[DLNA] restoreLocalPlayback skip (wasPlayingBefore=false) currentSong=${context.read<PlayerProvider>().currentSong?.id}');
+      debugPrint('[DLNA] restoreLocalPlayback skip (wasPlayingBefore=false) currentSong=${context.read<PlayerProvider>().currentSong?.id}');
     }
   }
 
@@ -558,8 +545,7 @@ class DlnaProvider extends ChangeNotifier {
     _duration = null;
     _lastPositionMs = 0;
     _supportedActions = {};
-    // ignore: avoid_print
-    print('[DLNA] device lost -> error');
+    debugPrint('[DLNA] device lost -> error');
     notifyListeners();
   }
 

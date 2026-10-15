@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/models/album.dart';
@@ -1807,7 +1808,7 @@ class KugouUserVipDetail {
                 // 概念版VIP: product_type 为 "svip"
                 final pt = b['product_type']?.toString() ?? '';
                 final isConcept = pt == 'svip';
-                print(
+                debugPrint(
                   '[VIP_DEBUG] product_type=$pt isConcept=$isConcept end_time=$t',
                 );
                 if (isConcept) {
@@ -1819,7 +1820,7 @@ class KugouUserVipDetail {
           }
         }
       }
-      if (latest != null && expireTime == null) {
+      if (latest != null) {
         expireTime =
             '${latest.year.toString().padLeft(4, '0')}-${latest.month.toString().padLeft(2, '0')}-${latest.day.toString().padLeft(2, '0')}';
       }

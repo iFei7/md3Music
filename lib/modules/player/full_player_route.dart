@@ -222,8 +222,7 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
     _isDismissing = true;
     _animStartValue = controller.value;
     _animDirection = -1;
-    // ignore: avoid_print
-    print(
+    debugPrint(
       '[Route] dismiss v=${controller.value} animating=${controller.isAnimating}',
     );
     controller.reverse().then((_) {
@@ -246,8 +245,7 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
     if (_isDismissing) return;
     _animStartValue = controller.value;
     _animDirection = 1;
-    // ignore: avoid_print
-    print(
+    debugPrint(
       '[Route] settleToFull v=${controller.value} animating=${controller.isAnimating}',
     );
     controller.forward().whenCompleteOrCancel(() {

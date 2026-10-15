@@ -848,13 +848,6 @@ class _SearchPageState extends State<SearchPage>
       results = searchResults.artists;
     }
 
-    print('[_buildArtistResults] results.count=${results.length}');
-    for (final a in results) {
-      print(
-        '[_buildArtistResults] artist: id="${a.id}", name="${a.name}", avatar="${a.avatarUrl}"',
-      );
-    }
-
     if (results.isEmpty) {
       return _buildNoResult();
     }
@@ -1221,22 +1214,18 @@ class _ArtistAvatarState extends State<_ArtistAvatar> {
 
   Future<void> _resolveAvatar() async {
     if (widget.artistId.isEmpty) {
-      print('[_ArtistAvatar] artistId 为空，跳过');
       if (mounted) setState(() => _loading = false);
       return;
     }
-    print('[_ArtistAvatar] 开始获取头像, artistId=${widget.artistId}');
     try {
       final detail = await KugouApiClient().getArtistDetail(widget.artistId);
       if (!mounted) return;
       final url = _fixUrl(detail?.avatarUrl);
-      print('[_ArtistAvatar] 获取到头像 URL: $url');
       setState(() {
         _resolvedUrl = url;
         _loading = false;
       });
     } catch (e) {
-      print('[_ArtistAvatar] 获取头像失败: $e');
       if (mounted) setState(() => _loading = false);
     }
   }

@@ -154,7 +154,7 @@ class KugouApiServer {
       succeeded = true;
       KugouApiClient.markServerReady(generation);
     } catch (e) {
-      print('KugouApiServer start failed: $e');
+      debugPrint('KugouApiServer start failed: $e');
     } finally {
       if (generation == KugouApiClient.localServerGeneration) {
         if (!succeeded) {
@@ -172,13 +172,13 @@ class KugouApiServer {
       return await _startViaFfi();
     } catch (e) {
       if (!Platform.isAndroid) {
-        print(
+        debugPrint(
           'dart:ffi start failed and no fallback on this platform '
           '(missing ${_libraryName()}?): $e',
         );
         rethrow;
       }
-      print('dart:ffi start failed, falling back to MethodChannel: $e');
+      debugPrint('dart:ffi start failed, falling back to MethodChannel: $e');
     }
 
     for (var attempt = 0; attempt < 2; attempt++) {
@@ -187,7 +187,7 @@ class KugouApiServer {
         if (port != null && port > 0) return port;
         throw StateError('MethodChannel returned invalid port: $port');
       } catch (e) {
-        print('MethodChannel start failed (attempt ${attempt + 1}): $e');
+        debugPrint('MethodChannel start failed (attempt ${attempt + 1}): $e');
         if (attempt == 1) rethrow;
         await Future.delayed(const Duration(seconds: 1));
       }
@@ -216,7 +216,7 @@ class KugouApiServer {
       final nativeTimes = await Isolate.run(
         () => _startServerInWorker(_libraryName(), dataDirPath),
       );
-      print(
+      debugPrint(
         '[Startup] phase=ffi_start_complete dlopen_ms=${nativeTimes[1]} '
         'lookup_ms=${nativeTimes[2]} start_server_ms=${nativeTimes[3]}',
       );
@@ -239,7 +239,7 @@ class KugouApiServer {
     late int port;
     try {
       port = startServer(0, dataDirPath);
-      print('kugou_server start_server returned port: $port');
+      debugPrint('kugou_server start_server returned port: $port');
       if (port <= 0) {
         throw StateError('start_server failed with code $port');
       }
@@ -255,7 +255,7 @@ class KugouApiServer {
     // 若 KugouApiClient 已构建，同步更新其 Dio baseUrl；未构建时构造函数
     // 会直接读取 KugouEndpoints.baseUrl，onRequest 拦截器也会逐请求覆盖。
     KugouApiClient().updateBaseUrl(url);
-    print('Kugou API server ready on $url');
+    debugPrint('Kugou API server ready on $url');
   }
 
   /// 当前本地 API 服务器端口（start() 成功后有效，未启动/失败时 0）。
@@ -280,7 +280,7 @@ class KugouApiServer {
           timeout: probeTimeout,
         );
         await socket.close();
-        print('Local API server is ready on port $port');
+        debugPrint('Local API server is ready on port $port');
         return true;
       } catch (_) {
         // P0: 重试间隔 1s → 200ms。start_server 返回端口即已 bind，
@@ -295,7 +295,7 @@ class KugouApiServer {
         }
       }
     }
-    print('Local API server did not become ready within 30 seconds');
+    debugPrint('Local API server did not become ready within 30 seconds');
     return false;
   }
 
@@ -362,7 +362,7 @@ class KugouApiServer {
       if (Platform.isAndroid) {
         // Rust stop() 会 join listener 线程；在主 isolate 同步调用会冻结UI。
         await Isolate.run(() => _stopServerInWorker(_libraryName()));
-        print('KugouApiServer stopped via background FFI isolate');
+        debugPrint('KugouApiServer stopped via background FFI isolate');
         return;
       }
       final lib = _loadLib();
@@ -370,10 +370,10 @@ class KugouApiServer {
         'stop_server',
       );
       _stopServerFn!();
-      print('KugouApiServer stopped via FFI');
+      debugPrint('KugouApiServer stopped via FFI');
       return;
     } catch (e) {
-      print('KugouApiServer FFI stop error: $e');
+      debugPrint('KugouApiServer FFI stop error: $e');
     }
 
     // MethodChannel 兜底仅 Android 可用
@@ -381,7 +381,7 @@ class KugouApiServer {
     try {
       await _channel.invokeMethod('stopServer');
     } catch (e) {
-      print('KugouApiServer MethodChannel stop error: $e');
+      debugPrint('KugouApiServer MethodChannel stop error: $e');
     }
   }
 

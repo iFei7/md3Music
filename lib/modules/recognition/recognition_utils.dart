@@ -149,11 +149,11 @@ Uint8List normalizeGain(Uint8List input, int currentMaxAmplitude,
   // 3. 计算增益因子
   final gain = targetAmplitude / adjustedMax;
   if (gain <= 1.0) {
-    print('[SongRecognition] gain=$gain (already loud enough, no boost)');
+    debugPrint('[SongRecognition] gain=$gain (already loud enough, no boost)');
     return input;
   }
 
-  print('[SongRecognition] applying gain=$gain (${adjustedMax} -> $targetAmplitude)');
+  debugPrint('[SongRecognition] applying gain=$gain (${adjustedMax} -> $targetAmplitude)');
 
   // 4. 应用增益
   final output = Uint8List(input.length);
@@ -266,7 +266,7 @@ Future<void> playRecognizedSong(
   }
   try {
     final query = singerName.isNotEmpty ? '$singerName $songName' : songName;
-    print('[SongRecognition] 搜索歌曲获取 hash: $query');
+    debugPrint('[SongRecognition] 搜索歌曲获取 hash: $query');
     final api = KugouApiClient();
     final result = await api.search(query, pagesize: 5);
     if (result == null || result.songs.isEmpty) {
@@ -284,7 +284,7 @@ Future<void> playRecognizedSong(
       }
     }
     matched ??= result.songs.first;
-    print('[SongRecognition] 搜索到歌曲: ${matched.songName}, hash=${matched.hash}');
+    debugPrint('[SongRecognition] 搜索到歌曲: ${matched.songName}, hash=${matched.hash}');
 
     final song = Song(
       id: matched.hash,
@@ -304,7 +304,7 @@ Future<void> playRecognizedSong(
       player_route.openFullPlayer(context);
     }
   } catch (e) {
-    print('[SongRecognition] 搜索播放失败: $e');
+    debugPrint('[SongRecognition] 搜索播放失败: $e');
     onError?.call('播放失败: $e');
   }
 }

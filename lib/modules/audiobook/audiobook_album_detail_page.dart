@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
@@ -94,8 +95,7 @@ class _AudiobookAlbumDetailPageState extends State<AudiobookAlbumDetailPage> {
     }
     // 接近底部时自动加载下一页章节（自动翻页）
     final pos = _scrollController.position;
-    if (pos != null &&
-        pos.maxScrollExtent > 0 &&
+    if (pos.maxScrollExtent > 0 &&
         pos.pixels >= pos.maxScrollExtent - 200) {
       _loadMoreAudios();
     }
@@ -219,8 +219,7 @@ class _AudiobookAlbumDetailPageState extends State<AudiobookAlbumDetailPage> {
         .toList();
     final hidden = audios.length - list.length;
     if (hidden > 0) {
-      // ignore: avoid_print
-      print('[AudiobookFree] 详情页隐藏付费章节 $hidden 条，展示 ${list.length} 条');
+      debugPrint('[AudiobookFree] 详情页隐藏付费章节 $hidden 条，展示 ${list.length} 条');
     }
     return list;
   }

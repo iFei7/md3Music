@@ -121,7 +121,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       list = _songs.where((s) {
         return s.title.toLowerCase().contains(q) ||
             s.artist.toLowerCase().contains(q) ||
-            (s.album?.toLowerCase().contains(q) ?? false);
+            (s.album.toLowerCase().contains(q));
       }).toList();
     }
     list.sort((a, b) {

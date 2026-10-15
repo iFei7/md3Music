@@ -248,7 +248,7 @@ class Md3LyricPreferences extends ChangeNotifier {
     }
     final file = File(path);
     if (!file.existsSync()) {
-      print('[Md3LyricPreferences] 字体文件不存在: $path');
+      debugPrint('[Md3LyricPreferences] 字体文件不存在: $path');
       _loadedCustomFontFamily = null;
       return;
     }
@@ -262,7 +262,7 @@ class Md3LyricPreferences extends ChangeNotifier {
       _loadedCustomFontFamily = familyName;
       notifyListeners();
     } catch (e) {
-      print('[Md3LyricPreferences] 字体加载失败: $e');
+      debugPrint('[Md3LyricPreferences] 字体加载失败: $e');
       _loadedCustomFontFamily = null;
       notifyListeners();
     }

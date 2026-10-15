@@ -99,7 +99,7 @@ class ArtworkColorExtractor {
       // 本地封面：统一「读字节 → ResizeImage(MemoryImage) → PaletteGenerator」
       final bytes = await _loadLocalBytes(url);
       if (bytes == null) return null;
-      return PaletteGenerator.fromImageProvider(
+      return await PaletteGenerator.fromImageProvider(
         ResizeImage(MemoryImage(bytes), width: sampleSize),
         maximumColorCount: 12,
       );

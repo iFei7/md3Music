@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 
@@ -90,8 +91,7 @@ class VolumeNormalizationService {
       const channel = MethodChannel('com.md3music.md3music/floating_lyric');
       await channel.invokeMethod('setGainDb', {'gainDb': gainDb});
     } catch (e) {
-      // ignore: avoid_print
-      print('[NormalizationGain] applyGain failed: $e');
+      debugPrint('[NormalizationGain] applyGain failed: $e');
     }
   }
 }

@@ -6,7 +6,6 @@ import '../../data/models/song.dart';
 import '../../data/repositories/favorite_lists_cache.dart';
 import '../../providers/kugou_provider.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
-import '../../services/kugou_api/kugou_models.dart';
 
 /// 歌单歌曲加载结果。[apiSucceeded] 用于区分「空歌单」与「网络失败」。
 class PlaylistSongsResult {

@@ -385,7 +385,7 @@ class _AppViewState extends State<_AppView> {
         '/search': (_) => const SearchPage(),
         '/library': (_) => const LibraryPage(),
         '/settings': (_) => const SettingsPage(),
-        // 发现页右上角头像点击跳转入口（push 独立路由，与底部 tab 中的实例并存无冲突）
+        // 发现页问候胶囊头像点击跳转入口（push 独立路由，与底部 tab 中的实例并存无冲突）
         '/user': (_) => const UserCenterPage(),
         '/player': (_) => const FullPlayer(),
         '/personal_fm': (_) => const PersonalFmPage(),

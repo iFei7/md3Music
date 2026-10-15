@@ -100,8 +100,7 @@ class ListeningGradeService {
       await _onTickInner();
     } catch (e, s) {
       // Timer 回调内任何异常都不能外泄（否则未处理异常可能导致 App 崩溃）
-      // ignore: avoid_print
-      print('[GradeTick] 异常: $e\n$s');
+      debugPrint('[GradeTick] 异常: $e\n$s');
     }
   }
 
@@ -123,8 +122,7 @@ class ListeningGradeService {
     }
     // 调试日志：确认累计是否发生（听歌时长不生效排查用）
     if (dirty || _pendingDiff > 0 || _syncedDsec > 0) {
-      // ignore: avoid_print
-      print(
+      debugPrint(
         '[GradeTick] online=$_onlinePlaying pending=$_pendingDiff synced=$_syncedDsec userid=$userid',
       );
     }
@@ -171,14 +169,12 @@ class ListeningGradeService {
       _serverDsec = _parseServerDsec(resp); // 记录服务器返回的 d_sec（未上报时长用）
       await _save();
       // 打印服务器完整返回（含 error_code 与 data.d_sec），用于确认服务器是否真的记账
-      // ignore: avoid_print
-      print(
+      debugPrint(
         '[GradeReport] 上报记账成功 d_sec=$dSec diff=$diff error_code=$errorCode synced=$_syncedDsec resp=$resp',
       );
     } else {
       _failedReports++;
-      // ignore: avoid_print
-      print(
+      debugPrint(
         '[GradeReport] 上报未记账 d_sec=$dSec diff=$diff status=$status error_code=$errorCode synced=$_syncedDsec serverDsec=$_serverDsec resp=$resp failed=$_failedReports',
       );
       if (_failedReports >= _maxFailedReports) {
@@ -193,16 +189,14 @@ class ListeningGradeService {
     final resp = await KugouApiClient().getGradeInfo();
     final serverDsec = _parseServerDsec(resp);
     // 打印查询结果（含 status/error_code / data.d_sec），排查查询是否被拒或异常
-    // ignore: avoid_print
-    print(
+    debugPrint(
       '[GradeQuery] resp_status=${resp?['status']} error_code=${resp?['error_code']} serverDsec=$serverDsec',
     );
     if (serverDsec > 0) _serverDsec = serverDsec;
     if (serverDsec > _syncedDsec) {
       _syncedDsec = serverDsec;
       await _save();
-      // ignore: avoid_print
-      print('[GradeReport] 重同步基准 synced=$_syncedDsec');
+      debugPrint('[GradeReport] 重同步基准 synced=$_syncedDsec');
     }
   }
 
@@ -215,8 +209,7 @@ class ListeningGradeService {
     if (serverDsec > _syncedDsec) {
       _syncedDsec = serverDsec;
     }
-    // ignore: avoid_print
-    print(
+    debugPrint(
       '[GradeReport] 连续失败重同步：丢弃 pending=$_pendingDiff，抬升 synced=$_syncedDsec（serverDsec=$serverDsec resp=${resp?['status']}/${resp?['error_code']}）',
     );
     _pendingDiff = 0;
