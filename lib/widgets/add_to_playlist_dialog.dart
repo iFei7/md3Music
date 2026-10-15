@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:m3e_core/m3e_core.dart';
 
 import '../core/utils/app_toast.dart';
+import '../data/models/song.dart';
 import '../services/kugou_api/kugou_api_client.dart';
 import '../services/kugou_api/kugou_models.dart';
 import '../utils/playlist_order_utils.dart';
@@ -15,11 +16,37 @@ import 'smart_artwork_image.dart';
 /// 添加前先检查歌曲是否已在歌单中（用 global_collection_id 拉取歌单歌曲，
 /// 按歌曲 hash 判断），存在则不执行——这是公开版偏好。
 
-/// 弹出「添加到歌单」对话框。
+/// 弹出「添加到歌单」对话框（单首）。
 Future<void> showAddToPlaylistDialog(
   BuildContext context,
   dynamic song,
 ) async {
+  await _showPlaylistPickerDialog(
+    context,
+    onPicked: (playlist) => addSongToPlaylist(song, playlist),
+  );
+}
+
+/// 弹出「添加到歌单」对话框（批量版，多选操作条等场景）。
+///
+/// 与单首版共用同一歌单选择器与去重偏好，行为一致。
+Future<void> showAddToPlaylistDialogForSongs(
+  BuildContext context,
+  List<Song> songs,
+) async {
+  await _showPlaylistPickerDialog(
+    context,
+    onPicked: (playlist) => addSongsToPlaylist(songs, playlist),
+  );
+}
+
+/// 共享歌单选择器：拉取用户歌单列表并展示，选中后回调 [onPicked]。
+///
+/// 未登录直接 toast 提示并返回（与原单首版守卫一致）。
+Future<void> _showPlaylistPickerDialog(
+  BuildContext context, {
+  required Future<void> Function(Map<String, dynamic> playlist) onPicked,
+}) async {
   final api = KugouApiClient();
   if (!api.isLoggedIn) {
     showToast('请先登录', long: true);
@@ -112,7 +139,7 @@ Future<void> showAddToPlaylistDialog(
                     subtitle: Text('$songCount 首'),
                     onTap: () {
                       Navigator.pop(dialogContext);
-                      addSongToPlaylist(song, playlist);
+                      onPicked(playlist);
                     },
                   );
                 },
@@ -245,4 +272,77 @@ Future<void> addSongToPlaylist(
       .catchError((_) {
         // 网络错误等，同样静默处理
       });
+}
+
+/// 将多首歌曲批量添加到指定歌单（歌单详情页多选操作条等场景）。
+///
+/// 与 [addSongToPlaylist] 同一套偏好：先按 global_collection_id 拉取歌单
+/// 现有歌曲做**一次整体去重**（按歌曲 hash），再逐首调用 addPlaylistTracks
+/// （单首 data 格式「title|hash|albumId|albumAudioId」，不假设服务端支持
+/// 多条目合并提交）。任一首失败不阻断其余歌曲。
+Future<void> addSongsToPlaylist(
+  List<Song> songs,
+  Map<String, dynamic> playlist,
+) async {
+  if (songs.isEmpty) return;
+  final api = KugouApiClient();
+  final listid =
+      playlist['listid']?.toString() ?? playlist['list_id']?.toString() ?? '';
+  final globalCollectionId =
+      playlist['global_collection_id']?.toString() ??
+      playlist['gid']?.toString() ??
+      '';
+
+  if (listid.isEmpty) {
+    showToast('歌单ID无效', long: true);
+    return;
+  }
+
+  final name = (playlist['name'] ?? playlist['specialname'] ?? '未知歌单')
+      .toString();
+
+  // 整体去重：一次拉取歌单现有歌曲，hash 集合过滤（与单首版同口径）。
+  final existingHashes = <String>{};
+  try {
+    final gid = globalCollectionId.isNotEmpty ? globalCollectionId : listid;
+    final existing = await api.getPlaylistTrackAll(
+      id: gid,
+      page: 1,
+      pagesize: 100,
+    );
+    if (existing != null) {
+      existingHashes
+        ..clear()
+        ..addAll(existing.map((s) => s.hash.toLowerCase()));
+    }
+  } catch (_) {
+    // 查询失败不阻断添加，继续走原逻辑
+  }
+
+  final pending = songs
+      .where((s) => !existingHashes.contains(s.id.toLowerCase()))
+      .toList();
+  if (pending.isEmpty) {
+    showToast('所选歌曲均已在「$name」中');
+    return;
+  }
+
+  var ok = 0;
+  for (final song in pending) {
+    // 构造歌曲数据 — 酷狗API要求的格式：歌名|hash|albumId|albumAudioId
+    final songData =
+        '${song.title}|${song.id}|${song.albumId ?? 0}|${int.tryParse(song.albumAudioId ?? '') ?? 0}';
+    try {
+      final result = await api.addPlaylistTracks(listid, songData);
+      if (result != null) ok++;
+    } catch (_) {
+      // 单首失败不阻断其余歌曲
+    }
+  }
+  showToast(
+    ok == pending.length
+        ? '已把 $ok 首歌曲加入「$name」'
+        : '已添加 $ok/${pending.length} 首，部分失败',
+    long: true,
+  );
 }

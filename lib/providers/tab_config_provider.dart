@@ -33,19 +33,20 @@ class TabItem {
   int get hashCode => id.hashCode;
 }
 
-/// 默认 Tab 定义（lite 版：主页 / 收藏 / 我的，顺序与底部玻璃 Dock 一致）。
+/// 默认 Tab 定义（lite 版：主页 / 收藏 / 本地音乐 / 我的，顺序与底部玻璃 Dock 一致）。
 ///
-/// library（本地音乐）现为可选 Tab：默认隐藏，可在设置页「主页管理」
-/// 手动开启；收藏页「本地」tab 与桌面快捷方式入口保持不变。
+/// v5 起 library（本地音乐，即音乐库页）回归默认 Tab；私人FM/听书等
+/// 仍为可选 Tab、默认隐藏，可在设置页「主页管理」手动开启；收藏页
+/// 「本地」tab 与桌面快捷方式入口保持不变。
 const List<TabItem> kDefaultTabs = [
   TabItem(id: 'discover', label: '主页'),
   TabItem(id: 'favorites', label: '收藏'),
+  TabItem(id: 'library', label: '本地音乐'),
   TabItem(id: 'user', label: '我的', isRemovable: false),
 ];
 
 /// 可选 Tab（默认隐藏，需在设置页手动开启）。
 const List<TabItem> kOptionalTabs = [
-  TabItem(id: 'library', label: '本地音乐'),
   TabItem(id: 'fm', label: '私人FM'),
   TabItem(id: 'search', label: '搜索'),
   TabItem(id: 'recognition', label: '听歌识曲'),
@@ -113,13 +114,16 @@ class TabConfigProvider extends ChangeNotifier {
       // 为此升迁移版本；但追加逻辑会把 library 排到持久化 order 末尾，
       // 即「我的」之后，破坏了 v3 建立的「我的收尾」不变量，因此「我的
       // 收尾」的**恢复**需要 v4 迁移（见 v3 段之后的 v4 块）。
+      // v5（library 回归默认 Tab）：音乐库（本地音乐）重新进入默认导航，
+      // 老用户此前由 v2/v4 迁移写入持久化隐藏集合的 library 由 v5 块统一
+      // 移除恢复显示（见 v4 段之后的 v5 块）。
       final fromVersion = await _repo.getTabConfigMigrationVersion();
-      const tabConfigMigrationVersion = 4;
+      const tabConfigMigrationVersion = 5;
       if (fromVersion < 2) {
         if (fromVersion < 1) {
           _hiddenTabs..remove('favorites')..remove('library');
         }
-        _hiddenTabs.add('library');
+        // v5：library 已回归默认 Tab，不再在此写回隐藏集合。
         await _repo.setHiddenTabs(_hiddenTabs);
       }
 
@@ -176,6 +180,13 @@ class TabConfigProvider extends ChangeNotifier {
           _allTabs.add(userTab);
           await _repo.setTabOrder([for (final t in _allTabs) t.id]);
         }
+      }
+      // v5：library 回归默认 Tab。老用户隐藏集合中的 library 由 v2/v4
+      // 迁移写入（非用户主动隐藏），统一恢复显示；用户若确不需要，可在
+      // 主页管理再次手动隐藏（本块只跑一次，之后的手动开关不受影响）。
+      // 条件幂等：library 不在 hidden 集合时无副作用。
+      if (fromVersion < 5) {
+        _hiddenTabs.remove('library');
       }
       if (fromVersion < tabConfigMigrationVersion) {
         await _repo.setTabConfigMigrationVersion(tabConfigMigrationVersion);

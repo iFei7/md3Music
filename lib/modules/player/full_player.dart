@@ -190,6 +190,11 @@ class _FullPlayerState extends State<FullPlayer>
   // 进度条拖动状态：记录拖动前是否正在播放，拖动结束后恢复
   bool _wasPlayingBeforeDrag = false;
 
+  /// 歌词自动跟随态（AppleMusicLyricsView 回调上报）：true=自动跟随播放中。
+  /// 歌词 tab 上自动跟随时收起底部进度条与传输行（摸歌词才出控件），
+  /// 手动浏览（拖动/停止未恢复）时恢复显示。见 [_lyricsControlsVisible]。
+  final ValueNotifier<bool> _lyricsFollowing = ValueNotifier(true);
+
   void _collapseByButton() {
     final route = ModalRoute.of(context);
     if (route is DraggablePlayerRoute) {
@@ -719,6 +724,7 @@ class _FullPlayerState extends State<FullPlayer>
     // 未完成展开就收起时，移除拖拽展开的监听（未切换系统栏，无需恢复）
     _dragRoute?.controller.removeStatusListener(_onDragRouteStatus);
     _zenPressController.dispose();
+    _lyricsFollowing.dispose();
     try {
       context.read<PlayerProvider>().removeListener(_onPlayerSongChanged);
     } catch (_) {}
@@ -1326,6 +1332,9 @@ class _FullPlayerState extends State<FullPlayer>
                                         // 播放态直达（暂停立即停帧，不靠 200ms 推断）
                                         speed: speed,
                                         isPlaying: isPlaying,
+                                        // 跟随态上报：驱动底部操作区收起/恢复
+                                        onFollowChanged: (following) =>
+                                            _lyricsFollowing.value = following,
                                       );
                                     },
                                   )
@@ -1863,33 +1872,47 @@ class _FullPlayerState extends State<FullPlayer>
         mainAxisSize: MainAxisSize.min,
         children: [
           const PlaybackStatusFeedback(),
-          // 与上方 tab 内容拉开距离：进度条拖动时时间标签会向上浮出 16px
-          SizedBox(
-            height: isExpanded ? 4 : (isLandscape ? 4 : 8),
-          ),
-          // P0: 进度条监听 positionNotifier（高频 200ms）+ provider（duration 等低频），
-          // 不再因 positionStream 触发 _buildControls 整体重建。
-          // P1-2 收敛后时长必须在 builder 内直读：此前闭包捕获页级 duration
-          // 局部变量，provider 通知触发本 ListenableBuilder 重建时会滞留旧值。
-          ListenableBuilder(
-            listenable: Listenable.merge([
-              playerProvider.positionNotifier,
-              playerProvider,
-            ]),
-            builder: (context, _) => _buildProgressBar(
-              playerProvider,
-              playerProvider.position,
-              playerProvider.duration ?? Duration.zero,
-              colorScheme,
+          // 歌词自动跟随时收起进度条与传输行（手动浏览/非歌词 tab 时恢复）。
+          // 收起组含进度条与传输行及其间距；底部导航条常驻（页面切换不受影响），
+          // 播放状态错误提示（PlaybackStatusFeedback）也常驻。
+          AnimatedBuilder(
+            animation: Listenable.merge([_lyricsFollowing, _tabController]),
+            builder: (context, _) => _LyricsControlsReveal(
+              visible: _lyricsControlsVisible,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 与上方 tab 内容拉开距离：进度条拖动时时间标签会向上浮出 16px
+                  SizedBox(
+                    height: isExpanded ? 4 : (isLandscape ? 4 : 8),
+                  ),
+                  // P0: 进度条监听 positionNotifier（高频 200ms）+ provider（duration 等低频），
+                  // 不再因 positionStream 触发 _buildControls 整体重建。
+                  // P1-2 收敛后时长必须在 builder 内直读：此前闭包捕获页级 duration
+                  // 局部变量，provider 通知触发本 ListenableBuilder 重建时会滞留旧值。
+                  ListenableBuilder(
+                    listenable: Listenable.merge([
+                      playerProvider.positionNotifier,
+                      playerProvider,
+                    ]),
+                    builder: (context, _) => _buildProgressBar(
+                      playerProvider,
+                      playerProvider.position,
+                      playerProvider.duration ?? Duration.zero,
+                      colorScheme,
+                    ),
+                  ),
+                  SizedBox(
+                    height: isExpanded ? 8 : (isLandscape ? 8 : 16),
+                  ),
+                  _buildMainControls(
+                    playerProvider,
+                    colorScheme,
+                    isExpanded: isExpanded,
+                  ),
+                ],
+              ),
             ),
-          ),
-          SizedBox(
-            height: isExpanded ? 8 : (isLandscape ? 8 : 16),
-          ),
-          _buildMainControls(
-            playerProvider,
-            colorScheme,
-            isExpanded: isExpanded,
           ),
           SizedBox(
             height: isExpanded ? 4 : (isLandscape ? 4 : 10),
@@ -1898,6 +1921,16 @@ class _FullPlayerState extends State<FullPlayer>
         ],
       ),
     );
+  }
+
+  /// 底部操作区（进度条 + 传输行）是否可见：
+  /// - 无结构化歌词（回退 LyricsView，无跟随回调）恒显示；
+  /// - 非歌词 tab 恒显示（封面/列表/评论页不受歌词跟随态影响）；
+  /// - 歌词 tab 上：自动跟随中隐藏，手动浏览（拖动/停止未恢复跟随）时显示。
+  bool get _lyricsControlsVisible {
+    if (_lyricMetadata.isEmpty) return true;
+    if (_tabController.index != _tabLayout.lyricsIndex) return true;
+    return !_lyricsFollowing.value;
   }
 
   /// 进度条 —— 常态一条细直线轨道（播放中才上色），按下时膨胀并浮出时间数字
@@ -2938,6 +2971,36 @@ class _FullPlayerState extends State<FullPlayer>
       context: context,
       isScrollControlled: true,
       builder: (context) => SafeArea(child: const Md3LyricPreferencesPanel()),
+    );
+  }
+}
+
+/// 歌词跟随态驱动的底部操作区收起/恢复组件（Apple Music 式「摸歌词才出控件」）。
+///
+/// [visible]=false 时 260ms 内折叠高度为 0 并淡出（进度条/传输行让位给歌词）；
+/// true 时恢复。TweenAnimationBuilder 单值 t 同时驱动 SizeTransition 与
+/// Opacity，收起后不残留占位高度；列表子树经 child 复用，动画期零重建。
+class _LyricsControlsReveal extends StatelessWidget {
+  final bool visible;
+  final Widget child;
+
+  const _LyricsControlsReveal({required this.visible, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: visible ? 1.0 : 0.0),
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeInOut,
+      child: child,
+      builder: (context, t, child) {
+        final clamped = t.clamp(0.0, 1.0);
+        return SizeTransition(
+          sizeFactor: AlwaysStoppedAnimation(clamped),
+          alignment: Alignment.topCenter,
+          child: Opacity(opacity: clamped, child: child),
+        );
+      },
     );
   }
 }

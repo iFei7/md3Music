@@ -12,15 +12,18 @@ import '../../data/models/song.dart';
 import '../../data/repositories/collected_playlist_store.dart';
 import '../../data/repositories/favorite_lists_cache.dart';
 import '../../providers/favorites_provider.dart';
+import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/playlist_collection_notifier.dart';
 import '../../providers/theme_provider.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
+import '../../widgets/add_to_playlist_dialog.dart';
 import '../../widgets/song_list_item.dart';
 import '../../widgets/m3e_sort_sheet.dart';
 import '../../widgets/playlist_comments_view.dart';
 import '../../widgets/keyboard_expand_sheet.dart';
+import '../../widgets/common/liquid_glass_surface.dart';
 import '../../widgets/common/multi_select_controller.dart';
 import '../../widgets/common/sonify_pill_buttons.dart';
 import 'playlist_songs_loader.dart';
@@ -921,7 +924,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   if (_error != null)
                     _buildErrorBanner(context, colorScheme, textTheme),
                   if (_multiSelect.isSelectMode)
-                    _buildMultiSelectBar(colorScheme, textTheme),
+                    _buildMultiSelectBar(colorScheme),
                   Expanded(
                     child: CustomScrollView(
                       controller: _scrollController,
@@ -1250,6 +1253,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
                       ],
                     ),
                   ),
+                  // 多选操作条：有选中时出现（0 选中隐藏，多选模式保持）
+                  if (_multiSelect.isSelectMode && _multiSelect.hasSelection)
+                    _buildMultiSelectActionBar(colorScheme),
                 ],
               ],
             ),
@@ -1624,8 +1630,15 @@ class _PlaylistPageState extends State<PlaylistPage> {
     );
   }
 
-  /// 多选模式顶栏：关闭 / 已选 N 首 / 全选 / 删除
-  Widget _buildMultiSelectBar(ColorScheme colorScheme, TextTheme textTheme) {
+  /// 当前选中的歌曲对象（按 _songs 原顺序）。
+  List<Song> get _selectedSongs =>
+      _songs.where((s) => _multiSelect.selectedIds.contains(s.id)).toList();
+
+  /// 多选模式顶栏：关闭 / 已选 N 首 / 全选 / 删除。
+  ///
+  /// sonify 风格（方案 §4.2）：计数用 barTitle（18.5 Bold，与折叠顶栏小标题
+  /// 同规格），图标操作沿用 IconButton（tooltip 供基线测试断言，语义不变）。
+  Widget _buildMultiSelectBar(ColorScheme colorScheme) {
     final selectedCount = _multiSelect.selectedIds.length;
     final totalCount = _displaySongs.length;
     final allSelected = selectedCount == totalCount && totalCount > 0;
@@ -1654,8 +1667,8 @@ class _PlaylistPageState extends State<PlaylistPage> {
               Expanded(
                 child: Text(
                   '已选 $selectedCount 首',
-                  style: textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+                  style: SonifyTextStyles.barTitle.copyWith(
+                    color: colorScheme.onSurface,
                   ),
                 ),
               ),
@@ -1691,6 +1704,139 @@ class _PlaylistPageState extends State<PlaylistPage> {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  // ==================== 多选操作条（方案 §4.2「选中后下一步操作」） ====================
+
+  /// 底部操作条：玻璃胶囊（LiquidGlassSurface）+ 横排图标操作。
+  ///
+  /// 操作集均复用既有公开能力，不新造 API：
+  /// - 收藏：FavoritesProvider.toggleFavorite / LocalFavoritesProvider（只做
+  ///   「添加」语义，已是红心的跳过，不做批量取消）；
+  /// - 歌单：共享「添加到歌单」批量入口（showAddToPlaylistDialogForSongs）；
+  /// - 下一首：PlayerProvider.insertAfterCurrent（既有公开批量 API）；
+  /// - 队列：PlayerProvider.appendPlaylist（既有公开批量 API，按 id 去重）。
+  /// 下载未提供：公开库不含下载功能（同 playlist_page 原注释）。
+  Widget _buildMultiSelectActionBar(ColorScheme colorScheme) {
+    final actions = [
+      (Icons.favorite_border, '收藏', _favoriteSelected),
+      (Icons.playlist_add, '歌单', _addSelectedToPlaylist),
+      (Icons.queue_play_next, '下一首', _playSelectedNext),
+      (Icons.add_to_queue_outlined, '队列', _appendSelectedToQueue),
+    ];
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xs,
+          AppSpacing.lg,
+          AppSpacing.sm,
+        ),
+        child: LiquidGlassSurface(
+          shape: GlassShape.pill,
+          fillAlpha: 0.10,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xs,
+            vertical: 4,
+          ),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final (icon, label, onTap) in actions)
+                  _MultiSelectAction(icon: icon, label: label, onTap: onTap),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 批量收藏：在线歌走 FavoritesProvider（红心），本地歌走
+  /// LocalFavoritesProvider；已是红心的跳过（只加不减）。
+  Future<void> _favoriteSelected() async {
+    final selected = _selectedSongs;
+    if (selected.isEmpty) return;
+    final favorites = context.read<FavoritesProvider>();
+    final localFavorites = context.read<LocalFavoritesProvider>();
+    var added = 0;
+    for (final song in selected) {
+      if (song.isOnline) {
+        if (!favorites.isFavorite(song.id)) {
+          await favorites.toggleFavorite(song);
+          added++;
+        }
+      } else if (!localFavorites.isFavorite(song.id)) {
+        await localFavorites.toggleFavorite(song.id);
+        added++;
+      }
+    }
+    showToast(added > 0 ? '已收藏 $added 首歌曲' : '选中歌曲均已在收藏中', long: true);
+  }
+
+  /// 批量加入其他歌单：共享批量入口（含整体去重，见 addSongsToPlaylist）。
+  Future<void> _addSelectedToPlaylist() async {
+    final selected = _selectedSongs;
+    if (selected.isEmpty) return;
+    await showAddToPlaylistDialogForSongs(context, selected);
+  }
+
+  /// 批量「下一首播放」：复用 PlayerProvider.insertAfterCurrent。
+  Future<void> _playSelectedNext() async {
+    final selected = _selectedSongs;
+    if (selected.isEmpty) return;
+    await context.read<PlayerProvider>().insertAfterCurrent(selected);
+    showToast('已把 ${selected.length} 首加入下一首播放', long: true);
+  }
+
+  /// 批量追加到当前队列尾部：复用 PlayerProvider.appendPlaylist
+  /// （按歌曲 id 去重，已在队列中的不重复加入）。
+  Future<void> _appendSelectedToQueue() async {
+    final selected = _selectedSongs;
+    if (selected.isEmpty) return;
+    await context.read<PlayerProvider>().appendPlaylist(selected);
+    showToast('已把 ${selected.length} 首加入播放队列', long: true);
+  }
+}
+
+/// 多选操作条的单个操作：图标 + 文字胶囊项（InkWell 水波，热区高 ≥44dp）。
+class _MultiSelectAction extends StatelessWidget {
+  const _MultiSelectAction({
+    required this.icon,
+    required this.label,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 20, color: colorScheme.onSurfaceVariant),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: SonifyTextStyles.listItem.copyWith(
+                color: colorScheme.onSurface,
+              ),
+            ),
+          ],
         ),
       ),
     );

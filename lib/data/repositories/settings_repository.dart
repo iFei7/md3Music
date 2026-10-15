@@ -745,16 +745,16 @@ class SettingsRepository {
   static const String _keyDockSwipeToSwitchTrack =
       'settings_dock_swipe_to_switch_track';
 
-  /// Dock 展开胶囊「左右滑切歌」开关（默认关闭）。
+  /// Dock 展开胶囊「左右滑切歌」开关（默认开启，批次 5 由默认关改为默认开）。
   /// 内存缓存走 ValueNotifier：Dock 拖拽松手判定在离散事件路径上同步读取，
   /// 设置页修改后即时生效（无需重启或等 Dock 重建）。
   static final ValueNotifier<bool> dockSwipeToSwitchTrack =
-      ValueNotifier<bool>(false);
+      ValueNotifier<bool>(true);
 
-  /// 读取 Dock 左右滑切歌开关（默认关闭），并同步内存缓存。
+  /// 读取 Dock 左右滑切歌开关（默认开启），并同步内存缓存。
   Future<bool> getDockSwipeToSwitchTrack() async {
     final prefs = await SharedPreferences.getInstance();
-    final v = prefs.getBool(_keyDockSwipeToSwitchTrack) ?? false;
+    final v = prefs.getBool(_keyDockSwipeToSwitchTrack) ?? true;
     dockSwipeToSwitchTrack.value = v;
     return v;
   }

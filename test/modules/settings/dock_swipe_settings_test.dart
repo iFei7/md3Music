@@ -4,19 +4,19 @@ import 'package:md3music/modules/settings/settings_search_index.g.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 批次 3 新增设置项回归：
-/// - Dock 展开胶囊「左右滑切歌」开关（方案 §7.3 P1-1，默认关）
+/// - Dock 展开胶囊「左右滑切歌」开关（批次 5 起默认开）
 /// - 设置搜索索引与新增/迁移条目同步（左右滑切歌 / 开发者子页）
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('Dock 左右滑切歌开关', () {
-    test('默认关闭', () async {
+    test('默认开启（批次 5 由默认关改为默认开）', () async {
       SharedPreferences.setMockInitialValues({});
       expect(
         await SettingsRepository().getDockSwipeToSwitchTrack(),
-        isFalse,
+        isTrue,
       );
-      expect(SettingsRepository.dockSwipeToSwitchTrack.value, isFalse);
+      expect(SettingsRepository.dockSwipeToSwitchTrack.value, isTrue);
     });
 
     test('可写入并读回', () async {

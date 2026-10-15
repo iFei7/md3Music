@@ -188,7 +188,16 @@ class _SearchPageState extends State<SearchPage>
       );
     }
 
+    // 键盘 inset 单一来源（真机 bug 修复）：
+    // - Tab 模式（Dock 导航宿主）：本页嵌在 ResponsiveScaffold 的 Scaffold body
+    //   内，宿主 Scaffold 已消费一次 viewInsets（resize 缩小 body）；本页
+    //   Scaffold 若再 resize 会二次 inset，键盘上方多出一段空隙。祖先已存在
+    //   Scaffold 时关闭本页 resize，inset 由宿主单一消费。
+    // - 独立路由模式（发现页搜索框 push）：本页是栈顶唯一 Scaffold，必须保持
+    //   resize 让键盘正常抬升内容。
+    final bool hostedInDockScaffold = Scaffold.maybeOf(context) != null;
     return Scaffold(
+      resizeToAvoidBottomInset: !hostedInDockScaffold,
       body: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) {
           return [

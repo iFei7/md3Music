@@ -154,8 +154,8 @@ class _SettingsPageState extends State<SettingsPage>
       VolumeNormalizationService.defaultReferenceLufs;
   // 播放时保持屏幕常亮开关
   bool _keepScreenOn = false;
-  // Dock 展开胶囊「左右滑切歌」开关（默认关闭，方案 §7.3 P1-1）
-  bool _dockSwipeToSwitchTrack = false;
+  // Dock 展开胶囊「左右滑切歌」开关（默认开启，批次 5 由默认关改为默认开）
+  bool _dockSwipeToSwitchTrack = true;
 
   // 忽略音频焦点开关（默认开启：允许与其他应用同时播放音频）
   bool _ignoreAudioFocus = true;
@@ -2442,7 +2442,7 @@ class _SettingsPageState extends State<SettingsPage>
         // search: 左右滑切歌 dock 滑动 切歌 换歌 手势 播放器胶囊
         SwitchListTile(
           title: const Text('左右滑切歌'),
-          subtitle: const Text('底部播放器胶囊上左右滑动快速切歌；默认关闭'),
+          subtitle: const Text('底部播放器胶囊上左右滑动快速切歌；默认开启'),
           value: _dockSwipeToSwitchTrack,
           onChanged: (value) {
             HapticFeedback.lightImpact();

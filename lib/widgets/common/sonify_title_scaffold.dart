@@ -30,6 +30,7 @@ class SonifyTitleScaffold extends StatefulWidget {
     required this.itemBuilder,
     this.controller,
     this.trailing,
+    this.actions,
     this.titleBottomPadding = 8,
   });
 
@@ -47,8 +48,13 @@ class SonifyTitleScaffold extends StatefulWidget {
   /// 测试与需要监听滚动位置的页面可传入共享实例。
   final ScrollController? controller;
 
-  /// 顶栏右侧内容（如搜索玻璃圆钮），批次 1 首页接入。
+  /// 顶栏右侧内容（如固定用户头像），批次 1 首页接入。
+  /// **常驻渲染**，不随折叠淡入出。
   final Widget? trailing;
+
+  /// [trailing] 左侧的动作按钮组（如搜索/识曲圆钮）。
+  /// 仅在折叠后（小标题浮现时）随栏体 120ms 淡入，展开态隐藏（不挡内容）。
+  final List<Widget>? actions;
 
   /// 大标题 item 底部留白（内容区与大标题的间距）。
   final double titleBottomPadding;
@@ -236,6 +242,7 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
               showSmallTitle: _showSmallTitle,
               statusBarHeight: media.padding.top,
               trailing: widget.trailing,
+              actions: widget.actions,
             ),
           ),
         ],
@@ -312,6 +319,7 @@ class _TopBar extends StatelessWidget {
     required this.showSmallTitle,
     required this.statusBarHeight,
     required this.trailing,
+    this.actions,
   });
 
   final String title;
@@ -319,6 +327,7 @@ class _TopBar extends StatelessWidget {
   final ValueListenable<bool> showSmallTitle;
   final double statusBarHeight;
   final Widget? trailing;
+  final List<Widget>? actions;
 
   @override
   Widget build(BuildContext context) {
@@ -382,12 +391,41 @@ class _TopBar extends StatelessWidget {
                     ),
                   ),
                 ),
-                if (trailing != null)
+                // 右侧动作区：actions（折叠后淡入）+ trailing（常驻）
+                if (trailing != null ||
+                    (actions != null && actions!.isNotEmpty))
                   PositionedDirectional(
                     end: SonifySpacing.titleMargin,
                     top: 0,
                     bottom: 0,
-                    child: Center(child: trailing!),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // actions 与小标题同拍：大标题完全没入后才浮现
+                        if (actions != null && actions!.isNotEmpty)
+                          ValueListenableBuilder<bool>(
+                            valueListenable: showSmallTitle,
+                            builder: (context, visible, child) {
+                              return IgnorePointer(
+                                ignoring: !visible,
+                                child: AnimatedOpacity(
+                                  opacity: visible ? 1 : 0,
+                                  duration: SonifyMotion.barFade,
+                                  child: child,
+                                ),
+                              );
+                            },
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: actions!,
+                            ),
+                          ),
+                        if (trailing != null) ...[
+                          const SizedBox(width: 8),
+                          Center(child: trailing!),
+                        ],
+                      ],
+                    ),
                   ),
               ],
             ),

@@ -217,5 +217,43 @@ void main() {
       await tester.pump();
       expect(find.byIcon(Icons.search), findsOneWidget);
     });
+
+    testWidgets('顶栏 actions 仅折叠后浮现，trailing 常驻不同拍', (tester) async {
+      final controller = ScrollController();
+      await tester.pumpWidget(MaterialApp(
+        theme: _testTheme,
+        home: SonifyTitleScaffold(
+          title: '发现',
+          itemCount: 3,
+          controller: controller,
+          trailing: const Icon(Icons.person),
+          actions: const [Icon(Icons.mic_none)],
+          itemBuilder: (context, index) =>
+              SizedBox(height: 100, child: ListTile(title: Text('item $index'))),
+        ),
+      ));
+      await tester.pump();
+
+      // 展开态：actions 目标透明度 0（隐藏），trailing 无透明度门控常驻
+      AnimatedOpacity actionsAnimated(WidgetTester tester) =>
+          tester.widget<AnimatedOpacity>(
+            find
+                .ancestor(
+                  of: find.byIcon(Icons.mic_none),
+                  matching: find.byType(AnimatedOpacity),
+                )
+                .first,
+          );
+      expect(actionsAnimated(tester).opacity, 0);
+      expect(find.byIcon(Icons.person), findsOneWidget);
+
+      // 完全折叠（alpha = 0，小标题浮现）后：actions 目标透明度 1
+      final h = _titleItemHeight(tester);
+      controller.jumpTo(h / 1.8 + 2);
+      await tester.pump();
+      expect(actionsAnimated(tester).opacity, 1);
+      // trailing 依旧在场（固定头像不随折叠消失）
+      expect(find.byIcon(Icons.person), findsOneWidget);
+    });
   });
 }

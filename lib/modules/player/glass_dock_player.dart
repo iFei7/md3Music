@@ -83,11 +83,14 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 ///   与 DraggablePlayerRoute 既有映射口径）；end 按 [shouldExpandPlayer]
 ///   三阈值（屏高 20% / 900px/s / 6000px/s²）判定：达标则 push
 ///   [fullPlayerRoute]（dragOriginTop 模式）并从当前拖拽进度 settleToFull，
-///   未达标 / 取消则覆盖层归位。song == null 或播放页已在栈中时不注册
-///   拖拽回调（不抢手势，tap 行为不变）；
-/// - **左右滑切歌（P1，默认关）**：展开胶囊 `onHorizontalDragEnd` 按
-///   primaryVelocity 判向调 previous()/next()，开关
-///   `SettingsRepository.dockSwipeToSwitchTrack`（默认关，设置→播放行为）；
+///   未达标 / 取消则覆盖层归位。song == null 时不注册拖拽回调（不抢手势，
+///   tap 行为不变）；「播放页已在栈中」在 start 运行时拦截——build 期判定
+///   会随 Dock 子树移除/重挂载产生过期快照（收起后无法再展开的回归根因，
+///   见 [_buildPlayerButton] 内注释）；
+/// - **左右滑切歌（P1，默认开）**：展开胶囊 `onHorizontalDrag*` 歌名跟手
+///   位移、露出相邻方向歌名预览，松手按距离/速度阈值判定调 previous()/next()
+///   （iOS 迷你条惯例），开关 `SettingsRepository.dockSwipeToSwitchTrack`
+///   （默认开，设置→播放行为）；
 /// - **隐藏**：完整播放页展开（playerExpansion > 0.5）时整体移除，不产帧；
 ///   Dock 自身上滑拖拽期间豁免（拖拽会把 expansion 推过 0.5，此时 Dock
 ///   必须保持在树中维持手势事件流，视觉上由 Opacity(1-exp) 淡出）。
@@ -118,7 +121,8 @@ class GlassDockPlayer extends StatefulWidget {
   State<GlassDockPlayer> createState() => _GlassDockPlayerState();
 }
 
-class _GlassDockPlayerState extends State<GlassDockPlayer> {
+class _GlassDockPlayerState extends State<GlassDockPlayer>
+    with SingleTickerProviderStateMixin {
   /// 播放器圆钮 → 控制小胶囊的展开态（收敛型 AnimatedSize 驱动）。
   bool _controlsExpanded = false;
 
@@ -161,6 +165,22 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   /// 当前向上加速度估计（px/s²，允许为负 = 末端减速）。
   double _dragAcceleration = 0.0;
 
+  // ── 左右滑切歌：歌名跟手位移 / 相邻曲目预览（ValueNotifier 局部驱动，
+  //    拖拽期不 setState、不重建整个 Dock）──
+
+  /// 歌名区水平位移（px，向左为负 = 预览下一曲；向右为正 = 预览上一曲）。
+  final ValueNotifier<double> _switchDx = ValueNotifier<double>(0.0);
+
+  /// 跟手位移收敛动画（松手切歌滑出 / 未达阈值回弹归位）。
+  late final AnimationController _switchSettle;
+
+  /// 收敛动画起止位移（由 [_settleSwitchTo] 记录）。
+  double _switchAnimFrom = 0.0;
+  double _switchAnimTo = 0.0;
+
+  /// 最近一次布局得到的歌名区宽度（跟手位移上限与切歌距离阈值用）。
+  double _marqueeWidth = 0.0;
+
   @override
   void initState() {
     super.initState();
@@ -172,6 +192,14 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     // 预热「左右滑切歌」开关内存缓存（设置页修改经 ValueNotifier 即时生效）
     // ignore: discarded_futures
     SettingsRepository().getDockSwipeToSwitchTrack();
+    _switchSettle = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    _switchSettle.addListener(() {
+      final t = Curves.easeOutCubic.transform(_switchSettle.value);
+      _switchDx.value = _switchAnimFrom + (_switchAnimTo - _switchAnimFrom) * t;
+    });
   }
 
   @override
@@ -186,6 +214,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   @override
   void dispose() {
     widget.navExpanded.removeListener(_onNavExpandedChanged);
+    _switchSettle.dispose();
+    _switchDx.dispose();
     super.dispose();
   }
 
@@ -386,13 +416,17 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     return RepaintBoundary(
       child: Builder(
         builder: (buttonContext) {
-          // 上滑展开（P0-1）：song == null 不注册拖拽回调（不抢手势）；
-          // 播放页已在栈中（未在栈顶）时同样不注册——tap 走 openFullPlayer
-          // 的 popUntil 回退语义，拖拽 push 会造成双实例。
-          final canDrag =
-              song != null &&
-              (activePlayerRoute == null || !activePlayerRoute!.isActive);
+          // 上滑展开（P0-1）：song == null 不注册拖拽回调（不抢手势）。
+          // 注意：**播放页已在栈中**这一条不能在 build 期判定——回归教训：
+          // 播放页展开期间 Dock 子树被移除（exp > 0.5 → SizedBox.shrink），
+          // 收起动画中段（exp 回落 ≤ 0.5、路由仍在栈中）子树重挂载时，
+          // build 期快照判定 canDrag=false 注册了空回调；收起完成后若暂停态
+          // 无 position tick 通知重建，回调永久缺失 → 无法再次上滑展开。
+          // 因此注册只看 song；「播放页已在栈中」由 [_onPlayerDragStart]
+          // 运行时守卫拦截（拖拽期 Dock 未隐藏时仍不抢播放页手势）。
+          final canDrag = song != null;
           return GestureDetector(
+            key: const ValueKey('glass_dock_player_button'),
             behavior: HitTestBehavior.opaque,
             onVerticalDragStart:
                 canDrag ? (d) => _onPlayerDragStart(buttonContext, d) : null,
@@ -421,7 +455,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
   /// 拖拽开始：记录播放器按钮顶端全局 Y（= FullPlayer 展开起点），
   /// 激活跟手覆盖层（真实 FullPlayer，随 playerExpansion 位移/淡入）。
   void _onPlayerDragStart(BuildContext boxContext, DragStartDetails details) {
-    // 运行时再拦一道（build 期判定与手势到达之间状态可能变化）：
+    // 运行时守卫（含「播放页已在栈中」检查——不放在 build 期注册判定，
+    // 否则 Dock 子树重挂载后会拿到过期快照，见 _buildPlayerButton 注释）：
     // 无歌 / 播放页已在栈中时不启动拖拽。
     if (context.read<PlayerProvider>().currentSong == null) return;
     if (activePlayerRoute != null && activePlayerRoute!.isActive) return;
@@ -509,21 +544,90 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     playerExpansion.value = 0.0;
   }
 
-  /// 左右滑切歌（P1，默认关）：展开胶囊横向松手按 primaryVelocity 判向，
-  /// 向左甩 → 下一曲，向右甩 → 上一曲（iOS 迷你条惯例）。开关关闭时
-  /// GestureDetector 不注册回调，手势完全不占用。
+  // ── 左右滑切歌（P1，默认开）：歌名跟手位移 + 相邻曲目预览 ──
+  //
+  // 手势注册在展开胶囊（开关关闭或无歌时不注册，不进手势竞技场）。
+  // 拖拽期 [_switchDx] 驱动歌名区双层交叉位移/透明度（局部 ValueNotifier，
+  // 不 setState 不重建 Dock）；松手按「距离 ≥ 歌名区宽一半 或
+  // |primaryVelocity| ≥ _kSwipeSwitchVelocity」判定：达标 → 收敛动画滑出
+  // 完整露出相邻歌名后执行切歌并归位；未达标 → 回弹归位。
+
+  /// 拖拽开始：停掉进行中的收敛动画，从当前位置接续跟手。
+  void _onCapsuleHorizontalDragStart(DragStartDetails details) {
+    _switchSettle.stop();
+  }
+
+  /// 拖拽更新：位移跟手（上限 = 歌名区宽度，防止拖出胶囊视口）。
+  void _onCapsuleHorizontalDragUpdate(DragUpdateDetails details) {
+    if (_switchSettle.isAnimating) return;
+    final max = _marqueeWidth;
+    if (max <= 0) return;
+    _switchDx.value = (_switchDx.value + details.delta.dx).clamp(-max, max);
+  }
+
+  /// 拖拽松手：按距离 / 速度阈值判定切歌方向，或回弹归位。
   void _onCapsuleHorizontalDragEnd(DragEndDetails details) {
-    if (!SettingsRepository.dockSwipeToSwitchTrack.value) return;
+    final dx = _switchDx.value;
     final velocity = details.primaryVelocity ?? 0.0;
-    if (velocity.abs() < _kSwipeSwitchVelocity) return;
-    final player = context.read<PlayerProvider>();
-    if (player.currentSong == null) return;
-    AppHaptics.tick();
-    if (velocity < 0) {
-      player.next();
+    final width = _marqueeWidth;
+    final distanceThreshold = width * 0.5;
+    if (dx < 0 &&
+        (-dx >= distanceThreshold ||
+            velocity < -_kSwipeSwitchVelocity)) {
+      _commitTrackSwitch(-1); // 向左甩 → 下一曲
+    } else if (dx > 0 &&
+        (dx >= distanceThreshold || velocity > _kSwipeSwitchVelocity)) {
+      _commitTrackSwitch(1); // 向右甩 → 上一曲
     } else {
-      player.previous();
+      _settleSwitchTo(0);
     }
+  }
+
+  /// 拖拽被系统取消（来电 / 手势竞争仲裁）：回弹归位。
+  void _onCapsuleHorizontalDragCancel() {
+    _settleSwitchTo(0);
+  }
+
+  /// 切歌收敛动画：从当前位移滑到 ±歌名区宽（完整露出相邻歌名），
+  /// 动画结束后执行切歌并瞬移归位（此刻当前歌名即为刚预览的那首，
+  /// 视觉上无缝衔接）。切歌走 provider 既有 previous()/next()。
+  void _commitTrackSwitch(int direction) {
+    AppHaptics.tick();
+    final player = context.read<PlayerProvider>();
+    if (player.currentSong == null) {
+      _settleSwitchTo(0);
+      return;
+    }
+    _switchAnimFrom = _switchDx.value;
+    _switchAnimTo = direction < 0 ? -_marqueeWidth : _marqueeWidth;
+    _switchSettle.forward(from: 0).whenComplete(() {
+      if (!mounted) return;
+      if (direction < 0) {
+        player.next();
+      } else {
+        player.previous();
+      }
+      _switchDx.value = 0.0;
+    });
+  }
+
+  /// 位移收敛到 [target]（未达阈值回弹归位 / 取消恢复）。
+  void _settleSwitchTo(double target) {
+    _switchAnimFrom = _switchDx.value;
+    _switchAnimTo = target;
+    _switchSettle.forward(from: 0);
+  }
+
+  /// 相邻方向曲目的展示名（预览层用）；无相邻曲目（列表边界）返回 null。
+  /// 简化处理：不做循环播放方向的绕回预览（loop 模式下边界由 provider
+  /// 既有 next()/previous() 语义决定，预览层宁缺毋假）。
+  String? _neighborTrackTitle(PlayerProvider player, int offset) {
+    final songs = player.playlist;
+    final index = player.currentIndex;
+    if (songs.isEmpty || index < 0) return null;
+    final neighbor = index + offset;
+    if (neighbor < 0 || neighbor >= songs.length) return null;
+    return songs[neighbor].displayName;
   }
 
   /// 播放器圆钮：外周进度环 + 中央播放标识。
@@ -675,12 +779,20 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
     Duration? duration,
   ) {
     final cs = Theme.of(context).colorScheme;
-    // 左右滑切歌（P1）：开关关闭时不注册 onHorizontalDragEnd，
-    // 不进手势竞技场（默认关，见 SettingsRepository.dockSwipeToSwitchTrack）。
-    final swipeEnabled = SettingsRepository.dockSwipeToSwitchTrack.value;
+    // 左右滑切歌（P1）：开关关闭或无歌时不注册 onHorizontalDrag*，
+    // 不进手势竞技场（默认开，见 SettingsRepository.dockSwipeToSwitchTrack）。
+    final swipeEnabled =
+        SettingsRepository.dockSwipeToSwitchTrack.value && song != null;
     return GestureDetector(
       onTap: _toggleControls,
+      onHorizontalDragStart: swipeEnabled ? _onCapsuleHorizontalDragStart : null,
+      onHorizontalDragUpdate: swipeEnabled
+          ? _onCapsuleHorizontalDragUpdate
+          : null,
       onHorizontalDragEnd: swipeEnabled ? _onCapsuleHorizontalDragEnd : null,
+      onHorizontalDragCancel: swipeEnabled
+          ? _onCapsuleHorizontalDragCancel
+          : null,
       child: LiquidGlassContainer(
         shape: GlassShape.pill,
         padding: const EdgeInsets.fromLTRB(6, 0, 4, 0),
@@ -698,6 +810,7 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                   10; // 水平 padding（6 + 4）
               final marqueeWidth =
                   (constraints.maxWidth - fixedWidth).clamp(0.0, 120.0);
+              _marqueeWidth = marqueeWidth;
               return Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -764,17 +877,80 @@ class _GlassDockPlayerState extends State<GlassDockPlayer> {
                     ),
                   ),
                   const SizedBox(width: _kCapsuleCoverGap),
-                  // 歌名 marquee：点击打开播放页。
+                  // 歌名 marquee：点击打开播放页；左右滑跟手位移并露出
+                  // 相邻方向歌名预览（双层交叉位移/透明度，局部
+                  // ValueListenableBuilder 驱动，不重建整个 Dock）。
                   GestureDetector(
+                    key: const ValueKey('glass_dock_track_title'),
                     behavior: HitTestBehavior.opaque,
                     onTap: song == null ? null : () => openFullPlayer(context),
-                    child: _MarqueeText(
-                      text: song?.displayName ?? '未在播放',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: song == null ? cs.onSurfaceVariant : cs.onSurface,
+                    child: ClipRect(
+                      child: SizedBox(
+                        width: marqueeWidth,
+                        child: ValueListenableBuilder<double>(
+                          valueListenable: _switchDx,
+                          builder: (context, dx, _) {
+                            final titleStyle = Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(
+                                  color: song == null
+                                      ? cs.onSurfaceVariant
+                                      : cs.onSurface,
+                                );
+                            final current = _MarqueeText(
+                              text: song?.displayName ?? '未在播放',
+                              style: titleStyle,
+                              width: marqueeWidth,
+                              playing: player.isPlaying,
+                            );
+                            // 未拖拽 / 无可用宽度：仅当前歌名（零开销路径）。
+                            if (dx == 0 || marqueeWidth <= 0) return current;
+                            final progress =
+                                (dx.abs() / marqueeWidth).clamp(0.0, 1.0);
+                            final toNext = dx < 0;
+                            final incomingText = _neighborTrackTitle(
+                              player,
+                              toNext ? 1 : -1,
+                            );
+                            return Stack(
+                              children: [
+                                // 当前歌名：跟手位移 + 随进度淡出。
+                                Opacity(
+                                  opacity: 1.0 - progress,
+                                  child: Transform.translate(
+                                    offset: Offset(dx, 0),
+                                    child: current,
+                                  ),
+                                ),
+                                // 相邻方向歌名：从拖拽方向对侧滑入 + 淡入。
+                                if (incomingText != null)
+                                  Opacity(
+                                    opacity: progress,
+                                    child: Transform.translate(
+                                      offset: Offset(
+                                        toNext
+                                            ? dx + marqueeWidth
+                                            : dx - marqueeWidth,
+                                        0,
+                                      ),
+                                      child: SizedBox(
+                                        width: marqueeWidth,
+                                        child: Text(
+                                          incomingText,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          softWrap: false,
+                                          style: titleStyle,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            );
+                          },
+                        ),
                       ),
-                      width: marqueeWidth,
-                      playing: player.isPlaying,
                     ),
                   ),
                   _DockIconButton(

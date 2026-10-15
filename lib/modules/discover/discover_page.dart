@@ -31,8 +31,9 @@ import '../search/search_page.dart';
 /// 结构（方案 §1.2 线框）：
 /// - [SonifyTitleScaffold] 大标题「发现」折叠顶栏（列表首 item，滚动溶解，
 ///   没入后 18.5sp 小标题浮现，180ms EaseOutCubic 吸附）；
-/// - 顶栏右上搜索玻璃圆钮（42dp，Title.kt:849-873 材质）；
-/// - 列表：问候胶囊（头像 28dp + 问候语）→ 快捷入口行（FM/识曲）→ 每日推荐
+/// - 顶栏右上**固定用户头像**（常驻不折叠，点击进 /user）；
+/// - 折叠后头像左侧浮现搜索/识曲两枚玻璃圆钮（点击行为同搜索框）；
+/// - 列表：胶囊搜索框（内右侧识曲按钮）→ 快捷入口行（FM/识曲）→ 每日推荐
 ///   → 编辑精选/主题歌单/热门歌单/新碟上架/排行榜 横滑 Rail（[CoverRail]）
 ///   → 刷歌推荐 → Dock 避让。
 ///
@@ -231,8 +232,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
           ? Scaffold(body: _buildError(colorScheme))
           : SonifyTitleScaffold(
               title: '发现',
-              // 顶栏右侧搜索玻璃圆钮（sonify 42dp，Title.kt:849-873 材质）
-              trailing: _buildSearchGlassButton(),
+              // 顶栏右侧固定用户头像（常驻，不随折叠）
+              trailing: _buildUserAvatar(),
+              // 折叠后在头像左侧浮现搜索/识曲圆钮
+              actions: _buildCollapsedBarActions(),
               itemCount: _kSectionCount,
               itemBuilder: _buildListItem,
             ),
@@ -245,7 +248,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
   Widget _buildListItem(BuildContext context, int index) {
     switch (index) {
       case 0:
-        return _buildGreetingItem();
+        return _buildSearchFieldItem();
       case 1:
         return _buildQuickAccessRow();
       case 2:
@@ -269,15 +272,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
       default:
         return const SizedBox.shrink();
     }
-  }
-
-  String _getGreeting() {
-    final h = DateTime.now().hour;
-    if (h < 6) return '夜深了';
-    if (h < 12) return '早上好';
-    if (h < 14) return '中午好';
-    if (h < 18) return '下午好';
-    return '晚上好';
   }
 
   Widget _buildError(ColorScheme cs) {
@@ -318,82 +312,63 @@ class _DiscoverPageState extends State<DiscoverPage> {
     );
   }
 
-  /// 顶栏搜索玻璃圆钮：42dp 圆形液态玻璃（sonify Title.kt:849-873 材质，
-  /// 经 [LiquidGlassSurface] 参数化实现），图标 20dp。
-  Widget _buildSearchGlassButton() {
-    return LiquidGlassSurface(
-      shape: GlassShape.circle,
-        child: SizedBox(
-          width: 42,
-          height: 42,
-          child: IconButton(
-            // 顶满玻璃圆钮（默认 48dp 会溢出 42dp 容器）
-            constraints: const BoxConstraints.tightFor(width: 42, height: 42),
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.search, size: 20),
-            onPressed: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const SearchPage())),
-          ),
-        ),
+  void _openSearch() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SearchPage()),
     );
   }
 
-  /// 问候胶囊：头像 28dp（左）+ 问候语/昵称（方案 §1.1「头像入问候胶囊」）。
-  /// 整体可点 → /user（未登录时用户中心自身展示登录引导）。
-  Widget _buildGreetingItem() {
+  /// 识曲入口：[SongRecognitionPage] 为独立路由页（非 tab 项），
+  /// 复用快捷入口行的 MaterialPageRoute 跳转方式。
+  void _openRecognition() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SongRecognitionPage()),
+    );
+  }
+
+  /// 胶囊搜索框（列表首 item，随内容自然滚动，不吸顶）：
+  /// sonify 玻璃胶囊，左侧搜索图标 + 占位文案，框内右侧识曲按钮。
+  /// 整体可点 → 搜索页；识曲按钮单独响应（内层 GestureDetector 在手势
+  /// 竞技场中优先胜出）。
+  Widget _buildSearchFieldItem() {
     final cs = Theme.of(context).colorScheme;
     final sonify = SonifyColors.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         SonifySpacing.titleMargin, 4, SonifySpacing.titleMargin, 0,
       ),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: GestureDetector(
-          onTap: () => Navigator.of(context).pushNamed('/user'),
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(4, 4, 14, 4),
-            decoration: ShapeDecoration(
-              color: sonify.surfaceCard,
-              shape: const StadiumBorder(),
-            ),
+      child: GestureDetector(
+        onTap: _openSearch,
+        behavior: HitTestBehavior.opaque,
+        child: LiquidGlassSurface(
+          shape: GlassShape.pill,
+          child: SizedBox(
+            height: 44,
             child: Row(
-              mainAxisSize: MainAxisSize.min,
               children: [
-                // 头像 28dp：登录用真实头像，未登录显示默认人形占位
-                Selector<KugouProvider, String?>(
-                  selector: (_, kugou) => kugou.userInfo?.avatar,
-                  builder: (context, avatar, _) => CircleAvatar(
-                    radius: 14,
-                    backgroundColor: cs.surfaceContainerHighest,
-                    backgroundImage: (avatar != null && avatar.isNotEmpty)
-                        ? CachedNetworkImageProvider(avatar)
-                        : null,
-                    child: (avatar == null || avatar.isEmpty)
-                        ? Icon(Icons.person, size: 16, color: cs.onSurfaceVariant)
-                        : null,
+                const Gap(AppSpacing.md),
+                Icon(Icons.search, size: 20, color: cs.onSurfaceVariant),
+                const Gap(AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    '搜索歌曲、歌手',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: SonifyTextStyles.listItem.copyWith(
+                      color: sonify.textSecondary,
+                    ),
                   ),
                 ),
-                const Gap(AppSpacing.sm),
-                Selector<KugouProvider, String?>(
-                  selector: (_, kugou) =>
-                      kugou.isLoggedIn ? kugou.userInfo?.nickname : null,
-                  builder: (context, nickname, _) {
-                    final greeting = _getGreeting();
-                    return Text(
-                      nickname == null || nickname.isEmpty
-                          ? greeting
-                          : '$greeting，$nickname',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: SonifyTextStyles.listItem.copyWith(
-                        color: cs.onSurface,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    );
-                  },
+                // 框内右侧：听歌识曲按钮
+                GestureDetector(
+                  onTap: _openRecognition,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12,
+                    ),
+                    child: Icon(Icons.mic_none, size: 20, color: cs.onSurface),
+                  ),
                 ),
               ],
             ),
@@ -401,6 +376,58 @@ class _DiscoverPageState extends State<DiscoverPage> {
         ),
       ),
     );
+  }
+
+  /// 顶栏固定用户头像（36dp）：常驻不参与折叠，点击进 /user
+  /// （未登录时用户中心自身展示登录引导）。
+  Widget _buildUserAvatar() {
+    final cs = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: () => Navigator.of(context).pushNamed('/user'),
+      behavior: HitTestBehavior.opaque,
+      child: Selector<KugouProvider, String?>(
+        selector: (_, kugou) => kugou.userInfo?.avatar,
+        builder: (context, avatar, _) => CircleAvatar(
+          radius: 18,
+          backgroundColor: cs.surfaceContainerHighest,
+          backgroundImage: (avatar != null && avatar.isNotEmpty)
+              ? CachedNetworkImageProvider(avatar)
+              : null,
+          child: (avatar == null || avatar.isEmpty)
+              ? Icon(Icons.person, size: 20, color: cs.onSurfaceVariant)
+              : null,
+        ),
+      ),
+    );
+  }
+
+  /// 顶栏玻璃圆钮：42dp 圆形液态玻璃（sonify Title.kt:849-873 材质），
+  /// 图标 20dp。用于折叠后的顶栏搜索/识曲按钮。
+  Widget _buildGlassCircleButton(IconData icon, VoidCallback onTap) {
+    return LiquidGlassSurface(
+      shape: GlassShape.circle,
+      child: SizedBox(
+        width: 42,
+        height: 42,
+        child: IconButton(
+          // 顶满玻璃圆钮（默认 48dp 会溢出 42dp 容器）
+          constraints: const BoxConstraints.tightFor(width: 42, height: 42),
+          padding: EdgeInsets.zero,
+          icon: Icon(icon, size: 20),
+          onPressed: onTap,
+        ),
+      ),
+    );
+  }
+
+  /// 折叠后顶栏动作按钮：头像左侧的搜索圆钮 + 识曲圆钮，
+  /// 点击行为与列表搜索框一致。
+  List<Widget> _buildCollapsedBarActions() {
+    return [
+      _buildGlassCircleButton(Icons.search, _openSearch),
+      const SizedBox(width: 10),
+      _buildGlassCircleButton(Icons.mic_none, _openRecognition),
+    ];
   }
 
   /// 快捷入口行：FM / 识曲，56dp squircle 9dp 卡底色块（方案 §1.3）。

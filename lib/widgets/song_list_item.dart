@@ -3,6 +3,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../core/services/lyrico_editor.dart';
+import '../core/theme/app_theme.dart';
+import '../core/theme/squircle.dart';
 import '../core/utils/app_toast.dart';
 import '../data/models/song.dart';
 import '../modules/player/comments_view.dart';
@@ -184,15 +186,16 @@ class SongListItem extends StatelessWidget {
       onTap: isSelectMode ? onSelectToggle : onTap,
       onLongPress: onLongPress,
       child: Container(
+        // 多选选中行高亮：品牌红 8% 淡色（token 取色，与勾选框同源）
         color: isSelectMode && isSelected
-            ? colorScheme.primaryContainer.withValues(alpha: 0.3)
+            ? SonifyColors.of(context).primary.withValues(alpha: 0.08)
             : Colors.transparent,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         child: Row(
           children: [
             // 多选模式：圆形复选框；普通模式：封面图
             if (isSelectMode)
-              _buildCheckbox(colorScheme, imgSize)
+              _buildCheckbox(context, imgSize)
             else
               // 封面图：智能选择 Image.network（在线/content://）或 LocalArtworkImage（文件路径）
               SmartArtworkImage(
@@ -353,34 +356,50 @@ class SongListItem extends StatelessWidget {
     );
   }
 
-  /// 多选模式下的圆形复选框，与封面同等大小。
-  Widget _buildCheckbox(ColorScheme colorScheme, double size) {
+  /// 多选模式下的勾选框，与封面同等大小的占位内居中。
+  ///
+  /// sonify 风格（方案 §4.2「多选样式美化」）：
+  /// - 勾选态：品牌红填充（token 取色走 [SonifyColors.primary]，默认种子
+  ///   #F54047，跟随用户种子色/深浅色），白色对勾缩放弹入；
+  /// - 未勾选：2dp 描边空心；
+  /// - 外形：squircle 连续曲率圆形（半径传入 boxSize，smoothCornerPath
+  ///   自动收敛到 min(w,h)/2，即带连续曲率的正圆）。
+  Widget _buildCheckbox(BuildContext context, double size) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final checkedColor = SonifyColors.of(context).primary;
+    const boxSize = 24.0;
     return SizedBox(
       width: size,
       height: size,
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 150),
-        child: isSelected
-            ? Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: colorScheme.primary,
-                ),
-                child: Icon(
-                  Icons.check,
-                  color: colorScheme.onPrimary,
-                  size: 28,
-                ),
-              )
-            : Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: colorScheme.outline.withValues(alpha: 0.5),
-                    width: 2,
-                  ),
-                ),
-              ),
+      child: Center(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          width: boxSize,
+          height: boxSize,
+          decoration: ShapeDecoration(
+            color: isSelected ? checkedColor : Colors.transparent,
+            shape: SmoothRectangleBorder(
+              borderRadius: BorderRadius.circular(boxSize),
+              side: isSelected
+                  ? BorderSide.none
+                  : BorderSide(
+                      color: colorScheme.outline.withValues(alpha: 0.5),
+                      width: 2,
+                    ),
+            ),
+          ),
+          child: AnimatedScale(
+            scale: isSelected ? 1.0 : 0.5,
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOut,
+            child: Icon(
+              Icons.check,
+              size: 16,
+              color: isSelected ? colorScheme.onPrimary : Colors.transparent,
+            ),
+          ),
+        ),
       ),
     );
   }
