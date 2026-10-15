@@ -34,9 +34,10 @@ import '../../widgets/md3_lyric_preferences.dart';
 /// - 跟随态交互：自动跟随时整视图渐变焦点层（离当前行越远越淡出，视口级
 ///   单层 ShaderMask，见 [_AppleMusicLyricsViewState._buildFollowFocusFade]），
 ///   并经 [AppleMusicLyricsView.onFollowChanged] 上报跟随态供播放器收起
-///   底部进度条/传输行；手动拖动立即去模糊并恢复操作区，滚动停止后在
-///   默认播放位置（视口上部 1/3 基准线）显示横线+胶囊播放按钮，点胶囊
-///   seek 到对齐行并恢复跟随；3 秒无操作自动恢复跟随。
+///   底部进度条/传输行；手动拖动立即去模糊并恢复操作区，滚动停止后选中行
+///   （基准线对齐行）以品牌红文字 + 淡色底高亮，该行右侧常驻尖角朝左的
+///   播放胶囊（lyric-bubble 样式，点按 seek 到该行并恢复跟随）；3 秒无操作
+///   自动恢复跟随。
 class AppleMusicLyricsView extends StatefulWidget {
   const AppleMusicLyricsView({
     super.key,
@@ -95,10 +96,25 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
   static const double _edgeViewportRatio = 0.35;
   // 当前行锚定点距视口顶部的比例
   static const double _anchorViewportRatio = 1 / 3;
+  // 选中行高亮淡色底圆角（与播放胶囊体圆角一致）
+  static const double _selectedHighlightRadius = 9;
 
   final ScrollController _scrollController = ScrollController();
   late final Ticker _ticker;
   Timer? _resumeFollowTimer;
+
+  /// 歌词列表的全局 Key。
+  ///
+  /// 根因修复：[_buildFollowFocusFade] 的 builder 按焦点强度在
+  /// 「ShaderMask(包裹列表)」与「裸列表」两种树形间切换，t 跨 0 时列表
+  /// 所在 slot 的 widget 类型变化 → 整棵列表子树被卸载重挂 ——
+  /// ScrollController 会挂到全新的 ScrollPosition（滚动偏移重置为 0），
+  /// 且拖拽中的手势随 Scrollable 的销毁被取消。表现为：手动滚动松手后
+  /// 歌词跳回顶部/当前行、滚动中途卡住、恢复跟随时列表不回当前行。
+  /// 挂上本 Key 后，树形切换时列表子树被**原地转移**（Element 复用，
+  /// State / RenderObject / ScrollPosition / 手势识别器全部保留），
+  /// 手动滚动只浏览、不丢偏移、不中断手势。
+  final GlobalKey _lyricsListKey = GlobalKey();
 
   /// 按startTime 升序的显示副本（parser 输出应已有序，这里保险再排一次）。
   List<LyricLine> _lines = const [];
@@ -117,9 +133,16 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
   bool _initialJumpDone = false;
 
   /// 用户滚动物理进行中（拖动起手 → 滚动完全停止，含惯性滑行）。
-  /// 与 [_follow]（含 3 秒延迟窗）共同决定基准线/胶囊 overlay 的显隐：
+  /// 与 [_follow]（含 3 秒延迟窗）共同决定选中行高亮的显隐：
   /// 仅「非跟随 且 滚动已停止」时显示，拖动/惯性途中不显示。
   bool _isUserScrolling = false;
+
+  /// 手动浏览态与基准线（视口上部 [_anchorViewportRatio] 处）对齐的选中行：
+  /// 驱动选中行高亮与常驻播放胶囊的宿主行。跟随态不适用（选中行即当前行，
+  /// 见 [_bubbleLineIndex]），由 [_onScrollOffsetChanged] 在滚动偏移变化时
+  /// 按 [_computeSelectedLine] 逐帧刷新（仅下标变化才 setState，一次拖动
+  /// 约每行高一次重建）。
+  int? _selectedLine;
 
   // ===== 行高估算缓存（TextPainter 预测，仅用于滚动偏移计算）=====
   bool _layoutDirty = true;
@@ -145,6 +168,8 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     _lastReportedMs = _anchorMs;
     _anchorTime = DateTime.now();
     _applyDisplayPosition(_anchorMs);
+    // 滚动偏移变化时逐帧刷新手动浏览态的选中行（驱动行高亮与常驻胶囊）
+    _scrollController.addListener(_onScrollOffsetChanged);
     // 首帧后同步一次初始跟随态：tab 切走再切回会重建 State（_follow 复位为
     // true），而外部可能还保留上一次的 false——必须上报对齐。
     // post-frame 触发避免在 build 阶段同步改写外部 listenable。
@@ -162,6 +187,8 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
       _rebuildLines();
       _layoutDirty = true;
       _currentIndex = -1;
+      // 选中行随旧行集失效（布局缓存已脏，反算无意义），下次滚动重新计算
+      _selectedLine = null;
       _initialJumpDone = false;
       _applyDisplayPosition(_anchorMs);
     }
@@ -177,6 +204,7 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     _prefs.removeListener(_onPrefsChanged);
     _resumeFollowTimer?.cancel();
     _ticker.dispose();
+    _scrollController.removeListener(_onScrollOffsetChanged);
     _scrollController.dispose();
     _progress.dispose();
     super.dispose();
@@ -348,9 +376,9 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
   /// dragDetails == null，不会误判为用户滚动。
   ///
   /// 状态机（跟随态 [_follow] × 滚动态 [_isUserScrolling]）：
-  /// - 跟随中：渐变焦点层生效（模糊淡出），基准线/胶囊隐藏；
-  /// - 手动滚动中（拖动起手/惯性滑行）：立即去模糊，基准线/胶囊仍隐藏；
-  /// - 手动停止（滚动结束、3 秒延迟窗内）：无模糊，基准线+胶囊显示；
+  /// - 跟随中：渐变焦点层生效（模糊淡出），无选中行高亮；
+  /// - 手动滚动中（拖动起手/惯性滑行）：立即去模糊，胶囊跟随基准线移动；
+  /// - 手动停止（滚动结束、3 秒延迟窗内）：无模糊，选中行高亮 + 胶囊定格；
   /// - 恢复跟随（3 秒无操作 / 点胶囊 / 点行 seek）：回到跟随态。
   bool _onScrollNotification(ScrollNotification notification) {
     final isUserDrag =
@@ -360,8 +388,14 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
         notification.direction != ScrollDirection.idle;
     if (isUserDrag || isUserFling) {
       _resumeFollowTimer?.cancel();
+      final wasFollowing = _follow;
       _setUserScrolling(true);
       _setFollow(false);
+      if (wasFollowing) {
+        // 进入手动浏览：选中行先初始化为基准线对齐行（此刻即当前行），
+        // 随后由 [_onScrollOffsetChanged] 逐帧跟踪，避免胶囊/高亮闪烁
+        _selectedLine = _computeSelectedLine();
+      }
       _resumeFollowTimer = Timer(_followResumeDelay, () {
         if (!mounted) return;
         _setUserScrolling(false);
@@ -372,7 +406,7 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
         }
       });
     } else if (notification is ScrollEndNotification && _isUserScrolling) {
-      // 滚动完全停止（含惯性结束）：显示基准线与胶囊播放按钮
+      // 滚动完全停止（含惯性结束）：选中行定格，显示行高亮
       _setUserScrolling(false);
     }
     return false;
@@ -386,19 +420,33 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     widget.onFollowChanged?.call(value);
   }
 
-  /// 更新「滚动物理进行中」标志（决定基准线/胶囊是否显示）。
+  /// 更新「滚动物理进行中」标志（决定选中行高亮是否显示）。
   void _setUserScrolling(bool value) {
     if (_isUserScrolling == value) return;
     _isUserScrolling = value;
     setState(() {});
   }
 
+  /// 滚动偏移变化（用户拖动/惯性/程序滚动）：手动浏览态逐帧刷新选中行，
+  /// 驱动常驻胶囊跟随基准线对齐行移动；仅下标变化才 setState。
+  /// 跟随态选中行即当前行（[_bubbleLineIndex] 直取 [_currentIndex]），不反算。
+  void _onScrollOffsetChanged() {
+    if (_follow) return;
+    final next = _computeSelectedLine();
+    if (next != _selectedLine) {
+      setState(() => _selectedLine = next);
+    }
+  }
+
+  /// 常驻播放胶囊的宿主行：跟随态=当前行（锚定在基准线）；手动浏览态=选中行。
+  int? get _bubbleLineIndex =>
+      _follow ? (_currentIndex >= 0 ? _currentIndex : null) : _selectedLine;
+
   /// 与基准线（视口上部 [_anchorViewportRatio] 处）对齐的歌词行下标。
   ///
-  /// 仅在手动停止、构建 overlay 时调用（滚动期间 overlay 不显示，
-  /// 不做逐帧计算）。行高估算同 [_scrollToLine]，误差约一个副行高，
-  /// 对「选中行」判定足够。
-  int? _selectedLineIndex() {
+  /// 仅在手动浏览态使用（滚动停止定影选中行、滚动中逐帧跟踪胶囊归属）。
+  /// 行高估算同 [_scrollToLine]，误差约一个副行高，对「选中行」判定足够。
+  int? _computeSelectedLine() {
     if (!_scrollController.hasClients || _lineTopOffsets.isEmpty) return null;
     final position = _scrollController.position;
     if (position.viewportDimension <= 0) return null;
@@ -417,12 +465,12 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     return selected.clamp(0, _lines.length - 1);
   }
 
-  /// 胶囊播放按钮：seek 到基准线对齐行的显示轴 startTime，并立即恢复跟随。
-  /// （新交互收敛：点胶囊 = 选中该行起播，随后恢复自动跟随。）
-  void _playSelectedLine() {
-    final index = _selectedLineIndex();
-    if (index == null || index < 0 || index >= _lines.length) return;
-    HapticFeedback.selectionClick();
+  /// 播放指定行：seek 到该行显示轴 startTime，并立即恢复自动跟随。
+  /// （点胶囊 / 点行共用：选中起播，取消 3 秒恢复计时。）
+  /// [withHaptic] 仅胶囊点按触发（触觉反馈），点行沿用旧行为不反馈。
+  void _playLineAt(int index, {bool withHaptic = false}) {
+    if (index < 0 || index >= _lines.length) return;
+    if (withHaptic) HapticFeedback.selectionClick();
     _resumeFollowTimer?.cancel();
     _setUserScrolling(false);
     _setFollow(true);
@@ -541,45 +589,86 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     final mainText = line.text.isEmpty ? '…' : line.text;
     final subText = isCurrent ? _subTextFor(line) : null;
     final subFontSize = _currentFontSize * _subScale;
+    // 手动浏览停止态：选中行（基准线对齐行）高亮——品牌红文字 + 淡色底。
+    // 当前行已有 32px 扫色强调，不叠加高亮（文字样式会冲突）。
+    final isSelected = !_follow &&
+        !_isUserScrolling &&
+        !isCurrent &&
+        index == _selectedLine;
+    // 行右侧常驻播放胶囊：跟随态挂当前行，手动浏览态挂选中行
+    final hasBubble = index == _bubbleLineIndex;
 
     return GestureDetector(
       // 点击行 seek：传该行显示轴 startTime（与旧 LyricsView 一致，
       // 不做逆变换，由 full_player 的 onSeek 回调统一下发）。
       // 点行 = 选中起播，立即恢复自动跟随（新交互收敛，替代旧的
       // 「点行后仍等 3 秒」行为；恢复跟随机制本身保留）。
-      onTap: () {
-        _resumeFollowTimer?.cancel();
-        _setFollow(true);
-        widget.onSeek(Duration(milliseconds: line.startTime));
-      },
+      onTap: () => _playLineAt(index),
       behavior: HitTestBehavior.opaque,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: _lineVerticalPadding),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        // Stack 尺寸=Column 尺寸（非定位子决定），行布局与行高测量不受影响；
+        // 选中行淡色底与播放胶囊均为定位子，不参与尺寸计算。
+        // clipBehavior.none：胶囊左尖角允许向行左缘外溢出（极窄行如「…」
+        // 时尖角探出行盒，指向歌词不被裁切）。
+        child: Stack(
+          clipBehavior: Clip.none,
           children: [
-            // 字号/字重平滑过渡（200ms），当前行以纯白做扫色模板
-            AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOut,
-              style: isCurrent
-                  ? _currentTextStyle()
-                  : _otherTextStyle(colorScheme),
-              child: isCurrent
-                  ? _buildCurrentLine(line, colorScheme)
-                  : Text(mainText),
-            ),
-            if (subText != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  subText,
-                  style: TextStyle(
-                    fontSize: subFontSize,
-                    height: 1.35,
-                    fontWeight: FontWeight.w500,
-                    color: colorScheme.onSurfaceVariant,
+            // 选中行淡色底（贴着文本行宽）
+            if (isSelected)
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(
+                      _selectedHighlightRadius,
+                    ),
                   ),
+                ),
+              ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 字号/字重平滑过渡（200ms），当前行以纯白做扫色模板
+                AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                  style: isCurrent
+                      ? _currentTextStyle()
+                      : isSelected
+                          // 选中行：仅换色（字号/字重/字轴不变，行高测量契约
+                          // 不受影响），品牌红 + 淡色底双重强调
+                          ? _otherTextStyle(colorScheme).copyWith(
+                              color: colorScheme.primary,
+                            )
+                          : _otherTextStyle(colorScheme),
+                  child: isCurrent
+                      ? _buildCurrentLine(line, colorScheme)
+                      : Text(mainText),
+                ),
+                if (subText != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      subText,
+                      style: TextStyle(
+                        fontSize: subFontSize,
+                        height: 1.35,
+                        fontWeight: FontWeight.w500,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            // 行右侧常驻播放胶囊（尖角朝左指向该行歌词）
+            if (hasBubble)
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child: _buildPlayBubble(colorScheme, index),
                 ),
               ),
           ],
@@ -623,27 +712,23 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
           _ensureLayout(width);
           // 首尾各留视口高度 35% 的空白：首行可锚定到视口上部 1/3 处
           _topPadding = constraints.maxHeight * _edgeViewportRatio;
-          return Stack(
-            fit: StackFit.expand,
-            children: [
-              _buildFollowFocusFade(
-                child: NotificationListener<ScrollNotification>(
-                  onNotification: _onScrollNotification,
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    padding: EdgeInsets.symmetric(
-                      vertical: _topPadding,
-                      horizontal: 24,
-                    ),
-                    itemCount: _lines.length,
-                    itemBuilder: (context, index) => _buildLine(context, index),
-                  ),
+          // 选中态不再用基准线 overlay：行高亮 + 行右侧常驻胶囊均随行走
+          // （见 [_buildLine]），此处只保留跟随态渐变焦点层。
+          // 列表子树挂 [_lyricsListKey]：焦点层树形切换时原地转移、不重挂。
+          return _buildFollowFocusFade(
+            child: NotificationListener<ScrollNotification>(
+              key: _lyricsListKey,
+              onNotification: _onScrollNotification,
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: EdgeInsets.symmetric(
+                  vertical: _topPadding,
+                  horizontal: 24,
                 ),
+                itemCount: _lines.length,
+                itemBuilder: (context, index) => _buildLine(context, index),
               ),
-              // 手动浏览停止：基准线 + 胶囊播放按钮（跟随中/滚动中隐藏）
-              if (!_follow && !_isUserScrolling)
-                _buildSelectionBaseline(constraints.maxHeight),
-            ],
+            ),
           );
         },
       ),
@@ -661,6 +746,10 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
   /// - 渐变静态，不随行距逐帧重算。
   /// 显隐用 [TweenAnimationBuilder] 在 250ms 内插值边缘 alpha（1→0），
   /// 避免模式切换时突兀跳变。
+  ///
+  /// 树形稳定性：builder 在 t 跨 0 时会在「ShaderMask(包裹)」与「裸子树」
+  /// 两种树形间切换——列表子树因此挂 [_lyricsListKey]（GlobalKey）保命，
+  /// 切换时 Element 原地转移而非卸载重挂（详见该字段注释）。
   Widget _buildFollowFocusFade({required Widget child}) {
     return TweenAnimationBuilder<double>(
       tween: Tween(end: _follow ? 1.0 : 0.0),
@@ -692,57 +781,88 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     );
   }
 
-  /// 手动浏览停止态的选中基准线 + 胶囊播放按钮。
+  /// 行右侧常驻播放胶囊（lyric-bubble 样式：胶囊体 + 左尖角指向该行歌词）。
   ///
-  /// 横线固定在「默认播放位置」（视口上部 [_anchorViewportRatio] 处，与
-  /// 自动跟随的当前行锚定点重合），表示松手后将被播放的行；横线右端是
-  /// 小胶囊播放按钮，点击 seek 到对齐行并恢复跟随。横线本体不参与命中
-  /// （IgnorePointer），只有胶囊可点，不挡歌词点击 seek。
-  Widget _buildSelectionBaseline(double viewportHeight) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Positioned(
-      left: 24,
-      right: 24,
-      top: viewportHeight * _anchorViewportRatio - 14,
-      child: SizedBox(
-        height: 28,
-        child: Row(
-          children: [
-            Expanded(
-              child: IgnorePointer(
-                child: Center(
-                  child: Container(
-                    height: 1.5,
-                    color: colorScheme.onSurfaceVariant
-                        .withValues(alpha: 0.35),
-                  ),
-                ),
+  /// 宿主行：跟随态=当前行，手动浏览态=选中行（基准线对齐行），随行走、
+  /// 随列表滚，不只在停止态出现。点按 seek 到该行 startTime 并恢复跟随。
+  ///
+  /// 命中行为：整块 [_bubbleWidth]×[_bubbleHeight] 不透明可点
+  /// （[HitTestBehavior.opaque]），但只挂 tap 手势——垂直拖动会输给
+  /// ListView 的拖拽器（>slop 即被拒绝），因此「从胶囊上起手的滚动」
+  /// 依然正常滚动，不会误触 seek、也不会挡住歌词浏览。
+  Widget _buildPlayBubble(ColorScheme colorScheme, int index) {
+    return GestureDetector(
+      key: AppleMusicLyricsView.capsulePlayKey,
+      onTap: () => _playLineAt(index, withHaptic: true),
+      behavior: HitTestBehavior.opaque,
+      child: CustomPaint(
+        painter: _LyricBubblePainter(fill: colorScheme.primaryContainer),
+        // SizedBox 锁死 46×30：宿主 Positioned(top/bottom=0) 给的是行高
+        // 拉伸约束，内层 Center（空因子）会撑满可用高度，必须显式限幅；
+        // 图标居中于胶囊体（尖角左侧 9px 不计入），配色走 token。
+        child: SizedBox(
+          width: _bubbleWidth,
+          height: _bubbleHeight,
+          child: Padding(
+            padding: const EdgeInsets.only(left: _bubbleTipWidth),
+            child: Center(
+              child: Icon(
+                Icons.play_arrow_rounded,
+                size: 18,
+                color: colorScheme.onPrimaryContainer,
               ),
             ),
-            const SizedBox(width: 10),
-            Material(
-              color: colorScheme.primaryContainer,
-              shape: const StadiumBorder(),
-              child: InkWell(
-                key: AppleMusicLyricsView.capsulePlayKey,
-                onTap: _playSelectedLine,
-                customBorder: const StadiumBorder(),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 5,
-                  ),
-                  child: Icon(
-                    Icons.play_arrow_rounded,
-                    size: 18,
-                    color: colorScheme.onPrimaryContainer,
-                  ),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
+}
+
+/// 常驻播放胶囊（lyric-bubble 样式）几何：整体宽高 / 左尖角宽与半高 /
+/// 胶囊体圆角。尖角底高 11 < 体高 30 − 2×圆角 9 = 12，底边完全落在胶囊体
+/// 左边缘的平直段内，同色并集无凹口。
+const double _bubbleWidth = 46;
+const double _bubbleHeight = 30;
+const double _bubbleTipWidth = 9;
+const double _bubbleTipHalfHeight = 5.5;
+const double _bubbleRadius = 9;
+
+/// 播放胶囊外形：圆角胶囊体 + 左尖角（气泡指向歌词行）。
+///
+/// 体与尖角同色不透明分绘（同一 canvas 先后绘制，取并集），避免
+/// [Path.combine] 的布尔运算开销；尖角底边完全落在胶囊体左边缘的平直段内
+/// （底高 11 < 体高 30 − 2×圆角 9 = 12），并集无凹口、无接缝。
+class _LyricBubblePainter extends CustomPainter {
+  _LyricBubblePainter({required this.fill});
+
+  final Color fill;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = fill;
+    final cy = size.height / 2;
+    // 胶囊体（右端与左端均为圆角，左边缘中段平直供尖角拼接）
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(_bubbleTipWidth, 0, size.width - _bubbleTipWidth,
+            size.height),
+        const Radius.circular(_bubbleRadius),
+      ),
+      paint,
+    );
+    // 左尖角（等腰三角形，顶点指向左侧歌词行）
+    canvas.drawPath(
+      Path()
+        ..moveTo(_bubbleTipWidth, cy - _bubbleTipHalfHeight)
+        ..lineTo(0, cy)
+        ..lineTo(_bubbleTipWidth, cy + _bubbleTipHalfHeight)
+        ..close(),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_LyricBubblePainter oldDelegate) =>
+      oldDelegate.fill != fill;
 }

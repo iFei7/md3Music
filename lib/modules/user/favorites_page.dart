@@ -28,7 +28,12 @@ import 'import_playlist_page.dart';
 import 'widgets/offline_banner.dart';
 
 class FavoritesPage extends StatefulWidget {
-  const FavoritesPage({super.key});
+  /// 初始选中的 tab（0=歌单 1=本地 2=专辑 3=歌手）。
+  /// v6（音乐库 9 项子页面全量化）：「歌单/专辑/歌手」可选 Tab 与音乐库
+  /// 入口区复用本页时预选对应 tab，避免造重复页；主页「收藏」tab 用默认 0。
+  final int initialTab;
+
+  const FavoritesPage({super.key, this.initialTab = 0});
 
   @override
   State<FavoritesPage> createState() => _FavoritesPageState();
@@ -119,7 +124,11 @@ class _FavoritesPageState extends State<FavoritesPage>
   void initState() {
     super.initState();
     // 4 tab：歌单 / 本地 / 专辑 / 歌手（本地音乐面板嵌入，见 LibraryMusicPanel）
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(
+      length: 4,
+      vsync: this,
+      initialIndex: widget.initialTab.clamp(0, 3),
+    );
     _tabController.addListener(_onTabChanged);
     // 立即探测一次网络 + 每 30 秒兜底探测（dio 拦截器会同步更新
     // KugouApiClient.networkReachable，banner 自动跟随）。

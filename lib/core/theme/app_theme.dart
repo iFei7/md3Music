@@ -753,12 +753,13 @@ class SonifyColors extends ThemeExtension<SonifyColors> {
 /// 字重规则（方案 §0.3）：Medium 为主、Bold 用于标题、禁用 w600 以上。
 /// 字体族不指定：跟随全局 ThemeData.fontFamily（含用户自定义字体切换）。
 abstract final class SonifyTextStyles {
-  /// 页面大标题（一级页列表首 item）：35sp Bold，lineHeight 40。
-  /// 出处：Title.kt:1135-1140。
+  /// 页面大标题（一级页列表首 item）：20sp Bold，行高 36dp。
+  /// 与右上角 36dp 用户头像等高（标题规格收敛：加粗 w700 + 36dp 行高，
+  /// 替代原 sonify 35sp/lineHeight 40 规格，Title.kt:1135-1140 仅作参照）。
   static const TextStyle largeTitle = TextStyle(
-    fontSize: 35,
+    fontSize: 20,
     fontWeight: FontWeight.w700,
-    height: 40 / 35,
+    height: 36 / 20,
     letterSpacing: 0,
   );
 

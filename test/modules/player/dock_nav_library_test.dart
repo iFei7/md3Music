@@ -85,4 +85,54 @@ void main() {
     expect(find.byIcon(Icons.library_music_outlined), findsNothing,
         reason: '选中态不应再显示 outlined 图标');
   });
+
+  testWidgets('v6：开启「最近播放」可选 Tab 后 Dock 渲染对应导航项，点击可切换', (tester) async {
+    // 音乐库子页面（v6）注册为可选 Tab：默认隐藏不进 Dock；经主页管理
+    // 手动开启后，Dock 导航项跟随 TabConfigProvider.visibleTabs 实时渲染。
+    SharedPreferences.setMockInitialValues({});
+    final tabConfig = TabConfigProvider();
+    String? selected;
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<PlayerProvider>(create: (_) => PlayerProvider()),
+          ChangeNotifierProvider<TabConfigProvider>.value(value: tabConfig),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: GlassDockPlayer(
+                selectedTabId: 'discover',
+                onSelectTab: (id) => selected = id,
+                navExpanded: ValueNotifier<bool>(true),
+                onNavExpandedChanged: (_) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    // 默认配置下不渲染（可选 Tab 默认隐藏）
+    expect(find.byIcon(Icons.history_outlined), findsNothing,
+        reason: '可选 Tab 默认隐藏，Dock 不应渲染');
+    expect(find.bySemanticsLabel('最近播放'), findsNothing);
+
+    // 主页管理开启后 Dock 实时渲染
+    await tabConfig.toggleTabVisibility('recent');
+    await tester.pump();
+
+    expect(find.byIcon(Icons.history_outlined), findsOneWidget,
+        reason: '开启后 Dock 应渲染「最近播放」导航项');
+    expect(find.bySemanticsLabel('最近播放'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.history_outlined));
+    // AppHaptics.tick（_DockNavItem 点击反馈）fire-and-forget 注册 300ms
+    // 超时 Timer，必须推进 fake 时间到期，否则测试结束时 pending timer 断言失败
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(selected, 'recent', reason: '点击「最近播放」应回调 onSelectTab(recent)');
+  });
 }

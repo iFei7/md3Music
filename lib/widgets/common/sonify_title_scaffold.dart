@@ -10,9 +10,11 @@ import '../../core/theme/app_theme.dart';
 ///
 /// 结构约定（与 sonify 一级页骨架同构，Title.kt:402-466）：
 /// - 列表首 item = 状态栏占位 + 大标题（[SonifyTextStyles.largeTitle]
-///   35sp Bold，水平边距 20dp，距顶 8dp）；
-/// - 顶栏悬浮叠加在列表之上：背景玻璃（回退磨砂档：blur 14dp + 页面色 α0.7，
-///   Title.kt:976-977）随滚动 120ms 淡入出（Title.kt:952-953）；
+///   20sp Bold、行高 36dp——与右上角 36dp 用户头像等高；水平边距
+///   20dp，距顶 8dp）；
+/// - 顶栏悬浮叠加在列表之上：背景**从上到下的渐变模糊带**（blur 14dp +
+///   页面色 α0.7，Title.kt:976-977，经 ShaderMask dstIn 线性渐变自栏体
+///   顶部全强度向下衰减至完全透明）随滚动 120ms 淡入出（Title.kt:952-953）；
 /// - 大标题随滚动**在顶栏玻璃下溶解**：透明度 = `1 + offset/height × 1.8`
 ///   clamp 0~1（Title.kt:588-589）；完全没入（alpha ≤ 0）后小标题
 ///   （[SonifyTextStyles.barTitle] 18.5sp Bold）才浮现——两个标题从不同时可见
@@ -251,7 +253,8 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
   }
 }
 
-/// 大标题 item：状态栏占位 + 8dp 顶距 + 35sp Bold 标题（透明度随滚动溶解）。
+/// 大标题 item：状态栏占位 + 8dp 顶距 + 20sp Bold 标题（行高 36dp，
+/// 与顶栏 36dp 头像等高；透明度随滚动溶解）。
 ///
 /// 高度实测通过 [onHeightChanged] 回传（字体缩放/文本变化自适应），
 /// 供吸附几何计算使用（对应 sonify `state.layoutInfo` 读首 item size）。
@@ -308,9 +311,10 @@ class _LargeTitleItem extends StatelessWidget {
 
 /// 顶栏：状态栏区域 + 54dp 栏体（Title.kt:989）。
 ///
-/// - 背景：回退磨砂档（blur 14dp + 页面色 α0.7，Title.kt:976-977），
-///   120ms 淡入出；渐进模糊（12dp→0 + 40dp 淡出尾）作为增强项后续迭代
-///   （方案 §9.4 先上回退档）。
+/// - 背景：**从上到下的渐变模糊带**（blur 14dp + 页面色 α0.7，
+///   Title.kt:976-977）——BackdropFilter 出磨砂，外层 ShaderMask
+///   （dstIn 线性渐变，栏体顶部全强度 → 底缘全透明）让模糊强度自上而下
+///   衰减，覆盖范围与顶栏栏体一致；120ms 淡入出。
 /// - 小标题：18.5sp Bold，仅大标题完全没入后浮现，120ms 淡入出。
 class _TopBar extends StatelessWidget {
   const _TopBar({
@@ -341,7 +345,7 @@ class _TopBar extends StatelessWidget {
             height: SonifySpacing.topBar,
             child: Stack(
               children: [
-                // 栏背景玻璃（覆盖状态栏 + 54dp 栏体，模糊列表内容）
+                // 栏背景渐变模糊带（覆盖 54dp 栏体，模糊列表内容）
                 Positioned.fill(
                   child: ValueListenableBuilder<bool>(
                     valueListenable: showBarBackground,
@@ -355,13 +359,31 @@ class _TopBar extends StatelessWidget {
                         ),
                       );
                     },
+                    // 渐变模糊：BackdropFilter 出磨砂（blur 14dp + 页面色
+                    // α0.7，Title.kt:976-977），ShaderMask dstIn 线性渐变
+                    // 把整带自栏体顶部全强度向下衰减到底缘全透明——顶部强
+                    // 模糊、底部渐隐，高度与顶栏栏体一致。
                     child: ClipRect(
-                      child: BackdropFilter(
-                        // sonify 回退磨砂：blur 14dp（Title.kt:976）
-                        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-                        child: ColoredBox(
-                          // 页面色 α0.7（Title.kt:977）
-                          color: cs.surface.withValues(alpha: 0.7),
+                      child: ShaderMask(
+                        shaderCallback: (bounds) => LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          // 顶部 ~60% 全强度毛玻璃，之后淡出到底缘全透明
+                          colors: const [
+                            Colors.white,
+                            Colors.white,
+                            Colors.transparent,
+                          ],
+                          stops: const [0, 0.6, 1],
+                        ).createShader(bounds),
+                        blendMode: BlendMode.dstIn,
+                        child: BackdropFilter(
+                          // sonify 回退磨砂：blur 14dp（Title.kt:976）
+                          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                          child: ColoredBox(
+                            // 页面色 α0.7（Title.kt:977）
+                            color: cs.surface.withValues(alpha: 0.7),
+                          ),
                         ),
                       ),
                     ),

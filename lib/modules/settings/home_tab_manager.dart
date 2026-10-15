@@ -29,6 +29,21 @@ IconData homeTabIcon(String tabId) {
       return Icons.radio;
     case 'audiobook':
       return Icons.auto_stories;
+    // v6 起音乐库子页面可选 Tab（与 app.dart 各 tab 图标保持一致）
+    case 'playlists':
+      return Icons.queue_music;
+    case 'albums':
+      return Icons.album;
+    case 'artists':
+      return Icons.people;
+    case 'recent':
+      return Icons.history;
+    case 'folders':
+      return Icons.folder;
+    case 'scan':
+      return Icons.radar;
+    case 'local_favorites':
+      return Icons.favorite_border;
     default:
       return Icons.circle;
   }

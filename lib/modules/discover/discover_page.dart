@@ -29,9 +29,9 @@ import '../search/search_page.dart';
 /// 首页 / Discover（UI 重设计批次 1，方案 §1）。
 ///
 /// 结构（方案 §1.2 线框）：
-/// - [SonifyTitleScaffold] 大标题「发现」折叠顶栏（列表首 item，滚动溶解，
+/// - [SonifyTitleScaffold] 大标题「首页」折叠顶栏（列表首 item，滚动溶解，
 ///   没入后 18.5sp 小标题浮现，180ms EaseOutCubic 吸附）；
-/// - 顶栏右上**固定用户头像**（常驻不折叠，点击进 /user）；
+/// - 顶栏右上**固定用户头像**（常驻不折叠，点击进设置页 /settings）；
 /// - 折叠后头像左侧浮现搜索/识曲两枚玻璃圆钮（点击行为同搜索框）；
 /// - 列表：胶囊搜索框（内右侧识曲按钮）→ 快捷入口行（FM/识曲）→ 每日推荐
 ///   → 编辑精选/主题歌单/热门歌单/新碟上架/排行榜 横滑 Rail（[CoverRail]）
@@ -231,7 +231,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
           : _error != null && !_hasAnySectionData
           ? Scaffold(body: _buildError(colorScheme))
           : SonifyTitleScaffold(
-              title: '发现',
+              title: '首页',
               // 顶栏右侧固定用户头像（常驻，不随折叠）
               trailing: _buildUserAvatar(),
               // 折叠后在头像左侧浮现搜索/识曲圆钮
@@ -378,12 +378,14 @@ class _DiscoverPageState extends State<DiscoverPage> {
     );
   }
 
-  /// 顶栏固定用户头像（36dp）：常驻不参与折叠，点击进 /user
-  /// （未登录时用户中心自身展示登录引导）。
+  /// 顶栏固定用户头像（36dp）：常驻不参与折叠，点击进设置页
+  /// （app.dart 已注册 '/settings' 路由，与 user_center_page 的
+  /// MaterialPageRoute push 同指 SettingsPage；pushNamed 独立入栈，
+  /// 与底部 tab 中的实例并存无冲突）。
   Widget _buildUserAvatar() {
     final cs = Theme.of(context).colorScheme;
     return GestureDetector(
-      onTap: () => Navigator.of(context).pushNamed('/user'),
+      onTap: () => Navigator.of(context).pushNamed('/settings'),
       behavior: HitTestBehavior.opaque,
       child: Selector<KugouProvider, String?>(
         selector: (_, kugou) => kugou.userInfo?.avatar,

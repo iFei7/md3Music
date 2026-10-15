@@ -255,5 +255,64 @@ void main() {
       // trailing 依旧在场（固定头像不随折叠消失）
       expect(find.byIcon(Icons.person), findsOneWidget);
     });
+
+    testWidgets('大标题规格：20sp Bold、行高 36dp（与 36dp 头像等高）',
+        (tester) async {
+      final (widget, _) = _host(title: '发现');
+      await tester.pumpWidget(widget);
+      await tester.pump();
+
+      final largeText = tester.widget<Text>(find.text('发现').first);
+      expect(largeText.style?.fontSize, 20);
+      expect(largeText.style?.fontWeight, FontWeight.w700);
+      // 测试字体下行高 = fontSize × height = 20 × 1.8 = 36dp
+      expect(tester.getSize(find.text('发现').first).height, 36);
+    });
+
+    testWidgets('上滑后顶栏渐变模糊带出现（ShaderMask 渐变包裹 BackdropFilter）',
+        (tester) async {
+      final (widget, controller) = _host(title: '发现');
+      await tester.pumpWidget(widget);
+      await tester.pump();
+      final h = _titleItemHeight(tester);
+
+      // 栏背景 AnimatedOpacity 门控（渐变模糊带整体挂在它下面）
+      AnimatedOpacity barAnimated(WidgetTester tester) =>
+          tester.widget<AnimatedOpacity>(
+            find
+                .ancestor(
+                  of: find.byType(BackdropFilter),
+                  matching: find.byType(AnimatedOpacity),
+                )
+                .first,
+          );
+
+      // 初始态：栏背景目标透明度 0（渐变带不可见）
+      expect(barAnimated(tester).opacity, 0);
+
+      // 上滑任意距离：栏背景激活 → 渐变模糊带在场
+      controller.jumpTo(h * 0.1);
+      await tester.pump();
+
+      final shaderMask = tester.widget<ShaderMask>(find.byType(ShaderMask));
+      // dstIn 混合：渐变 alpha 自上而下衰减整层（模糊 + 叠色）
+      expect(shaderMask.blendMode, BlendMode.dstIn);
+      // 渐变回调产出竖向（上→下）线性渐变着色器
+      final shader = shaderMask.shaderCallback(
+        const Rect.fromLTWH(0, 0, 100, 54),
+      );
+      expect(shader, isNotNull);
+
+      // 磨砂层（blur 14dp BackdropFilter）位于 ShaderMask 之内、栏背景
+      // 透明度门控之下（目标值 1）
+      expect(barAnimated(tester).opacity, 1);
+      expect(
+        find.ancestor(
+          of: find.byType(BackdropFilter),
+          matching: find.byType(ShaderMask),
+        ),
+        findsWidgets,
+      );
+    });
   });
 }

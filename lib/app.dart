@@ -29,6 +29,7 @@ import 'modules/discover/discover_page.dart';
 import 'utils/landscape_immersive.dart';
 import 'modules/user/user_center_page.dart';
 import 'modules/user/favorites_page.dart';
+import 'modules/user/play_history_page.dart';
 
 import 'modules/player/full_player.dart';
 import 'modules/player/full_player_route.dart';
@@ -38,6 +39,7 @@ import 'modules/playlist/playlist_page.dart';
 import 'modules/search/search_page.dart';
 import 'modules/settings/settings_page.dart';
 import 'modules/library/library_page.dart';
+import 'modules/library/scan_status_page.dart';
 import 'modules/login/login_page.dart';
 import 'widgets/app_animation.dart';
 import 'modules/onboarding/onboarding_page.dart';
@@ -648,6 +650,30 @@ class _MainLayoutState extends State<_MainLayout>
         // 本地音乐 tab（可选 Tab，默认隐藏）：与快捷方式路由共用 LibraryPage
         page = const LibraryPage();
         break;
+      // v6 起音乐库 9 项子页面注册为可选 Tab（默认隐藏，主页管理可开启）。
+      // 复用优先：歌单/专辑/歌手落「我的收藏」对应 tab；文件夹/本地收藏
+      // 复用本地音乐页并预选对应分类 tab；最近播放/扫描状态为既有/新页面。
+      case 'playlists':
+        page = const FavoritesPage(initialTab: 0);
+        break;
+      case 'albums':
+        page = const FavoritesPage(initialTab: 2);
+        break;
+      case 'artists':
+        page = const FavoritesPage(initialTab: 3);
+        break;
+      case 'recent':
+        page = const PlayHistoryPage();
+        break;
+      case 'folders':
+        page = const LibraryPage(initialTab: 3);
+        break;
+      case 'scan':
+        page = const ScanStatusPage();
+        break;
+      case 'local_favorites':
+        page = const LibraryPage(initialTab: 4);
+        break;
       case 'fm':
         page = const PersonalFmPage();
         break;
@@ -759,6 +785,70 @@ class _MainLayoutState extends State<_MainLayout>
             selected: isSelected,
             outlinedIcon: Icons.person_outlined,
             filledIcon: Icons.person,
+          ),
+          label: tab.label,
+        );
+      // v6 起音乐库子页面可选 Tab（图标与 home_tab_manager 映射一致）
+      case 'playlists':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.queue_music_outlined,
+            filledIcon: Icons.queue_music,
+          ),
+          label: tab.label,
+        );
+      case 'albums':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.album_outlined,
+            filledIcon: Icons.album,
+          ),
+          label: tab.label,
+        );
+      case 'artists':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.people_outlined,
+            filledIcon: Icons.people,
+          ),
+          label: tab.label,
+        );
+      case 'recent':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.history_outlined,
+            filledIcon: Icons.history,
+          ),
+          label: tab.label,
+        );
+      case 'folders':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.folder_outlined,
+            filledIcon: Icons.folder,
+          ),
+          label: tab.label,
+        );
+      case 'scan':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.radar_outlined,
+            filledIcon: Icons.radar,
+          ),
+          label: tab.label,
+        );
+      case 'local_favorites':
+        return NavigationDestination(
+          icon: _AnimatedTabIcon(
+            selected: isSelected,
+            outlinedIcon: Icons.favorite_outline,
+            filledIcon: Icons.favorite,
           ),
           label: tab.label,
         );

@@ -9,17 +9,29 @@ import '../../core/utils/app_toast.dart';
 import '../../providers/library_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../player/full_player_route.dart';
+import '../user/favorites_page.dart';
+import '../user/play_history_page.dart';
 import 'albums_page.dart';
 import 'artists_page.dart';
 import 'folders_page.dart';
+import 'scan_status_page.dart';
 import 'songs_page.dart';
 
 /// 本地音乐页（独立路由形态）。
 ///
 /// 页面内容已抽为可嵌入的 [LibraryMusicPanel]（去 Scaffold），收藏页
 /// 「本地」tab 直接嵌入同一面板；本页仅保留路由壳（AppBar + FAB）。
+///
+/// v6（音乐库 9 项子页面全量化）：壳内新增 [_LibraryHubEntries] 入口区，
+/// 补齐设计稿中跨云/本地的导航项（我的收藏/歌单/专辑/歌手/最近播放/
+/// 扫描状态）；曲目/专辑/艺术家/文件夹/收藏五类本地内容仍由面板承载。
 class LibraryPage extends StatefulWidget {
-  const LibraryPage({super.key});
+  /// 初始选中的面板 tab（0=曲目 1=专辑 2=艺术家 3=文件夹 4=收藏）。
+  /// 供「文件夹」「本地收藏」等可选 Tab 复用本页时预选对应分类，
+  /// 避免造重复页（复用既有面板，仅预选 tab）。
+  final int initialTab;
+
+  const LibraryPage({super.key, this.initialTab = 0});
 
   @override
   State<LibraryPage> createState() => _LibraryPageState();
@@ -38,7 +50,12 @@ class _LibraryPageState extends State<LibraryPage> {
           ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
         ),
       ),
-      body: const LibraryMusicPanel(),
+      body: Column(
+        children: [
+          const _LibraryHubEntries(),
+          Expanded(child: LibraryMusicPanel(initialTab: widget.initialTab)),
+        ],
+      ),
       floatingActionButton: _buildScanFAB(context),
     );
   }
@@ -67,6 +84,126 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 }
 
+/// 音乐库入口区：设计稿 9 项子页面中跨云/本地的导航项。
+///
+/// 面板已承载 曲目/专辑/艺术家/文件夹/收藏 五类本地内容（覆盖设计稿的
+/// 本地音乐/文件夹/本地收藏及本地专辑/歌手），本区补齐其余入口：
+/// 我的收藏/歌单/专辑/歌手（云，落「我的收藏」对应 tab）、最近播放
+/// （播放历史页）、扫描状态（本地扫描状态页）。
+///
+/// 仅渲染于独立路由壳（[LibraryPage]）；收藏页「本地」tab 嵌入的面板
+/// 形态不显示本区（避免与宿主收藏页入口重复）。
+class _LibraryHubEntries extends StatelessWidget {
+  const _LibraryHubEntries();
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    // 与搜索栏/ TabBar 容器同规格：squircle 9dp 卡底材质
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: AppSpacing.xs,
+      ),
+      child: DecoratedBox(
+        decoration: ShapeDecoration(
+          color: colorScheme.surfaceContainerHigh.withValues(alpha: 0.6),
+          shape: SmoothRectangleBorder(
+            borderRadius: BorderRadius.circular(SonifyRadius.card),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  _buildCell(
+                    context,
+                    icon: Icons.favorite,
+                    label: '我的收藏',
+                    page: const FavoritesPage(),
+                  ),
+                  _buildCell(
+                    context,
+                    icon: Icons.queue_music,
+                    label: '歌单',
+                    page: const FavoritesPage(initialTab: 0),
+                  ),
+                  _buildCell(
+                    context,
+                    icon: Icons.album,
+                    label: '专辑',
+                    page: const FavoritesPage(initialTab: 2),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  _buildCell(
+                    context,
+                    icon: Icons.person,
+                    label: '歌手',
+                    page: const FavoritesPage(initialTab: 3),
+                  ),
+                  _buildCell(
+                    context,
+                    icon: Icons.history,
+                    label: '最近播放',
+                    page: const PlayHistoryPage(),
+                  ),
+                  _buildCell(
+                    context,
+                    icon: Icons.radar,
+                    label: '扫描状态',
+                    page: const ScanStatusPage(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCell(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required Widget page,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(SonifyRadius.card),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => page),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 22, color: colorScheme.primary),
+              const Gap(AppSpacing.xs),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 本地音乐可嵌入面板（去 Scaffold 形态）。
 ///
 /// 承载原 LibraryPage 的全部内容：搜索栏 + 分类 TabBar + 内容区
@@ -74,7 +211,12 @@ class _LibraryPageState extends State<LibraryPage> {
 ///（[LibraryProvider.loadSavedSongs]/[loadScanFolders]）原样保留在面板
 /// 内部，独立路由与收藏页嵌入两种形态共用同一份。
 class LibraryMusicPanel extends StatefulWidget {
-  const LibraryMusicPanel({super.key});
+  /// 初始选中的分类 tab（0=曲目 1=专辑 2=艺术家 3=文件夹 4=收藏）。
+  /// 独立路由形态由 [LibraryPage.initialTab] 传入（如「文件夹」可选 Tab
+  /// 预选 3）；嵌入收藏页「本地」tab 时用默认 0。
+  final int initialTab;
+
+  const LibraryMusicPanel({super.key, this.initialTab = 0});
 
   @override
   State<LibraryMusicPanel> createState() => _LibraryMusicPanelState();
@@ -89,7 +231,11 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(
+      length: 5,
+      vsync: this,
+      initialIndex: widget.initialTab.clamp(0, 4),
+    );
     _searchFocusNode = FocusNode();
     // 监听 FullPlayer 展开状态：展开时取消搜索框焦点，防止返回时自动弹输入法
     playerExpansion.addListener(_onPlayerExpansionChanged);
@@ -250,7 +396,7 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
                     AlbumsPage(albums: libraryProvider.albums),
                     ArtistsPage(artists: libraryProvider.artists),
                     FoldersPage(folders: libraryProvider.folders),
-                    const _LocalFavoritesTab(),
+                    const LocalFavoritesPanel(),
                   ],
                 ),
         ),
@@ -488,8 +634,12 @@ void _showExcludedFolderManagement(BuildContext context) {
 /// 本地音乐收藏 tab：从 `LocalFavoritesProvider` 读取 id 集合，再从
 /// `LibraryProvider.allSongs` 中按 id 匹配出完整 Song，传入 `SongsPage`
 /// 复用其随机播放 / 排序 / 定位当前播放等交互。
-class _LocalFavoritesTab extends StatelessWidget {
-  const _LocalFavoritesTab();
+///
+/// v6（音乐库 9 项子页面全量化）：由私有 tab 组件抽取为公共面板，
+/// 面板「收藏」tab 与「本地收藏」可选 Tab（LibraryPage initialTab=4）
+/// 复用同一份实现，不造重复页。
+class LocalFavoritesPanel extends StatelessWidget {
+  const LocalFavoritesPanel({super.key});
 
   @override
   Widget build(BuildContext context) {

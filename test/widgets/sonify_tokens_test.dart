@@ -110,11 +110,11 @@ void main() {
   });
 
   group('SonifyTextStyles（0.3 排印表）', () {
-    test('textLargeTitle：35sp Bold lineHeight 40', () {
+    test('textLargeTitle：20sp Bold lineHeight 36（与 36dp 头像等高）', () {
       const s = SonifyTextStyles.largeTitle;
-      expect(s.fontSize, 35);
+      expect(s.fontSize, 20);
       expect(s.fontWeight, FontWeight.w700);
-      expect(s.height, 40 / 35);
+      expect(s.height, 36 / 20);
     });
 
     test('textBarTitle：18.5sp Bold（Title.kt:1063-1067）', () {
