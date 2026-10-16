@@ -115,3 +115,102 @@
   `docs/native/phase-5-offline-playlist.md` §10。
 - **阶段边界**：T-P1-07 / T-P1-08 / T-P1-09 / T-P1-10 / T-P1-11 / P2 / P3 **均未实现**（本阶段未越界）；
   未引入 USB 独占、离线下载、下载队列、断点续传或 `depth3d`。
+
+---
+
+# 第五阶段（第二批）· 验证报告：T-P1-08 + T-P1-10/11
+
+> 上面 §0–§4 是 **T-P1-13**（离线歌单播放，提交 `908d349`）的验证记录，原样保留。
+> 本节记录**同一阶段第二批**交付（T-P1-08 音频焦点运行时 + T-P1-10/11 持久化与数据层基础）的验证结果。
+
+## 5. 环境与基线
+
+| 项 | 值 |
+|---|---|
+| 仓库 | `C:/Users/hwx1254427/WorkBuddy/md3Music-native`，分支 `native` |
+| 开工 HEAD | `2942909`（`docs(native): add consolidated phase-4 delivery report`，未推送） |
+| 开工基线测试 | **772 tests / 0 failures / 0 errors / 0 skipped**（54 suites，`--rerun-tasks` 实测） |
+| 工具链 | JDK 17（`~/dev-tools/jdk-17.0.20.1+1`）、AGP 9.0.1、Kotlin 2.3.20、KSP 2.3.12 |
+| 设备 | **无**（沙箱无 Android 设备/模拟器） |
+
+## 6. 逐项命令与结果（均为实测，非估算）
+
+| # | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 1 | `./gradlew projects` | 0 | BUILD SUCCESSFUL（`:app` + `:media3fork`） |
+| 2 | `./gradlew :app:testDebugUnitTest --rerun-tasks` | 0 | **suites=60 / tests=874 / failures=0 / errors=0 / skipped=0** |
+| 3 | `./gradlew :app:assembleDebug` | 0 | BUILD SUCCESSFUL |
+| 4 | `./gradlew :app:lintDebug` | 0 | BUILD SUCCESSFUL；可见告警均为既有，**无本阶段新增**；`lint-baseline.xml` **未修改** |
+| 5 | `./gradlew :app:assembleDebugAndroidTest` | 0 | BUILD SUCCESSFUL |
+| — | Rust 测试 | — | **未执行**（`cargo` 未安装；本阶段 Rust **零改动**） |
+
+### 6.1 测试增量（可复算）
+
+| 批次 | 新增 | 累计 |
+|---|---|---|
+| 开工基线 | — | 772 |
+| T-P1-08（`AudioFocusControllerTest` 22 + `AudioFocusStoreTest` 14 + `PlaybackReducerTest` +7） | +43 | 815 |
+| T-P1-10/11（`PlaybackQueueCodecTest` 15 + `PlaybackCursorStoreTest` 19 + `PersistenceWiringStoreTest` 11 + `PlaybackReducerTest` +6） | +51 | 866 |
+| T-P1-13 边界补齐（`OfflineCacheBoundaryTest` 11） | +11 | **877** |
+
+> 实测 XML 汇总为 **874**（与上表 877 差 3）：`PlaybackReducerTest` 的 3 条既有用例被**改写**（非新增），
+> 上表按「新增方法」计数，XML 按「当前存在的用例」计数。差异已核实，非遗漏。
+
+### 6.2 lint 核验
+
+- 本阶段新增文件（`AudioFocusController` / `Media3AudioFocusEventSource` / `AudioFocusEventSource` /
+  `AppForegroundMonitor` / `ProcessLifecycleAppForegroundMonitor` / `PlaybackQueueCodec` /
+  `PlaybackCursorStore`）**无新增可见告警**；
+- `PlaybackCursorStore` 的 `Context` 参数未加 `@ApplicationContext`（改为由 DI 的 `@Provides` 显式构造），
+  避免 Hilt 对默认参数（io 调度器）的解析失败；
+- **未**扩大 `lint-baseline.xml`。
+
+## 7. 开发过程中的失败与修复（如实记录）
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | `AudioFocusStoreTest` 5 条断言失败（`isPlaying`） | `isPlaying` 是**引擎权威值**，由 `EngineIsPlayingChanged` 事件驱动；暂停归约**不**改它 | 修正断言：先 `emitIsPlayingChanged(false/true)` 再断言 |
+| 2 | `AudioFocusControllerTest`/`AudioFocusStoreTest` 平台签名冲突 | fake 的 `var forcedWillPauseWhenDucked: Boolean?` 生成的 setter 与接口方法 `setForcedWillPauseWhenDucked(Boolean?)` 同签名 | 属性改名 `lastForcedWillPauseWhenDucked` |
+| 3 | `AudioFocusStoreTest` 编译失败：嵌套类不能访问外层类成员 | `Harness` 非 `inner`，无法调外层类的 `localSong` / `converge` | 改为文件级 `private fun` + fake 的成员方法 |
+| 4 | `PlaybackReducer` 语法错误 | Edit 时误删 `setIgnoreAudioFocus` 的 KDoc 首两行 | 补回 `/**` + 首行 |
+| 5 | Hilt `[Dagger/MissingBinding] PlaybackPersistence` | 注入点声明接口，实现类未绑定 | `PlayerModule` 加 `providePlaybackPersistence` |
+| 6 | `ApplicationProvider` 未解析 | 工程无 `androidx.test:core` 依赖 | 改用 Robolectric 的 `RuntimeEnvironment.getApplication()` |
+| 7 | `幽灵守卫_队列按当前曲判定` 失败 | 测试用的 `queueOf` 默认构造**在线**曲（不跳过） | 改为显式构造本地曲 |
+| 8 | `离线停止后用户手动重试_走既有解析链路` 失败 | `UnconfinedTestDispatcher` 下解析**立即失败**并清 `isResolvingUrl`，`isResolvingUrl` 断言不成立 | 改为断言 fake api 的**解析调用次数**增加（直接验证「重新解析」） |
+
+**上述均为测试侧问题，生产逻辑未因此改动**（唯一的生产侧修正见 §8）。
+
+## 8. 契约演进（非「放宽断言」，逐条登记）
+
+| 变更 | 原契约 | 新契约 | 既有测试处置 |
+|---|---|---|---|
+| `SetIgnoreAudioFocus` 归约 | 只落盘不写状态 | 写 `PlaybackState.ignoreAudioFocus` + 落盘 | 用例**改写**为 `写内存并落盘` + 新增 `同值无操作` |
+| `SetAudioFocusInterruptionMode` 归约 | 只落盘不写状态 | 写 `PlaybackState.audioFocusInterruptionMode` + 落盘 | 同上 |
+| `SetRestoreMemoryEnabled` 归约 | 只落盘不写状态 | 写 `PlaybackState.restoreMemoryEnabled` + 落盘 | 同上 |
+| `AppForegroundChanged` 归约 | `unchanged` | 写 `PlaybackState.isAppBackgrounded` | 用例**改写**为 `写后台事实字段且不产生效果` + 新增 `同值无操作` |
+| `AppForegroundChanged` 消费 | `!backgrounded → onExternalRecoveryTrigger()` | 无播放动作（R-4 复核） | 新增 3 条锁定用例 |
+
+**未删除任何用例、未放宽任何断言、未扩大 lint baseline。**
+
+## 9. 未执行 / 未验证项（明确列出）
+
+| 项 | 原因 | 归属 |
+|---|---|---|
+| 真机焦点行为（来电/导航/语音助手/拔耳机/蓝牙断开） | 无设备 | 用户实测 |
+| 真机杀进程重启还原（队列/进度/音量） | 无设备 | 用户实测 |
+| 大队列（数千首）序列化耗时与落盘延迟 | 无设备 | 用户实测 |
+| 退桌面/退出时 `flush()` 是否在进程被杀前完成 | 无设备 | 用户实测 |
+| `ProcessLifecycleOwner` 在 OEM ROM 上的 700ms 延迟表现 | 无设备 | 用户实测 |
+| Android 7–9（API 24–28）兼容路径 | 无设备 | 用户实测 |
+| Rust 测试 | `cargo` 未安装 | 环境阻塞（Rust 零改动） |
+
+## 10. 结论
+
+- **代码层**：T-P1-08 与 T-P1-10/11 已实现并有单测覆盖；全量单测 **874 全绿**（772 → 874，+102），
+  `projects` / `assembleDebug` / `lintDebug` / `assembleDebugAndroidTest` 全部通过；lint 无新增、baseline 未动。
+- **关键验收项已由测试锁定**：系统焦点中断不产生错误效果（不消耗恢复预算）；用户主动暂停不被焦点恢复自动播放；
+  前后台事件不驱动任何播放/重试（R-4 复核）；缓存 URL 不落盘；恢复不自动播放；损坏数据不崩溃。
+- **真机层**：**完全未验证**。所有「焦点行为正确 / 冷启动还原」的真机可用性声明**一律不成立**。
+- **未完成项**：`abortCrossfade()` 接入（T-P1-07 必须补）、`PersistPreference`/`PersistFavoriteToggle` 执行器、
+  Room/DataStore 迁移、恢复位置钳位 —— 详见 `phase-5-audio-focus.md` §9 与 `phase-5-data-layer.md` §6。
+- **阶段边界**：T-P1-07 / T-P1-09 / P2 / P3 **未实现**（未越界）；未恢复 USB 独占、未引入离线下载。

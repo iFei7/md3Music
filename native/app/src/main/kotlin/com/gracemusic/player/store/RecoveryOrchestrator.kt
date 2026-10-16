@@ -195,19 +195,27 @@ internal class RecoveryOrchestrator(
     }
 
     /**
-     * 外部触发（回到前台 / 其它外部信号）后尝试重试未决失败。
+     * 外部触发（其它外部信号）后尝试重试未决失败。
      *
      * ## R-4 收口（S-B，2026-10-15）：**不再接网络恢复信号**
      * 本方法的 Dart 对位是 `_onNetworkChanged` → `_retryFailedPlayback()`
      * （player_provider.dart:1089-1095），语义原本是「网络恢复 → 自动重试」。
      * 产品决策 4 明确要求「网络恢复后**不**自动恢复播放，需等待用户手动操作」，
      * 故宿主 `PlaybackStore.dispatch(event)` 已**移除**
-     * `PlaybackEvent.NetworkChanged → onExternalRecoveryTrigger()` 这一条连线
-     * （仅保留 `AppForegroundChanged` 的「回到前台」触发）。
+     * `PlaybackEvent.NetworkChanged → onExternalRecoveryTrigger()` 这一条连线。
      *
-     * **能力本身保留**（不删除）：待后续任务（R4-01 前后台信号源接线，T-P1-08）
-     * 需要「回到前台尝试重试」时仍可复用；调用方**必须**确保它不会被
-     * 「网络由离线转在线」这一事实驱动。
+     * ## R-4 复核（T-P1-08 B4，2026-10-16）：**也不接前后台信号，当前无调用方**
+     * 第四阶段为「回到前台尝试重试」保留了
+     * `PlaybackEvent.AppForegroundChanged(!backgrounded) → onExternalRecoveryTrigger()`
+     * 这条连线。T-P1-08 接入 `AppForegroundChanged` 的**真实生产者**
+     * （`ProcessLifecycleAppForegroundMonitor`）时复核发现：该连线构成一条
+     * 间接的「离线失败 → 网络恢复 → 用户切回 App → 自动续播」路径——
+     * 与产品决策 4 的语义（用户未手动操作前不自动恢复）冲突。故一并移除。
+     *
+     * **能力本身保留**（不删除）：调用方**必须**确保它不会被
+     * 「网络由离线转在线」或「应用回到前台」这两类事实驱动；
+     * 当前生产代码**无调用方**（恢复重试只由 [scheduleBackoff] 的退避定时器驱动）。
+     * 若后续任务（如显式的「重试」入口）需要它，调用点必须重新评估 R-4。
      *
      * 离线期间：`pendingFailure` 虽被记录，但 [attemptRecovery] 的分类门
      * （`networkAvailable = false` → `NETWORK_UNAVAILABLE`）会在消耗预算前返回，

@@ -70,6 +70,40 @@ sealed interface PlaybackIntent {
     /** 暂停但**不视作用户意图**（拖动进度条前置暂停）。Dart `pauseForSeek`。 */
     data object PauseForSeek : PlaybackIntent
 
+    /**
+     * 暂停但**不视作用户意图**（音频焦点系统中断，T-P1-08 新增词汇）。
+     *
+     * ## 与 [Pause] / [PauseForSeek] 的区别（三者必须可区分）
+     * | 意图 | 来源 | 取消恢复链 | 停保活 | 落盘 | 清「中断暂停」标志 |
+     * |---|---|---|---|---|---|
+     * | [Pause] | 用户 | 是 | 是 | 是 | 是（[AudioFocusController.onUserTransportIntent]） |
+     * | [PauseForSeek] | 手势事务 | 否（手势中，会话未结束） | **否** | **否** | 否 |
+     * | [PauseByInterruption] | 系统焦点中断 | **否** | 是 | 是 | **否**（必须保留标志，`GAIN` 才可恢复） |
+     *
+     * ## 为什么不能复用 [Pause]
+     * [Pause] 是「用户主动暂停」，在 `PlaybackStore.dispatch` 里属于
+     * `isRecoveryCancellingIntent` → 会调 `RecoveryOrchestrator.onUserPlaybackIntent()`
+     * 清空 `pendingFailure` / 重置预算。系统中断**不是用户意图**，
+     * 若走 [Pause] 会把「中断前的失败上下文」一并抹掉，且语义上把系统事件
+     * 冒充成用户动作（与 S-B 拒绝「伪造引擎错误」同一取向）。
+     *
+     * ## 为什么不能复用 [com.gracemusic.player.store.PlaybackIntent.PauseForSeek]
+     * 后者刻意**不停保活、不落盘**（手势结束即恢复、会话未结束）；焦点中断
+     * 是完整暂停，保活应收起、游标应落盘（用户中断期间杀进程也要能恢复位置）。
+     *
+     * ## 归约结果
+     * 与 [Pause] **逐字段相同**（`awaitingPlaybackProgress=false`、
+     * `manualRetryInFlight=false`，效果 `Pause` + `StopKeepAlive` +
+     * `PersistPlaybackCursor`）——差异**只在 Store 的意图分类**，不在状态迁移。
+     * 之所以这样切分：状态语义是「已暂停」，而「谁按的暂停」是编排层的关注点。
+     *
+     * ## 不产生错误（验收项）
+     * 本意图**不投递** `PlaybackEvent.EngineError`，因此不进入
+     * `RecoveryOrchestrator` 的失败分类、**不消耗恢复预算**——
+     * 「系统中断不得被误判为播放故障」由结构保证，而非靠判据兜底。
+     */
+    data object PauseByInterruption : PlaybackIntent
+
     /** 绝对定位。Dart `seek`。 */
     data class SeekTo(val position: Duration) : PlaybackIntent
 
@@ -180,17 +214,60 @@ sealed interface PlaybackIntent {
     /** 设置「定时结束后播完当前歌曲」偏好。Dart `setStopAfterCurrentTrack`。 */
     data class SetStopAfterCurrentTrack(val enabled: Boolean) : PlaybackIntent
 
-    /** 忽略音频焦点开关。Dart `setIgnoreAudioFocus`。 */
+    /**
+     * 忽略音频焦点开关（F-FOC-002 / F-SET-039）。Dart `setIgnoreAudioFocus`。
+     *
+     * 归约结果：写 [PlaybackState.ignoreAudioFocus] 并落盘
+     * （键 `settings_ignore_audio_focus`）；Store 在归约后同步 fork 标志
+     * （`AudioFocusManager.setIgnoreAudioFocus`）。
+     */
     data class SetIgnoreAudioFocus(val enabled: Boolean) : PlaybackIntent
 
-    /** 音频焦点中断策略。Dart `setAudioFocusInterruptionMode`。 */
+    /**
+     * 音频焦点中断策略（F-FOC-003 / F-SET-040）。Dart `setAudioFocusInterruptionMode`。
+     *
+     * 归约结果：写 [PlaybackState.audioFocusInterruptionMode] 并落盘
+     * （键 `settings_audio_focus_interruption_mode`，存 `mode.ordinal`，
+     * 与 Dart `prefs.setInt(key, mode.index)` 同式）；Store 在归约后同步
+     * fork 标志（`setForceKeepPlaying` / `setForcedWillPauseWhenDucked`）。
+     */
     data class SetAudioFocusInterruptionMode(val mode: AudioFocusInterruptionMode) : PlaybackIntent
+
 
     /** 音质降级提示开关。Dart `setShowQualityDowngradeToast`。 */
     data class SetShowQualityDowngradeToast(val enabled: Boolean) : PlaybackIntent
 
     /** 「记忆播放状态」开关。Dart `setRestoreMemoryEnabled`。 */
     data class SetRestoreMemoryEnabled(val enabled: Boolean) : PlaybackIntent
+
+    /**
+     * 冷启动恢复持久化的播放游标（T-P1-10，**新增词汇**）。
+     *
+     * ## 来源不是用户
+     * 由 `PlaybackStore.restorePersistedPlayback()` 在冷启动读盘成功后派发；
+     * 读盘失败 / 开关关闭 / 幽灵歌曲 → **不**派发（见
+     * [com.gracemusic.player.store.PersistenceCoordinator] KDoc）。
+     *
+     * ## 语义（对位 Dart `_restoreState`）
+     * - 装载 [queue] 与 [position]（队列含当前曲 / 索引 / 随机 / 循环）；
+     * - **不自动播放**：产生的效果是 `Prepare(..., playWhenReady = false)`，
+     *   或对需要解析的在线曲投 `ResolveSongUrl`；
+     * - 清错误态与瞬态标志（恢复后是干净状态）；
+     * - `isPlaying = false`、`awaitingPlaybackProgress = false`
+     *   （与 Dart「装载但等用户手动触发」一致）。
+     *
+     * ## 为什么不复用 [PlayAt] / [PlayPlaylistFrom]
+     * 那两个都**恒 `playWhenReady = true`**（见 `PlaybackReducer.launchSong`），
+     * 会让冷启动直接出声——Dart 明确是 `play: false`。语义不同，不能复用。
+     *
+     * @property queue 恢复出的队列（已由 `PlaybackQueueCodec` 钳位索引、剥离 URL）。
+     * @property position 恢复出的播放位置（作为装载起始点，不自动播放）。
+     */
+    data class RestorePersistedCursor(
+        val queue: com.gracemusic.player.queue.PlaybackQueue,
+        val position: Duration,
+    ) : PlaybackIntent
+
 
     /** 本地音乐关闭评论区开关。Dart `setCloseLocalMusicComments`。 */
     data class SetCloseLocalMusicComments(val enabled: Boolean) : PlaybackIntent

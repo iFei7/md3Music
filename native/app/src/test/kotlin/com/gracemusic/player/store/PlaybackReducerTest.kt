@@ -117,8 +117,11 @@ import org.junit.Test
  * - `SetSleepTimer` → `SetSleepTimer_设置倒计时记录剩余`（正例）/ `SetSleepTimer_取消时清等待态与勾选`（边界）
  * - `SetStopAfterCurrentTrack` → `SetStopAfterCurrentTrack_启用仅记偏好`（正例）/
  *   `SetStopAfterCurrentTrack_取消时撤销到点等待态`（边界）
- * - `SetIgnoreAudioFocus` → `SetIgnoreAudioFocus_只落盘不写状态`（正例+边界）
- * - `SetAudioFocusInterruptionMode` → `SetAudioFocusInterruptionMode_只落盘不写状态`（正例+边界）
+ * - `SetIgnoreAudioFocus` → `SetIgnoreAudioFocus_写内存并落盘`（正例）/ `SetIgnoreAudioFocus_同值无操作`（边界）
+ * - `SetAudioFocusInterruptionMode` → `SetAudioFocusInterruptionMode_写内存并落盘`（正例）/
+ *   `SetAudioFocusInterruptionMode_同值无操作`（边界）
+ * - `PauseByInterruption`（T-P1-08）→ `PauseByInterruption_状态迁移与Pause逐字段一致`（正例）/
+ *   `PauseByInterruption_不产生任何错误效果`（边界）
  * - `SetShowQualityDowngradeToast` → `SetShowQualityDowngradeToast_写内存并落盘`（正例+边界）
  * - `SetRestoreMemoryEnabled` → `SetRestoreMemoryEnabled_只落盘不写状态`（正例+边界）
  * - `SetCloseLocalMusicComments` → `SetCloseLocalMusicComments_变更才落盘`（正例）/
@@ -146,7 +149,8 @@ import org.junit.Test
  *   `..._等待态异常结束不算播完继续循环语义`
  * - `EngineError` → `EngineError_原始错误入状态且待推进标志清理` / `EngineError_空消息回落兜底文案`
  * - `NetworkChanged` → `NetworkChanged_切换网络只写标志` / `..._同值无操作`
- * - `AppForegroundChanged` → `AppForegroundChanged_归约层无状态可写`
+ * - `AppForegroundChanged` → `AppForegroundChanged_写后台事实字段且不产生效果`（正例）/
+ *   `AppForegroundChanged_同值无操作`（边界）
  * - `VolumeChanged` → `VolumeChanged_引擎侧瞬态音量不改写用户设置`
  * - `LoopModeChanged` → `LoopModeChanged_外部循环模式对齐队列` / `..._同值无操作`
  * - `PlaybackProgressConfirmed` → `PlaybackProgressConfirmed_清理等待推进标志`
@@ -1274,19 +1278,70 @@ class PlaybackReducerTest {
     }
 
     @Test
-    fun `SetIgnoreAudioFocus_只落盘不写状态`() {
+    fun `SetIgnoreAudioFocus_写内存并落盘`() {
+        // T-P1-08 契约演进：由「只落盘不写状态」改为写 PlaybackState.ignoreAudioFocus
+        // （设置页与 AudioFocusController 需要权威读值），落盘效果不变。
         val before = PlaybackState()
         val t = reduceIntent(before, PlaybackIntent.SetIgnoreAudioFocus(enabled = true))
-        assertEquals(before, t.state)
+        assertTrue(t.state.ignoreAudioFocus)
         assertEquals(listOf(PersistPreference("settings_ignore_audio_focus")), t.effects)
     }
 
     @Test
-    fun `SetAudioFocusInterruptionMode_只落盘不写状态`() {
+    fun `SetIgnoreAudioFocus_同值无操作`() {
+        val before = PlaybackState(ignoreAudioFocus = true)
+        assertRejected(before, reduceIntent(before, PlaybackIntent.SetIgnoreAudioFocus(enabled = true)))
+    }
+
+    @Test
+    fun `SetAudioFocusInterruptionMode_写内存并落盘`() {
+        // T-P1-08 契约演进：同上，写 PlaybackState.audioFocusInterruptionMode。
         val before = PlaybackState()
-        val t = reduceIntent(before, PlaybackIntent.SetAudioFocusInterruptionMode(AudioFocusInterruptionMode.PAUSE_AND_RESUME))
-        assertEquals(before, t.state)
+        val t = reduceIntent(
+            before,
+            PlaybackIntent.SetAudioFocusInterruptionMode(AudioFocusInterruptionMode.PAUSE_AND_RESUME),
+        )
+        assertEquals(AudioFocusInterruptionMode.PAUSE_AND_RESUME, t.state.audioFocusInterruptionMode)
         assertEquals(listOf(PersistPreference("settings_audio_focus_interruption_mode")), t.effects)
+    }
+
+    @Test
+    fun `SetAudioFocusInterruptionMode_同值无操作`() {
+        val before = PlaybackState(
+            audioFocusInterruptionMode = AudioFocusInterruptionMode.DUCK_AND_RESTORE,
+        )
+        assertRejected(
+            before,
+            reduceIntent(
+                before,
+                PlaybackIntent.SetAudioFocusInterruptionMode(AudioFocusInterruptionMode.DUCK_AND_RESTORE),
+            ),
+        )
+    }
+
+    @Test
+    fun `PauseByInterruption_状态迁移与Pause逐字段一致`() {
+        // T-P1-08：系统中断暂停的状态语义 = 用户暂停（差异只在 Store 的意图分类，
+        // 见 PlaybackStore.isRecoveryCancellingIntent / isUserTransportIntent）。
+        val before = playing(onlineSongs("a"))
+        val byUser = reduceIntent(before, PlaybackIntent.Pause)
+        val byInterruption = reduceIntent(before, PlaybackIntent.PauseByInterruption)
+
+        assertEquals(byUser.state, byInterruption.state)
+        assertEquals(byUser.effects, byInterruption.effects)
+        // `isPlaying` 是引擎权威值，由 EngineIsPlayingChanged 事件驱动，
+        // 暂停归约**不**改它（两个意图同款），故此处断言「不变」而非「为假」。
+        assertTrue(byInterruption.state.isPlaying)
+        assertFalse(byInterruption.state.awaitingPlaybackProgress)
+        assertEquals(listOf(Pause, StopKeepAlive, PersistPlaybackCursor), byInterruption.effects)
+    }
+
+    @Test
+    fun `PauseByInterruption_不产生任何错误效果`() {
+        // 验收项：系统中断不得被误判为播放故障——归约结果里不得出现错误类效果。
+        val t = reduceIntent(playing(onlineSongs("a")), PlaybackIntent.PauseByInterruption)
+        assertTrue(t.effects.none { it is ShowMessage })
+        assertNull(t.state.resolveError)
     }
 
     @Test
@@ -1297,11 +1352,19 @@ class PlaybackReducerTest {
     }
 
     @Test
-    fun `SetRestoreMemoryEnabled_只落盘不写状态`() {
+    fun `SetRestoreMemoryEnabled_写内存并落盘`() {
+        // T-P1-10 契约演进：由「只落盘不写状态」改为写 PlaybackState.restoreMemoryEnabled
+        // （冷启动恢复判定需要读它）。
         val before = PlaybackState()
         val t = reduceIntent(before, PlaybackIntent.SetRestoreMemoryEnabled(enabled = false))
-        assertEquals(before, t.state)
+        assertFalse(t.state.restoreMemoryEnabled)
         assertEquals(listOf(PersistPreference("settings_restore_memory")), t.effects)
+    }
+
+    @Test
+    fun `SetRestoreMemoryEnabled_同值无操作`() {
+        val before = PlaybackState(restoreMemoryEnabled = false)
+        assertRejected(before, reduceIntent(before, PlaybackIntent.SetRestoreMemoryEnabled(enabled = false)))
     }
 
     @Test
@@ -1348,6 +1411,90 @@ class PlaybackReducerTest {
     fun `FlushPersistence_只发落盘效果`() {
         val t = reduceIntent(PlaybackState(), PlaybackIntent.FlushPersistence)
         assertEquals(listOf(PersistPlaybackCursor), t.effects)
+    }
+
+    // ═══════════════════════ 冷启动恢复（T-P1-10）═══════════════════════
+
+    @Test
+    fun `RestorePersistedCursor_装载队列与位置且不自动播放`() {
+        val restoredQueue = PlaybackQueue(
+            playlist = onlineSongs("a", "b", "c"),
+            originalPlaylist = onlineSongs("a", "b", "c"),
+            currentIndex = 2,
+            shuffleEnabled = false,
+            loopMode = AppLoopMode.ALL,
+        )
+
+        val t = reduceIntent(
+            PlaybackState(),
+            PlaybackIntent.RestorePersistedCursor(restoredQueue, 42.seconds),
+        )
+
+        assertEquals(restoredQueue, t.state.queue)
+        assertEquals(42.seconds, t.state.position)
+        assertEquals(42.seconds, t.state.platformPosition)
+        // 不自动播放：既无 Play 效果，isPlaying 也不为真。
+        assertFalse(t.state.isPlaying)
+        assertFalse(t.state.awaitingPlaybackProgress)
+        assertTrue(t.effects.none { it is Play })
+        // 不落盘（恢复动作不应立刻重写盘）。
+        assertTrue(t.effects.none { it is PersistPlaybackCursor })
+    }
+
+    @Test
+    fun `RestorePersistedCursor_在线曲走解析且不自动播放`() {
+        val queue = PlaybackQueue(
+            playlist = onlineSongs("a"),
+            originalPlaylist = onlineSongs("a"),
+            currentIndex = 0,
+        )
+
+        val t = reduceIntent(PlaybackState(), PlaybackIntent.RestorePersistedCursor(queue, 0.seconds))
+
+        assertTrue(t.state.isResolvingUrl)
+        assertTrue(t.effects.any { it is ResolveSongUrl })
+    }
+
+    @Test
+    fun `RestorePersistedCursor_本地曲直接准备且playWhenReady为假`() {
+        val song = testSong("a", isOnline = false, localPath = "/music/a.flac")
+        val queue = PlaybackQueue(playlist = listOf(song), originalPlaylist = listOf(song), currentIndex = 0)
+
+        val t = reduceIntent(
+            PlaybackState(),
+            PlaybackIntent.RestorePersistedCursor(queue, 5.seconds),
+        )
+
+        val prepare = t.effects.filterIsInstance<Prepare>().single()
+        assertFalse(prepare.playWhenReady)
+        assertEquals(5_000L, prepare.startPositionMs)
+        assertFalse(t.state.isResolvingUrl)
+    }
+
+    @Test
+    fun `RestorePersistedCursor_清错误态与瞬态标志`() {
+        val before = PlaybackState(
+            resolveError = "旧错误",
+            manualRetryInFlight = true,
+            awaitingPlaybackProgress = true,
+        )
+        val song = testSong("a", isOnline = false, localPath = "/music/a.flac")
+        val queue = PlaybackQueue(playlist = listOf(song), originalPlaylist = listOf(song), currentIndex = 0)
+
+        val t = reduceIntent(before, PlaybackIntent.RestorePersistedCursor(queue, 0.seconds))
+
+        assertNull(t.state.resolveError)
+        assertFalse(t.state.manualRetryInFlight)
+        assertFalse(t.state.awaitingPlaybackProgress)
+    }
+
+    @Test
+    fun `RestorePersistedCursor_空队列无操作`() {
+        val before = PlaybackState()
+        assertRejected(
+            before,
+            reduceIntent(before, PlaybackIntent.RestorePersistedCursor(PlaybackQueue(), 0.seconds)),
+        )
     }
 
     // ═══════════════════════ 收藏 ═══════════════════════
@@ -1620,12 +1767,19 @@ class PlaybackReducerTest {
     }
 
     @Test
-    fun `AppForegroundChanged_归约层无状态可写`() {
-        // 后台门由 Store 消费（恢复链的后台判据）；PlaybackState 无后台字段。
+    fun `AppForegroundChanged_写后台事实字段且不产生效果`() {
+        // T-P1-08 B4：归约写 PlaybackState.isAppBackgrounded（纯事实），
+        // 且**不产生任何效果**——「回前台是否重试」已按 R-4 复核结论移除。
         val before = playing(onlineSongs("a"))
         val t = PlaybackReducer.reduce(before, PlaybackEvent.AppForegroundChanged(backgrounded = true))
-        assertEquals(before, t.state)
+        assertTrue(t.state.isAppBackgrounded)
         assertTrue(t.effects.isEmpty())
+    }
+
+    @Test
+    fun `AppForegroundChanged_同值无操作`() {
+        val before = PlaybackState(isAppBackgrounded = true)
+        assertRejected(before, PlaybackReducer.reduce(before, PlaybackEvent.AppForegroundChanged(true)))
     }
 
     @Test

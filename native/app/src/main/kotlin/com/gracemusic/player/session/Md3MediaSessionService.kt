@@ -13,6 +13,7 @@ import androidx.media3.session.MediaSessionService
 import com.gracemusic.R
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
+import kotlinx.coroutines.launch
 
 /**
  * 媒体3 会话承载服务：把 App 的播放引擎挂进一个 `MediaSession`，
@@ -88,6 +89,15 @@ class Md3MediaSessionService : MediaSessionService() {
     @Inject
     lateinit var player: Player
 
+    /** 播放域状态机（T-P1-10：冷启动恢复的调用方）。 */
+    @Inject
+    lateinit var store: com.gracemusic.player.store.PlaybackStore
+
+    /** 播放域协程作用域（与 Store 同源，恢复任务绑此作用域）。 */
+    @Inject
+    @com.gracemusic.player.store.StoreScope
+    lateinit var storeScope: kotlinx.coroutines.CoroutineScope
+
     private var mediaSession: MediaSession? = null
 
     override fun onCreate() {
@@ -101,6 +111,10 @@ class Md3MediaSessionService : MediaSessionService() {
         super.onCreate()
         // Hilt 在此处（super.onCreate() 链）完成字段注入，因此上面不能提前使用 callback/engine。
         ensureSession()
+        // T-P1-10：冷启动恢复持久化的播放游标（队列 / 当前曲 / 位置 / 音量）。
+        // 异步执行（读盘是 IO），且 Store 侧有「只尝试一次」守卫——
+        // Service 可能因媒体键被反复拉起，恢复必须幂等、不重复重置队列。
+        storeScope.launch { store.restorePersistedPlayback() }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {

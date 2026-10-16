@@ -1,6 +1,7 @@
 package com.gracemusic.player.store
 
 import com.gracemusic.data.model.Song
+import com.gracemusic.player.gate.AudioFocusInterruptionMode
 import com.gracemusic.player.model.AppLoopMode
 import com.gracemusic.player.model.AudioQuality
 import com.gracemusic.player.model.PlaybackErrorInfo
@@ -94,8 +95,11 @@ import kotlin.time.Duration.Companion.ZERO
  *    [PlaybackIntent.SetAudioQuality] 回灌（保持唯一归约路径）。
  *    交叉淡化因词汇表无对应意图，暂为 no-op（已登记待增补）。
  * 8. **焦点/记忆类偏好**（`SetIgnoreAudioFocus` / `SetAudioFocusInterruptionMode`
- *    / `SetRestoreMemoryEnabled`）：[PlaybackState] 23 字段无对应存储位，
- *    归约器只发 [PersistPreference] 效果，由 Store 同步引擎（台本 §2.3）。
+ *    / `SetRestoreMemoryEnabled`）：`SetIgnoreAudioFocus` 与
+ *    `SetAudioFocusInterruptionMode` 自 T-P1-08 起**写 [PlaybackState] 对应字段**
+ *    （`ignoreAudioFocus` / `audioFocusInterruptionMode`，供设置页与
+ *    `AudioFocusController` 消费）并同时发 [PersistPreference]；
+ *    `SetRestoreMemoryEnabled` 仍只发 [PersistPreference]（状态位待 T-P1-10 一并接入）。
  *
  * ## PersistPreference 键名约定（Store 执行器据此路由仓库）
  * | 键 | 来源 |
@@ -188,6 +192,9 @@ object PlaybackReducer {
         is PlaybackIntent.Resume -> resume(state)
         is PlaybackIntent.Pause -> pause(state)
         is PlaybackIntent.PauseForSeek -> pauseForSeek(state)
+        // 系统焦点中断暂停（T-P1-08）：状态迁移与 Pause 逐字段相同，
+        // 差异只在 Store 的意图分类（不取消恢复链、不清「中断暂停」标志）。
+        is PlaybackIntent.PauseByInterruption -> pause(state)
         is PlaybackIntent.SeekTo -> seekTo(state, intent.position)
         is PlaybackIntent.SeekBy -> seekBy(state, intent.delta)
         is PlaybackIntent.Next -> next(state, intent.autoPlay)
@@ -217,13 +224,13 @@ object PlaybackReducer {
         is PlaybackIntent.SetSleepTimer -> setSleepTimer(state, intent.duration)
         is PlaybackIntent.SetStopAfterCurrentTrack -> setStopAfterCurrentTrack(state, intent.enabled)
         is PlaybackIntent.SetIgnoreAudioFocus ->
-            persistOnly(state, PersistPreference(KEY_IGNORE_AUDIO_FOCUS))
+            setIgnoreAudioFocus(state, intent.enabled)
         is PlaybackIntent.SetAudioFocusInterruptionMode ->
-            persistOnly(state, PersistPreference(KEY_AUDIO_FOCUS_INTERRUPTION_MODE))
+            setAudioFocusInterruptionMode(state, intent.mode)
         is PlaybackIntent.SetShowQualityDowngradeToast ->
             showQualityDowngradeToast(state, intent.enabled)
         is PlaybackIntent.SetRestoreMemoryEnabled ->
-            persistOnly(state, PersistPreference(KEY_RESTORE_MEMORY))
+            setRestoreMemoryEnabled(state, intent.enabled)
         is PlaybackIntent.SetCloseLocalMusicComments -> closeLocalMusicComments(state, intent.enabled)
 
         // ── 派生刷新与落盘 ──
@@ -231,6 +238,9 @@ object PlaybackReducer {
         is PlaybackIntent.RefreshCrossfadeSettings -> unchanged(state)
         is PlaybackIntent.RefreshNotification -> PlaybackTransition(state, RefreshSystemNotification)
         is PlaybackIntent.FlushPersistence -> PlaybackTransition(state, PersistPlaybackCursor)
+        // ── 冷启动恢复（T-P1-10）──
+        is PlaybackIntent.RestorePersistedCursor ->
+            restorePersistedCursor(state, intent.queue, intent.position)
 
         // ── 收藏 ──
         is PlaybackIntent.ToggleFavorite -> toggleFavorite(state)
@@ -246,7 +256,7 @@ object PlaybackReducer {
         is PlaybackEvent.EnginePlaybackCompleted -> playbackCompleted(state)
         is PlaybackEvent.EngineError -> engineError(state, event.info)
         is PlaybackEvent.NetworkChanged -> networkChanged(state, event.isWifi)
-        is PlaybackEvent.AppForegroundChanged -> unchanged(state)
+        is PlaybackEvent.AppForegroundChanged -> appForegroundChanged(state, event.backgrounded)
         is PlaybackEvent.VolumeChanged -> unchanged(state)
         is PlaybackEvent.LoopModeChanged -> loopModeChanged(state, event.mode)
         is PlaybackEvent.PlaybackProgressConfirmed -> progressConfirmed(state)
@@ -916,6 +926,112 @@ object PlaybackReducer {
         )
     }
 
+    /**
+     * 「记忆播放状态」开关（T-P1-10 / F-KEEP-005）。
+     *
+     * 归约语义（相对既有「只落盘不写状态」的**契约演进**，已登记）：
+     * 写入 [PlaybackState.restoreMemoryEnabled]（冷启动恢复判定需要读它）
+     * 并落盘 `settings_restore_memory`。同值 → no-op。
+     */
+    private fun setRestoreMemoryEnabled(
+        state: PlaybackState,
+        enabled: Boolean,
+    ): PlaybackTransition {
+        if (state.restoreMemoryEnabled == enabled) return unchanged(state)
+        return PlaybackTransition(
+            state.copy(restoreMemoryEnabled = enabled),
+            PersistPreference(KEY_RESTORE_MEMORY),
+        )
+    }
+
+    /**
+     * 冷启动恢复持久化游标（T-P1-10）。
+     *
+     * 逐条对位 Dart `_restoreState`（`player_provider.dart:1350-1438`）：
+     * - 队列 / 索引 / 循环 / 随机整体替换（[PlaybackQueue] 已内聚，无需逐字段同步）；
+     * - 位置作为装载起始点；
+     * - **不自动播放**：`Prepare(..., playWhenReady = false)`，或对需要音源的
+     *   在线曲投 `ResolveSongUrl`（解析成功后经既有 `UpdateSong` 回写收尾，
+     *   此时 `playWhenReady` 由 `updateSong` 的既有规则决定——见其 KDoc）；
+     * - 清错误态与瞬态标志；
+     * - **不**发 `PersistPlaybackCursor`：恢复动作本身不应立刻重写盘
+     *   （否则「恢复 → 落盘 → 恢复」形成无意义写放大）。
+     *
+     * 无当前曲（空队列 / 索引为 -1）→ no-op（Dart 侧由 `state == null` 提前返回）。
+     */
+    private fun restorePersistedCursor(
+        state: PlaybackState,
+        queue: PlaybackQueue,
+        position: Duration,
+    ): PlaybackTransition {
+        val song = queue.currentSong ?: return unchanged(state)
+        val resolving = needsUrlResolution(song)
+        val effects = buildList {
+            add(
+                if (resolving) {
+                    ResolveSongUrl(song)
+                } else {
+                    Prepare(
+                        song = song,
+                        startPositionMs = position.inWholeMilliseconds.takeIf { it > 0 },
+                        playWhenReady = false,
+                    )
+                },
+            )
+        }
+        return PlaybackTransition(
+            state.copy(
+                queue = queue,
+                isResolvingUrl = resolving,
+                resolveError = null,
+                isPlaying = false,
+                awaitingPlaybackProgress = false,
+                position = position,
+                platformPosition = position,
+                duration = null,
+                queueRevision = state.queueRevision + 1,
+                manualRetryInFlight = false,
+            ),
+            effects,
+        )
+    }
+
+    /**
+     * 「忽略音频焦点」开关（T-P1-08 / F-FOC-002）。
+     *
+     * 归约语义（相对既有「只落盘不写状态」的**契约演进**，已登记）：
+     * 写入 [PlaybackState.ignoreAudioFocus]（供设置页与
+     * `AudioFocusController` 读取），并落盘 `settings_ignore_audio_focus`。
+     *
+     * 同值 → no-op（沿用 `closeLocalMusicComments` 的守卫式样，
+     * 避免重复落盘与无意义的状态发射）。
+     */
+    private fun setIgnoreAudioFocus(state: PlaybackState, enabled: Boolean): PlaybackTransition {
+        if (state.ignoreAudioFocus == enabled) return unchanged(state)
+        return PlaybackTransition(
+            state.copy(ignoreAudioFocus = enabled),
+            PersistPreference(KEY_IGNORE_AUDIO_FOCUS),
+        )
+    }
+
+    /**
+     * 音频焦点中断处理模式（T-P1-08 / F-FOC-003）。
+     *
+     * 写入 [PlaybackState.audioFocusInterruptionMode] 并落盘
+     * `settings_audio_focus_interruption_mode`（Store 落 `ordinal`，
+     * 与 Dart `prefs.setInt(key, mode.index)` 同式）。
+     */
+    private fun setAudioFocusInterruptionMode(
+        state: PlaybackState,
+        mode: AudioFocusInterruptionMode,
+    ): PlaybackTransition {
+        if (state.audioFocusInterruptionMode == mode) return unchanged(state)
+        return PlaybackTransition(
+            state.copy(audioFocusInterruptionMode = mode),
+            PersistPreference(KEY_AUDIO_FOCUS_INTERRUPTION_MODE),
+        )
+    }
+
     // ═══════════════════════ 收藏 ═══════════════════════
 
     /**
@@ -1146,6 +1262,25 @@ object PlaybackReducer {
     private fun networkChanged(state: PlaybackState, isWifi: Boolean): PlaybackTransition {
         if (state.isWifiNetwork == isWifi) return unchanged(state)
         return PlaybackTransition(state.copy(isWifiNetwork = isWifi))
+    }
+
+    /**
+     * 应用前后台变化（T-P1-08 B4）。
+     *
+     * 只写事实字段 [PlaybackState.isAppBackgrounded]，**不产生任何效果**：
+     * 归约器是纯函数、不做 IO，且「回前台是否重试」这一决策已按 R-4 复核结论
+     * **移除**（`PlaybackStore.dispatch(event)` 不再调
+     * `RecoveryOrchestrator.onExternalRecoveryTrigger()`）——因此本事件在
+     * 归约层没有对应的 `PlaybackEffect` 是**刻意的**，不是遗漏。
+     *
+     * 同值 → no-op（避免 `ProcessLifecycleOwner` 的重复回调造成无意义状态发射）。
+     */
+    private fun appForegroundChanged(
+        state: PlaybackState,
+        backgrounded: Boolean,
+    ): PlaybackTransition {
+        if (state.isAppBackgrounded == backgrounded) return unchanged(state)
+        return PlaybackTransition(state.copy(isAppBackgrounded = backgrounded))
     }
 
     /**

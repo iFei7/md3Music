@@ -6,7 +6,11 @@ import com.gracemusic.data.model.Song
 import com.gracemusic.data.source.LoudnessCache
 import com.gracemusic.data.source.ResolutionResult
 import com.gracemusic.data.source.SongUrlResolver
+import com.gracemusic.player.gate.AppForegroundMonitor
+import com.gracemusic.player.gate.AudioFocusEventSource
 import com.gracemusic.player.gate.CdnStallWindowDecision
+import com.gracemusic.player.gate.NoOpAppForegroundMonitor
+import com.gracemusic.player.gate.NoOpAudioFocusEventSource
 import com.gracemusic.player.gate.PlaybackProgressGate
 import com.gracemusic.player.gate.PlaybackRequestGate
 import com.gracemusic.player.gate.PositionRewindGate
@@ -244,6 +248,25 @@ class PlaybackStore @Inject constructor(
     private val loudnessCache: LoudnessCache,
     private val cacheResolver: PlaybackCacheResolver,
     private val networkAvailability: NetworkAvailabilityProvider,
+    /**
+     * 音频焦点事件源（T-P1-08）。生产由 `di/PlayerModule` 绑定 fork 实现
+     * （[com.gracemusic.player.engine.Media3AudioFocusEventSource]）；
+     * 默认 [NoOpAudioFocusEventSource] 使**既有测试的手写构造无需改动**，
+     * 语义等价于「本次装配不接焦点运行时」（不注册监听、不写 fork 标志）。
+     */
+    private val audioFocusEventSource: AudioFocusEventSource = NoOpAudioFocusEventSource,
+    /**
+     * 应用前后台信号源（T-P1-08 B4）。生产由 `di/PlayerModule` 绑定
+     * `ProcessLifecycleAppForegroundMonitor`；默认 [NoOpAppForegroundMonitor]
+     * 使既有测试的手写构造无需改动。
+     */
+    private val appForegroundMonitor: AppForegroundMonitor = NoOpAppForegroundMonitor,
+    /**
+     * 播放状态持久化（T-P1-10）。生产由 `di/PlayerModule` 绑定
+     * [PersistenceCoordinator]；默认 [NoOpPlaybackPersistence] 使既有测试的
+     * 手写构造无需改动（语义等价于「本次装配不落盘」，与改造前逐字一致）。
+     */
+    private val persistence: PlaybackPersistence = NoOpPlaybackPersistence,
     @StoreScope private val scope: CoroutineScope,
 ) : PlaybackSessionBridge {
 
@@ -298,6 +321,14 @@ class PlaybackStore @Inject constructor(
      */
     private val recovery = RecoveryOrchestrator(scope, StoreRecoveryHost())
 
+    /**
+     * 音频焦点运行时控制器（T-P1-08）。
+     *
+     * 与 [recovery] 同为 Store 私有；状态写入仍只经 [PlaybackReducer]（唯一写路径）
+     * ——控制器只派意图、只读事实。
+     */
+    private val focusController = AudioFocusController(audioFocusEventSource, StoreAudioFocusHost())
+
     // —— 闸门（Store 私有，不进归约器）——
     private val requestGate = PlaybackRequestGate()
     private val progressGate = PlaybackProgressGate()
@@ -332,6 +363,9 @@ class PlaybackStore @Inject constructor(
 
     /** 保活对账态（Store 侧去重；服务本身幂等，两路驱动不重复触达）。 */
     private var keepAliveEngaged: Boolean = false
+
+    /** 冷启动恢复是否已尝试过（T-P1-10；Service 可被反复拉起，恢复必须幂等）。 */
+    private var restoredOnce: Boolean = false
 
     /**
      * 睡眠定时倒计时 ticker 的 Job（`null` = 无进行中的倒计时）。
@@ -397,6 +431,18 @@ class PlaybackStore @Inject constructor(
             runCdnStallWatchdog()
         }
         registry.attach(this)
+        // 焦点运行时装配（T-P1-08）：注册 fork 焦点监听 + 下发当前偏好标志。
+        // 放在 init 末尾（`_state` 已可用，`isPlaying()` 读得到权威值）。
+        focusController.attach()
+        focusController.onPreferenceChanged(
+            _state.value.ignoreAudioFocus,
+            _state.value.audioFocusInterruptionMode,
+        )
+        // 前后台信号（T-P1-08 B4）：订阅统一信号源 → 投事实事件。
+        // 消费侧**不**驱动任何播放/重试动作（R-4 复核结论，见 dispatch(event)）。
+        appForegroundMonitor.start { backgrounded ->
+            dispatch(PlaybackEvent.AppForegroundChanged(backgrounded))
+        }
     }
 
     // ─────────────────────────── 派发入口 ───────────────────────────
@@ -417,6 +463,11 @@ class PlaybackStore @Inject constructor(
             // 用户意图立即取消旧恢复任务（R3-06 / B4 边界；编排器自派发不触发，见 RecoveryOrchestrator）。
             recovery.onUserPlaybackIntent()
         }
+        if (isUserTransportIntent(intent)) {
+            // T-P1-08：任何用户传输类意图都清「中断暂停」标志，
+            // 否则「中断暂停 → 用户暂停 → GAIN」会被焦点恢复误变成播放。
+            focusController.onUserTransportIntent()
+        }
         if (isPlaybackRequestIntent(intent)) {
             activeRequestGen = requestGate.issue()
         }
@@ -435,6 +486,66 @@ class PlaybackStore @Inject constructor(
         if (intent is PlaybackIntent.SetSleepTimer) {
             reconcileSleepTimerTicker(intent.duration)
         }
+        if (intent is PlaybackIntent.FlushPersistence) {
+            // T-P1-10：`FlushPersistence` 的归约效果已触发一次落盘，
+            // 此处再等待写入队列排空（退桌面 / 退出前）。
+            scope.launch { persistence.flush() }
+        }
+        if (intent is PlaybackIntent.SetIgnoreAudioFocus ||
+            intent is PlaybackIntent.SetAudioFocusInterruptionMode
+        ) {
+            // T-P1-08：偏好变化后把新值下发 fork（`apply` 之后读，确保是归约后的权威值）。
+            focusController.onPreferenceChanged(
+                _state.value.ignoreAudioFocus,
+                _state.value.audioFocusInterruptionMode,
+            )
+        }
+    }
+
+    /**
+     * 冷启动恢复持久化的播放状态（T-P1-10）。
+     *
+     * 对位 Dart `_restoreState`（`player_provider.dart:1350-1438`）的完整决策链：
+     * 1. **开关关闭** → 清空历史数据并返回 `false`（Dart 同款：避免残留旧状态）；
+     * 2. **读盘**：无数据 / 数据损坏 / 版本不匹配 → `null` → 返回 `false`；
+     * 3. **幽灵歌曲守卫**：恢复出的队列若当前曲不可用（本地文件已被清理）
+     *    → 清空并返回 `false`（Dart `shouldSkipRestoredSong`）；
+     * 4. **音量回灌**：先派 [PlaybackIntent.SetVolume] 让音量与快照一致；
+     * 5. **派 [PlaybackIntent.RestorePersistedCursor]**：装载队列与位置，
+     *    **不自动播放**。
+     *
+     * ## 调用时机
+     * 由冷启动路径显式调用（`Md3MusicApp` / MediaSessionService 启动时）。
+     * 本方法**不**在 Store 构造期自动执行——构造期没有可用的磁盘上下文与
+     * 明确的「是否冷启动」判据，且 Store 构造必须在主线程快速完成。
+     *
+     * ## 线程
+     * `suspend`：读盘经 [PlaybackPersistence] 的 io 调度器；派意图在调用
+     * 协程的上下文（生产为主线程 immediate）。
+     *
+     * @param fileExists 本地文件存在性判据（可注入，测试不依赖真实文件系统）。
+     * @return 是否成功恢复。
+     */
+    suspend fun restorePersistedPlayback(
+        fileExists: (String) -> Boolean = { path -> java.io.File(path).exists() },
+    ): Boolean {
+        // 只尝试一次：Service 可能因媒体键被反复拉起，恢复必须幂等且不重复重置队列。
+        if (restoredOnce) return false
+        restoredOnce = true
+        if (!_state.value.restoreMemoryEnabled) {
+            persistence.clear()
+            return false
+        }
+        val cursor = persistence.restore() ?: return false
+        if (shouldSkipRestoredQueue(cursor.queue, fileExists)) {
+            persistence.clear()
+            return false
+        }
+        if (cursor.volume != _state.value.volume) {
+            dispatch(PlaybackIntent.SetVolume(cursor.volume))
+        }
+        dispatch(PlaybackIntent.RestorePersistedCursor(cursor.queue, cursor.position))
+        return true
     }
 
     /**
@@ -462,8 +573,18 @@ class PlaybackStore @Inject constructor(
             // 已移除：产品决策 4 要求「网络恢复后不自动恢复播放，需等待用户手动操作」。
             // 归约仍写 `isWifiNetwork`（仅标志，不产生任何播放/重试动作）。
             // 见 RecoveryOrchestrator.onExternalRecoveryTrigger 的 KDoc 收敛说明。
-            is PlaybackEvent.AppForegroundChanged ->
-                if (!event.backgrounded) recovery.onExternalRecoveryTrigger()
+            //
+            // ── R-4 复核（T-P1-08 B4，2026-10-16）：回前台同样**不得**触发自动重试 ──
+            // 原 `is PlaybackEvent.AppForegroundChanged ->
+            //     if (!event.backgrounded) recovery.onExternalRecoveryTrigger()`
+            // 已移除。理由：产品决策 4 的语义是「用户未手动操作前不自动恢复播放」，
+            // 而「回前台」不是用户播放操作。保留该连线会构成一条间接的
+            // 「离线失败 → 网络恢复 → 用户切回 App → 自动续播」路径
+            // （`onExternalRecoveryTrigger` 会经 `attemptRecovery` 的分类门，
+            // 此时 `isNetworkAvailable()` 已为 true → 通过分类门 → 重试）。
+            // 现在前后台事件**只写事实字段** `PlaybackState.isAppBackgrounded`。
+            // 复核结论与测试见 `docs/native/phase-5-audio-focus.md` §R-4。
+            is PlaybackEvent.AppForegroundChanged -> Unit
 
             else -> Unit
         }
@@ -553,7 +674,8 @@ class PlaybackStore @Inject constructor(
                 Log.w(TAG, "RefreshSystemNotification 未执行：session 通知刷新 TODO T-P1-03+")
 
             is PlaybackEffect.PersistPlaybackCursor ->
-                Log.w(TAG, "PersistPlaybackCursor 未执行：播放游标落盘 TODO T-P1-10")
+                // T-P1-10：真实落盘（异步 + 值去重，见 PersistenceCoordinator KDoc）。
+                persistence.persistCursor(_state.value)
 
             is PlaybackEffect.PersistFavoriteToggle ->
                 Log.w(
@@ -1226,6 +1348,58 @@ class PlaybackStore @Inject constructor(
         -> true
 
         else -> isPlaybackRequestIntent(intent)
+    }
+
+    /**
+     * 用户传输类意图判定（T-P1-08）——清「中断暂停」标志的依据。
+     *
+     * 覆盖：播放族（起播 / 切歌 / 重试 / seek）+ 用户暂停 + 拖动前置暂停 +
+     * 停止 + 清空队列。
+     *
+     * **不含** [PlaybackIntent.PauseByInterruption]（那是系统中断造成的暂停，
+     * 标志必须保留，`GAIN` 才能恢复）与 [PlaybackIntent.OfflineNoPlayableCache]
+     * （离线终态，与焦点无关）。这是「用户意图 / 系统中断」在意图层的显式切分。
+     */
+    private fun isUserTransportIntent(intent: PlaybackIntent): Boolean = when (intent) {
+        is PlaybackIntent.Pause,
+        is PlaybackIntent.PauseForSeek,
+        is PlaybackIntent.Stop,
+        is PlaybackIntent.ClearQueue,
+        -> true
+
+        else -> isPlaybackRequestIntent(intent)
+    }
+
+    /**
+     * 焦点运行时向 Store 索取的宿主实现（T-P1-08）。
+     *
+     * 只读事实（[isPlaying]）与派意图，不写状态——状态变化仍经 [dispatch] →
+     * [PlaybackReducer] 唯一路径。
+     */
+    private inner class StoreAudioFocusHost : AudioFocusHost {
+
+        override fun isPlaying(): Boolean = _state.value.isPlaying
+
+        /**
+         * 系统中断暂停：派 [PlaybackIntent.PauseByInterruption]（**非** [PlaybackIntent.Pause]）。
+         *
+         * 关键差异：本意图**不**在 [isRecoveryCancellingIntent] 里，故不会清
+         * `pendingFailure` / 重置恢复预算；同时它不投递任何 `EngineError`，
+         * 因此不会被 [RecoveryOrchestrator] 误判为播放故障（验收项）。
+         */
+        override fun pauseByInterruption() {
+            dispatch(PlaybackIntent.PauseByInterruption)
+        }
+
+        /**
+         * 中断结束恢复：派 [PlaybackIntent.Resume]。
+         *
+         * 由 [AudioFocusController] 保证只在「此前确实被中断暂停」时调用，
+         * 故不会覆盖用户主动暂停。
+         */
+        override fun resumeAfterInterruption() {
+            dispatch(PlaybackIntent.Resume)
+        }
     }
 
     /** 保活目标态切换（Store 侧去重；服务幂等，意图效果路径与事件对账路径共用）。 */

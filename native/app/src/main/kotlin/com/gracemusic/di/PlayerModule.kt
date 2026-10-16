@@ -8,6 +8,10 @@ import com.gracemusic.player.engine.AudioEngineConfig
 import com.gracemusic.player.engine.AudioEngineFactory
 import com.gracemusic.player.engine.EngineRole
 import com.gracemusic.player.engine.ExoPlayerPlaybackEngineAdapter
+import com.gracemusic.player.engine.Media3AudioFocusEventSource
+import com.gracemusic.player.engine.ProcessLifecycleAppForegroundMonitor
+import com.gracemusic.player.gate.AppForegroundMonitor
+import com.gracemusic.player.gate.AudioFocusEventSource
 import com.gracemusic.player.offline.AndroidNetworkAvailabilityProvider
 import com.gracemusic.player.offline.NetworkAvailabilityProvider
 import com.gracemusic.player.offline.PlaybackCacheConfig
@@ -19,6 +23,10 @@ import com.gracemusic.player.offline.SimplePlaybackCacheResolver
 import com.gracemusic.player.store.AndroidPlaybackKeepAlive
 import com.gracemusic.player.store.PlaybackEngine
 import com.gracemusic.player.store.PlaybackKeepAlive
+import com.gracemusic.player.store.PlaybackCursorStore
+import com.gracemusic.player.store.PlaybackPersistence
+import com.gracemusic.player.store.PersistenceCoordinator
+import com.gracemusic.player.store.SharedPreferencesPlaybackCursorStore
 import com.gracemusic.player.store.StoreScope
 import dagger.Module
 import dagger.Provides
@@ -184,4 +192,62 @@ object PlayerModule {
     fun provideNetworkAvailabilityProvider(
         @ApplicationContext context: Context,
     ): NetworkAvailabilityProvider = AndroidNetworkAvailabilityProvider(context)
+
+    // ------------------------------------------------------------------
+    // 音频焦点运行时（T-P1-08）
+    // ------------------------------------------------------------------
+
+    /**
+     * [AudioFocusEventSource] 的生产实现：委托 just_audio fork 的
+     * `AudioFocusManager` 静态焦点入口。
+     *
+     * **必须绑真实实现**：若误绑 `NoOpAudioFocusEventSource`，
+     * `AudioFocusController` 将收不到任何焦点事件、也不会向 Media3 下发
+     * `ignoreAudioFocus` / `forceKeepPlaying` / `willPauseWhenDucked` 标志，
+     * 三模式策略与「忽略音频焦点」开关会**静默失效**（无编译期报错）。
+     */
+    @Provides
+    @Singleton
+    fun provideAudioFocusEventSource(): AudioFocusEventSource = Media3AudioFocusEventSource()
+
+    /**
+     * [AppForegroundMonitor] 的生产实现：`ProcessLifecycleOwner` 应用级前后台信号。
+     *
+     * 由 `PlaybackStore` 在 `init` 中 `start` 订阅，把 `backgrounded` 变化投成
+     * `PlaybackEvent.AppForegroundChanged`（只写事实字段，不驱动播放/重试）。
+     */
+    @Provides
+    @Singleton
+    fun provideAppForegroundMonitor(): AppForegroundMonitor =
+        ProcessLifecycleAppForegroundMonitor()
+
+    // ------------------------------------------------------------------
+    // 播放状态持久化（T-P1-10）
+    // ------------------------------------------------------------------
+
+    /**
+     * 播放游标持久化实现（SharedPreferences，键映射对齐 Dart
+     * `PlayerStateRepository`；选型理由见实现类 KDoc）。
+     *
+     * 用显式 `@Provides` 而非 `@Inject constructor`：实现的第二个参数
+     * （io 调度器）有默认值 `Dispatchers.IO`，Hilt 无法为它找绑定。
+     */
+    @Provides
+    @Singleton
+    fun providePlaybackCursorStore(
+        @ApplicationContext context: Context,
+    ): PlaybackCursorStore = SharedPreferencesPlaybackCursorStore(context)
+
+    /**
+     * 持久化协调器（接口 → 实现绑定）。
+     *
+     * `PersistenceCoordinator` 虽是 `@Inject constructor`，但注入点声明的是
+     * 接口 [PlaybackPersistence]，Hilt 无法自动把实现类绑到接口上，故显式提供。
+     */
+    @Provides
+    @Singleton
+    fun providePlaybackPersistence(
+        store: PlaybackCursorStore,
+        @StoreScope scope: CoroutineScope,
+    ): PlaybackPersistence = PersistenceCoordinator(store, scope)
 }

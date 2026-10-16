@@ -206,6 +206,8 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // ProcessLifecycleOwner：应用级前后台信号源（T-P1-08 B4，AppForegroundChanged 生产者）。
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.palette.ktx)
     implementation(libs.androidx.datastore.preferences)

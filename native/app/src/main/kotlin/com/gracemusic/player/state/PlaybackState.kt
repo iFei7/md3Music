@@ -1,6 +1,7 @@
 package com.gracemusic.player.state
 
 import com.gracemusic.data.model.Song
+import com.gracemusic.player.gate.AudioFocusInterruptionMode
 import com.gracemusic.player.model.AppLoopMode
 import com.gracemusic.player.model.AudioQuality
 import com.gracemusic.player.model.SleepTimerMode
@@ -110,6 +111,17 @@ data class PlaybackState(
     /** 「定时结束后播完当前歌曲」的勾选态。 */
     val stopAfterTimerEnds: Boolean = false,
 
+    /**
+     * 「记忆播放状态」开关（T-P1-10 / F-KEEP-005 / F-SET-031）。
+     *
+     * 对位 Dart `PlayerProvider._restoreMemoryEnabled`（默认 `true`）。
+     * 关闭时冷启动**不**恢复上次播放，且清空历史持久化数据
+     * （对位 `_restoreState` 首段，`player_provider.dart:1354-1358`）。
+     *
+     * 归约写入：`SetRestoreMemoryEnabled`（T-P1-10 起由「只落盘」改为写字段）。
+     */
+    val restoreMemoryEnabled: Boolean = true,
+
     /** 交叉淡化开关。 */
     val crossfadeEnabled: Boolean = false,
 
@@ -119,8 +131,47 @@ data class PlaybackState(
     /** 当前是否处于 WiFi 类网络（决定用哪套音质偏好）。 */
     val isWifiNetwork: Boolean = true,
 
+    /**
+     * 应用是否整体处于后台（T-P1-08 B4）。
+     *
+     * 对位 Dart `PlayerProvider._isAppBackgrounded`（`player_provider.dart:352`），
+     * 生产者是 [com.gracemusic.player.engine.ProcessLifecycleAppForegroundMonitor]
+     * （`ProcessLifecycleOwner` 应用级聚合，非各页面自采）。
+     *
+     * **本字段是纯事实，不驱动任何播放动作**：`PlaybackStore` 在收到
+     * `AppForegroundChanged` 后**不再**触发 `RecoveryOrchestrator.onExternalRecoveryTrigger()`
+     * （R-4 复核结论，见 `docs/native/phase-5-audio-focus.md` §R-4）。
+     * 保留字段是给 UI（诊断/刷新策略）与后续任务（T-P1-09 睡眠定时到点执行）
+     * 一个权威的可见性来源，避免它们各自去问 `ProcessLifecycleOwner`。
+     */
+    val isAppBackgrounded: Boolean = false,
+
     /** 音质降级 Toast 的展示开关（实验设置）。 */
     val showQualityDowngradeToast: Boolean = false,
+
+    /**
+     * 「忽略音频焦点」开关（F-FOC-002 / F-SET-039）。
+     *
+     * 对位 Dart `PlayerProvider._ignoreAudioFocus`（默认 false）。开启后
+     * 不响应任何焦点中断（来电 / 导航 / 拔耳机），播放与音量完全保持。
+     *
+     * 归约写入：`SetIgnoreAudioFocus`；消费方：[com.gracemusic.player.store.AudioFocusController]
+     * （同步 fork 标志）与设置页。落盘键 `settings_ignore_audio_focus`。
+     */
+    val ignoreAudioFocus: Boolean = false,
+
+    /**
+     * 短暂失去音频焦点时的处理策略（F-FOC-003 / F-SET-040）。
+     *
+     * 对位 Dart `PlayerProvider._interruptionMode`，默认
+     * [AudioFocusInterruptionMode.KEEP_PLAYING]（Dart 同）。三模式语义见
+     * [com.gracemusic.player.store.AudioFocusController] 的类 KDoc。
+     *
+     * 归约写入：`SetAudioFocusInterruptionMode`；落盘键
+     * `settings_audio_focus_interruption_mode`（存 `ordinal`）。
+     */
+    val audioFocusInterruptionMode: AudioFocusInterruptionMode =
+        AudioFocusInterruptionMode.KEEP_PLAYING,
 
     /** 本地音乐是否关闭评论区（player_provider.dart:1326-1329）。 */
     val closeLocalMusicComments: Boolean = true,
