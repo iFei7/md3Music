@@ -13,6 +13,7 @@
 | **R3-06** `RetryPlayback` 无生产者 | 🟡 开放 | ✅ **已关闭** | 二择一取**选型 ①**：恢复链决策后派发 `PlaybackIntent.RetryCurrent`；`PlaybackEffect.RetryPlayback` **已删除**；两份 phase-3 文档已回写 |
 | **R3-04** 在线音源阻塞 | 🟡 代码层解除 | 🟡 仍开放（真机待验） | 恢复链已接线，但「在线恢复」的真机行为仍未知 |
 | **R3-13** 真机验证缺失 | 🔴 | 🔴 **仍开放** | 本阶段新增能力（睡眠定时通道、恢复链、自动跳歌）**全部未真机验证** |
+| **R4-02** `NETWORK_UNAVAILABLE` 分支不可达 | 🟡 开放 | ✅ **已关闭**（2026-10-16，T-P1-13） | 新增 `NetworkAvailabilityProvider` 生产实现并由 `PlayerModule` 绑定，`PlaybackStore.StoreEngineListener.isNetworkAvailable()` 返回真实值，该分类分支**已可达**；离线失败因此**不消耗预算、不排期退避**。详见下方 R4-02 |
 | **F-KEEP-004** 前后台切换 | 🟡 进行中 | 🟡 仍开放 | `AppForegroundChanged` 仍**无生产者**（ProcessLifecycle 观测未接），恢复策略无法按前后台区分 |
 
 ---
@@ -24,12 +25,21 @@
 - **缓解**：已登记为明确决策（phase-4-recovery.md §6-2）；前后台信号源落地（T-P2 或 T-P1-08）后可按 Dart 语义收紧。
 - **验证需求**：真机前台/后台失败场景对比。
 
-## R4-02 🟡 `NETWORK_UNAVAILABLE` 分类分支当前不可达
+## R4-02 ✅ `NETWORK_UNAVAILABLE` 分类分支不可达（**已关闭，2026-10-16**）
 
-- **事实**：`RecoveryHost.isNetworkAvailable()` 固定返回 `true`（native 尚无连接可用性监测，connectivity 属 T-P2 数据/系统层），故 `classifyPlaybackRecoveryFailure` 的 `NETWORK_UNAVAILABLE` 分支**永远不命中**。
-- **影响**：断网时不做「等待网络恢复」的差异化处理，仍按 30/60/120s 重试（预算 3 次），存在无谓重试。
-- **缓解**：预算上限 + 退避已兜底，不会形成风暴。
-- **归属**：T-P2 数据/系统层（连接监测接入后接线）。
+- **原事实**：`RecoveryHost.isNetworkAvailable()` 固定返回 `true`（native 尚无连接可用性监测，connectivity 属 T-P2 数据/系统层），故 `classifyPlaybackRecoveryFailure` 的 `NETWORK_UNAVAILABLE` 分支**永远不命中**。
+- **原影响**：断网时不做「等待网络恢复」的差异化处理，仍按 30/60/120s 重试（预算 3 次），存在无谓重试。
+- **决议（2026-10-16，T-P1-13 离线歌单播放）**：新增
+  `N/…/player/offline/NetworkAvailabilityProvider.kt` + `AndroidNetworkAvailabilityProvider.kt`
+  （`ConnectivityManager` 同步按需查询；无活动网络 → `false`，有 `NET_CAPABILITY_INTERNET` → `true`，
+  无法判定 / 任何异常 → 保守 `true`），由 `di/PlayerModule.provideNetworkAvailabilityProvider` 绑定生产实现；
+  `PlaybackStore.StoreEngineListener.isNetworkAvailable()` 改为读取真实值。
+  于是 `classifyPlaybackRecoveryFailure(networkAvailable = false)` → `NETWORK_UNAVAILABLE`，
+  且该分类门位于 `budget.tryConsume` **之前** → 离线失败**不消耗恢复预算、不排期退避**。
+- **结论**：**已关闭**。原「无谓重试」问题消除，并同时满足产品决策 4（网络恢复不自动续播）。
+- **残留（登记）**：OEM 定制 ROM 上 `ConnectivityManager` 的判定表现**未真机验证**；且本端口语义是
+  「设备是否有网」，与 lite 的 `networkReachable`（**连接类错误**推导）**不等价**（矩阵 F-NET-007 仍为进行中）。
+  详见 `docs/native/phase-5-offline-playlist.md` §4.2 / §11。
 
 ## R4-03 🟡 HTTP 状态码提取依赖反射（真机未验）
 
@@ -37,13 +47,18 @@
 - **影响**：若真机 R8 混淆后该类名/字段被改写，提取返回 `null` → HTTP 错误降级为按 media3 `errorCode`（2000–2008）分类，**仍可重试**，不会误判为不可恢复。
 - **缓解**：反射失败即 `null`，行为安全降级；已用「公开类」在单测环境验证。
 - **验证需求**：真机 release 构建（含 R8）下断链/403/404 的分类表现。
+- **前提变化（2026-10-16，登记）**：T-P1-13 因播放缓存层需要，已在 `:app` 显式引入
+  `libs.media3.datasource`。故本条**可**改为直接引用
+  `androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException` 并移除反射——
+  本阶段**未改动**（避免越界改 phase-4 代码），登记为后续收敛项。
 
-## R4-04 🟡 睡眠定时 ticker 不随切歌/停止取消（刻意偏离）
+## R4-04 ✅ 睡眠定时 ticker 不随切歌/停止取消（**已确认，已关闭**）
 
 - **事实**：任务措辞要求「切歌/停止/引擎释放时取消」，实现**按 Dart 权威语义**保留倒计时（墙钟语义），仅在 `SetSleepTimer(null)` / 到点 / 作用域取消时停。
-- **影响**：若维护者期望「切歌清零定时」，行为不符；但按字面实现会破坏 F-KEEP-007（30 分钟定时被一次切歌清零）。
-- **缓解**：已显式测试记录（`睡眠定时通道_切歌与停止不取消倒计时`）+ phase-4-concurrency-audit.md §4-1 登记。**需人类确认**。
-- **验证需求**：产品侧确认预期行为。
+- **决议（2026-10-15）**：**产品确认保持现状**——睡眠定时不随切歌取消。
+- **结论**：本行为由「刻意偏离待确认」转为**已确认的既定契约**（对位 Dart `_sleepTimerTicker` 墙钟语义 + F-KEEP-007「30 分钟定时不被一次切歌清零」）。
+- **既有证据**：`睡眠定时通道_切歌与停止不取消倒计时`（`HighFrequencyChannelTest`）+ phase-4-concurrency-audit.md §4-1。
+- **状态**：✅ **已关闭**（无需改动代码）。
 
 ## R4-05 🟡 引擎释放无 Store 可见信号
 

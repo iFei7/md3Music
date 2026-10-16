@@ -1,6 +1,7 @@
 package com.gracemusic.player.engine
 
 import androidx.media3.common.C
+import androidx.media3.datasource.DataSource
 
 /**
  * 音频引擎角色。
@@ -93,6 +94,19 @@ data class LoadControlConfig(
  * @property handleAudioBecomingNoisy 有线拔出 / 蓝牙断开时自动暂停。
  * @property wakeMode 息屏保活级别，见 [DEFAULT_WAKE_MODE] 的长注释。
  * @property loadControl 缓冲策略。
+ * @property dataSourceFactory 数据源工厂（**可选，默认 `null` = 与改造前完全一致**）。
+ *   传入时经 `DefaultMediaSourceFactory` 挂到 `ExoPlayer.Builder.setMediaSourceFactory`
+ *   上，用于接入播放缓存层（Media3 `CacheDataSource`：先查缓存、未命中回源、边播边写）。
+ *   生产接线见 `di/PlayerModule.provideMainAudioEngine`（注入
+ *   `PlaybackCacheStore.dataSourceFactory`）。
+ *
+ *   **为什么是 `DataSource.Factory` 而不是 `CacheDataSource.Factory`**：引擎配置只应
+ *   依赖 media3 的最小公共抽象（`androidx.media3.datasource.DataSource.Factory`），
+ *   不该知道上层用的是缓存还是别的数据源装饰器；`CacheDataSource.Factory` 本身
+ *   就是 `DataSource.Factory` 的实现，可直接传入。
+ *
+ *   **向后兼容**：`null` 时不调用 `setMediaSourceFactory`，`ExoPlayer.Builder`
+ *   保持 media3 默认行为，既有 690 条测试与运行时行为**零变化**。
  */
 data class AudioEngineConfig(
     val role: EngineRole = EngineRole.MAIN,
@@ -102,6 +116,7 @@ data class AudioEngineConfig(
     val handleAudioBecomingNoisy: Boolean = true,
     val wakeMode: Int = DEFAULT_WAKE_MODE,
     val loadControl: LoadControlConfig = LoadControlConfig(),
+    val dataSourceFactory: DataSource.Factory? = null,
 ) {
     companion object {
         /**

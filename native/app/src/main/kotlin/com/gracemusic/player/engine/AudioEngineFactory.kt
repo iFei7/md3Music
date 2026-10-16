@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 
 /**
  * 播放引擎工厂——just_audio fork 引擎构建逻辑的原生化端口。
@@ -54,7 +55,9 @@ class AudioEngineFactory(private val context: Context) {
      * `verifyApplicationThread()` 断言（vendored 源码 `ExoPlayerImpl.java:1521-1523`），
      * `ExoPlayer.Builder.build()` 同样要求主线程。fork 侧的调用点（method channel 回调）也在主线程。
      *
-     * @param config 引擎配置。
+     * @param config 引擎配置。其中 [AudioEngineConfig.dataSourceFactory] 为 `null` 时
+     *   不挂载媒体源工厂（行为与改造前一致）；非 `null` 时经 `DefaultMediaSourceFactory`
+     *   挂载（播放缓存层接入点，见该字段 KDoc）。
      * @param sharedAudioSessionId 需要复用的音频会话 id。当 [AudioEngineConfig.role] 为
      *   [EngineRole.AUX] 时必须提供（辅引擎与主引擎共享 session，使作用于 session 的音频效果
      *   在交叉淡化全程对两路同时生效）；为 [EngineRole.MAIN] 时可省略，此时按 fork 逻辑生成
@@ -78,14 +81,22 @@ class AudioEngineFactory(private val context: Context) {
             Log.i(TAG, "flac extension renderer enabled")
         }
 
-        val player = ExoPlayer.Builder(context, buildRenderersFactory(config, flacExtensionAvailable))
+        val playerBuilder = ExoPlayer.Builder(context, buildRenderersFactory(config, flacExtensionAvailable))
             .setUseLazyPreparation(config.useLazyPreparation)
             .setHandleAudioBecomingNoisy(config.handleAudioBecomingNoisy)
             // 息屏保活：media3 默认 WAKE_MODE_NONE（不持任何锁），必须显式开启，
             // 否则息屏后台切歌时 CPU/Wi-Fi 被挂起，新连接全部失败。见 AudioEngineConfig.DEFAULT_WAKE_MODE。
             .setWakeMode(config.wakeMode)
             .setLoadControl(buildLoadControl(config.loadControl))
-            .build()
+
+        // 播放缓存层接入点（T-P1-13 / S-A）：仅在配置提供数据源工厂时挂载。
+        // 默认 null → 不调用 setMediaSourceFactory，Builder 保持 media3 默认行为，
+        // 与改造前逐字节一致（既有测试与运行时行为零变化）。
+        config.dataSourceFactory?.let { dataSourceFactory ->
+            playerBuilder.setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+        }
+
+        val player = playerBuilder.build()
 
         val audioSessionId = applyAudioSessionId(player, config.role, sharedAudioSessionId)
 

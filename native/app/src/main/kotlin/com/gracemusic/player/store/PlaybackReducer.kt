@@ -142,6 +142,15 @@ object PlaybackReducer {
     /** 错误兜底文案（Dart errorStream 处理器硬编码，player_provider.dart:1705；未知错误经 `safePlaybackErrorMessage` 收敛）。 */
     private const val DEFAULT_PLAYBACK_ERROR = "播放失败，请重试"
 
+    /**
+     * 离线无可播缓存的原始错误串（S-B 新增词汇，产品需求 2026-10-15）。
+     *
+     * 展示文案由 [com.gracemusic.player.model.safePlaybackErrorMessage] 映射为
+     * 「网络不可用，歌单中无已缓存歌曲」——**不得**直接上屏原始串（UI 契约）。
+     * 文案刻意不含 URL / 曲目 id / 堆栈（安全纪律）。
+     */
+    private const val OFFLINE_NO_PLAYABLE_CACHE_ERROR = "网络不可用且歌单中无已缓存歌曲"
+
     private const val KEY_PLAYER_VOLUME = "player_volume"
     private const val KEY_QUALITY_WIFI = "settings_default_quality_wifi"
     private const val KEY_QUALITY_MOBILE = "settings_default_quality_mobile"
@@ -173,7 +182,7 @@ object PlaybackReducer {
             playPlaylist(state, intent.songs, intent.startIndex, forceResolve = true, random = random)
         is PlaybackIntent.PlayCloudPlaylistFrom ->
             playPlaylist(state, intent.songs, intent.startIndex, forceResolve = true, random = random)
-        is PlaybackIntent.PlayAt -> playAt(state, intent.index)
+        is PlaybackIntent.PlayAt -> playAt(state, intent.index, intent.source)
 
         // ── 传输控制 ──
         is PlaybackIntent.Resume -> resume(state)
@@ -185,6 +194,7 @@ object PlaybackReducer {
         is PlaybackIntent.Previous -> previous(state, intent.autoPlay)
         is PlaybackIntent.RetryCurrent -> retryCurrent(state)
         is PlaybackIntent.Stop -> stop(state)
+        is PlaybackIntent.OfflineNoPlayableCache -> offlineNoPlayableCache(state)
         is PlaybackIntent.SeekGestureStarted -> seekGestureStarted(state, intent.wasPlaying)
         is PlaybackIntent.SeekGestureCompleted -> seekGestureCompleted(state, intent.position)
 
@@ -285,11 +295,29 @@ object PlaybackReducer {
         return launchSong(state, queue, song, forceResolve)
     }
 
-    /** 播放队列中指定下标（Dart `playSongAt`，player_provider.dart:4684-4728）。越界拒绝。 */
-    private fun playAt(state: PlaybackState, index: Int): PlaybackTransition {
+    /**
+     * 播放队列中指定下标（Dart `playSongAt`，player_provider.dart:4684-4728）。越界拒绝。
+     *
+     * [source] 非 null 时，**把「回写记忆到的源」与「起播」合并为一次状态迁移**：
+     * 命中缓存的候选曲先 `copy(url = source)` 换进队列项，再交给 [launchSong] 起播。
+     * 为什么必须合并（不能先派发一次 [PlaybackIntent.UpdateSong] 回写、再派发一次
+     * `PlayAt`）：[Song.equals] 仅按 id 比较（`Song.kt:123-127`），纯字段级更新使
+     * [PlaybackState.copy]`(queue = updated)` 与旧 state **结构性相等** →
+     * `PlaybackStore.apply` 的 `_state.value = transition.state` 会被
+     * `MutableStateFlow` 相等去重**吞掉**，回写不落入状态；随后 `PlayAt` 读到的
+     * `url` 仍为 null → `needsUrlResolution` 为真 → 走离线必失败的
+     * [ResolveSongUrl]。合并后由 [launchSong] 承载的迁移必然改变
+     * `isResolvingUrl` / `awaitingPlaybackProgress` / `position` / `queueRevision`，
+     * 故**不可能**被相等去重吞掉，回写与起播一并落地。
+     *
+     * [source] == null（默认）时不做任何回写，行为与改造前**逐字一致**。
+     */
+    private fun playAt(state: PlaybackState, index: Int, source: String? = null): PlaybackTransition {
         if (index < 0 || index >= state.queue.playlist.size) return unchanged(state)
-        val song = state.queue.playlist[index]
-        return launchSong(state, state.queue.positionedAt(index), song, forceResolve = false)
+        val queued = state.queue.playlist[index]
+        val song = if (source != null && queued.url != source) queued.copy(url = source) else queued
+        val queue = if (song === queued) state.queue else state.queue.updateSong(song).queue
+        return launchSong(state, queue.positionedAt(index), song, forceResolve = false)
     }
 
     /**
@@ -574,6 +602,41 @@ object PlaybackReducer {
         Stop,
         StopKeepAlive,
         PersistPlaybackCursor,
+    )
+
+    /**
+     * 离线无可播缓存 → 停止推进（**保留队列 + 错误态**，S-B / 产品决策 1）。
+     *
+     * 与 [stop] 的三处刻意差异（逐条对应产品决策）：
+     * 1. **不清队列、不动 `currentIndex`**：`queue` 与 `currentSong` 原样保留
+     *    （用户仍能在列表里看到自己播到哪儿，也能手动点歌）；
+     * 2. **不动位置基准**（不归零 `position` / 不清 `duration`）：保留「停在哪」
+     *    的上下文，与 `Stop` 的「清空播放态」相反；
+     * 3. **错误态走 `resolveError`**：UI 经 `resolveErrorForDisplay` 展示
+     *    「网络不可用，歌单中无已缓存歌曲」，与引擎错误（`EngineError`）同一条
+     *    展示通道但**不冒充**引擎错误——本函数不经 `RecoveryOrchestrator`，
+     *    故不消耗恢复预算、不排期退避（产品决策 4）。
+     *
+     * 效果只发 `Pause` + `StopKeepAlive`：引擎若停在 `ENDED`（自然播完）时
+     * `pause()` 是无害幂等调用；若用户手动 `Next` 时仍在播，`pause()` 即停声。
+     * **不发 [PlaybackEffect.Stop]**——那是「停止并作废请求」的语义，
+     * 本路径明确不采用。
+     *
+     * `isPlaying = false` 与 [playbackCompleted] 的 `HintAndPause` 分支同款
+     * （该分支亦写 `isPlaying = false`）：停机态必须立即对 UI 生效，不等引擎
+     * `onIsPlayingChanged` 的迟到收敛。
+     */
+    private fun offlineNoPlayableCache(state: PlaybackState): PlaybackTransition = PlaybackTransition(
+        state.copy(
+            isPlaying = false,
+            playbackNotReady = true,
+            awaitingPlaybackProgress = false,
+            isResolvingUrl = false,
+            manualRetryInFlight = false,
+            resolveError = OFFLINE_NO_PLAYABLE_CACHE_ERROR,
+        ),
+        Pause,
+        StopKeepAlive,
     )
 
     /**

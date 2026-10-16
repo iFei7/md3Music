@@ -50,8 +50,14 @@ sealed interface PlaybackIntent {
     /** 装载云盘队列并起播。Dart `playCloudPlaylist`。 */
     data class PlayCloudPlaylistFrom(val songs: List<Song>, val startIndex: Int) : PlaybackIntent
 
-    /** 播放队列中指定下标的歌曲（播放列表面板点击）。Dart `playSongAt`。 */
-    data class PlayAt(val index: Int) : PlaybackIntent
+    /**
+     * 播放队列中指定下标的歌曲（播放列表面板点击）。Dart `playSongAt`。
+     *
+     * @property source 离线前进专用——命中缓存的候选曲目「上次成功解析到的源」；
+     *   非 null 时先回写进队列项再起播，避免 `needsUrlResolution` 触发离线必失败的
+     *   `ResolveSongUrl`；默认 `null` = 与改造前逐字一致。
+     */
+    data class PlayAt(val index: Int, val source: String? = null) : PlaybackIntent
 
     // ───────────────────────── 传输控制 ─────────────────────────
 
@@ -78,6 +84,28 @@ sealed interface PlaybackIntent {
 
     /** 重试当前曲目（手动重试，计数独立于自动恢复额度）。Dart `retryCurrentPlayback`。 */
     data object RetryCurrent : PlaybackIntent
+
+    /**
+     * 离线「前进」失败：网络不可用且歌单中不存在任何**已缓存可播**曲目
+     * → 停止推进（**保留队列 + 错误态**）。S-B 新增词汇。
+     *
+     * ## 为什么必须新增意图（而不是复用既有词汇）
+     * - **不复用 [Stop]**：`Stop` 是「停止并作废请求代次」的语义（`dispatch` 里
+     *   `invalidatePlaybackRequest()`），产品决策明确要求**不得清空队列**、
+     *   **不得执行 Stop 语义**（见 `docs/native/phase-5-offline-playlist.md` §1
+     *   决策 1）。本意图只「停播 + 置错误态」，队列与当前曲原样保留；
+     * - **不伪造引擎错误**：错误态走 `PlaybackEvent.EngineError` 会把「缓存缺失」
+     *   冒充成「媒体解码/网络错误」，污染错误分类与恢复链（`RecoveryOrchestrator`
+     *   会对它做恢复决策）。本意图**不经恢复链**——离线无可播缓存是**终态**，
+     *   不消耗恢复预算、不排期退避（产品决策 4：网络恢复后不自动续播/重试）。
+     *
+     * ## 语义
+     * 由 `PlaybackStore` 的离线前进判定（`OfflineAdvancePolicy.Decision.Stop`）
+     * 派发；归约后：`resolveError` = 离线文案、`isPlaying = false`、
+     * `playbackNotReady = true`，效果 = `Pause` + `StopKeepAlive`。
+     * 队列（[com.gracemusic.player.state.PlaybackState.queue]）与 `currentSong` 不变。
+     */
+    data object OfflineNoPlayableCache : PlaybackIntent
 
     /** 停止并清空播放状态（不改变队列？——Dart 由 `clearPlaylist` 承担。此处仅停引擎）。 */
     data object Stop : PlaybackIntent

@@ -246,6 +246,9 @@ class RecoveryOrchestratorTest {
             keepAlive = keepAlive,
             songUrlResolver = SongUrlResolver(api, loudnessCache),
             loudnessCache = loudnessCache,
+            // S-B：既有用例全部按「在线」运行（离线分支不可达 → 行为零变化）。
+            cacheResolver = com.gracemusic.player.offline.NoOpPlaybackCacheResolver,
+            networkAvailability = com.gracemusic.player.offline.AlwaysOnlineNetworkAvailabilityProvider,
             scope = scope,
         )
         return Harness(store, engine, keepAlive, api, scope)

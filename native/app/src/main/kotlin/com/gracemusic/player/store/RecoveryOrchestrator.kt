@@ -37,11 +37,13 @@ internal interface RecoveryHost {
     fun isResolvingUrl(): Boolean
 
     /**
-     * 网络是否可用。
+     * 网络是否可用（S-B R-4 收口：由宿主读真实
+     * [com.gracemusic.player.offline.NetworkAvailabilityProvider]）。
      *
-     * native 尚无连接可用性监测（connectivity 属 T-P2 数据/系统层），固定返回
-     * `true`——即 [PlaybackRecoveryFailureKind.NETWORK_UNAVAILABLE] 分支暂不可达。
-     * 登记为与 Dart 的差异（Dart 用 `_lastHasNetwork`）。
+     * `false` 时 [classifyPlaybackRecoveryFailure] 归
+     * [PlaybackRecoveryFailureKind.NETWORK_UNAVAILABLE]，[attemptRecovery] 在该分类门
+     * **之后**才 `budget.tryConsume`，故离线失败**不消耗预算、不排期退避**。
+     * 该分支此前因宿主硬编码 `true` 而不可达（风险 **R4-02**），现已关闭。
      */
     fun isNetworkAvailable(): Boolean
 
@@ -193,9 +195,23 @@ internal class RecoveryOrchestrator(
     }
 
     /**
-     * 外部触发（网络恢复 / 网络类型变化 / 回到前台）后尝试重试未决失败。
+     * 外部触发（回到前台 / 其它外部信号）后尝试重试未决失败。
      *
-     * 对应 Dart `_onNetworkChanged` → `_retryFailedPlayback()`（player_provider.dart:1089-1095）。
+     * ## R-4 收口（S-B，2026-10-15）：**不再接网络恢复信号**
+     * 本方法的 Dart 对位是 `_onNetworkChanged` → `_retryFailedPlayback()`
+     * （player_provider.dart:1089-1095），语义原本是「网络恢复 → 自动重试」。
+     * 产品决策 4 明确要求「网络恢复后**不**自动恢复播放，需等待用户手动操作」，
+     * 故宿主 `PlaybackStore.dispatch(event)` 已**移除**
+     * `PlaybackEvent.NetworkChanged → onExternalRecoveryTrigger()` 这一条连线
+     * （仅保留 `AppForegroundChanged` 的「回到前台」触发）。
+     *
+     * **能力本身保留**（不删除）：待后续任务（R4-01 前后台信号源接线，T-P1-08）
+     * 需要「回到前台尝试重试」时仍可复用；调用方**必须**确保它不会被
+     * 「网络由离线转在线」这一事实驱动。
+     *
+     * 离线期间：`pendingFailure` 虽被记录，但 [attemptRecovery] 的分类门
+     * （`networkAvailable = false` → `NETWORK_UNAVAILABLE`）会在消耗预算前返回，
+     * 故离线不会产生任何重试，也不会耗尽预算。
      */
     fun onExternalRecoveryTrigger() {
         if (selfDispatchDepth > 0) return

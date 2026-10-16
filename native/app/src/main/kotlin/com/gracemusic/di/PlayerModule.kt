@@ -8,6 +8,14 @@ import com.gracemusic.player.engine.AudioEngineConfig
 import com.gracemusic.player.engine.AudioEngineFactory
 import com.gracemusic.player.engine.EngineRole
 import com.gracemusic.player.engine.ExoPlayerPlaybackEngineAdapter
+import com.gracemusic.player.offline.AndroidNetworkAvailabilityProvider
+import com.gracemusic.player.offline.NetworkAvailabilityProvider
+import com.gracemusic.player.offline.PlaybackCacheConfig
+import com.gracemusic.player.offline.PlaybackCacheResolver
+import com.gracemusic.player.offline.PlaybackCacheStore
+import com.gracemusic.player.offline.ResolvedSourceMemory
+import com.gracemusic.player.offline.SharedPreferencesResolvedSourceMemory
+import com.gracemusic.player.offline.SimplePlaybackCacheResolver
 import com.gracemusic.player.store.AndroidPlaybackKeepAlive
 import com.gracemusic.player.store.PlaybackEngine
 import com.gracemusic.player.store.PlaybackKeepAlive
@@ -66,12 +74,30 @@ object PlayerModule {
      * 配置当前取默认值（蝰蛇母带开、flac 扩展开、60s 缓冲、`WAKE_MODE_NETWORK`）。
      * TODO(P1)：待设置层（DataStore）落地后改为读用户设置构建；
      *   届时需保证"引擎单例已创建后切换设置"走 `player.set*` 增量路径而非重建引擎。
+     *
+     * ## 播放缓存层接线（T-P1-13 / S-A）
+     * 注入 [PlaybackCacheStore.dataSourceFactory]，使播放经 `CacheDataSource`
+     * （先查缓存、未命中回源、边播边写）。
+     *
+     * **主线程代价评估（重要）**：[PlaybackCacheStore] 的构造**不**触发磁盘 I/O
+     * ——`SimpleCache` 是 `by lazy`，而 `dataSourceFactory` 是委托工厂，
+     * 真正的 `CacheDataSource.Factory`/`SimpleCache` 在 `createDataSource()`
+     * 时才构建，该调用由 ExoPlayer 在**加载线程**发起。故本 `@MainThread` 提供者
+     * 只做一次廉价的 lambda 传递，不会阻塞主线程。详见
+     * [PlaybackCacheStore] 类 KDoc 的「构造代价与线程」段。
      */
     @Provides
     @Singleton
     @MainThread
-    fun provideMainAudioEngine(factory: AudioEngineFactory): AudioEngine =
-        factory.create(AudioEngineConfig(role = EngineRole.MAIN))
+    fun provideMainAudioEngine(
+        factory: AudioEngineFactory,
+        playbackCacheStore: PlaybackCacheStore,
+    ): AudioEngine = factory.create(
+        AudioEngineConfig(
+            role = EngineRole.MAIN,
+            dataSourceFactory = playbackCacheStore.dataSourceFactory,
+        ),
+    )
 
     @Provides
     @Singleton
@@ -107,4 +133,55 @@ object PlayerModule {
     @StoreScope
     fun provideStoreScope(): CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    // ------------------------------------------------------------------
+    // 离线播放端口（T-P1-13 / S-A）
+    // ------------------------------------------------------------------
+
+    /**
+     * 播放缓存层构建参数（专用子目录 + 512 MiB 上限）。
+     *
+     * 生产固定取默认值；独立成提供者是为了让「缓存大小」设置（F-CACHE-009）
+     * 接线时只改这一处（把默认值换成读设置）。
+     */
+    @Provides
+    @Singleton
+    fun providePlaybackCacheConfig(): PlaybackCacheConfig = PlaybackCacheConfig()
+
+    /**
+     * 「`songId|quality` → 上次解析到的源」的持久化记忆。
+     *
+     * 实现为应用私有 `SharedPreferences`（见 [SharedPreferencesResolvedSourceMemory]
+     * 的持久化选择与后续收敛登记）。**不得**把其中的源 URL 写入任何日志。
+     */
+    @Provides
+    @Singleton
+    fun provideResolvedSourceMemory(
+        @ApplicationContext context: Context,
+    ): ResolvedSourceMemory = SharedPreferencesResolvedSourceMemory(context)
+
+    /**
+     * [PlaybackCacheResolver] 的生产实现（`NoOpPlaybackCacheResolver` 仅用于降级/测试）。
+     *
+     * 绑定后「离线时跳歌到下一首已缓存曲目」的判定才有真实数据源；
+     * 若仍绑定 `NoOp`，离线时所有曲目都会被判为未缓存 → 立即停播
+     * （见 [com.gracemusic.player.offline.PlaybackCacheResolver] KDoc 的接线顺序风险）。
+     */
+    @Provides
+    @Singleton
+    fun providePlaybackCacheResolver(store: PlaybackCacheStore): PlaybackCacheResolver =
+        SimplePlaybackCacheResolver(store)
+
+    /**
+     * [NetworkAvailabilityProvider] 的生产实现：`ConnectivityManager` 同步按需查询。
+     *
+     * 绑定后 `PlaybackStore.StoreEngineListener.isNetworkAvailable()` 才能拿到真实值，
+     * `RecoveryOrchestrator` 的 `NETWORK_UNAVAILABLE` 分类分支由此变为**可达**
+     * （关闭风险 **R4-02**）。本提供者只做端口接线，不改任何恢复/跳歌策略。
+     */
+    @Provides
+    @Singleton
+    fun provideNetworkAvailabilityProvider(
+        @ApplicationContext context: Context,
+    ): NetworkAvailabilityProvider = AndroidNetworkAvailabilityProvider(context)
 }

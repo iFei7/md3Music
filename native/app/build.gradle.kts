@@ -238,6 +238,10 @@ dependencies {
     // 出现 androidx.media3.decoder.SimpleDecoder，须在 :app 的编译类路径上可见
     // （:media3fork 以 implementation 声明该模块，不向消费者导出）。
     implementation(libs.media3.decoder)
+    // 播放缓存层（T-P1-13 / S-A）：需编译期引用 androidx.media3.datasource.*
+    // 与 androidx.media3.datasource.cache.*（SimpleCache / CacheDataSource 等）。
+    // 同上，:media3fork 以 implementation 声明故需在 :app 显式声明。
+    implementation(libs.media3.datasource)
 
     // --- 图片（Coil 3 + okhttp 网络组件）---
     implementation(libs.coil.compose)

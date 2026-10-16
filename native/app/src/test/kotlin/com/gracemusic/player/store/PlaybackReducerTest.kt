@@ -56,7 +56,9 @@ import org.junit.Test
  *   `PlayPlaylistFrom_起始索引越界收敛到合法区间`（边界）
  * - `PlayOnlinePlaylistFrom` → `PlayOnlinePlaylistFrom_装载并强制解析当前曲`（正例+空列表边界）
  * - `PlayCloudPlaylistFrom` → `PlayCloudPlaylistFrom_装载云盘队列并解析`（正例+空列表边界）
- * - `PlayAt` → `PlayAt_播放列表面板指定下标`（正例）/ `PlayAt_越界索引拒绝`（边界）
+ * - `PlayAt` → `PlayAt_播放列表面板指定下标` / `PlayAt_带记忆源_回写队列项url并以该源Prepare`
+ *   （正例，S-B 离线前进）/ `PlayAt_省略记忆源_保持改造前行为_无url时走解析` /
+ *   `PlayAt_越界索引拒绝`（边界）
  *
  * **传输控制**：
  * - `Resume` → `Resume_就绪态直接起播`（正例）/ `Resume_空队列拒绝` /
@@ -76,6 +78,8 @@ import org.junit.Test
  *   `RetryCurrent_本地曲带当前位置重备`（正例）/ `RetryCurrent_重试在途时拒绝` /
  *   `RetryCurrent_解析在途时拒绝`（边界）
  * - `Stop` → `Stop_清播放基准但保留队列`（正例+边界）
+ * - `OfflineNoPlayableCache`（S-B） → `OfflineNoPlayableCache_停止推进_保留队列与播放基准且仅发Pause与停保活`（正例）/
+ *   `OfflineNoPlayableCache_与Stop的差异_不作废队列与播放基准`（边界）
  * - `SeekGestureStarted` → `SeekGestureStarted_播放中前置暂停`（正例）/
  *   `SeekGestureStarted_未播放时无操作`（边界）
  * - `SeekGestureCompleted` → `SeekGestureCompleted_落目标位置并下发定位`（正例）/
@@ -382,6 +386,54 @@ class PlaybackReducerTest {
         assertRejected(empty, reduceIntent(empty, PlaybackIntent.PlayAt(index = 0)))
     }
 
+    @Test
+    fun `PlayAt_带记忆源_回写队列项url并以该源Prepare`() {
+        // S-B 离线前进专用：把「回写记忆源」与「起播」合并为一次状态迁移
+        // （Song.equals 仅比 id → 纯字段级更新会被 StateFlow 去重吞掉，故不可分两次派发）。
+        val source = "https://cdn.example/c"
+        val before = stateOf(onlineSongs("a", "b", "c"), currentIndex = 0, revision = 3)
+
+        val t = reduceIntent(before, PlaybackIntent.PlayAt(index = 2, source = source))
+
+        assertEquals(2, t.state.currentIndex)
+        assertEquals("c", t.state.currentSong?.id)
+        // 队列项 url 被回写为记忆源（真的落进新 state）。
+        assertEquals(source, t.state.queue.playlist[2].url)
+        // 以该源 Prepare（不是 ResolveSongUrl）→ 不需解析。
+        assertFalse(t.state.isResolvingUrl)
+        assertTrue(t.state.awaitingPlaybackProgress)
+        assertEquals(4, t.state.queueRevision)
+        assertEquals(
+            listOf(
+                Prepare(testSong("c", url = source), null, true),
+                StartKeepAlive,
+                PersistPlaybackCursor,
+            ),
+            t.effects,
+        )
+    }
+
+    @Test
+    fun `PlayAt_省略记忆源_保持改造前行为_无url时走解析`() {
+        // source 省略 / 为 null = 与改造前逐字一致：无 url 的在线曲走 ResolveSongUrl。
+        val before = stateOf(onlineSongs("a", "b", "c"), currentIndex = 0, revision = 3)
+
+        val t = reduceIntent(before, PlaybackIntent.PlayAt(index = 2))
+
+        assertEquals(2, t.state.currentIndex)
+        assertEquals("c", t.state.currentSong?.id)
+        assertNull(t.state.queue.playlist[2].url)
+        assertTrue(t.state.isResolvingUrl)
+        assertEquals(
+            listOf(
+                ResolveSongUrl(testSong("c")),
+                StartKeepAlive,
+                PersistPlaybackCursor,
+            ),
+            t.effects,
+        )
+    }
+
     // ═══════════════════════ 传输控制 ═══════════════════════
 
     @Test
@@ -684,6 +736,56 @@ class PlaybackReducerTest {
         assertNull(t.state.resolveError)
         assertFalse(t.state.awaitingPlaybackProgress)
         assertEquals(listOf(Stop, StopKeepAlive, PersistPlaybackCursor), t.effects)
+    }
+
+    @Test
+    fun `OfflineNoPlayableCache_停止推进_保留队列与播放基准且仅发Pause与停保活`() {
+        // S-B 产品需求（2026-10-15）：离线且歌单无任何已缓存可播曲目 → 停止推进，
+        // 但**保留队列 + 当前曲 + 播放基准**，错误态走 resolveError（不经恢复链）。
+        val before = playing(onlineSongs("a", "b"), position = 30.seconds, duration = 200.seconds)
+            .copy(resolveError = "boom")
+        val t = reduceIntent(before, PlaybackIntent.OfflineNoPlayableCache)
+
+        // 队列 / 当前索引 / 当前曲 / 位置 / 时长 全部不变（与 Stop 的「清基准」相反）。
+        assertEquals(listOf("a", "b"), idsOf(t.state.playlist))
+        assertEquals(before.currentIndex, t.state.currentIndex)
+        assertEquals(before.currentSong, t.state.currentSong)
+        assertEquals(before.position, t.state.position)
+        assertEquals(before.platformPosition, t.state.platformPosition)
+        assertEquals(before.duration, t.state.duration)
+        // 停机态：立即对 UI 生效，不等引擎迟到收敛。
+        assertFalse(t.state.isPlaying)
+        assertTrue(t.state.playbackNotReady)
+        assertFalse(t.state.awaitingPlaybackProgress)
+        assertFalse(t.state.isResolvingUrl)
+        assertFalse(t.state.manualRetryInFlight)
+        // 错误态 = 离线原始串（展示串由 safePlaybackErrorMessage 收敛）。
+        assertEquals("网络不可用且歌单中无已缓存歌曲", t.state.resolveError)
+        // 效果恰为 Pause + StopKeepAlive：**不含 Stop**（不采用「停止并作废请求」语义）。
+        assertEquals(listOf(Pause, StopKeepAlive), t.effects)
+    }
+
+    @Test
+    fun `OfflineNoPlayableCache_与Stop的差异_不作废队列与播放基准`() {
+        val base = playing(onlineSongs("a", "b"), position = 30.seconds, duration = 200.seconds)
+        val stop = reduceIntent(base, PlaybackIntent.Stop)
+        val offline = reduceIntent(base, PlaybackIntent.OfflineNoPlayableCache)
+
+        // 二者都保留队列。
+        assertEquals(idsOf(stop.state.playlist), idsOf(offline.state.playlist))
+        // Stop：清播放基准（位置归零 / 时长清空）+ 发 Stop 效果。
+        assertEquals(Duration.ZERO, stop.state.position)
+        assertEquals(Duration.ZERO, stop.state.platformPosition)
+        assertNull(stop.state.duration)
+        assertTrue(stop.effects.contains(Stop))
+        // OfflineNoPlayableCache：**不**清播放基准、**不**发 Stop。
+        assertEquals(30.seconds, offline.state.position)
+        assertEquals(30.seconds, offline.state.platformPosition)
+        assertEquals(200.seconds, offline.state.duration)
+        assertFalse(offline.effects.contains(Stop))
+        // 错误态差异：Stop 清空 resolveError，本意图落离线文案。
+        assertNull(stop.state.resolveError)
+        assertEquals("网络不可用且歌单中无已缓存歌曲", offline.state.resolveError)
     }
 
     @Test

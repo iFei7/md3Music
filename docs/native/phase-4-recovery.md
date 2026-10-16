@@ -185,6 +185,7 @@ PlaybackStore.handlePlaybackFailure(info)                             PlaybackSt
 | 5 | 新增恢复超时看门狗（20s） | 见 §3.3 |
 | 6 | `budget.nextDelay` 消费前读取 | 见 §2 差异登记 |
 | 7 | 测试用 `RobolectricTestRunner` | `android.util.Log` 在纯 JUnit 下抛 `Stub!`；与既有 Store 测试同一偏离 |
+| 8 | **网络恢复不再触发自动重试（R-4，2026-10-16 追补）** | 产品决策 4（2026-10-15）要求「网络恢复后**不**自动恢复播放，需等待用户手动操作」。`PlaybackStore.dispatch(event)` 已**移除** `PlaybackEvent.NetworkChanged → recovery.onExternalRecoveryTrigger()` 连线（该能力保留，仅由 `AppForegroundChanged` 触发）。故 Dart `_onNetworkChanged → _retryFailedPlayback()`（`player_provider.dart:1072-1099`）的语义在本工程**刻意反转**。详见 `docs/native/phase-5-offline-playlist.md` §4.5 |
 
 ---
 
@@ -192,7 +193,7 @@ PlaybackStore.handlePlaybackFailure(info)                             PlaybackSt
 
 | 项 | 归属 |
 |---|---|
-| `isNetworkAvailable()` 恒 `true` → `NETWORK_UNAVAILABLE` 分支**当前不可达** | T-P2 数据/系统层（连接监测） |
+| ~~`isNetworkAvailable()` 恒 `true` → `NETWORK_UNAVAILABLE` 分支**不可达**~~ | ✅ **已关闭**（2026-10-16，T-P1-13：`NetworkAvailabilityProvider` / `AndroidNetworkAvailabilityProvider` 生产实现已接线，`PlayerModule` 绑定；离线失败不消耗预算、不排期退避。关闭 R4-02） |
 | `AppForegroundChanged` 无生产者 → 前后台不分 | T-P2 / T-P1-08 |
 | 完整音频焦点运行时 | **T-P1-08** |
 | 睡眠定时到点执行 | **T-P1-09** |

@@ -91,6 +91,12 @@ media3-common = { group = "androidx.media3", name = "media3-common", version.ref
 # androidx.media3.decoder.SimpleDecoder，需在其编译类路径可见（:media3fork 以
 # implementation 声明故不外泄）。
 media3-decoder = { group = "androidx.media3", name = "media3-decoder", version.ref = "media3" }
+# :app 显式依赖 media3-datasource：播放缓存层（T-P1-13 / S-A）需要编译期引用
+# androidx.media3.datasource.{DataSource,DefaultDataSource} 与
+# androidx.media3.datasource.cache.{SimpleCache,CacheDataSource,ContentMetadata,
+# LeastRecentlyUsedCacheEvictor}。这些类型由 :media3fork 以 implementation 声明
+# （运行期在类路径上，编译期不外泄），故需在 :app 显式声明以获得编译类路径。
+media3-datasource = { group = "androidx.media3", name = "media3-datasource", version.ref = "media3" }
 # --- androidx.core（core 明文条目供 :media3fork 使用）---
 # :media3fork 编译 vendored media3-session，其中 NotificationCompat.Builder
 # #setForegroundServiceBehavior / #setSilent 等为 androidx.core 1.7.0+ API；

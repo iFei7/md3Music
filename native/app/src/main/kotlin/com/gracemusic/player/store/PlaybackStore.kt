@@ -12,7 +12,13 @@ import com.gracemusic.player.gate.PlaybackRequestGate
 import com.gracemusic.player.gate.PositionRewindGate
 import com.gracemusic.player.gate.classifyCdnStallWindow
 import com.gracemusic.player.gate.shouldHandlePlaybackErrorEvent
+import com.gracemusic.player.model.AppLoopMode
 import com.gracemusic.player.model.PlaybackErrorInfo
+import com.gracemusic.player.offline.NetworkAvailabilityProvider
+import com.gracemusic.player.offline.OfflineAdvancePolicy
+import com.gracemusic.player.offline.PlaybackCacheKeys
+import com.gracemusic.player.offline.PlaybackCacheResolver
+import com.gracemusic.player.queue.PlaybackQueue
 import com.gracemusic.player.session.PlaybackSessionBridge
 import com.gracemusic.player.session.PlaybackSessionRegistry
 import com.gracemusic.player.session.PlayerCommand
@@ -179,6 +185,36 @@ annotation class StoreScope
  *   [com.gracemusic.player.model.classifyPlaybackError]（纯函数）。退避与看门狗
  *   定时器绑 [scope]，见 [RecoveryOrchestrator] KDoc。
  *
+ * ## 离线前进判定（S-B，产品需求 2026-10-15）
+ * 断网时「前进」不再盲目推进，而是**先过滤到已缓存曲目**；无任何可播缓存则
+ * **停止（保留队列 + 错误态）**；网络恢复**不**自动续播/重试。
+ *
+ * **三条前进路径汇入同一处判定**（[tryOfflineAdvance]，收口唯一）：
+ * | 路径 | 入口 | 判定调用点 |
+ * |---|---|---|
+ * | 自然播完推进 | `EnginePlaybackCompleted` 事件 | [dispatch] 事件侧（`replayCurrentFirst = true`） |
+ * | 解析失败自动跳歌 | `RecoveryOrchestrator.maybeAutoSkip` → 自派发 `Next(autoPlay=true)` | [dispatch] 意图侧（`replayCurrentFirst = false`） |
+ * | 用户手动下一首 | `PlaybackIntent.Next` / `PlayerCommand.Next` | [dispatch] 意图侧（`replayCurrentFirst = false`） |
+ *
+ * **判定流程**：`!networkAvailable` → 归约结果确属「前进」（见
+ * [isOfflineFilterableForward]，用归约器自身产出判定，不重推索引算术）→
+ * 取 [PlaybackQueue.nextCandidateIndices]（循环/随机/队尾截断的唯一入口，
+ * 单曲 + ONE 补「重播当前曲」）→ 逐个**挂起**查询
+ * [PlaybackCacheResolver.resolveCachedSource] → 首个非 null 者经
+ * [OfflineAdvancePolicy] 判为 `Play` → 回写记忆到的源 + 既有
+ * [PlaybackIntent.PlayAt] 继续播放；全 null → `Stop` →
+ * [PlaybackIntent.OfflineNoPlayableCache]（保留队列 + 错误态，**不经恢复链**）。
+ *
+ * **代次校验**：枚举是挂起操作，每步复用 [PlaybackRequestGate] / [activeRequestGen]
+ * （**不引入第三套代次体系**）；枚举期间用户发出新播放意图 → 本轮放弃、**不写状态**。
+ *
+ * **资源与取消**：枚举任务绑 [offlineAdvanceJob]，可取消；连续点「下一首」取消上一轮；
+ * `Stop` / `ClearQueue` / 新播放族意图到达时取消；[scope] 取消时随作用域释放。
+ * 无界 Channel / 无界队列 / 永久运行协程一律禁止。
+ *
+ * **禁止在归约器里做 I/O**：归约器仍是纯函数；网络查询（同步端口）在
+ * [tryOfflineAdvance]，缓存查询（挂起 I/O）在 [startOfflineAdvance] 的受控协程。
+ *
  * ## EngineListener 桥接（内部监听，全部主线程回调）
  * - `onPlaybackStateChanged` / `onDurationChanged` / `onPlaybackCompleted` →
  *   同名事件直投；
@@ -206,6 +242,8 @@ class PlaybackStore @Inject constructor(
     private val keepAlive: PlaybackKeepAlive,
     private val songUrlResolver: SongUrlResolver,
     private val loudnessCache: LoudnessCache,
+    private val cacheResolver: PlaybackCacheResolver,
+    private val networkAvailability: NetworkAvailabilityProvider,
     @StoreScope private val scope: CoroutineScope,
 ) : PlaybackSessionBridge {
 
@@ -306,6 +344,22 @@ class PlaybackStore @Inject constructor(
      */
     private var sleepTimerTicker: Job? = null
 
+    /**
+     * 离线「前进」候选枚举任务（唯一在途任务；`null` = 无枚举在途）。
+     *
+     * 生命周期（见类 KDoc「离线前进判定」节）：
+     * - **启动**：离线且发生「前进」触发（`Next` 意图 / 播完事件）时 [startOfflineAdvance]；
+     * - **取消**：新的播放族意图 / `Stop` / `ClearQueue` 到达时 [cancelOfflineAdvance]；
+     * - **自释放**：决策落定、派发前先置 `null`（避免派发的 `PlayAt` 触发自取消），
+     *   随后任务自然结束；
+     * - **作用域取消**：本 Job 是 [scope] 的子任务，`@StoreScope` 取消（进程级拆卸 /
+     *   Service 销毁）即随之取消。
+     *
+     * 不引入第三套代次体系：正确性由 `PlaybackRequestGate` / [activeRequestGen]
+     * 保证（见 [startOfflineAdvance]），本字段只负责**资源**（取消在途枚举）。
+     */
+    private var offlineAdvanceJob: Job? = null
+
     // —— CDN 看门狗状态（Dart player_provider.dart:411-447 字段镜像）——
     /** 最近一次装载（Prepare 效果）时刻；装载保护窗 [LOAD_GUARD_WINDOW_MS] 内不看门狗。 */
     private var lastLoadStartedAt: Long = 0L
@@ -366,7 +420,15 @@ class PlaybackStore @Inject constructor(
         if (isPlaybackRequestIntent(intent)) {
             activeRequestGen = requestGate.issue()
         }
-        apply(PlaybackReducer.reduce(_state.value, intent))
+        if (isPlaybackRequestIntent(intent) || intent is PlaybackIntent.Stop || intent is PlaybackIntent.ClearQueue) {
+            // 新用户动作取代在途枚举（资源释放；正确性另由代次校验保证）。
+            cancelOfflineAdvance()
+        }
+        val transition = PlaybackReducer.reduce(_state.value, intent)
+        // 离线「前进」判定（唯一入口）：命中则本轮归约**不落地**，改由受控枚举决定。
+        // `Next` 触发不做「优先重播当前曲」（与归约器 next() 的前进语义一致）。
+        if (isForwardAdvanceIntent(intent) && tryOfflineAdvance(transition, replayCurrentFirst = false)) return
+        apply(transition)
         if (intent is PlaybackIntent.Stop) {
             invalidatePlaybackRequest()
         }
@@ -383,14 +445,23 @@ class PlaybackStore @Inject constructor(
      * 未来的系统事件源（网络变化等）接入。
      */
     fun dispatch(event: PlaybackEvent) {
-        apply(PlaybackReducer.reduce(_state.value, event))
+        val transition = PlaybackReducer.reduce(_state.value, event)
+        // 离线「前进」判定（唯一入口）：自然播完驱动的推进同样受缓存过滤。
+        // 播完触发在 ONE 模式优先重播当前曲（与归约器 playbackCompleted 的 ONE 分支一致）。
+        if (isForwardAdvanceEvent(event) && tryOfflineAdvance(transition, replayCurrentFirst = true)) return
+        apply(transition)
         // T-P1-06 B3 恢复链的外部触发与成功收敛（状态迁移已在上面完成，此处只驱动编排器）。
         when (event) {
             is PlaybackEvent.EngineIsPlayingChanged ->
                 if (event.isPlaying) recovery.onPlaybackHealthy()
 
             is PlaybackEvent.PlaybackProgressConfirmed -> recovery.onPlaybackHealthy()
-            is PlaybackEvent.NetworkChanged -> recovery.onExternalRecoveryTrigger()
+
+            // ── R-4 收口（S-B）：网络恢复**不得**触发自动重试/续播 ──
+            // 原 `is PlaybackEvent.NetworkChanged -> recovery.onExternalRecoveryTrigger()`
+            // 已移除：产品决策 4 要求「网络恢复后不自动恢复播放，需等待用户手动操作」。
+            // 归约仍写 `isWifiNetwork`（仅标志，不产生任何播放/重试动作）。
+            // 见 RecoveryOrchestrator.onExternalRecoveryTrigger 的 KDoc 收敛说明。
             is PlaybackEvent.AppForegroundChanged ->
                 if (!event.backgrounded) recovery.onExternalRecoveryTrigger()
 
@@ -527,14 +598,251 @@ class PlaybackStore @Inject constructor(
         val requestedQuality: String = _state.value.audioQuality.value
         scope.launch {
             when (val result: ResolutionResult = songUrlResolver.resolve(song, requestedQuality)) {
-                is ResolutionResult.Success ->
+                is ResolutionResult.Success -> {
+                    // 源记忆写入口（S-B §4.3）：**唯一**写「键 → 上次成功解析到的源」的地方。
+                    // 键的 quality 与引擎 `prepare` 的 `customCacheKey` 取同一来源
+                    // （见 [cacheQualityOf]），三处键因此逐字一致。
+                    rememberResolvedSourceSafely(song, result.url)
                     dispatch(PlaybackIntent.UpdateSong(song.copy(url = result.url), result.actualQuality))
+                }
 
                 is ResolutionResult.Failure ->
                     handlePlaybackFailure(PlaybackErrorInfo.resolutionFailure(result.message, song.id))
             }
         }
     }
+
+    /**
+     * 记录「`songId|quality` → 源」记忆（离线重建播放项的唯一写入口，S-B §4.3）。
+     *
+     * 缓存是**加速设施**：记忆写入失败（磁盘满 / 权限异常等）不得阻断播放，
+     * 故显式降级并登记日志——**绝不记录 URL**（可能含鉴权参数，安全纪律）。
+     * `CancellationException` 照常上抛（协作式取消不得被吞）。
+     */
+    private suspend fun rememberResolvedSourceSafely(song: Song, source: String) {
+        try {
+            cacheResolver.rememberResolvedSource(song.id, cacheQualityOf(song), source)
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            throw cancellation
+        } catch (t: Throwable) {
+            Log.w(TAG, "源记忆写入失败（缓存为加速设施，不阻断播放）：${t.javaClass.simpleName}")
+        }
+    }
+
+    // ─────────────────────── 离线「前进」判定（S-B） ───────────────────────
+
+    /**
+     * 「前进」触发的**意图**侧判定（离线过滤的唯一入口之一）：用户 / 系统点「下一首」。
+     *
+     * 只有 `Next` 在此列：`Previous` 方向**刻意不收编**（产品决策 3：本次只对前进
+     * 方向生效，`Previous` 保持既有行为并登记为待确认项）；用户手动 `PlayAt` /
+     * `PlaySingleSong` 等是**显式选曲**，不做缓存过滤（产品决策：用户意图优先）。
+     */
+    private fun isForwardAdvanceIntent(intent: PlaybackIntent): Boolean = intent is PlaybackIntent.Next
+
+    /**
+     * 「前进」触发的**事件**侧判定：自然播完。
+     *
+     * 解析失败自动跳歌不在此列——它由 `RecoveryOrchestrator` 自派发
+     * `PlaybackIntent.Next(autoPlay = true)`，经 [dispatch] 的意图侧判定收编，
+     * 故三条前进路径（自然播完 / 失败跳歌 / 手动 Next）最终都汇入
+     * [tryOfflineAdvance] 这一处。
+     */
+    private fun isForwardAdvanceEvent(event: PlaybackEvent): Boolean =
+        event is PlaybackEvent.EnginePlaybackCompleted
+
+    /**
+     * 离线「前进」判定的**唯一收口**（三条前进路径共用）。
+     *
+     * @return `true` = 本轮已交由离线枚举处理（调用方**不得**再落地原归约结果）；
+     *   `false` = 非离线 / 非前进 / 退化队列，走既有在线路径。
+     *
+     * 判定顺序（每步都是「不成立即放行既有行为」）：
+     * 1. 网络可用 → `false`（在线路径零变化）；
+     * 2. 归约结果不是「前进」（见 [isOfflineFilterableForward]）→ `false`；
+     * 3. 队列为空或 `currentIndex` 无效（退化队列，归约器自会拒绝）→ `false`；
+     * 4. 命中 → 启动受控枚举（挂起查询在 [startOfflineAdvance] 内），返回 `true`。
+     *
+     * **归约器保持纯函数**：本方法只读 `_state`、只调网络端口（同步无阻塞），
+     * 不做任何缓存 I/O；缓存查询全部发生在 [startOfflineAdvance] 的挂起路径里。
+     */
+    private fun tryOfflineAdvance(transition: PlaybackTransition, replayCurrentFirst: Boolean): Boolean {
+        if (networkAvailability.isNetworkAvailable()) return false
+        if (!transition.isOfflineFilterableForward()) return false
+        val queue = _state.value.queue
+        if (queue.isEmpty || queue.currentIndex !in 0 until queue.size) return false
+        startOfflineAdvance(replayCurrentFirst)
+        return true
+    }
+
+    /**
+     * 「该归约结果是否属于离线需要过滤的前进」——用**归约器自己的产出**判定，
+     * 不重推索引算术、不重推边界判定：
+     *
+     * - 装载类效果（`Prepare` / `ResolveSongUrl`）：推进到新曲或重备（`switchToIndex` /
+     *   `launchSong` / ONE 异常结束重解析）；
+     * - `SeekTo` + `Play` 同时出现：重播当前曲（`restartCurrent` / ONE 播完重播 /
+     *   `RestartSingle`）；
+     * - `ShowMessage`：队尾提示（`HintAndPause`，OFF 模式到队尾）——离线时同样应走
+     *   缓存判定，故一并收编。离线枚举沿用 `PlaybackQueue.nextCandidateIndices()` 的
+     *   Dart `(_currentIndex + 1) % n` 语义：**起始位即队尾时仍会绕回队首方向**。这
+     *   **刻意**对应产品需求原文「**循环到**歌单下一首已缓存歌曲，**若存在可播放的
+     *   缓存歌曲则继续播放，若无任何可播放的歌曲则停止播放**」（全歌单**存在性**判定，
+     *   而非「仅看当前索引之后」）。故离线路径**不**复用 `nextBoundary` 的
+     *   `HintAndPause` 守卫。
+     *
+     * 反向排除（**必须保留**）：睡眠定时到点的 `Pause` + `StopKeepAlive`（无上述特征）、
+     * 终态 / 空队列的 no-op、seek 手势的纯 `SeekTo`——它们都不是「前进」，
+     * 不进入离线判定。
+     */
+    private fun PlaybackTransition.isOfflineFilterableForward(): Boolean =
+        effects.any {
+            it is PlaybackEffect.Prepare ||
+                it is PlaybackEffect.ResolveSongUrl ||
+                it is PlaybackEffect.ShowMessage
+        } ||
+            (effects.any { it is PlaybackEffect.SeekTo } && effects.any { it is PlaybackEffect.Play })
+
+    /**
+     * 启动离线前进枚举（受控执行器：挂起查询只在这里发生）。
+     *
+     * ## 代次校验（强制，复用既有机制，不引入第三套体系）
+     * 捕获 [activeRequestGen] 作本轮代次；每次挂起返回后与派发前都过
+     * `requestGate.isCurrent(gen)`——枚举期间用户发出任何播放族意图都会 `issue()`
+     * 新代次，本轮随即**放弃且不写任何状态**。
+     *
+     * ## 资源与取消（强制）
+     * 任务绑定 [offlineAdvanceJob]（可取消）：新一轮枚举先取消上一轮（连点「下一首」），
+     * `Stop` / `ClearQueue` / 新的播放族意图到达时取消，`scope` 取消时随作用域释放。
+     * 决策落定后**先置空引用再派发**，避免枚举自身派发的 `PlayAt` 触发自取消。
+     *
+     * ## 为什么先整体求值再调策略
+     * [OfflineAdvancePolicy.choose] 是**纯函数**（不得挂起、不得 I/O），故先把候选的
+     * 缓存查询全部求值成 `index → 源` 映射，再以纯谓词喂给策略。
+     *
+     * ## 探测短路（惰性契约，必须兑现）
+     * [OfflineAdvancePolicy] 的 KDoc 已声明「惰性短路由调用方保证」（首个命中即停止
+     * 查询），实现必须兑现：命中首个可播缓存候选后**立即 `break`**，不再探测后续候选。
+     * 命中后继续探测是无谓的磁盘 I/O，而离线切歌是**用户可见延迟**。等价性：策略
+     * [OfflineAdvancePolicy.choose] 仍按候选顺序返回**首个**命中，短路不改变决策结果。
+     */
+    private fun startOfflineAdvance(replayCurrentFirst: Boolean) {
+        cancelOfflineAdvance()
+        val gen = activeRequestGen
+        val candidates = offlineAdvanceCandidates(_state.value.queue, replayCurrentFirst)
+        offlineAdvanceJob = scope.launch {
+            val sources = LinkedHashMap<Int, String>()
+            for (index in candidates) {
+                if (!requestGate.isCurrent(gen)) return@launch
+                val song = _state.value.queue.playlist.getOrNull(index) ?: continue
+                val source = cacheResolver.resolveCachedSource(song.id, cacheQualityOf(song)) ?: continue
+                sources[index] = source
+                // 命中首个可播缓存即停（惰性短路契约，见上方 KDoc「探测短路」）：
+                // 策略仍取候选序首个命中，结果不变，省去后续无谓磁盘 I/O。
+                break
+            }
+            if (!requestGate.isCurrent(gen)) return@launch
+            when (val decision = OfflineAdvancePolicy.choose(candidates) { it in sources }) {
+                is OfflineAdvancePolicy.Decision.Play -> {
+                    if (!requestGate.isCurrent(gen)) return@launch
+                    val index = decision.index
+                    val source = sources[index] ?: return@launch
+                    // 决策已定、即将派发：先解除引用（避免自身派发的 PlayAt 触发自取消）。
+                    offlineAdvanceJob = null
+                    playCachedCandidate(index, source)
+                }
+
+                OfflineAdvancePolicy.Decision.Stop -> {
+                    if (!requestGate.isCurrent(gen)) return@launch
+                    offlineAdvanceJob = null
+                    // 停止语义 = 保留队列 + 错误态（不经恢复链，故不消耗预算 / 不排期退避）。
+                    dispatch(PlaybackIntent.OfflineNoPlayableCache)
+                }
+            }
+        }
+    }
+
+    /**
+     * 离线候选下标序列：**复用** [PlaybackQueue.nextCandidateIndices]（循环 / 随机 /
+     * 队尾截断语义的唯一入口，交接铁律 §4-7：不得重推索引算术），只补一处
+     * **归约器已有**的特例：
+     *
+     * - `replayCurrentFirst`（播完事件 + `ONE` 单曲循环）时把当前下标置于候选首位——
+     *   归约器的 `playbackCompleted` ONE 分支本就是「重播当前曲」，故离线也须先判
+     *   当前曲是否已缓存（已缓存 → 重播；未缓存 → 继续向后找）；
+     * - 单曲 + `ONE`：`nextCandidateIndices` 对 `n <= 1` 恒空，而归约器的
+     *   `Next`/播完对「单曲 + ONE」是「重播当前曲」（`RestartSingle`），
+     *   故把当前下标作为唯一候选。
+     *
+     * **绕回是刻意契约，不是意外**：`nextCandidateIndices` 沿用 Dart
+     * `(_currentIndex + 1) % n` 语义，起始位即队尾时仍会**绕回队首方向**——对应产品
+     * 需求「**循环到**歌单下一首已缓存歌曲，若存在可播放的缓存歌曲则继续播放，若无
+     * 任何可播放的歌曲则停止播放」的**全歌单存在性**判定，而非「仅看当前索引之后」。
+     */
+    private fun offlineAdvanceCandidates(queue: PlaybackQueue, replayCurrentFirst: Boolean): List<Int> {
+        val forward = queue.nextCandidateIndices()
+        val base = when {
+            queue.loopMode == AppLoopMode.ONE && replayCurrentFirst && queue.currentIndex >= 0 ->
+                listOf(queue.currentIndex) + forward
+
+            queue.size == 1 && queue.loopMode == AppLoopMode.ONE && queue.currentIndex == 0 ->
+                listOf(0)
+
+            else -> forward
+        }
+        return base.distinct()
+    }
+
+    /**
+     * 切到已缓存候选并播放：把记忆到的源作为 [PlaybackIntent.PlayAt.source] 一并下发，
+     * 由归约器把「回写源」与「起播」**合并为一次状态迁移**。
+     *
+     * 为什么要回写源：`CacheDataSource` 是**透明读缓存**——命中时引擎仍按**原 URL**
+     * 打开，只是内部改读缓存文件。若队列项 `url` 为空，`launchSong` 会走
+     * `ResolveSongUrl`（网络解析）→ 离线必失败。回写记忆到的源后，`Prepare`
+     * 直接带着该 URL 装载，`customCacheKey = songId|quality` 命中缓存，全程不出网。
+     *
+     * 为什么回写与起播**必须合并为一次迁移**（不能先 `UpdateSong` 回写、再 `PlayAt`
+     * 起播）：[com.gracemusic.data.model.Song.equals] 仅按 id 比较 → 纯字段级更新使
+     * `state.copy(queue = updated)` 与旧 state **结构性相等** → 本类 `apply` 的
+     * `_state.value = transition.state` 会被 `MutableStateFlow` 相等去重**吞掉**，
+     * 回写不落入状态 → `PlayAt` 读到的 `url` 仍为 null → `needsUrlResolution` 为真
+     * → 走离线必失败的 `ResolveSongUrl`。合并进 [PlaybackIntent.PlayAt] 后，
+     * 归约器产出的迁移必然改变 `isResolvingUrl` / `awaitingPlaybackProgress` /
+     * `position` / `queueRevision`，**不可能**被去重吞掉。
+     *
+     * 登记（偏离）：回写会让「离线期间切到的曲」在队列里留下一个可能已过期的
+     * 签名 URL；这与既有行为一致（任何解析成功的曲目 URL 都会留在队列里被复用），
+     * 且在线重试路径（`RetryCurrent`）会先清 URL 再重解析。
+     */
+    private fun playCachedCandidate(index: Int, source: String) {
+        dispatch(PlaybackIntent.PlayAt(index, source))
+    }
+
+    /** 取消在途离线枚举（幂等；取消后旧协程不再有任何写入）。 */
+    private fun cancelOfflineAdvance() {
+        offlineAdvanceJob?.cancel()
+        offlineAdvanceJob = null
+    }
+
+    /**
+     * 缓存键的音质档**唯一来源**（S-B §4.3 三处键一致性的收敛点）。
+     *
+     * 取 [Song.quality]，为 null 时回落 [PlaybackCacheKeys.DEFAULT_QUALITY]——
+     * 与引擎写入路径 `ExoPlayerPlaybackEngineAdapter.prepare` 的
+     * `setCustomCacheKey(PlaybackCacheKeys.key(song.id, song.quality ?: DEFAULT_QUALITY))`
+     * **逐字同源**。故：
+     * 1. 引擎写入键 = 本方法 + [PlaybackCacheKeys.key]；
+     * 2. [rememberResolvedSourceSafely] 的键 = 同上；
+     * 3. [startOfflineAdvance] 查询键 = 同上。
+     *
+     * 已知一致性风险（S-A 登记，本阶段闭环）：解析回写的 `actualPlayingQuality`
+     * 可能与 [Song.quality] 不同（降级），但引擎**始终**按 [Song.quality] 写键，
+     * 故查询侧同样按 [Song.quality] 即命中——语义上「键代表请求档、字节可能是降级档」，
+     * 登记为偏离（见报告）。
+     */
+    private fun cacheQualityOf(song: Song): String =
+        song.quality ?: PlaybackCacheKeys.DEFAULT_QUALITY
 
     // ─────────────────────────── 引擎监听桥接 ───────────────────────────
 
@@ -634,10 +942,15 @@ class PlaybackStore @Inject constructor(
         override fun isResolvingUrl(): Boolean = _state.value.isResolvingUrl
 
         /**
-         * native 尚无连接可用性监测（connectivity 属 T-P2 数据/系统层）→ 固定可用。
-         * 即 `NETWORK_UNAVAILABLE` 分类分支暂不可达（登记于 RecoveryOrchestrator KDoc）。
+         * 网络可用性（S-B R-4 收口）：读真实 [NetworkAvailabilityProvider]。
+         *
+         * 此前硬编码 `true`，使 `RecoveryOrchestrator` 的
+         * [com.gracemusic.player.gate.PlaybackRecoveryFailureKind.NETWORK_UNAVAILABLE]
+         * 分类分支**不可达**（风险 **R4-02**）。接线后：离线失败不消耗恢复预算、
+         * 不排期退避（分类门在 `attemptRecovery` 里先于 `budget.tryConsume`）。
+         * 端口契约保证「同步、无阻塞、绝不抛异常；无法判定时返回 true（保守）」。
          */
-        override fun isNetworkAvailable(): Boolean = true
+        override fun isNetworkAvailable(): Boolean = networkAvailability.isNetworkAvailable()
 
         override fun dispatchIntent(intent: PlaybackIntent) = dispatch(intent)
     }
@@ -901,11 +1214,15 @@ class PlaybackStore @Inject constructor(
      *
      * `PauseForSeek`（拖动进度条前置暂停）**不**在此列——它是瞬态手势，不应打断
      * 待处理恢复。
+     *
+     * `OfflineNoPlayableCache`（S-B）在此列：离线无可播缓存是**终态**，旧恢复任务
+     * 必须取消（否则退避定时器会在用户已停播后继续空转）。
      */
     private fun isRecoveryCancellingIntent(intent: PlaybackIntent): Boolean = when (intent) {
         is PlaybackIntent.Pause,
         is PlaybackIntent.Stop,
         is PlaybackIntent.ClearQueue,
+        is PlaybackIntent.OfflineNoPlayableCache,
         -> true
 
         else -> isPlaybackRequestIntent(intent)

@@ -14,6 +14,7 @@ import com.gracemusic.data.model.Song
 import com.gracemusic.player.model.PlaybackErrorInfo
 import com.gracemusic.player.model.extractHttpStatusCode
 import com.gracemusic.player.model.safePlaybackErrorMessage
+import com.gracemusic.player.offline.PlaybackCacheKeys
 import com.gracemusic.player.store.EngineListener
 import com.gracemusic.player.store.PlaybackEngine
 import java.util.concurrent.CopyOnWriteArrayList
@@ -120,9 +121,19 @@ class ExoPlayerPlaybackEngineAdapter(
             return
         }
         // 单曲时间线：单个 MediaItem 重建（mediaId = song.id）。
+        // customCacheKey 把缓存键与易变的签名 URL 解耦（否则缓存永不命中）：
+        // 键 = "songId|quality"，与 PlaybackCacheStore / PlaybackCacheResolver 共用
+        // PlaybackCacheKeys.key 单一入口。quality 取该曲接口返回的音质标记
+        // （Song.quality），为 null 时回落 PlaybackCacheKeys.DEFAULT_QUALITY。
+        // 流转链（vendored 源码）：MediaItem.customCacheKey →
+        // ProgressiveMediaPeriod.java:1127 `.setKey(customCacheKey)` → DataSpec.key →
+        // CacheKeyFactory.DEFAULT（media3-datasource:1.4.1）= dataSpec.key ?: uri.toString()。
         val mediaItem = MediaItem.Builder()
             .setMediaId(song.id)
             .setUri(uri)
+            .setCustomCacheKey(
+                PlaybackCacheKeys.key(song.id, song.quality ?: PlaybackCacheKeys.DEFAULT_QUALITY),
+            )
             .build()
         player.setMediaItem(mediaItem)
         player.prepare()

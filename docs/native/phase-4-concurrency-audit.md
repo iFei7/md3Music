@@ -122,7 +122,7 @@ val sleepTimerRemaining: StateFlow<Duration?>   // PlaybackStore.kt:241；null =
 
 | # | 差异 | 依据 / 理由 |
 |---|---|---|
-| 1 | **切歌 / 停止 / 暂停不取消睡眠定时 ticker**（任务措辞 §5.2-8 要求取消，**未采纳**） | Dart `_sleepTimerTicker` 仅在 `setSleepTimer`（`:5280`）、到点（`:5303`）、`dispose`（`:5832`）三处取消；睡眠定时是**墙钟**倒计时，设计意图即跨曲目持续。若按字面在切歌时取消，会导致「30 分钟睡眠定时被一次切歌清零」，破坏 F-KEEP-007 产品契约。已显式测试记录（`睡眠定时通道_切歌与停止不取消倒计时`）。 |
+| 1 | **切歌 / 停止 / 暂停不取消睡眠定时 ticker**（任务措辞 §5.2-8 要求取消，**未采纳**） | Dart `_sleepTimerTicker` 仅在 `setSleepTimer`（`:5280`）、到点（`:5303`）、`dispose`（`:5832`）三处取消；睡眠定时是**墙钟**倒计时，设计意图即跨曲目持续。若按字面在切歌时取消，会导致「30 分钟睡眠定时被一次切歌清零」，破坏 F-KEEP-007 产品契约。已显式测试记录（`睡眠定时通道_切歌与停止不取消倒计时`）。<br>✅ **2026-10-15 产品已确认：保持现状**（睡眠定时不随切歌取消）。风险 R4-04 据此关闭，本行为由「刻意偏离待确认」转为**已确认的既定契约**。 |
 | 2 | 引擎 release **无 Store 可见信号** | `EngineListener` 无释放回调，`PlaybackStore` KDoc 亦声明「本类不 release 引擎」。最小风险选择：ticker 绑 `scope`，经作用域取消释放。给 `EngineListener` 加 `onEngineReleased()` 属公开 API 变更，超出本任务边界。 |
 | 3 | 暂停 / 恢复对 ticker **无对应语义** | Dart ticker 无 pause/resume，倒计时不随播放暂停而停；native 保持一致。 |
 | 4 | 到点后 `state.sleepTimerRemaining` 停在设置值 | 到点迁移属 T-P1-09；本阶段低频快照不随秒刷新。差异是**阶段性的**，T-P1-09 收敛。 |
