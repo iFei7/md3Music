@@ -99,6 +99,7 @@ internal fun tabIndex(id: String): Int =
 fun MainScaffold(
     modifier: Modifier = Modifier,
     onOpenFullPlayer: () -> Unit = {},
+    onNavigateToLogin: () -> Unit = {},
     viewModel: MainScaffoldViewModel = hiltViewModel(),
 ) {
     val playbackState: PlaybackState by viewModel.store.state.collectAsState()
@@ -117,6 +118,7 @@ fun MainScaffold(
         onNext = { viewModel.store.dispatch(PlaybackIntent.Next()) },
         onPrevious = { viewModel.store.dispatch(PlaybackIntent.Previous()) },
         onOpenFullPlayer = onOpenFullPlayer,
+        onNavigateToLogin = onNavigateToLogin,
         modifier = modifier,
     )
 }
@@ -134,6 +136,7 @@ internal fun MainScaffoldContent(
     onPrevious: () -> Unit,
     onOpenFullPlayer: () -> Unit,
     modifier: Modifier = Modifier,
+    onNavigateToLogin: () -> Unit = {},
 ) {
     var selectedTabId by rememberSaveable { mutableStateOf(value = MainTabs.first().id) }
     val useVerticalTransition = LocalWindowSizeClass.current != WindowSizeClass.Compact
@@ -180,7 +183,7 @@ internal fun MainScaffoldContent(
                     when (tabId) {
                         "discover" -> DiscoverScreen()
                         "favorites" -> FavoritesScreen()
-                        "user" -> UserCenterScreen()
+                        "user" -> UserCenterScreen(onNavigateToLogin = onNavigateToLogin)
                     }
                 }
             }

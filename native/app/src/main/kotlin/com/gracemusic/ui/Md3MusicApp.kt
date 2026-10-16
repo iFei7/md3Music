@@ -22,6 +22,7 @@ import com.gracemusic.core.theme.Md3Motion
 import com.gracemusic.core.ui.AppBackground
 import com.gracemusic.feature.home.MainScaffold
 import com.gracemusic.feature.library.LibraryScreen
+import com.gracemusic.feature.login.LoginScreen
 import com.gracemusic.feature.onboarding.OnboardingScreen
 import com.gracemusic.feature.personalfm.PersonalFmScreen
 import com.gracemusic.feature.player.PlayerScreen
@@ -53,6 +54,7 @@ object Routes {
     const val LIBRARY = "/library"
     const val SETTINGS = "/settings"
     const val USER = "/user"
+    const val LOGIN = "/login"
     const val PLAYER = "/player"
     const val PERSONAL_FM = "/personal_fm"
 
@@ -113,6 +115,7 @@ internal fun Md3MusicNavHost(navController: NavHostController) {
         ) {
             MainScaffold(
                 onOpenFullPlayer = { navController.navigate(route = Routes.PLAYER) },
+                onNavigateToLogin = { navController.navigate(route = Routes.LOGIN) },
             )
         }
         composable(
@@ -146,7 +149,15 @@ internal fun Md3MusicNavHost(navController: NavHostController) {
             SettingsScreen()
         }
         composable(Routes.USER) {
-            UserScreen()
+            UserScreen(
+                onNavigateToLogin = { navController.navigate(route = Routes.LOGIN) },
+            )
+        }
+        composable(Routes.LOGIN) {
+            LoginScreen(
+                onLoggedIn = { navController.popBackStack() },
+                onClose = { navController.popBackStack() },
+            )
         }
         composable(
             Routes.PLAYER,

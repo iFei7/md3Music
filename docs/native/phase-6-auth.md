@@ -244,3 +244,79 @@ KDoc 固化约定：`OkHttpClient` 唯一由 `NetworkModule` 提供，本模块�
 | L8 | `adb shell run-as <pkg> cat shared_prefs/gracemusic_secure_credentials.xml` | **不含 token 明文** |
 | L9 | 登录前后各播放一首 VIP/付费曲 | 对比可得音质档（验证 VIP 通道是否仍被拒） |
 | L10 | 登录态过期（改密码/踢下线） | 走 `refresh` 失败 → 清凭证登出，不静默失败 |
+
+---
+
+# 10. 登录 UI（T-P4-11 落地，2026-10-16 追加）
+
+## 10.1 交付内容
+
+| 文件 | 摘要 |
+|---|---|
+| `feature/login/LoginViewModel.kt` | `@HiltViewModel`，持 `AccountRepository`；`LoginUiState`（tabIndex / qrImage / wxImage / statusText / isBusy / phone / code / countdown / message / loginSucceeded） |
+| `feature/login/LoginScreen.kt` | Compose 3 tab（扫码 / 手机 / 微信）+ 200x200 二维码容器 + base64 解码 + 状态文本 + 刷新按钮 |
+| `feature/user/UserCenterViewModel.kt` | 透传 `AccountRepository.authState` + `logout()` + `restoreSession()`（**不复制状态**） |
+| `feature/user/UserCenterScreen.kt` | 未登录 → 头像占位 + 「登录后同步收藏」+ 登录按钮；已登录 → 昵称/userid + 退出登录 |
+| `feature/user/UserScreen.kt` | 从路由占位改为 `UserCenterScreen(onNavigateToLogin)` |
+| `ui/Md3MusicApp.kt` | 新增 `Routes.LOGIN = "/login"` 路由 + `composable(Routes.LOGIN)` |
+| `feature/home/MainScaffold.kt` | `MainScaffold` 与 `MainScaffoldContent` 增 `onNavigateToLogin` 参数并下传 |
+
+## 10.2 与 lite 的逐条对位（`lib/modules/login/login_page.dart`）
+
+| lite | native |
+|---|---|
+| `_switchTab(int)` | `LoginViewModel.onTabSelected`（取消轮询/倒计时 + 清空输入 + 重启 init） |
+| `initState → _initLogin()` | `LoginViewModel.init → startCurrentTab()` |
+| `generateQrCode()` + `_startCheck()`（2s 轮询） | `onRefreshQr` / `startQrLogin` + `startQrPolling`（`POLL_INTERVAL = 2.seconds`） |
+| `_initWxLogin()` + `_startWxCheck()` | `startWxLogin`（`beginWxLogin` + 2s 轮询；确认即完成，其 Success 直带 token） |
+| `_onSendCode` + `_countdownTimer`（60s） | `onSendCode` + `startCountdown`（`RESEND_COUNTDOWN_SECONDS = 60`） |
+| `_onLoginPhone` | `onLoginPhone` |
+| `Navigator.pop()`（登录成功 800ms 后） | `onLoggedIn` 回调 → 调用方 `popBackStack()` |
+| `_decodeBase64Image` | `decodeDataUrlToBitmap`（`Base64.decode` + `BitmapFactory.decodeByteArray`，失败返回 null 回落加载态） |
+| `_checkTimer` / `_countdownTimer` | `pollJob` / `countdownJob`（绑 `viewModelScope`，切 tab / `onDismiss` 取消） |
+
+## 10.3 登录链路（端到端）
+
+```
+「我的」tab（UserCenterScreen）
+  → 未登录态点「登录」→ navController.navigate("/login")
+  → LoginScreen（LoginViewModel 持 AccountRepository）
+      → 扫码/手机/微信 tab（2s 轮询）
+      → AccountRepository 编排 → KugouAuthApi → Rust /login/*
+      → 成功：TokenStore.save → setCurrentUserid → AuthHeaderProvider.update
+      → authState = LoggedIn → onLoggedIn 回调 → popBackStack()
+  → 「我的」页展示昵称/userid + 「退出登录」（logout：clear + update(null) + LoggedOut）
+```
+
+冷启动恢复：`UserCenterScreen` 的 `LaunchedEffect(Unit) { viewModel.restoreSession() }` →
+`AccountRepository.restoreSession()`（内部 `ensureDeviceRegistered` + 读 TokenStore）。
+**恢复后不自动播放**（与 Dart 一致，PlaybackStore 侧无任何联动）。
+
+## 10.4 测试
+
+**`feature/login/LoginViewModelTest.kt`（17 条，Robolectric）**
+
+策略：**真实 `AccountRepository` + 假 `KugouAuthApi` + 假 `TokenStore` + 假 `DeviceRegistrar` + 真 `AuthHeaderProvider`**
+—— `AccountRepository` 是 final class（未抽接口），为**不改动生产代码**，用真实类 + 两个假接口组装，从而覆盖
+「ViewModel → AccountRepository → LoginAttempt/LocalFailure 映射」的完整链路。
+
+覆盖：初始化扫码态 / 生成失败提示 / 切 tab 清空 / 微信 tab / 手机号校验与过滤 / 发码倒计时 60s / 倒计时期不可重发 /
+验证码空校验 / 登录成功 / 登录失败文案 / 本地服务器不可用提示 / **扫码轮询两次成功** / **扫码被拒终态** /
+consumeMessage / onDismiss 取消轮询 / 多账号提示。
+
+**开发期踩坑（登记，防复踩）**：
+1. `viewModelScope` + `UnconfinedTestDispatcher` 下用 `runTest` 会**挂死**（同 scheduler 上的泄漏协程被无限推进虚拟时间）→ 改为直接驱动 `mainDispatcher.scheduler.advanceTimeBy(...)` + 末尾 `onDismiss()`。
+2. `AccountRepository.pollQrLogin` 把 `LoginAttempt.Failed(errorCode=null)` 映射为「继续轮询」，`errorCode!=null` 才是终态 → 测试构造终态必须给非 null 错误码。
+3. `LoginViewModel` / `LoginUiState` / `UserCenterViewModel` 必须 public（Compose `public fun` 不能暴露 internal 参数类型）。
+4. `typealias = @Composable () -> Unit` 与参数上的 `@Composable` 叠加会报 "annotation is not repeatable"。
+
+## 10.5 仍未完成（T-P4-11 剩余）
+
+| 项 | 说明 |
+|---|---|
+| **多账号选择 UI** | `NeedAccountChoice` 目前只提示「请选择账号」，未做账号列表（lite 由 info_list 弹窗承担） |
+| **设备踢下线** | `/login/device/kick` 已有 Rust 路由，native 未做 |
+| **资料刷新 UI** | `fetchUserDetail()` 已就位，但「我的」页的会员卡/听歌数据/操作网格未做（F-FAV-002 等） |
+| **`RecoveryOrchestrator` 登录态判定** | 仍未接入（见 §8 决策 3） |
+| **Compose UI 测试** | 未写 androidTest（`/login` 路由可达性、tab 切换、登录按钮可见性） |
+| **真机验证** | 三种登录方式、切号、注销、冷启动恢复**全未执行**（见 §9 清单 L1–L10） |
