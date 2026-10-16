@@ -16,6 +16,7 @@ import '../../data/models/song.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../login/login_page.dart';
 import '../personal_fm/personal_fm_core.dart';
+import '../user/play_history_page.dart';
 
 /// 首页卡片区的档位预设（任务口径：红心 / 小众 / 速览）。
 ///
@@ -263,6 +264,8 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   }
 
   void _onDragEnd(DragEndDetails details) {
+    // 飞出中忽略新手势收尾：220ms 飞出窗口内再次抬手不应触发二次 dismiss
+    if (_flying) return;
     final dx = _dragDx;
     const threshold = 90.0;
     final velocity = details.velocity.pixelsPerSecond.dx;
@@ -420,38 +423,14 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     required int playingIndex,
     required bool isPlaying,
   }) {
-    // 飞出中的前卡：沿 _flyDx 平移 + 渐隐
-    if (layer == 0 && _flying) {
-      final ft = flyProgress;
-      return Transform.translate(
-        offset: Offset(_flyDx * (1 - ft), 0),
-        child: Opacity(
-          opacity: 1 - ft,
-          child: _buildFrontCard(context, song, playingIndex, isPlaying),
-        ),
-      );
-    }
-    // 跟手拖拽（仅前卡）
-    if (layer == 0 && _dragDx != 0) {
-      return Transform.translate(
-        offset: Offset(_dragDx, 0),
-        child: Transform.rotate(
-          angle: _dragDx / 1200,
-          child: _buildFrontCard(context, song, playingIndex, isPlaying),
-        ),
-      );
-    }
+    // 前卡：手势识别器常驻（位移只施加在子树，见 _buildFrontCardGesture）。
     if (layer == 0) {
-      // 前卡静止态同样走 _buildFrontCard（isFront: true，带播放/暂停 +
-      // 收藏按钮）：此前只在拖拽/飞出分支用 _buildFrontCard，静止态
-      // 落到 isFront:false 的裸卡面，按钮凭空消失，与类文档语义不符。
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onHorizontalDragUpdate: (d) =>
-            setState(() => _dragDx += d.delta.dx),
-        onHorizontalDragEnd: _onDragEnd,
-        onHorizontalDragCancel: () => setState(() => _dragDx = 0),
-        child: _buildFrontCard(context, song, playingIndex, isPlaying),
+      return _buildFrontCardGesture(
+        context,
+        song,
+        playingIndex: playingIndex,
+        isPlaying: isPlaying,
+        flyProgress: flyProgress,
       );
     }
     // 下方层：缩小下沉 + 半透明（层级暗示）；飞出时随 t 前移一级
@@ -465,6 +444,65 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
           child: _buildCardFace(context, song),
         ),
       ),
+    );
+  }
+
+  /// 前卡容器：**GestureDetector 常驻**，跟手拖拽/飞出位移一律施加在其
+  /// 子树（Transform）上，绝不整体更换 widget 类型。
+  ///
+  /// 真机 bug 根因（批次 7 反馈「FM 卡片无法左右滑动切换」）：此前拖拽态
+  /// 把 GestureDetector 换成 `Transform.translate` 直包卡面，首帧重建即
+  /// 触发 `OneSequenceGestureRecognizer.dispose()`——它会把自己从
+  /// pointerRouter 摘除（recognizer.dart:485-493），后续 move/up 事件再也
+  /// 到不了，`onHorizontalDragEnd` 不触发，卡片停在几 px 位移处「滑不动」。
+  /// 既有 widget 测试 moveBy 与 up 之间不插帧、识别器没被换掉才侥幸绿，
+  /// 真机上 move 事件间必有帧落地，故 100% 复现。
+  ///
+  /// 与垂直滚动的竞争（arena）：HorizontalDragGestureRecognizer 在
+  /// |Σdx| > touchSlop 时即 resolve(accepted)，同事件内比 Scrollable 的
+  /// VerticalDragGestureRecognizer（更靠祖先、后入竞技场）先声夺势；纯水平
+  ///  swipe 垂直向累计量不越 slop，滚动器不会抢。仍保留水平语义：以竖向
+  /// 分量开头（|Σdy| 先越 slop）的手势交给页面滚动，属预期行为。
+  Widget _buildFrontCardGesture(
+    BuildContext context,
+    KugouSongDetail song, {
+    required int playingIndex,
+    required bool isPlaying,
+    required double flyProgress,
+  }) {
+    Widget card = _buildFrontCard(context, song, playingIndex, isPlaying);
+    // 飞出中的前卡：沿 _flyDx 平移 + 渐隐（_flying 优先于跟手位移）
+    if (_flying) {
+      card = Transform.translate(
+        offset: Offset(_flyDx * (1 - flyProgress), 0),
+        child: Opacity(
+          opacity: 1 - flyProgress,
+          child: card,
+        ),
+      );
+    } else if (_dragDx != 0) {
+      // 跟手拖拽（仅前卡）：位移/旋转施加在子树，识别器不重建
+      card = Transform.translate(
+        offset: Offset(_dragDx, 0),
+        child: Transform.rotate(
+          angle: _dragDx / 1200,
+          child: card,
+        ),
+      );
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragUpdate: (d) {
+        // 飞出中忽略新手势：防 220ms 窗口内二次 dismiss
+        if (_flying) return;
+        setState(() => _dragDx += d.delta.dx);
+      },
+      onHorizontalDragEnd: _onDragEnd,
+      onHorizontalDragCancel: () {
+        if (_flying) return;
+        setState(() => _dragDx = 0);
+      },
+      child: card,
     );
   }
 
@@ -692,11 +730,15 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   }
 }
 
-/// 首页「正在播放」大卡片：封面 + 歌名 + 歌手。
+/// 首页「最近播放」大卡片：标题行（最近播放 + 右箭头）+ 封面 + 歌名 +
+/// 歌手 + 播放态图标。
 ///
-/// 点击语义（任务允许自定）：**播放/暂停切换**——暂停态点击恢复播放
-/// （任务要求的「点击继续播放」），播放态点击暂停（对齐卡片上播放键的
-/// 常规心智）。无播放内容时整块隐藏（SizedBox.shrink，不占列表位）。
+/// - 标题行整行可点 → [PlayHistoryPage]（照搬 library_page /
+///   user_center_page 的 MaterialPageRoute push 用法，不造新路由；
+///   history 模块只读参考）；
+/// - 卡片本体点击语义（任务允许自定）：**播放/暂停切换**——暂停态点击
+///   恢复播放，播放态点击暂停（对齐卡片上播放键的常规心智）；
+/// - 无播放内容时整块隐藏（SizedBox.shrink，不占列表位）。
 class DiscoverNowPlayingCard extends StatelessWidget {
   const DiscoverNowPlayingCard({super.key});
 
@@ -713,97 +755,148 @@ class DiscoverNowPlayingCard extends StatelessWidget {
         builder: (context, record, _) {
           final (song, isPlaying) = record;
           if (song == null) return const SizedBox.shrink();
-          final cs = Theme.of(context).colorScheme;
-          final sonify = SonifyColors.of(context);
-          return GestureDetector(
-            onTap: () {
-              final player = context.read<PlayerProvider>();
-              if (player.isPlaying) {
-                unawaited(player.pause());
-              } else {
-                unawaited(player.resume());
-              }
-            },
-            behavior: HitTestBehavior.opaque,
-            child: SmoothClipRRect(
-              borderRadius: BorderRadius.circular(SonifyRadius.card),
-              child: Container(
-                color: sonify.surfaceCard,
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                height: 100,
-                child: Row(
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildHeaderRow(context),
+              const Gap(AppSpacing.xs),
+              _buildNowPlayingCard(context, song, isPlaying),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// 标题行：「最近播放」+ 右侧箭头（整行点按进历史播放页）。
+  ///
+  /// 形态照 discover_page._sectionHeader 的「更多」行（18sp Bold 标题 +
+  /// 24dp primary 右箭头）。内层 GestureDetector 在手势竞技场中优先于
+  /// 卡片本体的播放/暂停手势（同搜索框内识曲按钮的层级套路）。
+  Widget _buildHeaderRow(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      // 上下补 4dp：箭头 24dp 外再扩出舒适点按区
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const PlayHistoryPage()),
+        ),
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '最近播放',
+                style: SonifyTextStyles.sectionTitle.copyWith(
+                  color: cs.onSurface,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const Gap(AppSpacing.xs),
+            Icon(Icons.chevron_right, size: 24, color: cs.primary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 卡片本体：封面 + 歌名/歌手 + 播放态图标；点击 = 播放/暂停切换。
+  Widget _buildNowPlayingCard(
+    BuildContext context,
+    Song song,
+    bool isPlaying,
+  ) {
+    final cs = Theme.of(context).colorScheme;
+    final sonify = SonifyColors.of(context);
+    return GestureDetector(
+      onTap: () {
+        final player = context.read<PlayerProvider>();
+        if (player.isPlaying) {
+          unawaited(player.pause());
+        } else {
+          unawaited(player.resume());
+        }
+      },
+      behavior: HitTestBehavior.opaque,
+      child: SmoothClipRRect(
+        borderRadius: BorderRadius.circular(SonifyRadius.card),
+        child: Container(
+          color: sonify.surfaceCard,
+          padding: const EdgeInsets.all(AppSpacing.sm),
+          height: 100,
+          child: Row(
+            children: [
+              SmoothClipRRect(
+                borderRadius: BorderRadius.circular(SonifyRadius.cover),
+                child: SizedBox(
+                  width: 72,
+                  height: 72,
+                  child: (song.artworkUri != null &&
+                          song.artworkUri!.isNotEmpty)
+                      ? CachedNetworkImage(
+                          imageUrl: song.artworkUri!,
+                          memCacheWidth: 216,
+                          memCacheHeight: 216,
+                          fit: BoxFit.cover,
+                          placeholder: (_, _) => Container(
+                            color: cs.surfaceContainerHighest,
+                          ),
+                          errorWidget: (_, _, _) => Container(
+                            color: cs.surfaceContainerHighest,
+                            child: Icon(
+                              Icons.music_note,
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        )
+                      : Container(
+                          color: cs.surfaceContainerHighest,
+                          child: Icon(
+                            Icons.music_note,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                ),
+              ),
+              const Gap(AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    SmoothClipRRect(
-                      borderRadius: BorderRadius.circular(SonifyRadius.cover),
-                      child: SizedBox(
-                        width: 72,
-                        height: 72,
-                        child: (song.artworkUri != null &&
-                                song.artworkUri!.isNotEmpty)
-                            ? CachedNetworkImage(
-                                imageUrl: song.artworkUri!,
-                                memCacheWidth: 216,
-                                memCacheHeight: 216,
-                                fit: BoxFit.cover,
-                                placeholder: (_, _) => Container(
-                                  color: cs.surfaceContainerHighest,
-                                ),
-                                errorWidget: (_, _, _) => Container(
-                                  color: cs.surfaceContainerHighest,
-                                  child: Icon(
-                                    Icons.music_note,
-                                    color: cs.onSurfaceVariant,
-                                  ),
-                                ),
-                              )
-                            : Container(
-                                color: cs.surfaceContainerHighest,
-                                child: Icon(
-                                  Icons.music_note,
-                                  color: cs.onSurfaceVariant,
-                                ),
-                              ),
+                    Text(
+                      song.displayName,
+                      style: SonifyTextStyles.cardTitle.copyWith(
+                        color: cs.onSurface,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    const Gap(AppSpacing.md),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            song.displayName,
-                            style: SonifyTextStyles.cardTitle.copyWith(
-                              color: cs.onSurface,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const Gap(2),
-                          Text(
-                            song.artist,
-                            style: SonifyTextStyles.listItem.copyWith(
-                              color: sonify.textSecondary,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
+                    const Gap(2),
+                    Text(
+                      song.artist,
+                      style: SonifyTextStyles.listItem.copyWith(
+                        color: sonify.textSecondary,
                       ),
-                    ),
-                    const Gap(AppSpacing.sm),
-                    Icon(
-                      isPlaying ? Icons.pause_circle : Icons.play_circle,
-                      size: 34,
-                      color: cs.primary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
               ),
-            ),
-          );
-        },
+              const Gap(AppSpacing.sm),
+              Icon(
+                isPlaying ? Icons.pause_circle : Icons.play_circle,
+                size: 34,
+                color: cs.primary,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

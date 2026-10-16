@@ -33,160 +33,126 @@ final _testTheme = AppTheme.lightTheme.copyWith(
   return (widget, controller);
 }
 
-/// 大标题（列表首 item）的透明度值。
-double _largeTitleOpacity(WidgetTester tester) {
-  final opacity = tester.widget<Opacity>(
-    find
-        .ancestor(
-          of: find.text('发现').first,
-          matching: find.byType(Opacity),
-        )
-        .first,
-  );
-  return opacity.opacity;
-}
+/// 固定悬浮大标题（可见标题 = 树中最后一个标题文本；列表首项是
+/// 不可见占位，`find.text` 仍能匹配但它排在前面）。
+Finder _pinnedTitle(String text) => find.text(text).last;
+
+/// 固定标题的屏幕矩形（位置 + 尺寸）。
+Rect _titleRect(WidgetTester tester, String text) =>
+    tester.getRect(_pinnedTitle(text));
+
+/// 栏背景（渐变带组整体）的 AnimatedOpacity 目标值。
+double _barOpacity(WidgetTester tester) => tester
+    .widget<AnimatedOpacity>(
+      find
+          .ancestor(
+            of: find.byType(BackdropFilter),
+            matching: find.byType(AnimatedOpacity),
+          )
+          .first,
+    )
+    .opacity;
 
 /// 大标题 item 总高度（状态栏占位 0 + 顶距 8 + 文本行高 + 底距 8）。
 double _titleItemHeight(WidgetTester tester) {
-  // 文本实测行高（测试字体下 = fontSize × height）
+  // 文本实测行高（测试字体下 = fontSize × height）；不可见占位与可见
+  // 悬浮标题同款样式，取第一个（占位）测量等价
   final text = tester.getSize(find.text('发现').first).height;
   return 8 + text + 8;
 }
 
 void main() {
-  group('SonifyTitleScaffold 大标题折叠', () {
-    testWidgets('初始态：大标题不透明、无小标题、无栏背景', (tester) async {
+  group('SonifyTitleScaffold 大标题固定悬浮', () {
+    testWidgets('初始态：大标题固定可见、无栏背景', (tester) async {
       final (widget, _) = _host(title: '发现');
       await tester.pumpWidget(widget);
       await tester.pump();
 
-      expect(_largeTitleOpacity(tester), 1);
-      // 小标题（最后一个『发现』文本）目标透明度 0
-      final smallAnimated = tester.widget<AnimatedOpacity>(
-        find
-            .ancestor(
-              of: find.text('发现').last,
-              matching: find.byType(AnimatedOpacity),
-            )
-            .first,
-      );
-      expect(smallAnimated.opacity, 0);
-      // 栏背景目标透明度 0
-      final barAnimated = tester.widget<AnimatedOpacity>(
-        find
-            .ancestor(
-              of: find.byType(BackdropFilter),
-              matching: find.byType(AnimatedOpacity),
-            )
-            .first,
-      );
-      expect(barAnimated.opacity, 0);
+      // 可见标题在场（固定悬浮项）
+      expect(_pinnedTitle('发现'), findsOneWidget);
+      // 栏背景目标透明度 0（渐变带组不可见）
+      expect(_barOpacity(tester), 0);
     });
 
-    testWidgets('滚动中：大标题按 1 + offset/height × 1.8 溶解，栏背景浮现',
+    testWidgets('滚动中：标题位置与尺寸固定不变（不位移/不缩放/不溶解），栏背景浮现',
         (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
       await tester.pump();
       final h = _titleItemHeight(tester);
 
-      // 滚动 0.1 × height：alpha = 1 − 1.8 × 0.1 = 0.82
-      controller.jumpTo(h * 0.1);
+      final before = _titleRect(tester, '发现');
+      // 上滑到过渡区中段：旧实现会在此折叠为小标题（位置/尺寸变化）
+      controller.jumpTo(h * 0.5);
       await tester.pump();
-      expect(_largeTitleOpacity(tester), closeTo(0.82, 0.01));
+      final after = _titleRect(tester, '发现');
 
-      // 栏背景出现（目标透明度 1）
-      final barAnimated = tester.widget<AnimatedOpacity>(
-        find
-            .ancestor(
-              of: find.byType(BackdropFilter),
-              matching: find.byType(AnimatedOpacity),
-            )
-            .first,
-      );
-      expect(barAnimated.opacity, 1);
-
-      // 完全滚出（≥ height/1.8）后 alpha = 0，小标题浮现。
-      // 取 h/1.8 + 2：alpha 已为 0，且首 item 尚未滑出 ListView 缓存区
-      //（不取 h 端点：恰好等于 item 高度时 item 会被裁剪出元素树）。
-      controller.jumpTo(h / 1.8 + 2);
-      await tester.pump();
-      expect(_largeTitleOpacity(tester), 0);
-      final smallAnimated = tester.widget<AnimatedOpacity>(
-        find
-            .ancestor(
-              of: find.text('发现').last,
-              matching: find.byType(AnimatedOpacity),
-            )
-            .first,
-      );
-      expect(smallAnimated.opacity, 1);
+      expect(after, before,
+          reason: '上滑过程中标题不位移、不缩放（反馈①）');
+      // 标题始终完整可见：无溶解、无互斥小标题
+      expect(_pinnedTitle('发现'), findsOneWidget);
+      // 栏背景出现（目标透明度 1）：滚过内容时标题可读性由渐变带保证
+      expect(_barOpacity(tester), 1);
     });
 
-    testWidgets('两标题互斥：小标题只在大标题完全没入后出现', (tester) async {
-      final (widget, controller) = _host(title: '发现');
-      await tester.pumpWidget(widget);
-      await tester.pump();
-      final h = _titleItemHeight(tester);
-
-      // 过渡区中段：大标题半透明，小标题仍隐藏
-      controller.jumpTo(h * 0.3);
-      await tester.pump();
-      expect(_largeTitleOpacity(tester), greaterThan(0));
-      final smallDuringTransition = tester.widget<AnimatedOpacity>(
-        find
-            .ancestor(
-              of: find.text('发现').last,
-              matching: find.byType(AnimatedOpacity),
-            )
-            .first,
-      );
-      expect(smallDuringTransition.opacity, 0);
-    });
-
-    testWidgets('吸附：停在过渡区上半段弹回展开端（180ms EaseOutCubic）',
+    testWidgets('深度滚动（越过标题区）：标题仍固定在顶部，内容从其下方滚过',
         (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
       await tester.pump();
       final h = _titleItemHeight(tester);
 
-      controller.jumpTo(h * 0.1); // raw = 0.1 < 0.5 → 吸回 0
-      await tester.pumpAndSettle();
-      expect(controller.offset, closeTo(0, 0.5));
+      final before = _titleRect(tester, '发现');
+      controller.jumpTo(h * 2); // 占位 item 完全滚出视口
+      await tester.pump();
+
+      expect(_titleRect(tester, '发现'), before,
+          reason: '标题不随内容滚走');
+      expect(_pinnedTitle('发现'), findsOneWidget);
+      expect(_barOpacity(tester), 1);
     });
 
-    testWidgets('吸附：停在过渡区下半段收进折叠端', (tester) async {
+    testWidgets('无吸附：拖到过渡区上半段原地停留（固定标题无需端点吸附）',
+        (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
       await tester.pump();
       final h = _titleItemHeight(tester);
 
-      controller.jumpTo(h * 0.9); // raw = 0.9 ≥ 0.5 → 吸到 zone（= h − statusBar 0）
+      controller.jumpTo(h * 0.4);
       await tester.pumpAndSettle();
-      expect(controller.offset, closeTo(h, 0.5));
+      expect(controller.offset, closeTo(h * 0.4, 0.5),
+          reason: '旧实现会 180ms 吸附回展开端；固定标题无端点可吸附');
     });
 
-    testWidgets('回到顶部：大标题恢复、栏背景与小标题隐藏', (tester) async {
+    testWidgets('无吸附：拖到过渡区下半段原地停留（不自动收起）', (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
       await tester.pump();
       final h = _titleItemHeight(tester);
 
       controller.jumpTo(h * 0.9);
-      await tester.pumpAndSettle(); // 吸附到折叠端
+      await tester.pumpAndSettle();
+      expect(controller.offset, closeTo(h * 0.9, 0.5),
+          reason: '旧实现会 180ms 吸附到折叠端；固定标题无端点可吸附');
+    });
+
+    testWidgets('回到顶部：栏背景隐藏、标题位置不变', (tester) async {
+      final (widget, controller) = _host(title: '发现');
+      await tester.pumpWidget(widget);
+      await tester.pump();
+      final h = _titleItemHeight(tester);
+      final initial = _titleRect(tester, '发现');
+
+      controller.jumpTo(h * 0.9);
+      await tester.pump();
+      expect(_barOpacity(tester), 1);
+
       controller.jumpTo(0);
       await tester.pump();
-      expect(_largeTitleOpacity(tester), 1);
-      final barAnimated = tester.widget<AnimatedOpacity>(
-        find
-            .ancestor(
-              of: find.byType(BackdropFilter),
-              matching: find.byType(AnimatedOpacity),
-            )
-            .first,
-      );
-      expect(barAnimated.opacity, 0);
+      expect(_barOpacity(tester), 0);
+      expect(_titleRect(tester, '发现'), initial,
+          reason: '回到顶部标题回到初始坐标（本就未动过）');
     });
 
     testWidgets('业务 item 索引从 0 映射（大标题不占业务索引）', (tester) async {
@@ -195,7 +161,7 @@ void main() {
       await tester.pump();
       expect(find.text('item 0'), findsOneWidget);
       expect(find.text('item 2'), findsOneWidget);
-      // 总 item = 大标题 + 3 业务 item（主列表为 CustomScrollView +
+      // 总 item = 大标题占位 + 3 业务 item（主列表为 CustomScrollView +
       // 单 SliverToBoxAdapter 包裹的整列，列内 children 数即 item 数）
       final columns = tester.widgetList<Column>(find.byType(Column));
       final mainColumn = columns.firstWhere(
@@ -205,30 +171,22 @@ void main() {
       expect(mainColumn.children.length, 4);
     });
 
-    testWidgets('内容不足一屏时仍可上滑折叠大标题（minHeight 兜底）',
+    testWidgets('内容不足一屏时仍可滚动（minHeight 兜底），标题不随之移动',
         (tester) async {
       // 2 个 100dp item：内容 252dp << 600dp 视口——历史上这种短内容态
       // maxScrollExtent == 0，上滑零位移（首页冷启动的真实反馈）。
       final (widget, controller) = _host(title: '发现', itemCount: 2);
       await tester.pumpWidget(widget);
       await tester.pump();
+      final before = _titleRect(tester, '发现');
 
       await tester.drag(find.byType(CustomScrollView), const Offset(0, -300));
       await tester.pumpAndSettle();
 
       // 折叠区高度（zone = 首item高 − 状态栏0）内滚动必然产生位移
       expect(controller.offset, greaterThan(0));
-      // 拖到折叠端：大标题完全没入、小标题浮现
-      expect(_largeTitleOpacity(tester), 0);
-      final smallAnimated = tester.widget<AnimatedOpacity>(
-        find
-            .ancestor(
-              of: find.text('发现').last,
-              matching: find.byType(AnimatedOpacity),
-            )
-            .first,
-      );
-      expect(smallAnimated.opacity, 1);
+      // 标题固定悬浮：滚动只挪内容，不挪标题
+      expect(_titleRect(tester, '发现'), before);
     });
 
     testWidgets('渐变模糊带自屏幕最顶开始（覆盖状态栏 + 栏体）', (tester) async {
@@ -256,10 +214,12 @@ void main() {
       controller.jumpTo(h * 0.1);
       await tester.pump();
 
-      // 带体（ShaderMask 所在层）高度 = 状态栏 24 + 栏体 54 = 78：
+      // 带体高度 = 状态栏 24 + 栏体 54 = 78（磨砂带 + 加深带两层同尺寸）：
       // 曾只覆盖 54dp 栏体，状态栏区域透明导致内容从状态栏透出。
-      final bandSize = tester.getSize(find.byType(ShaderMask));
-      expect(bandSize.height, 24 + SonifySpacing.topBar);
+      final shaderMasks = find.byType(ShaderMask);
+      expect(shaderMasks, findsNWidgets(2));
+      expect(tester.getSize(shaderMasks.first).height, 24 + SonifySpacing.topBar);
+      expect(tester.getSize(shaderMasks.last).height, 24 + SonifySpacing.topBar);
       expect(
         find.ancestor(
           of: find.byType(BackdropFilter),
@@ -267,6 +227,50 @@ void main() {
         ),
         findsWidgets,
       );
+    });
+
+    testWidgets('加深带：文字区域更浓（scrim 蒙层 + 强模糊）且 stops 非线性分布',
+        (tester) async {
+      final (widget, controller) = _host(title: '发现');
+      await tester.pumpWidget(widget);
+      await tester.pump();
+      final h = _titleItemHeight(tester);
+      controller.jumpTo(h * 0.1);
+      await tester.pump();
+
+      // ① 两层带：磨砂带（blur 14 + 页面色 α0.7）+ 加深带（树中第二个
+      //    BackdropFilter）——加深带即"文字上方区域更浓"的那层（反馈②）
+      final backdrops = find.byType(BackdropFilter);
+      expect(backdrops, findsNWidgets(2));
+
+      // ② 加深带着色走 SonifyColors.scrim token（玻璃下内容淡出蒙层），
+      //    非硬编码颜色
+      final scrim = SonifyColors.of(
+        tester.element(backdrops.last),
+      ).scrim;
+      final deepenColor = tester
+          .widget<ColoredBox>(
+            find
+                .descendant(
+                  of: backdrops.last,
+                  matching: find.byType(ColoredBox),
+                )
+                .first,
+          )
+          .color;
+      expect(deepenColor, scrim);
+
+      // ③ dstIn stops 非线性分布（禁线性均分）：差分不全等
+      final stops = kSonifyBarDeepenStops;
+      expect(stops.first, 0.0);
+      expect(stops.last, 1.0);
+      final diffs = <double>[
+        for (var i = 1; i < stops.length; i++) stops[i] - stops[i - 1],
+      ];
+      expect(diffs.toSet().length, greaterThan(1),
+          reason: 'stops 差分不全等 = 非线性渐变曲线');
+      // 顶部保持全强度覆盖标题文字区（0.85 之前不衰减）
+      expect(stops[1], greaterThanOrEqualTo(0.8));
     });
 
     testWidgets('顶栏 trailing 内容渲染在栏体内', (tester) async {
@@ -286,7 +290,7 @@ void main() {
       expect(find.byIcon(Icons.search), findsOneWidget);
     });
 
-    testWidgets('顶栏 actions 仅折叠后浮现，trailing 常驻不同拍', (tester) async {
+    testWidgets('顶栏 actions 滚动后浮现，trailing 常驻不同拍', (tester) async {
       final controller = ScrollController();
       await tester.pumpWidget(MaterialApp(
         theme: _testTheme,
@@ -315,12 +319,12 @@ void main() {
       expect(actionsAnimated(tester).opacity, 0);
       expect(find.byIcon(Icons.person), findsOneWidget);
 
-      // 完全折叠（alpha = 0，小标题浮现）后：actions 目标透明度 1
+      // 任意滚动后（不再需要完全折叠）：actions 目标透明度 1
       final h = _titleItemHeight(tester);
-      controller.jumpTo(h / 1.8 + 2);
+      controller.jumpTo(h * 0.1);
       await tester.pump();
       expect(actionsAnimated(tester).opacity, 1);
-      // trailing 依旧在场（固定头像不随折叠消失）
+      // trailing 依旧在场（固定头像不随滚动消失）
       expect(find.byIcon(Icons.person), findsOneWidget);
     });
 
@@ -330,11 +334,12 @@ void main() {
       await tester.pumpWidget(widget);
       await tester.pump();
 
-      final largeText = tester.widget<Text>(find.text('发现').first);
+      // 取可见的固定悬浮标题（树中最后一个）
+      final largeText = tester.widget<Text>(find.text('发现').last);
       expect(largeText.style?.fontSize, 20);
       expect(largeText.style?.fontWeight, FontWeight.w700);
       // 测试字体下行高 = fontSize × height = 20 × 1.8 = 36dp
-      expect(tester.getSize(find.text('发现').first).height, 36);
+      expect(tester.getSize(find.text('发现').last).height, 36);
     });
 
     testWidgets('上滑后顶栏渐变模糊带出现（ShaderMask 渐变包裹 BackdropFilter）',
@@ -344,25 +349,17 @@ void main() {
       await tester.pump();
       final h = _titleItemHeight(tester);
 
-      // 栏背景 AnimatedOpacity 门控（渐变模糊带整体挂在它下面）
-      AnimatedOpacity barAnimated(WidgetTester tester) =>
-          tester.widget<AnimatedOpacity>(
-            find
-                .ancestor(
-                  of: find.byType(BackdropFilter),
-                  matching: find.byType(AnimatedOpacity),
-                )
-                .first,
-          );
+      // 栏背景 AnimatedOpacity 门控（渐变带组整体挂在它下面）
+      expect(_barOpacity(tester), 0);
 
-      // 初始态：栏背景目标透明度 0（渐变带不可见）
-      expect(barAnimated(tester).opacity, 0);
-
-      // 上滑任意距离：栏背景激活 → 渐变模糊带在场
+      // 上滑任意距离：栏背景激活 → 渐变模糊带组在场
       controller.jumpTo(h * 0.1);
       await tester.pump();
 
-      final shaderMask = tester.widget<ShaderMask>(find.byType(ShaderMask));
+      // 磨砂带 = 第一个 ShaderMask（加深带在后）
+      final shaderMask = tester.widget<ShaderMask>(
+        find.byType(ShaderMask).first,
+      );
       // dstIn 混合：渐变 alpha 自上而下衰减整层（模糊 + 叠色）
       expect(shaderMask.blendMode, BlendMode.dstIn);
       // 渐变回调产出竖向（上→下）线性渐变着色器
@@ -373,7 +370,7 @@ void main() {
 
       // 磨砂层（blur 14dp BackdropFilter）位于 ShaderMask 之内、栏背景
       // 透明度门控之下（目标值 1）
-      expect(barAnimated(tester).opacity, 1);
+      expect(_barOpacity(tester), 1);
       expect(
         find.ancestor(
           of: find.byType(BackdropFilter),

@@ -842,17 +842,9 @@ abstract final class SonifySpacing {
 
 /// sonify 动效 token（方案 §0.3 动效表）。
 abstract final class SonifyMotion {
-  /// 大标题折叠吸附：180ms EaseOutCubic。出处：Title.kt:745-753。
-  static const Duration collapseSnap = Duration(milliseconds: 180);
-  static const Curve collapseSnapCurve = Curves.easeOutCubic;
-
   /// 顶栏背景/小标题淡入出：120ms。出处：Title.kt:952-953, 1050-1060。
   static const Duration barFade = Duration(milliseconds: 120);
 
   /// 玻璃圆钮材质切换：150ms。出处：Title.kt:940-941。
   static const Duration glassAlpha = Duration(milliseconds: 150);
-
-  /// 折叠大标题透明度公式增益：`1 + offset/height × 1.8`，clamp 0~1。
-  /// 出处：Title.kt:588-589。
-  static const double collapseAlphaGain = 1.8;
 }

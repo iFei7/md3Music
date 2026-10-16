@@ -11,6 +11,7 @@ import '../../providers/local_favorites_provider.dart';
 import '../player/full_player_route.dart';
 import '../user/favorites_page.dart';
 import '../user/play_history_page.dart';
+import '../../widgets/common/liquid_glass_surface.dart';
 import 'albums_page.dart';
 import 'artists_page.dart';
 import 'folders_page.dart';
@@ -277,8 +278,10 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
     return Column(
       children: [
         if (hasMusic || isScanning) ...[
-          // 搜索栏：squircle 9dp 卡底材质（方案 §4.2「tab 容器 squircle 9dp 卡底色」
-          // 的同类规格，搜索条与 sonify 搜索框材质对齐）
+          // 搜索栏：sonify 玻璃胶囊（与首页 _buildSearchFieldItem 同款
+          // LiquidGlassSurface + GlassShape.pill，批次 8 补项统一外观形状，
+          // 高度对齐首页 44dp 基准）。**交互语义不变**：仍是可输入实时
+          // 过滤框（非首页的"点击跳搜索页"入口），只统一外观不改交互。
           Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: AppSpacing.lg,
@@ -287,44 +290,43 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
             child: Row(
               children: [
                 Expanded(
-                  child: DecoratedBox(
-                    decoration: ShapeDecoration(
-                      color: colorScheme.surfaceContainerHigh,
-                      shape: SmoothRectangleBorder(
-                        borderRadius:
-                            BorderRadius.circular(SonifyRadius.card),
-                      ),
-                    ),
-                    child: TextField(
-                      controller: _searchController,
-                      focusNode: _searchFocusNode,
-                      onTap: () {
-                        // 点击搜索框时请求焦点并弹出键盘
-                        _searchFocusNode.requestFocus();
-                      },
-                      decoration: InputDecoration(
-                        hintText: '搜索本地音乐',
-                        prefixIcon: const Icon(Icons.search, size: 20),
-                        suffixIcon: _searchController.text.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.clear, size: 20),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  libraryProvider.clearSearch();
-                                },
-                              )
-                            : null,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.md,
-                          vertical: AppSpacing.sm,
+                  child: LiquidGlassSurface(
+                    shape: GlassShape.pill,
+                    child: SizedBox(
+                      height: 44,
+                      child: TextField(
+                        controller: _searchController,
+                        focusNode: _searchFocusNode,
+                        onTap: () {
+                          // 点击搜索框时请求焦点并弹出键盘
+                          _searchFocusNode.requestFocus();
+                        },
+                        // InputDecorator 默认 textAlignVertical 为 top，
+                        // 44dp 固定高度下需显式居中（input_decorator.dart:807）
+                        textAlignVertical: TextAlignVertical.center,
+                        decoration: InputDecoration(
+                          hintText: '搜索本地音乐',
+                          prefixIcon: const Icon(Icons.search, size: 20),
+                          suffixIcon: _searchController.text.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear, size: 20),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    libraryProvider.clearSearch();
+                                  },
+                                )
+                              : null,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.md,
+                          ),
+                          border: InputBorder.none,
                         ),
-                        border: InputBorder.none,
+                        onChanged: (value) {
+                          libraryProvider.setSearchQuery(value);
+                          setState(() {});
+                        },
                       ),
-                      onChanged: (value) {
-                        libraryProvider.setSearchQuery(value);
-                        setState(() {});
-                      },
                     ),
                   ),
                 ),

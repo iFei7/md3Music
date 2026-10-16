@@ -307,14 +307,21 @@ class _FullPlayerState extends State<FullPlayer>
     }
   }
 
-  /// 拖拽展开完成：切换沉浸模式并移除监听。
+  /// 拖拽展开完成：横屏切换沉浸模式并移除状态监听。
+  ///
+  /// **保留 [_dragRoute] 引用（不再置空）**：PlayerSystemUiScope 需要它
+  /// 让系统栏样式跟随 controller 进度——展开完成（value ≥ 1）后为播放器
+  /// 样式，收起 reverse 一开始（value < 1）即切回主页面样式，路由移除后
+  /// 由主页面 AppBar 注解无缝接替。若此处置空，收起全程注解会冻结在播放器
+  /// 样式，与主页面稳态样式之间产生多余的合并跳变（真机系统栏闪色的来源
+  /// 之一）。竖屏下 applyImmersiveForOrientation 不做任何模式切换（本就是
+  /// edgeToEdge），仅横屏真正隐藏系统栏。
   void _onDragRouteStatus(AnimationStatus status) {
     if (status != AnimationStatus.completed) return;
-    applyImmersiveForOrientation();
-    _systemUiModified = true;
+    _systemUiModified =
+        applyImmersiveForOrientation() || _systemUiModified;
     _syncLandscapeImmersiveFlag();
     _dragRoute?.controller.removeStatusListener(_onDragRouteStatus);
-    _dragRoute = null;
     if (mounted) setState(() {});
   }
 
@@ -617,10 +624,13 @@ class _FullPlayerState extends State<FullPlayer>
       _dragRoute = null;
       _systemUiModified = false;
     } else {
-      // 点击打开 / 普通路由：立即应用沉浸模式
-      _dragRoute = null;
-      applyImmersiveForOrientation();
-      _systemUiModified = true;
+      // 点击打开 / 普通路由：横屏沉浸立即应用；竖屏本就是主界面 edgeToEdge，
+      // 无需切模式，系统栏样式由本页 AnnotatedRegion（PlayerSystemUiScope）
+      // 单一数据源驱动（DraggablePlayerRoute 同样挂 dragRoute，让展开/收起
+      // 过程样式跟随 controller 进度，与拖拽模式口径一致；普通
+      // MaterialPageRoute（/player）无 controller 可跟随，置 null 恒播放器样式）。
+      _dragRoute = route is DraggablePlayerRoute ? route : null;
+      _systemUiModified = applyImmersiveForOrientation();
       _syncLandscapeImmersiveFlag();
     }
   }
@@ -636,11 +646,19 @@ class _FullPlayerState extends State<FullPlayer>
       // 避免 immersiveSticky 下用户触摸边缘唤醒系统栏等 insets 抖动
       // 引发无效的 applyImmersiveForOrientation 调用导致系统栏闪烁
       if (_lastPhysicalSize == current) return;
+      // 旋转前的沉浸态：横屏沉浸生效中旋竖屏时，需要 manual 显式恢复
+      // 系统栏再切回 edgeToEdge（部分设备直接切不显示状态栏）
+      final wasImmersive = _lastPhysicalSize != null &&
+          _lastPhysicalSize!.width > _lastPhysicalSize!.height &&
+          kLandscapeImmersiveEnabled;
       _lastPhysicalSize = current;
       if (_zenMode) {
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+        _systemUiModified = true;
       } else {
-        applyImmersiveForOrientation();
+        _systemUiModified =
+            applyImmersiveForOrientation(fromImmersive: wasImmersive) ||
+                _systemUiModified;
       }
       _syncLandscapeImmersiveFlag();
     });
@@ -737,8 +755,14 @@ class _FullPlayerState extends State<FullPlayer>
     kPlayerLandscapeImmersiveActive.value = false;
     // 退出播放器时恢复系统栏；若仍处于封面流页横屏沉浸（从封面流进入播放器后返回），
     // 则保持沉浸，避免返回后状态栏闪现。
-    // 拖拽覆盖层（非路由）从未修改系统栏，无需恢复
-    if (_systemUiModified) {
+    // 拖拽覆盖层（非路由）从未修改系统栏，无需恢复。
+    // _systemUiModified 仅在实际切换过系统 UI 模式（横屏沉浸 / 从沉浸态退出 /
+    // Zen）时为 true；竖屏 edgeToEdge 下播放器不切模式，无需恢复——主界面
+    // AppBar 注解会在下一帧自动接替系统栏样式（单一数据源，避免这次多余的
+    // 平台调用与样式跳变）。
+    // _zenMode 兜底：Zen 由 _enterZenMode 直接设 immersiveSticky（不经
+    // applyImmersiveForOrientation），卸载时若仍在 Zen 必须恢复。
+    if (_systemUiModified || _zenMode) {
       if (kCoverFlowImmersiveActive.value) {
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       } else {
@@ -782,7 +806,9 @@ class _FullPlayerState extends State<FullPlayer>
     setState(() => _zenMode = false);
     _zenController.reverse();
     kPlayerZenImmersiveActive.value = false;
-    applyImmersiveForOrientation();
+    // 从沉浸态退出：需要 manual 显式恢复系统栏再切回 edgeToEdge
+    _systemUiModified =
+        applyImmersiveForOrientation(fromImmersive: true) || _systemUiModified;
     _syncLandscapeImmersiveFlag();
   }
 
@@ -1187,9 +1213,9 @@ class _FullPlayerState extends State<FullPlayer>
 
     // 拦截系统返回键：先播放 reverse 动画（mini player 淡入），
     // 动画完成后用 removeRoute 移除路由（绕过 PopScope 避免死循环）。
-    // 引用 kPlayerOverlayStyle 与 applyImmersiveForOrientation 共用同一 const 实例
-    // 避免 SystemUiOverlayStyle 引用不等触发平台 channel 真实调用导致闪烁
-    // 拖拽展开模式下系统栏样式跟随展开进度，避免拖动过程提前切换（见 PlayerSystemUiScope）
+    // 系统栏样式单一数据源：本页 AnnotatedRegion（PlayerSystemUiScope）随
+    // 展开进度在主页面样式 / 播放器样式间切换，applyImmersiveForOrientation
+    // 不再直设样式（避免竞态闪烁，见其注释）。
     // md 播放器背景跟随主题：状态栏文字需按主题亮度（浅色主题黑字 / 深色主题白字）
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final mdOverlayStyle = SystemUiOverlayStyle(

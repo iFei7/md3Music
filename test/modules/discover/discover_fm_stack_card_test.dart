@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
@@ -11,7 +10,9 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:md3music/core/theme/app_theme.dart';
+import 'package:md3music/data/models/song.dart';
 import 'package:md3music/modules/discover/discover_home_cards.dart';
+import 'package:md3music/modules/user/play_history_page.dart';
 import 'package:md3music/providers/favorites_provider.dart';
 import 'package:md3music/providers/kugou_provider.dart';
 import 'package:md3music/providers/local_favorites_provider.dart';
@@ -115,6 +116,33 @@ class _FmAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+/// 默认滚动宿主：纵向 SingleChildScrollView（与首页列表同轴）。
+Widget _defaultScrollHost(Widget child) => Scaffold(
+      body: SingleChildScrollView(
+        child: Column(
+          children: [child],
+        ),
+      ),
+    );
+
+/// 真机竞争环境宿主：CustomScrollView（SonifyTitleScaffold 同款纵向
+/// 滚动容器）+ 垫高内容，保证 maxScrollExtent > 0——垂直滚动 recognizer
+/// 真实参与手势竞技场，复现「FM 卡嵌在上滑页里」的真机场景。
+Widget _customScrollHost(Widget child) => Scaffold(
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(child: child),
+          SliverList.builder(
+            itemCount: 30,
+            itemBuilder: (context, i) => SizedBox(
+              height: 80,
+              child: ListTile(title: Text('filler $i')),
+            ),
+          ),
+        ],
+      ),
+    );
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -124,7 +152,7 @@ void main() {
     FavoritesProvider,
     LocalFavoritesProvider,
     _FmAdapter,
-  )> _pumpCard(WidgetTester tester) async {
+  )> _pumpCard(WidgetTester tester, {Widget Function(Widget child)? host}) async {
     SharedPreferences.setMockInitialValues({});
     installFakeSecureStorage();
     // mock path_provider：switchAccount 会触发 DefaultCacheManager 清头像缓存，
@@ -171,12 +199,8 @@ void main() {
               value: localFavorites,
             ),
           ],
-          child: const Scaffold(
-            body: SingleChildScrollView(
-              child: Column(
-                children: [DiscoverFmStackCard()],
-              ),
-            ),
+          child: Scaffold(
+            body: (host ?? _defaultScrollHost)(const DiscoverFmStackCard()),
           ),
         ),
       ),
@@ -263,6 +287,52 @@ void main() {
       }
     });
 
+    testWidgets('真机竞争环境：CustomScrollView 内水平拖拽（拖拽中途有帧落地）仍能切歌',
+        (tester) async {
+      // 真机反馈「FM 卡片无法左右滑动切换」的复现用例：
+      // ① 宿主换成 CustomScrollView（SonifyTitleScaffold 同款纵向滚动），
+      //    垂直 recognizer 真实参与竞技场；
+      // ② 关键差异——两段 move 之间插入 tester.pump()：真机上每次 move
+      //    事件间必有帧落地。此前拖拽态会把前卡的 GestureDetector 换成
+      //    Transform，首帧重建即 dispose 掉 HorizontalDragGestureRecognizer
+      //    （recognizer.dart:485-493 会把它从 pointerRouter 摘除），后续
+      //    move/up 全部丢失、onHorizontalDragEnd 不触发——卡片停在几 px
+      //    位移处「滑不动」。既有 drag() 用例 move 与 up 之间不插帧，
+      //    识别器没被换掉才侥幸绿，覆盖不到真机。
+      // 注：DragStartBehavior.start 下首个 move 只触发 drag start（pending
+      // offset 被吸收进初始位置、不发 update，monodrag.dart:805-808），
+      // 故需要两个 move 才产出首个 onHorizontalDragUpdate。
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester, host: _customScrollHost);
+      try {
+        expect(find.text('甲'), findsOneWidget);
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        // move ①：越过 touchSlop，HorizontalDrag 胜出竞技场、拖拽开始
+        await gesture.moveBy(const Offset(-60, 0));
+        // move ②：首个 onHorizontalDragUpdate → _dragDx 非零 → setState
+        // （拖拽态分支从此生效）
+        await gesture.moveBy(const Offset(-40, 0));
+        // 帧在拖拽中途落地：拖拽态重建发生在识别器存活期间
+        await tester.pump();
+        // move ③ + 抬手：位移累计越过 dismiss 阈值
+        await gesture.moveBy(const Offset(-400, 0));
+        await gesture.up();
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(player.currentSong, isNull,
+            reason: '未播放时滑动切歌不应擅自起播');
+        expect(find.text('乙'), findsOneWidget,
+            reason: '前卡滑出后下一首（乙）应前移为前卡（真机滑动手感）');
+        expect(find.text('甲'), findsNothing);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
     testWidgets('未播放态：卡片提供播放/暂停与收藏按钮（语义元素在场）',
         (tester) async {
       final (kugou, player, favorites, localFavorites, adapter) =
@@ -281,6 +351,132 @@ void main() {
       }
     });
   });
+
+  group('首页最近播放卡片', () {
+    Future<(PlayerProvider, LocalFavoritesProvider)> _pumpNowPlaying(
+      WidgetTester tester, {
+      Song? song,
+      bool isPlaying = false,
+    }) async {
+      SharedPreferences.setMockInitialValues({});
+      installFakeSecureStorage();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('plugins.flutter.io/path_provider'),
+            (call) async => switch (call.method) {
+              'getTemporaryDirectory' ||
+              'getApplicationSupportDirectory' ||
+              'getApplicationDocumentsDirectory' ||
+              'getDownloadsDirectory' => Directory.systemTemp.path,
+              _ => null,
+            },
+          );
+      AudioServiceLoader.setTestOverride(() async => _FakeAudioService());
+      final player = _TestPlayerProvider();
+      player.setTestPlaybackState(currentSong: song, isPlaying: isPlaying);
+      final localFavorites = LocalFavoritesProvider();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: _testTheme,
+          home: MultiProvider(
+            providers: [
+              ChangeNotifierProvider<PlayerProvider>.value(value: player),
+            ],
+            child: const Scaffold(
+              body: SingleChildScrollView(
+                child: Column(
+                  children: [DiscoverNowPlayingCard()],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      return (player, localFavorites);
+    }
+
+    testWidgets('有当前曲目：标题行「最近播放」+ 右箭头 + 歌曲信息在场',
+        (tester) async {
+      final (player, localFavorites) = await _pumpNowPlaying(
+        tester,
+        song: const Song(
+          id: 'np-1',
+          title: '正在播的这首歌',
+          artist: '测试歌手',
+          album: '测试专辑',
+          duration: Duration(minutes: 3),
+        ),
+      );
+      try {
+        expect(find.text('最近播放'), findsOneWidget);
+        expect(find.byIcon(Icons.chevron_right), findsOneWidget);
+        expect(find.text('正在播的这首歌'), findsOneWidget);
+        expect(find.text('测试歌手'), findsOneWidget);
+      } finally {
+        player.dispose();
+        localFavorites.dispose();
+        AudioServiceLoader.setTestOverride(null);
+        uninstallFakeSecureStorage();
+      }
+    });
+
+    testWidgets('点右箭头跳转播放历史页（复用既有 MaterialPageRoute push）',
+        (tester) async {
+      final (player, localFavorites) = await _pumpNowPlaying(
+        tester,
+        song: const Song(
+          id: 'np-1',
+          title: '正在播的这首歌',
+          artist: '测试歌手',
+          album: '测试专辑',
+          duration: Duration(minutes: 3),
+        ),
+      );
+      try {
+        await tester.tap(find.byIcon(Icons.chevron_right));
+        await tester.pumpAndSettle();
+        expect(find.byType(PlayHistoryPage), findsOneWidget);
+      } finally {
+        player.dispose();
+        localFavorites.dispose();
+        AudioServiceLoader.setTestOverride(null);
+        uninstallFakeSecureStorage();
+      }
+    });
+
+    testWidgets('无当前曲目：整块隐藏（不占列表位）', (tester) async {
+      final (player, localFavorites) = await _pumpNowPlaying(tester);
+      try {
+        expect(find.text('最近播放'), findsNothing);
+        expect(find.byIcon(Icons.chevron_right), findsNothing);
+      } finally {
+        player.dispose();
+        localFavorites.dispose();
+        AudioServiceLoader.setTestOverride(null);
+        uninstallFakeSecureStorage();
+      }
+    });
+  });
+}
+
+/// 测试播放器：覆写 currentSong/isPlaying 为测试态（_pumpNowPlaying 注入），
+/// 其余构造/释放行为与真 PlayerProvider 一致（假音频服务已装）。
+class _TestPlayerProvider extends PlayerProvider {
+  Song? _testCurrentSong;
+  bool _testIsPlaying = false;
+
+  @override
+  Song? get currentSong => _testCurrentSong;
+
+  @override
+  bool get isPlaying => _testIsPlaying;
+
+  void setTestPlaybackState({Song? currentSong, required bool isPlaying}) {
+    _testCurrentSong = currentSong;
+    _testIsPlaying = isPlaying;
+    notifyListeners();
+  }
 }
 
 void _markLocalServerReady() {

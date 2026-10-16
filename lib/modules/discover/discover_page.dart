@@ -28,12 +28,12 @@ import '../search/search_page.dart';
 /// 首页 / Discover（UI 重设计批次 1，方案 §1）。
 ///
 /// 结构（方案 §1.2 线框）：
-/// - [SonifyTitleScaffold] 大标题「首页」折叠顶栏（列表首 item，滚动溶解，
-///   没入后 18.5sp 小标题浮现，180ms EaseOutCubic 吸附）；
-/// - 顶栏右上**固定用户头像**（常驻不折叠，点击进设置页 /settings）；
-/// - 折叠后头像左侧浮现搜索/识曲两枚玻璃圆钮（点击行为同搜索框）；
+/// - [SonifyTitleScaffold] 大标题「首页」**固定悬浮**（滚动中不位移/
+///   不缩放/不溶解，批次 8 起去掉折叠为小标题的旧机制）；
+/// - 顶栏右上**固定用户头像**（常驻，点击进设置页 /settings）；
+/// - 滚动后头像左侧浮现搜索/识曲两枚玻璃圆钮（点击行为同搜索框）；
 /// - 列表：胶囊搜索框（内右侧识曲按钮）→ 私人 FM 堆叠大卡片（档位切换/
-///   滑动切歌）→ 正在播放大卡片 → 每日推荐
+///   滑动切歌）→ 最近播放大卡片（标题 + 箭头进播放历史页）→ 每日推荐
 ///   → 编辑精选/主题歌单/热门歌单/新碟上架/排行榜 横滑 Rail（[CoverRail]）
 ///   → 刷歌推荐 → Dock 避让。
 ///
@@ -232,10 +232,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
           ? Scaffold(body: _buildError(colorScheme))
           : SonifyTitleScaffold(
               title: '首页',
-              // 顶栏右侧固定用户头像（常驻，不随折叠）
+              // 顶栏右侧固定用户头像（常驻，不随滚动）
               trailing: _buildUserAvatar(),
-              // 折叠后在头像左侧浮现搜索/识曲圆钮
-              actions: _buildCollapsedBarActions(),
+              // 滚动后在头像左侧浮现搜索/识曲圆钮
+              actions: _buildBarActions(),
               itemCount: _kSectionCount,
               itemBuilder: _buildListItem,
             ),
@@ -253,7 +253,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
         // 私人 FM 堆叠大卡片（原 FM/识曲快捷行位置，快捷行已删）
         return const DiscoverFmStackCard();
       case 2:
-        // 正在播放大卡片（无播放内容时整块隐藏）
+        // 最近播放大卡片（标题 + 箭头进播放历史页；无播放内容时整块隐藏）
         return const DiscoverNowPlayingCard();
       case 3:
         return _buildDailySection();
@@ -426,9 +426,9 @@ class _DiscoverPageState extends State<DiscoverPage> {
     );
   }
 
-  /// 折叠后顶栏动作按钮：头像左侧的搜索圆钮 + 识曲圆钮，
+  /// 滚动后顶栏动作按钮：头像左侧的搜索圆钮 + 识曲圆钮，
   /// 点击行为与列表搜索框一致。
-  List<Widget> _buildCollapsedBarActions() {
+  List<Widget> _buildBarActions() {
     return [
       _buildGlassCircleButton(Icons.search, _openSearch),
       const SizedBox(width: 10),

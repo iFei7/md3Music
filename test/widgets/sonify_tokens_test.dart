@@ -167,11 +167,8 @@ void main() {
     });
 
     test('动效 token 取值', () {
-      expect(SonifyMotion.collapseSnap, const Duration(milliseconds: 180));
-      expect(SonifyMotion.collapseSnapCurve, Curves.easeOutCubic);
       expect(SonifyMotion.barFade, const Duration(milliseconds: 120));
       expect(SonifyMotion.glassAlpha, const Duration(milliseconds: 150));
-      expect(SonifyMotion.collapseAlphaGain, 1.8);
     });
   });
 }
