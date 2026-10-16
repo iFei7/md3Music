@@ -138,10 +138,13 @@ Future<void> _dragUpBelowThreshold(WidgetTester tester) async {
   await gesture.moveBy(const Offset(0, -30));
   await tester.pump(const Duration(milliseconds: 100));
   await gesture.up();
-  await tester.pump(const Duration(milliseconds: 16));
-  // 未达三阈值（update 口径累计 31 < 120、速度 ~350 < 900）→ 覆盖层归位、
-  // 不 push 播放页
+  // 未达三阈值（update 口径累计 31 < 120、速度 ~350 < 900）→ 覆盖层从
+  // 松手进度收敛归位（200ms easeOutCubic 回归动画 _startDragReturn，
+  // 替代此前的瞬跳置 0），settle 后归位、释放拖拽激活且不 push 播放页
+  await tester.pumpAndSettle();
   expect(playerExpansion.value, 0.0);
+  expect(playerDragActive.value, isFalse,
+      reason: '回归收敛结束后应释放拖拽激活');
   expect(activePlayerRoute, isNull);
 }
 

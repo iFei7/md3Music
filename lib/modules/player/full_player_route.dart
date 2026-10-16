@@ -222,9 +222,6 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
     _isDismissing = true;
     _animStartValue = controller.value;
     _animDirection = -1;
-    debugPrint(
-      '[Route] dismiss v=${controller.value} animating=${controller.isAnimating}',
-    );
     controller.reverse().then((_) {
       // 强制归零，避免 removeRoute 不触发 didPop 导致 playerExpansion 残留非零值
       // （didPop 只在系统 pop 时触发，dismiss 走 removeRoute 不触发）
@@ -245,9 +242,6 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
     if (_isDismissing) return;
     _animStartValue = controller.value;
     _animDirection = 1;
-    debugPrint(
-      '[Route] settleToFull v=${controller.value} animating=${controller.isAnimating}',
-    );
     controller.forward().whenCompleteOrCancel(() {
       // 松手动画结束（或被新的拖拽取消）时，若没有新拖拽激活则恢复原映射；
       // 若用户在动画期间重新开始拖拽（topBarDragging=true，回调晚于 start

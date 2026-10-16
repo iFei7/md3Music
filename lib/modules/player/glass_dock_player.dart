@@ -55,9 +55,16 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 /// - **单展开不变量**：导航与播放器工具**恰好一个展开**，仅两种合法组合：
 ///   [导航胶囊 + 播放器球]（默认）与 [导航球 + 播放器胶囊]。折叠状态唯一
 ///   驱动是用户点击，滚动不参与：
-///   · 点坍缩导航圆 / 切 tab / 播放器工具收起 → 导航展开；
 ///   · 播放器工具展开（点播放器圆钮）→ 导航坍缩让位；
+///   · 点坍缩导航圆 / 切 tab → 导航展开；
 ///   · 导航展开 → 播放器工具收起（listener 双向闭环，无双坍缩驻留）。
+///   **播放器工具的收起只由「点坍缩导航圆 / 切 tab」经 listener 闭环驱动**，
+///   胶囊自身不响应 tap 收起：用户反馈「未点中悬浮导航条的触摸也误触导致
+///   播放器坍缩」——根因是玻璃叠色层（[LiquidGlassSurface] 内的 ColoredBox）
+///   以 HitTestBehavior.opaque 命中，整个胶囊矩形（含 padding / 边缘）均可
+///   点，原胶囊外层 onTap 在背景区域即生效。语义收紧后仅命中导航条本体的
+///   点击才坍缩播放器；封面 / 歌名点击进播放页、三个控制钮、左右滑切歌、
+///   上滑展开均不受影响。
 ///   合法组合仅 [导航胶囊 + 播放器球] 与 [导航球 + 播放器胶囊] 两种；
 ///   现为纯点击驱动（点导航坍缩圆 / 切 tab / 点播放器圆钮），无滚动驱动。
 /// - **导航**：展开（玻璃胶囊导航项）↔ 坍缩（单个当前 tab 玻璃圆）。
@@ -69,7 +76,8 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 ///   展开态由外部（`_MainLayout`）持有并通过 [navExpanded] 注入；
 ///   项宽随项数自适应（≤4 项 44dp，更多时按 320dp 最小屏预算压缩，
 ///   见 `_buildNavPill`），保证「导航胶囊 + 播放器球」组合不超宽；
-/// - **播放器圆钮**：点击在「圆钮 ↔ 控制小胶囊」间收敛形变（AnimatedSize）；
+/// - **播放器圆钮**：点击展开为控制小胶囊（AnimatedSize 收敛形变；收起只
+///   经点坍缩导航圆 / 切 tab，见单展开不变量——胶囊自身不再响应 tap 收起）；
 ///   圆钮外周进度环订阅 [PlayerProvider.positionNotifier]（~200ms 高频通道，
 ///   禁 context.watch），中央为当前歌曲的**圆形封面缩略图**（46dp 充满
 ///   圆内）：播放中叠加 [PlayingSpectrumIndicator] 律动图标（挂共享 60fps
@@ -91,7 +99,9 @@ _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
 ///   与 DraggablePlayerRoute 既有映射口径）；end 按 [shouldExpandPlayer]
 ///   三阈值（屏高 20% / 900px/s / 6000px/s²）判定：达标则 push
 ///   [fullPlayerRoute]（dragOriginTop 模式）并从当前拖拽进度 settleToFull，
-///   未达标 / 取消则覆盖层归位。song == null 时不注册拖拽回调（不抢手势，
+///   未达标 / 取消则覆盖层经 200ms easeOutCubic 回归收敛归位
+///   （[_startDragReturn]，从松手进度连续收敛，无瞬跳）。song == null 时
+///   不注册拖拽回调（不抢手势，
 ///   tap 行为不变）；「播放页已在栈中」在 start 运行时拦截——build 期判定
 ///   会随 Dock 子树移除/重挂载产生过期快照（收起后无法再展开的回归根因，
 ///   见 [_buildPlayerButton] 内注释）；
@@ -121,8 +131,9 @@ class GlassDockPlayer extends StatefulWidget {
   /// 滚动不参与）。
   final ValueListenable<bool> navExpanded;
 
-  /// 请求导航展开/坍缩（双向闭环）：true = 点坍缩圆或播放器工具收起时
-  /// 恢复展开；false = 播放器工具展开时请求导航让位坍缩。
+  /// 请求导航展开/坍缩（双向闭环）：true = 点坍缩圆或切 tab 时恢复展开
+  /// （播放器工具若仍展开，经 listener 强制收起）；false = 播放器工具
+  /// 展开时请求导航让位坍缩。
   final ValueChanged<bool> onNavExpandedChanged;
 
   @override
@@ -130,7 +141,7 @@ class GlassDockPlayer extends StatefulWidget {
 }
 
 class _GlassDockPlayerState extends State<GlassDockPlayer>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   /// 播放器圆钮 → 控制小胶囊的展开态（收敛型 AnimatedSize 驱动）。
   bool _controlsExpanded = false;
 
@@ -173,6 +184,19 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   /// 当前向上加速度估计（px/s²，允许为负 = 末端减速）。
   double _dragAcceleration = 0.0;
 
+  /// 松手未达三阈值（/ 手势被取消）时的回归收敛动画：把 [playerExpansion]
+  /// 从松手进度 easeOutCubic 收敛回 0（200ms），期间保持 [playerDragActive]
+  /// （跟手覆盖层继续渲染回归过程），正常结束后释放。
+  ///
+  /// 修复此前的瞬跳：旧实现直接 `playerExpansion.value = 0.0`，跟手覆盖层
+  /// （[PlayerDragOverlay]）瞬间消失、Dock 透明度瞬跳回 1，与
+  /// [DraggablePlayerRoute.settleToFull] / dismiss 的收敛口径不一致。
+  late final AnimationController _dragReturnSettle;
+
+  /// 回归收敛起点（松手瞬间的 playerExpansion 快照，由 [_startDragReturn]
+  /// 记录）。
+  double _dragReturnFrom = 0.0;
+
   // ── 左右滑切歌：歌名跟手位移 / 相邻曲目预览（ValueNotifier 局部驱动，
   //    拖拽期不 setState、不重建整个 Dock）──
 
@@ -193,9 +217,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   void initState() {
     super.initState();
     // 状态联动（单展开不变量的反向闭环）：导航展开 ⇒ 播放器工具强制收起。
-    // 正向闭环（播放器工具展开 ⇒ 导航坍缩；收起 ⇒ 导航恢复展开）在
-    // [_toggleControls] 中经 onNavExpandedChanged 回调完成。两个展开态
-    // 不得同时存在，否则总宽超出屏宽。
+    // 正向闭环（播放器工具展开 ⇒ 导航坍缩）在 [_expandControls] 中经
+    // onNavExpandedChanged 回调完成。两个展开态不得同时存在，否则总宽
+    // 超出屏宽。
     widget.navExpanded.addListener(_onNavExpandedChanged);
     // 预热「左右滑切歌」开关内存缓存（设置页修改经 ValueNotifier 即时生效）
     // ignore: discarded_futures
@@ -208,6 +232,13 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
       final t = Curves.easeOutCubic.transform(_switchSettle.value);
       _switchDx.value = _switchAnimFrom + (_switchAnimTo - _switchAnimFrom) * t;
     });
+    // 上滑拖拽松手未达阈值时的回归收敛（200ms easeOutCubic）：帧回调只写
+    // 局部 ValueNotifier（playerExpansion），不 setState、不重建 Dock。
+    _dragReturnSettle = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    _dragReturnSettle.addListener(_onDragReturnTick);
   }
 
   @override
@@ -224,18 +255,20 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     widget.navExpanded.removeListener(_onNavExpandedChanged);
     _switchSettle.dispose();
     _switchDx.dispose();
+    _dragReturnSettle.dispose();
     super.dispose();
   }
 
   /// 反向闭环：导航展开 ⇒ 播放器工具强制收起（维持单展开不变量）。
   /// 两种驱动路径的命中情况：
-  /// - 点播放器圆钮展开（[_toggleControls] 置 _controlsExpanded = true 后
+  /// - 点播放器圆钮展开（[_expandControls] 置 _controlsExpanded = true 后
   ///   回调 onNavExpandedChanged(false)）：_collapseNav() 使 nav 变为
   ///   false，本 listener 触发时 navExpanded.value 为 false，条件不成立，
   ///   走 no-op，播放器胶囊得以保留 ✓；
   /// - 点导航坍缩圆展开导航（onNavExpandedChanged(true)）：nav 变为 true，
   ///   若播放器胶囊仍展开则强制收起，恢复「恰好一个展开」——这是期望
-  ///   行为，不可删除。
+  ///   行为，不可删除；也是**播放器工具收起的唯一点击路径**（语义收紧，
+  ///   见类文档：胶囊自身不再响应 tap 收起）。
   /// 两条路径均不会反向再改导航值，故无乒乓竞态。
   void _onNavExpandedChanged() {
     if (widget.navExpanded.value && _controlsExpanded) {
@@ -243,20 +276,23 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     }
   }
 
-  /// 播放器工具展开/收起（单展开不变量的正向驱动，双向闭环）：
-  /// - 展开：先置 _controlsExpanded = true，再回调 onNavExpandedChanged(false)
-  ///   请求导航坍缩让位；
-  /// - 收起：先置 _controlsExpanded = false，再回调 onNavExpandedChanged(true)
-  ///   请求导航恢复展开。时序保证：回调触发 _onNavExpandedChanged 时
-  ///   _controlsExpanded 已为 false，命中 no-op 分支，不会反向收起导航，
-  ///   无乒乓竞态。
-  void _toggleControls() {
+  /// 播放器工具展开（单展开不变量的正向驱动，双向闭环）：先置
+  /// _controlsExpanded = true，再回调 onNavExpandedChanged(false) 请求
+  /// 导航坍缩让位。时序保证：回调触发 _onNavExpandedChanged 时
+  /// navExpanded.value 已为 false，条件不成立，走 no-op，播放器胶囊
+  /// 得以保留，无乒乓竞态。
+  ///
+  /// 语义收紧（用户反馈「未点中悬浮导航条的触摸误触导致播放器坍缩」）：
+  /// 本方法只负责展开——原「点胶囊收起」分支随胶囊 onTap 一并移除
+  /// （根因见类文档与 [_buildControlsCapsule] 注释），播放器工具的收起
+  /// 只经「点坍缩导航圆 / 切 tab → 导航展开 → [_onNavExpandedChanged]
+  /// 强制收起」闭环。
+  void _expandControls() {
     AppHaptics.click();
-    final next = !_controlsExpanded;
-    setState(() => _controlsExpanded = next);
+    setState(() => _controlsExpanded = true);
     // 回调语义是「导航是否展开」，与播放器自身状态相反：
-    // 播放器展开 → 导航让位坍缩；播放器收起 → 导航恢复展开。
-    widget.onNavExpandedChanged(!next);
+    // 播放器展开 → 导航让位坍缩。
+    widget.onNavExpandedChanged(false);
   }
 
   @override
@@ -379,6 +415,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
 
   /// 坍缩态：单个当前 tab 玻璃圆（点击展开导航，展开逻辑不变）。
   ///
+  /// **播放器工具收起的唯一点击路径**（语义收紧，见类文档）：点此圆展开
+  /// 导航，[_onNavExpandedChanged] listener 闭环同步强制收起播放器胶囊。
+  ///
   /// 显示「当前选中且可见」的 tab 图标（选中 filled + primary）；
   /// selectedTabId 不在 visibleTabs 中时回退第一个可见 tab（outlined +
   /// onSurfaceVariant，该 tab 并非选中态）。
@@ -468,7 +507,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     // 无歌 / 播放页已在栈中时不启动拖拽。
     if (context.read<PlayerProvider>().currentSong == null) return;
     if (activePlayerRoute != null && activePlayerRoute!.isActive) return;
-    _dragDistance = 0.0;
+    // 停掉可能正在进行的回归收敛（松手未达阈值后立刻重新上滑的场景）：
+    // 新拖拽接管，[playerDragActive] 本就保持 true，无需重置。
+    _dragReturnSettle.stop();
     _dragVelocity = 0.0;
     _dragAcceleration = 0.0;
     _dragLastY = details.globalPosition.dy;
@@ -477,6 +518,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     if (box != null && box.hasSize) {
       playerDragOriginTop = box.localToGlobal(Offset.zero).dy;
     }
+    // 从当前 expansion 续接累计距离：回归收敛被新拖拽接管时的无缝起点
+    // （常态 expansion 为 0，与旧的 _dragDistance = 0.0 等价）。
+    _dragDistance = playerExpansion.value * playerDragOriginTop;
     playerDragActive.value = true;
   }
 
@@ -509,10 +553,10 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   /// 拖拽松手：按 [shouldExpandPlayer] 三阈值判定（屏高 20% / 900px/s /
   /// 6000px/s²，任一达标即展开；松手瞬间向下回拉则否决）。
   /// 达标 → push dragOriginTop 模式路由并从当前拖拽进度 settleToFull
-  /// （覆盖层最后位置与路由首帧无缝衔接）；未达标 → 覆盖层归位。
+  /// （覆盖层最后位置与路由首帧无缝衔接）；未达标 → 覆盖层经回归收敛
+  /// 动画归位（[_startDragReturn]，替代此前的瞬跳置 0）。
   void _onPlayerDragEnd(DragEndDetails details) {
     if (!playerDragActive.value) return;
-    playerDragActive.value = false;
     final distance = _dragDistance;
     _dragDistance = 0.0;
     // primaryVelocity 向下为正，换算为「向上为正」
@@ -525,6 +569,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
       velocity: velocity,
       acceleration: _dragAcceleration,
     )) {
+      // 路由接管显示权，拖拽激活即刻释放（覆盖层交棒）。
+      playerDragActive.value = false;
       final route = fullPlayerRoute(
         context,
         dragOriginTop: playerDragOriginTop,
@@ -536,20 +582,58 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
       route.controller.value = progress.clamp(0.0, 1.0);
       route.settleToFull();
     } else {
-      playerExpansion.value = 0.0;
+      // 未达标：跟手覆盖层从当前进度收敛归位，[playerDragActive] 保持
+      // true 直到动画正常结束（被新拖拽接管则不释放，见 [_startDragReturn]）。
+      _startDragReturn();
     }
     _dragVelocity = 0.0;
     _dragAcceleration = 0.0;
   }
 
-  /// 拖拽被系统取消（来电 / 手势竞争仲裁）：覆盖层归位，状态清零。
+  /// 启动回归收敛（松手未达三阈值 / 手势被系统取消）：从当前
+  /// [playerExpansion] easeOutCubic 收敛回 0（200ms），期间
+  /// [playerDragActive] 保持 true 让跟手覆盖层渲染回归过程；动画正常
+  /// 结束后释放，被新拖拽（[_onPlayerDragStart] stop 接管，status 非
+  /// completed）则不释放、交给新拖拽管理。已在起点（expansion ≤ 0）时
+  /// 无需动画，直接释放。
+  void _startDragReturn() {
+    final from = playerExpansion.value;
+    if (from <= 0.0) {
+      playerDragActive.value = false;
+      return;
+    }
+    _dragReturnFrom = from;
+    _dragReturnSettle.forward(from: 0).whenCompleteOrCancel(() {
+      if (!mounted) return;
+      // stop 接管后 status 为 dismissed（不释放）；自然收敛完成才释放。
+      if (_dragReturnSettle.status == AnimationStatus.completed) {
+        playerDragActive.value = false;
+      }
+    });
+  }
+
+  /// 回归收敛帧回调：easeOutCubic 插值写回 [playerExpansion]（局部
+  /// ValueNotifier 驱动覆盖层位置 / 透明度与 Dock 淡入，不 setState、
+  /// 不重建整个 Dock；动画结束 controller 自动停止，无残留 ticker）。
+  void _onDragReturnTick() {
+    // 收敛期间被外部释放（如系统返回键置 playerDragActive = false 并清零
+    // expansion）：即刻停止收敛并不再写回，避免 Dock 亮度二次闪烁。
+    if (!playerDragActive.value) {
+      _dragReturnSettle.stop();
+      return;
+    }
+    final t = Curves.easeOutCubic.transform(_dragReturnSettle.value);
+    playerExpansion.value = _dragReturnFrom * (1.0 - t);
+  }
+
+  /// 拖拽被系统取消（来电 / 手势竞争仲裁）：覆盖层收敛归位，状态清零。
   void _onPlayerDragCancel() {
     if (!playerDragActive.value) return;
-    playerDragActive.value = false;
     _dragDistance = 0.0;
     _dragVelocity = 0.0;
     _dragAcceleration = 0.0;
-    playerExpansion.value = 0.0;
+    // 与松手未达阈值同一口径：收敛归位而非瞬跳。
+    _startDragReturn();
   }
 
   // ── 左右滑切歌（P1，默认开）：歌名跟手位移 + 相邻曲目预览 ──
@@ -648,7 +732,7 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     final cs = Theme.of(context).colorScheme;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: song == null ? null : _toggleControls,
+      onTap: song == null ? null : _expandControls,
       child: LiquidGlassContainer(
         shape: GlassShape.circle,
         child: SizedBox(
@@ -791,8 +875,15 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     // 不进手势竞技场（默认开，见 SettingsRepository.dockSwipeToSwitchTrack）。
     final swipeEnabled =
         SettingsRepository.dockSwipeToSwitchTrack.value && song != null;
+    // 语义收紧（用户反馈「未点中悬浮导航条的触摸也误触导致播放器坍缩」）：
+    // 胶囊自身**不**响应 tap 收起——原 onTap: _toggleControls 已移除。
+    // 根因：玻璃叠色层（[LiquidGlassSurface] 内 Positioned.fill 的
+    // ColoredBox）以 HitTestBehavior.opaque 命中，整个胶囊矩形（含
+    // padding / 边缘）均可点，点背景即触发收起。收紧后播放器工具的收起
+    // 只由「点坍缩导航圆 / 切 tab → 导航展开 → [_onNavExpandedChanged]
+    // 强制收起」驱动（见类文档）；封面 / 歌名点击进播放页、三个控制钮、
+    // 左右滑切歌（下方 onHorizontalDrag*，开关关闭或无歌时不注册）均不变。
     return GestureDetector(
-      onTap: _toggleControls,
       onHorizontalDragStart: swipeEnabled ? _onCapsuleHorizontalDragStart : null,
       onHorizontalDragUpdate: swipeEnabled
           ? _onCapsuleHorizontalDragUpdate
