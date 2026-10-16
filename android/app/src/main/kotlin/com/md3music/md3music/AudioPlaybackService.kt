@@ -47,12 +47,16 @@ import java.util.concurrent.TimeUnit
 
 class AudioPlaybackService : Service() {
     companion object {
-        const val CHANNEL_ID = "md3music_audio_playback"
-        // 保活通知专用频道：以最低重要度静默显示，用户可长按进入系统通知设置关闭。
-        // 通知对象常驻支撑 startForeground，避免服务被系统降级（DETACH 方案已废弃）。
+        // 阶段9：通知栏播放控件统一为安卓原生媒体通知（media3
+        // DefaultMediaNotificationProvider，ID 1001 / default_channel_id，MediaStyle）。
+        // 本服务的前台保活通知仅作 startForeground 的 FGS 载体：走 IMPORTANCE_NONE
+        // 隐藏渠道（v3 全新 ID——渠道重要度创建后不可改，同 ID 删重建不保证生效），
+        // 不再占据用户可见通知位，杜绝与原生媒体通知并列的第二条可见通知。
+        // 旧 ID（历史可见保活渠道 + 占位通知渠道）在 createNotificationChannel 中删除。
         private const val LEGACY_KEEPALIVE_CHANNEL_ID = "md3music_keepalive"
-        const val KEEPALIVE_CHANNEL_ID = "md3music_keepalive_v2"
-        const val KEEPALIVE_NOTIFICATION_TEXT = "前台保活增强歌曲留存，长按至系统通知设置关闭"
+        private const val LEGACY_KEEPALIVE_CHANNEL_ID_V2 = "md3music_keepalive_v2"
+        private const val LEGACY_VISIBLE_CHANNEL_ID = "md3music_audio_playback"
+        const val KEEPALIVE_CHANNEL_ID = "md3music_keepalive_v3"
         const val NOTIFICATION_ID = 1002
         // 桌面歌词关闭后通知播放服务立即确认前台保活状态
         const val ACTION_REFRESH_FOREGROUND = "com.md3music.md3music.REFRESH_FOREGROUND"
@@ -840,7 +844,7 @@ class AudioPlaybackService : Service() {
         sendBroadcast(intent)
     }
 
-    /// 解决方案B阶段5：前台服务保活通知。
+    /// 解决方案B阶段5/阶段9：前台服务保活通知（隐藏载体）。
     /// 展示层已由媒体3 now-playing 通知（MD3MusicMediaSessionService）承载，本服务仍需保持前台
     /// （后台 Flutter 引擎/WakeLock 保活）。
     ///
@@ -849,8 +853,11 @@ class AudioPlaybackService : Service() {
     /// （日志：Service.startForeground() not allowed due to mAllowStartForeground false；
     /// uidState: SVC；code:DENIED），此时进程变为后台状态 → 后台网络被系统/ROM 限制 →
     /// 挂后台切歌时 URL/歌词/封面等新连接全部失败（现象：像断网但没断网）。
-    /// 改为常驻 startForeground：保活通知走 IMPORTANCE_MIN 静默渠道，
-    /// 通知对象持续存在，服务保持 FGS，进程不降级，后台网络不受限。
+    /// 改为常驻 startForeground：保活通知对象持续存在，服务保持 FGS，进程不降级。
+    ///
+    /// 阶段9：保活通知改走 IMPORTANCE_NONE 隐藏渠道（见 KEEPALIVE_CHANNEL_ID），
+    /// 用户不可见；通知栏唯一可见条目为媒体3原生媒体通知（含封面/标题/艺术家/
+    /// 上一首/播放暂停/下一首/收藏按钮，点击回 App）。
     private fun startForegroundDetached(builder: NotificationCompat.Builder) {
         // 不再给桌面歌词或 Media3 服务让位。播放服务自身保持 FGS，避免其他前台
         // 服务状态切换期间出现保活空档，导致后台网络、切歌和歌曲留存被系统限制。
@@ -879,24 +886,24 @@ class AudioPlaybackService : Service() {
     }
 
     /// 前台服务占位通知：唤醒场景下服务可能刚被 startForegroundService 拉起，
-    /// 需要尽快进入前台。真实内容随后由 Dart 端 updateNotification 覆盖。
+    /// 需要尽快进入前台。真实内容随后由媒体3 now-playing 通知承载。
+    /// 阶段9：占位通知同样走隐藏渠道，不再向用户闪现「准备播放」空控件通知。
     private fun ensureForeground() {
         if (foregroundStarted) return
         foregroundStarted = true
         try {
-            val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            val builder = NotificationCompat.Builder(this, KEEPALIVE_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_launcher_monochrome)
                 .setContentTitle("Grace Music")
-                .setContentText("准备播放")
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setPriority(NotificationCompat.PRIORITY_MIN)
             startForegroundDetached(builder)
         } catch (_: Exception) {}
     }
 
     /// 桌面歌词关闭后立即确认播放服务仍处于保活前台。
-    /// 复用 KEEPALIVE_CHANNEL_ID 通知，不等下一次 30s 周期通知更新。
+    /// 复用隐藏保活渠道通知，不等下一次 30s 周期通知更新。
     private fun refreshKeepaliveForeground() {
         // 仅在播放中恢复保活前台。暂停/已停止不恢复：暂停期间无切歌需求，
         // 且本次 startService 若新建了服务实例（服务已被 stopSelf）应立即自停，
@@ -909,8 +916,7 @@ class AudioPlaybackService : Service() {
             val pendingIntent = launchPendingIntent()
             val builder = NotificationCompat.Builder(this, KEEPALIVE_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_launcher_monochrome)
-                .setContentTitle("")
-                .setContentText(KEEPALIVE_NOTIFICATION_TEXT)
+                .setContentTitle("Grace Music")
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
@@ -1311,55 +1317,38 @@ class AudioPlaybackService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
-            
-            // 删除旧渠道（如果存在且配置不正确）- Android 8+ 渠道一旦创建无法修改，必须删除重建
-            try {
-                val existingChannel = manager.getNotificationChannel(CHANNEL_ID)
-                if (existingChannel != null) {
-                    // 阶段6：重要度改为 MIN（保活通知彻底隐藏/最小化），旧渠道需删除重建
-                    if (existingChannel.importance != NotificationManager.IMPORTANCE_MIN ||
-                        existingChannel.sound != null) {
-                        manager.deleteNotificationChannel(CHANNEL_ID)
-                    }
-                }
-            } catch (_: Exception) {}
-            
-            // 创建静音通知渠道 - 修复荣耀/vivo 手机通知提示音问题
-            // 阶段7：IMPORTANCE_MIN + 常驻 startForeground（不 DETACH），保活通知只出现在
-            // 折叠的「其他通知」区（或 DETACH 已移除的旧行为不再使用），不产生打扰；
-            // 渠道静音（setSound null）避免部分 ROM 通知「叮咚响」。
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "音乐播放",
-                NotificationManager.IMPORTANCE_MIN
-            ).apply {
-                description = "音乐播放控制（静默保活）"
-                setShowBadge(false)
-                lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
-                // 关键修复：禁用声音和震动
-                setSound(null, null)
-                enableVibration(false)
-            }
-            manager.createNotificationChannel(channel)
 
-            // 保活通知专用频道：最低重要度静默显示；用户可长按通知进入系统设置关闭。
+            // 阶段9：清理旧版可见保活渠道。渠道重要度创建后不可更改（同 ID 删重建不保证
+            // 采用新重要度），保活通知已迁移到全新 ID 的 IMPORTANCE_NONE 隐藏渠道；
+            // 旧 ID 一律删除，避免升级安装后用户仍看到「前台保活」可见通知、
+            // 或系统通知设置里残留空渠道（删除渠道会同时取消其名下通知）。
+            for (legacyChannelId in listOf(
+                LEGACY_KEEPALIVE_CHANNEL_ID,
+                LEGACY_KEEPALIVE_CHANNEL_ID_V2,
+                LEGACY_VISIBLE_CHANNEL_ID,
+            )) {
+                try {
+                    manager.deleteNotificationChannel(legacyChannelId)
+                } catch (_: Exception) {}
+            }
+
+            // 隐藏保活渠道：IMPORTANCE_NONE 不在状态栏/通知抽屉展示，仅作 startForeground
+            // 的 FGS 载体（通知对象持续存在，服务保持前台，后台网络不受限——
+            // 阶段7 实测 DETACH 会被部分 ROM 降级为 SVC）。渠道静音避免部分 ROM「叮咚响」。
             try {
-                // 旧频道以 IMPORTANCE_NONE 创建，Android 不保证同 ID 删除重建后会采用
-                // 新重要度；迁移到 v2 ID，并清理旧的隐藏频道，确保升级安装后能显示。
-                manager.deleteNotificationChannel(LEGACY_KEEPALIVE_CHANNEL_ID)
                 val existingKeepalive = manager.getNotificationChannel(KEEPALIVE_CHANNEL_ID)
                 if (existingKeepalive != null &&
-                    existingKeepalive.importance != NotificationManager.IMPORTANCE_MIN) {
-                    // 渠道一旦创建 importance 不可改，必须先删后按最低重要度重建
+                    existingKeepalive.importance != NotificationManager.IMPORTANCE_NONE) {
+                    // 渠道一旦创建 importance 不可改，必须先删后按隐藏重要度重建
                     manager.deleteNotificationChannel(KEEPALIVE_CHANNEL_ID)
                 }
                 manager.createNotificationChannel(
                     NotificationChannel(
                         KEEPALIVE_CHANNEL_ID,
-                        "播放保活",
-                        NotificationManager.IMPORTANCE_MIN
+                        "播放保活（隐藏）",
+                        NotificationManager.IMPORTANCE_NONE
                     ).apply {
-                        description = "前台保活增强歌曲留存，可在系统通知设置中关闭"
+                        description = "前台服务保活载体，不对外展示"
                         setShowBadge(false)
                         lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
                         setSound(null, null)
@@ -1610,17 +1599,20 @@ class AudioPlaybackService : Service() {
         // 点击保活通知回到 App（懒加载一次，后续共用）
         val pendingIntent = launchPendingIntent()
 
-        // 方案B阶段5：自定义 MediaSessionCompat 已移除，展示层由媒体3 now-playing 通知承载。
-        // 本服务仍须 startForeground 保持前台（Android 8+ 硬性要求），故构建静默保活通知。
-        // 使用最低重要度频道常驻（不 DETACH），并给出关闭入口提示。
+        // 阶段9：通知栏展示层完全由媒体3 now-playing 通知承载
+        // （MD3MusicMediaSessionService + DefaultMediaNotificationProvider：
+        // 封面大图/标题/艺术家/上一首/播放暂停/下一首/收藏按钮，点击回 App）。
+        // 本服务仍须 startForeground 保持前台（后台 Flutter 引擎/WakeLock 保活，
+        // 阶段7 实测 DETACH 会被部分 ROM 降级为 SVC 导致后台网络受限），故构建
+        // 隐藏保活通知：IMPORTANCE_NONE 渠道 + PRIORITY_MIN，用户不可见，
+        // 不占据通知栏可见位——用户可见的通知收敛为唯一一条原生媒体通知。
         val builder = NotificationCompat.Builder(this, KEEPALIVE_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_monochrome)
-            .setContentTitle("")
-            .setContentText(KEEPALIVE_NOTIFICATION_TEXT)
+            .setContentTitle("Grace Music")
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setPriority(NotificationCompat.PRIORITY_MIN)  // 最小打扰，避免与媒体3通知并列醒目
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setSilent(true)
@@ -1816,53 +1808,7 @@ class AudioPlaybackService : Service() {
         )
         // 方案B阶段4：按当前开关状态渲染媒体3通知栏的自定义按钮（收藏）。
         pushMedia3CustomActions(lastIsFavorited)
-        // MD3Music fork: Vivo 原子随身听（vivomusicmix）歌词推送（歌词就绪后发一次，
-        // 定时器 25s 重发兜底）。
-        pushVivoAtomicExtras()
     }
-
-    // ==== MD3Music fork: Vivo 原子随身听（vivomusicmix）歌词推送 ====
-    // 协议字段照抄 vivo 官方拼写错误（meida / meidia），写成正确拼写反而收不到。
-    private val vivoAtomicHandler = Handler(Looper.getMainLooper())
-    private var lastVivoLrcSentAt = 0L
-    private var lastVivoLrcMediaId = ""
-
-    private fun startVivoAtomicTimer() {
-        vivoAtomicHandler.removeCallbacksAndMessages(null)
-        vivoAtomicHandler.postDelayed(object : Runnable {
-            override fun run() {
-                pushVivoAtomicExtras()
-                vivoAtomicHandler.postDelayed(this, 25_000L)
-            }
-        }, 25_000L)
-    }
-
-    /// 原子随身听歌词：通过 legacy MediaSessionCompat 静态通道向活跃 session 重发
-    /// lrc_change extras（framework extras，25s 定时兜底：覆盖"原子在首次发送后才连上"）。
-    /// meidia_id 必须与 hook 补进 metadata 的身份完全一致（title|artist），
-    /// 否则原子 E0()/z1() 匹配失败 → 封面纯色、歌词不显示（实测 songId 数字 ID 不匹配）。
-    /// 无整段歌词时安全跳过，不推空 Bundle。
-    private fun pushVivoAtomicExtras() {
-        try {
-            val mediaId = if (originalMediaId.isNotEmpty()) originalMediaId
-                else "$originalTitle|$originalArtist"
-            // 与 hook 补的 MEDIA_ID 保持一致：统一用 title|artist 身份
-            val atomicMediaId = "$originalTitle|$originalArtist"
-            if (originalTitle.isEmpty()) return
-            val lrc = AudioPlayer.extractCarLyricsFromLyricInfo(lyricInfoForCurrentTrack())
-                ?: return
-            androidx.media3.session.legacy.MediaSessionCompat
-                .resendVivoLrcChange(lrc, atomicMediaId)
-            lastVivoLrcSentAt = System.currentTimeMillis()
-            lastVivoLrcMediaId = atomicMediaId
-            lastVivoLrcSentLrc = lrc
-        } catch (e: Throwable) {
-            Log.w(TAG, "pushVivoAtomicExtras failed: ${e.message}", e)
-        }
-    }
-
-    @Volatile
-    private var lastVivoLrcSentLrc = ""
 
     private fun lyricInfoForCurrentTrack(): String {
         if (currentLyricInfo.isEmpty()) return ""
@@ -1883,8 +1829,6 @@ class AudioPlaybackService : Service() {
         }
         // P0: 取消排期中的 setMetadata 合并刷新，防止服务销毁后仍回调
         metadataRefreshHandler.removeCallbacksAndMessages(null)
-        // MD3Music fork: 取消原子随身听 25s 重发定时器
-        vivoAtomicHandler.removeCallbacksAndMessages(null)
         releaseWakeLock()
         // lastArtBitmap 可能仍由 MediaSession 或桌面组件引用，销毁服务时不能 recycle。
         lastArtBitmap = null

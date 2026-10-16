@@ -66,7 +66,8 @@ class DesktopLyricService {
   // LyricInfo 歌词转发开关：通过 MediaSession extras.lyricInfo 发布整首歌词
   // （LRC/ELRC），供 ColorOS 桌面歌词 / LyricInfo 模块等第三方系统读取。
   // 复用本服务的定时器与歌词解析管线，歌词加载完成后构造 JSON 推送一次。
-  // MD3Music fork（lite）：Vivo 车机歌词依赖此链路，main.dart 无条件启用。
+  // 按需求始终关闭：setLyricInfoEnabled API 保留但无调用方传 true，内部
+  // 推送分支均以 _lyricInfoEnabled 守卫（默认 false）。
   bool _lyricInfoEnabled = false;
   bool get lyricInfoEnabled => _lyricInfoEnabled;
   // 当前歌曲是否已推送过 lyricInfo（避免每 250ms tick 重复推送）

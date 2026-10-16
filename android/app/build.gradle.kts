@@ -164,7 +164,6 @@ kotlin {
 }
 
 dependencies {
-    implementation("androidx.media:media:1.6.0")
     implementation("androidx.core:core-ktx:1.12.0")
     // SuperLyricApi：基于 Binder 的系统级实时歌词 API（jnitpack，settings.gradle.kts 已声明）
     implementation("com.github.HChenX:SuperLyricApi:3.4")

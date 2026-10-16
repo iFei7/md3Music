@@ -1,9 +1,7 @@
 package com.md3music.md3music
 
 import android.annotation.SuppressLint
-import android.content.Intent
 import android.os.Bundle
-import android.os.IBinder
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -68,20 +66,6 @@ class MD3MusicMediaSessionService : MediaSessionService() {
             action: String,
             extras: Bundle
         ): Boolean = delegate.handleCustomCommand(session, action, extras)
-    }
-
-    override fun onBind(intent: Intent?): IBinder? {
-        // MD3Music fork: 原子随身听（vivomusicmix）以 vivo action 绑定本服务。
-        // media3 onBind 只认 media3 / android.media.browse.MediaBrowserService 两个 action，
-        // vivo action 落 default 分支返回 null → 绑定失败 → 原子拿不到 session
-        // （无歌词、无封面、无进度条）。把 vivo action 映射到 legacy MediaBrowserService
-        // 路径（返回 legacy browser binder，原子经 MediaControllerCompat 读取）。
-        if (intent?.action == "com.vivo.musicwidgetmix.support.service") {
-            return super.onBind(
-                Intent("android.media.browse.MediaBrowserService")
-            )
-        }
-        return super.onBind(intent)
     }
 
     override fun onDestroy() {

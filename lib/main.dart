@@ -253,17 +253,13 @@ Future<void> _restoreLyricPushPref() async {
       roma: roma,
       preferTranslation: preferTranslation,
     );
-    // 启用选中协议（词幕渠道已在 lite 精简中移除；LyricInfo 下方无条件启用）
+    // 启用选中协议（词幕渠道已在 lite 精简中移除；LyricInfo 通道按需求始终
+    // 关闭，启动恢复不启用：协议值仅 super_lyric 命中启用分支，历史残留的
+    // lyric_info 与未知值一律不启用任何通道）
     if (protocol == 'super_lyric') {
       // ignore: discarded_futures
       DesktopLyricService.instance.setSuperLyricEnabled(true);
     }
-    // MD3Music fork: lyricInfo 推送无条件启用（Vivo 车载歌词依赖此链路：extras LYRICS_WHOLE
-    // + 原子随身听 lrc_change）。协议开关只控制 super_lyric 等展示通道；
-    // 此前受开关控制 + 覆盖安装残留旧设置（lyric_push_protocol='none'）导致链路关闭，
-    // 原子随身听缺 8/16 能力位（无歌词无进度条）、车机无歌词。
-    // ignore: discarded_futures
-    DesktopLyricService.instance.setLyricInfoEnabled(true);
   } catch (_) {}
 }
 

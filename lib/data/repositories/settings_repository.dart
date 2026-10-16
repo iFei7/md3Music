@@ -214,15 +214,17 @@ class SettingsRepository {
   }
 
   // ===== 实时歌词推送协议 =====
-  // 协议：关闭 + SuperLyric（词幕渠道已在 lite 精简中移除；
-  // lyric_info 为静默底层恒推，不计入协议选项）。
+  // 协议：关闭 + SuperLyric（词幕渠道已在 lite 精简中移除；LyricInfo 通道
+  // 按需求始终关闭，不作为协议值，旧版残留的 'lyric_info' 按 'none' 处理）。
 
-  /// 当前选中的推送协议：'none' / 'super_lyric'（lyric_info 为静默底层恒推）。
+  /// 当前选中的推送协议：'none' / 'super_lyric'。
+  /// LyricInfo 已恒定关闭：旧版安装残留的 'lyric_info' 与未知值一律按
+  /// 'none' 返回，保证启动恢复与设置 UI 都不会据此启用推送通道。
   Future<String> getLyricPushProtocol() async {
     final prefs = await SharedPreferences.getInstance();
-    // MD3Music fork: 默认 lyric_info（Vivo 车载歌词依赖此链路推送整首歌词；
-    // 协议开关只控制展示通道，lyric_info 为静默底层恒推，与 UI 两选项不冲突）。
-    return prefs.getString('lyric_push_protocol') ?? 'lyric_info';
+    return prefs.getString('lyric_push_protocol') == 'super_lyric'
+        ? 'super_lyric'
+        : 'none';
   }
 
   Future<void> setLyricPushProtocol(String v) async {

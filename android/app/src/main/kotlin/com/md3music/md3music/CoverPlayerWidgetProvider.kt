@@ -121,7 +121,7 @@ class CoverPlayerWidgetProvider : AppWidgetProvider() {
         }
 
         // 缓存最近一次的文本状态，供封面更新时复用
-        private var lastTitle = "MD3Music"
+        private var lastTitle = "Grace"
         private var lastArtist = "未在播放"
         private var lastPlaying = false
         private val lastColors = mutableMapOf<String, Int>()
