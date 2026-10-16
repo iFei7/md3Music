@@ -13,8 +13,9 @@ import '../../core/theme/app_theme.dart';
 ///   20sp Bold、行高 36dp——与右上角 36dp 用户头像等高；水平边距
 ///   20dp，距顶 8dp）；
 /// - 顶栏悬浮叠加在列表之上：背景**从上到下的渐变模糊带**（blur 14dp +
-///   页面色 α0.7，Title.kt:976-977，经 ShaderMask dstIn 线性渐变自栏体
-///   顶部全强度向下衰减至完全透明）随滚动 120ms 淡入出（Title.kt:952-953）；
+///   页面色 α0.7，Title.kt:976-977，经 ShaderMask dstIn 线性渐变自屏幕
+///   最顶（含状态栏）全强度向下衰减至完全透明）随滚动 120ms 淡入出
+///   （Title.kt:952-953）；
 /// - 大标题随滚动**在顶栏玻璃下溶解**：透明度 = `1 + offset/height × 1.8`
 ///   clamp 0~1（Title.kt:588-589）；完全没入（alpha ≤ 0）后小标题
 ///   （[SonifyTextStyles.barTitle] 18.5sp Bold）才浮现——两个标题从不同时可见
@@ -210,26 +211,53 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
               }
               return false;
             },
-            child: ListView.builder(
-              controller: _controller,
-              itemCount: widget.itemCount + 1,
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  return _LargeTitleItem(
-                    title: widget.title,
-                    bottomPadding: widget.titleBottomPadding,
-                    onHeightChanged: (h) {
-                      if (h != _titleItemHeight) {
-                        _titleItemHeight = h;
-                        // 高度首测/变化后立即校正一次状态（等价 sonify
-                        // key 重建后 derivedStateOf 重估）
-                        _updateFromScroll();
-                      }
-                    },
-                    alpha: _largeTitleAlpha,
-                  );
-                }
-                return widget.itemBuilder(context, index - 1);
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return CustomScrollView(
+                  controller: _controller,
+                  // 内容不足一屏时也必须能拖拽（配合下方 minHeight 兜底）：
+                  // 否则冷启动/分区未就绪时整页 maxScrollExtent == 0，
+                  // 上滑零位移，大标题折叠交互随之失效。
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    SliverToBoxAdapter(
+                      child: ConstrainedBox(
+                        // 内容不足一屏时把列表撑到「视口 + 折叠区」：
+                        // 保证 maxScrollExtent ≥ 折叠区，上滑始终能把大标题
+                        // 收进顶栏（对齐 iOS 大标题在短内容页的行为）。
+                        // 内容超过该高度时 minHeight 不生效（无额外留白）。
+                        constraints: BoxConstraints(
+                          minHeight:
+                              constraints.maxHeight + _collapseZone(media),
+                        ),
+                        // stretch 对齐 ListView 的整宽 item 语义（子项缺省
+                        // 会收缩到内在宽度，导致搜索框/分区塌缩）。
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _LargeTitleItem(
+                              title: widget.title,
+                              bottomPadding: widget.titleBottomPadding,
+                              onHeightChanged: (h) {
+                                if (h != _titleItemHeight) {
+                                  // 实测高度回来后要重建一次：minHeight 兜底
+                                  // 依赖该值（首帧为 0，次帧起生效）。
+                                  setState(() => _titleItemHeight = h);
+                                  // 高度首测/变化后立即校正一次状态（等价
+                                  // sonify key 重建后 derivedStateOf 重估）
+                                  _updateFromScroll();
+                                }
+                              },
+                              alpha: _largeTitleAlpha,
+                            ),
+                            for (var i = 0; i < widget.itemCount; i++)
+                              widget.itemBuilder(context, i),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                );
               },
             ),
           ),
@@ -251,6 +279,11 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
       ),
     );
   }
+
+  /// 折叠区高度 = 首 item 高度 − 状态栏（与 [_computeCollapse] 的吸附区
+  /// 同一口径）。首帧实测值未回传时为 0，次帧起生效。
+  double _collapseZone(MediaQueryData media) =>
+      (_titleItemHeight - media.padding.top).clamp(0.0, double.infinity);
 }
 
 /// 大标题 item：状态栏占位 + 8dp 顶距 + 20sp Bold 标题（行高 36dp，
@@ -311,10 +344,11 @@ class _LargeTitleItem extends StatelessWidget {
 
 /// 顶栏：状态栏区域 + 54dp 栏体（Title.kt:989）。
 ///
-/// - 背景：**从上到下的渐变模糊带**（blur 14dp + 页面色 α0.7，
-///   Title.kt:976-977）——BackdropFilter 出磨砂，外层 ShaderMask
-///   （dstIn 线性渐变，栏体顶部全强度 → 底缘全透明）让模糊强度自上而下
-///   衰减，覆盖范围与顶栏栏体一致；120ms 淡入出。
+/// - 背景：**从上到下的渐变模糊带，自屏幕最顶（y=0，含状态栏区域）覆盖到
+///   栏体底缘**（blur 14dp + 页面色 α0.7，Title.kt:976-977）——BackdropFilter
+///   出磨砂，外层 ShaderMask（dstIn 线性渐变，带顶部全强度 → 底缘全透明）
+///   让模糊强度自上而下衰减；内容在带下可滚动（悬浮语义）；120ms 淡入出。
+///   覆盖状态栏是修正项：曾只覆盖 54dp 栏体，上滑时页面内容从状态栏透出。
 /// - 小标题：18.5sp Bold，仅大标题完全没入后浮现，120ms 淡入出。
 class _TopBar extends StatelessWidget {
   const _TopBar({
@@ -338,119 +372,121 @@ class _TopBar extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return SizedBox(
       height: statusBarHeight + SonifySpacing.topBar,
-      child: Column(
+      child: Stack(
         children: [
-          SizedBox(height: statusBarHeight),
-          SizedBox(
-            height: SonifySpacing.topBar,
-            child: Stack(
-              children: [
-                // 栏背景渐变模糊带（覆盖 54dp 栏体，模糊列表内容）
-                Positioned.fill(
-                  child: ValueListenableBuilder<bool>(
-                    valueListenable: showBarBackground,
-                    builder: (context, visible, child) {
-                      return IgnorePointer(
-                        ignoring: !visible,
-                        child: AnimatedOpacity(
-                          opacity: visible ? 1 : 0,
-                          duration: SonifyMotion.barFade,
-                          child: child,
-                        ),
-                      );
-                    },
-                    // 渐变模糊：BackdropFilter 出磨砂（blur 14dp + 页面色
-                    // α0.7，Title.kt:976-977），ShaderMask dstIn 线性渐变
-                    // 把整带自栏体顶部全强度向下衰减到底缘全透明——顶部强
-                    // 模糊、底部渐隐，高度与顶栏栏体一致。
-                    child: ClipRect(
-                      child: ShaderMask(
-                        shaderCallback: (bounds) => LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          // 顶部 ~60% 全强度毛玻璃，之后淡出到底缘全透明
-                          colors: const [
-                            Colors.white,
-                            Colors.white,
-                            Colors.transparent,
-                          ],
-                          stops: const [0, 0.6, 1],
-                        ).createShader(bounds),
-                        blendMode: BlendMode.dstIn,
-                        child: BackdropFilter(
-                          // sonify 回退磨砂：blur 14dp（Title.kt:976）
-                          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-                          child: ColoredBox(
-                            // 页面色 α0.7（Title.kt:977）
-                            color: cs.surface.withValues(alpha: 0.7),
-                          ),
-                        ),
-                      ),
+          // 渐变模糊带：Positioned.fill 覆盖「状态栏 + 栏体」全带（y=0 起），
+          // ShaderMask dstIn 竖向渐变把整带自顶部全强度衰减到底缘全透明
+          Positioned.fill(
+            child: ValueListenableBuilder<bool>(
+              valueListenable: showBarBackground,
+              builder: (context, visible, child) {
+                return IgnorePointer(
+                  ignoring: !visible,
+                  child: AnimatedOpacity(
+                    opacity: visible ? 1 : 0,
+                    duration: SonifyMotion.barFade,
+                    child: child,
+                  ),
+                );
+              },
+              child: ClipRect(
+                child: ShaderMask(
+                  shaderCallback: (bounds) => LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    // 顶部 ~60% 全强度毛玻璃，之后淡出到底缘全透明
+                    colors: const [
+                      Colors.white,
+                      Colors.white,
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 0.6, 1],
+                  ).createShader(bounds),
+                  blendMode: BlendMode.dstIn,
+                  child: BackdropFilter(
+                    // sonify 回退磨砂：blur 14dp（Title.kt:976）
+                    filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                    child: ColoredBox(
+                      // 页面色 α0.7（Title.kt:977）
+                      color: cs.surface.withValues(alpha: 0.7),
                     ),
                   ),
                 ),
-                // 小标题 + 右侧内容
-                Center(
-                  child: ValueListenableBuilder<bool>(
-                    valueListenable: showSmallTitle,
-                    builder: (context, visible, child) {
-                      return IgnorePointer(
-                        ignoring: !visible,
-                        child: AnimatedOpacity(
-                          opacity: visible ? 1 : 0,
-                          duration: SonifyMotion.barFade,
-                          child: child,
-                        ),
-                      );
-                    },
-                    child: Text(
-                      title,
-                      style: SonifyTextStyles.barTitle.copyWith(
-                        color: cs.onSurface,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                // 右侧动作区：actions（折叠后淡入）+ trailing（常驻）
-                if (trailing != null ||
-                    (actions != null && actions!.isNotEmpty))
-                  PositionedDirectional(
-                    end: SonifySpacing.titleMargin,
-                    top: 0,
-                    bottom: 0,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // actions 与小标题同拍：大标题完全没入后才浮现
-                        if (actions != null && actions!.isNotEmpty)
-                          ValueListenableBuilder<bool>(
-                            valueListenable: showSmallTitle,
-                            builder: (context, visible, child) {
-                              return IgnorePointer(
-                                ignoring: !visible,
-                                child: AnimatedOpacity(
-                                  opacity: visible ? 1 : 0,
-                                  duration: SonifyMotion.barFade,
-                                  child: child,
-                                ),
-                              );
-                            },
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: actions!,
-                            ),
-                          ),
-                        if (trailing != null) ...[
-                          const SizedBox(width: 8),
-                          Center(child: trailing!),
-                        ],
-                      ],
-                    ),
-                  ),
-              ],
+              ),
             ),
+          ),
+          // 栏体内容：状态栏占位 + 54dp 栏体（小标题 + 右侧内容）
+          Column(
+            children: [
+              SizedBox(height: statusBarHeight),
+              SizedBox(
+                height: SonifySpacing.topBar,
+                child: Stack(
+                  children: [
+                    // 小标题
+                    Center(
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: showSmallTitle,
+                        builder: (context, visible, child) {
+                          return IgnorePointer(
+                            ignoring: !visible,
+                            child: AnimatedOpacity(
+                              opacity: visible ? 1 : 0,
+                              duration: SonifyMotion.barFade,
+                              child: child,
+                            ),
+                          );
+                        },
+                        child: Text(
+                          title,
+                          style: SonifyTextStyles.barTitle.copyWith(
+                            color: cs.onSurface,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                    // 右侧动作区：actions（折叠后淡入）+ trailing（常驻）
+                    if (trailing != null ||
+                        (actions != null && actions!.isNotEmpty))
+                      PositionedDirectional(
+                        end: SonifySpacing.titleMargin,
+                        top: 0,
+                        bottom: 0,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // actions 与小标题同拍：大标题完全没入后才浮现
+                            if (actions != null && actions!.isNotEmpty)
+                              ValueListenableBuilder<bool>(
+                                valueListenable: showSmallTitle,
+                                builder: (context, visible, child) {
+                                  return IgnorePointer(
+                                    ignoring: !visible,
+                                    child: AnimatedOpacity(
+                                      opacity: visible ? 1 : 0,
+                                      duration: SonifyMotion.barFade,
+                                      child: child,
+                                    ),
+                                  );
+                                },
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: actions!,
+                                ),
+                              ),
+                            if (trailing != null) ...[
+                              const SizedBox(width: 8),
+                              Center(child: trailing!),
+                            ],
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),

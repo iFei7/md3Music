@@ -756,18 +756,26 @@ abstract final class SonifyTextStyles {
   /// 页面大标题（一级页列表首 item）：20sp Bold，行高 36dp。
   /// 与右上角 36dp 用户头像等高（标题规格收敛：加粗 w700 + 36dp 行高，
   /// 替代原 sonify 35sp/lineHeight 40 规格，Title.kt:1135-1140 仅作参照）。
+  ///
+  /// **必须显式写 wght 字轴**：正文默认样式（bodyMedium）被 M3E emphasized
+  /// 注入了 `FontVariation('wght', 500)` 轴，Text 与 DefaultTextStyle 合并时
+  /// 子样式的 fontVariations 为 null 会继承父级的轴；可变字体渲染中 wght 轴
+  /// 优先级高于 fontWeight——不写轴的话 Bold（w700）会被渲染成 Medium（500），
+  /// 表现为"标题加粗不生效"。
   static const TextStyle largeTitle = TextStyle(
     fontSize: 20,
     fontWeight: FontWeight.w700,
     height: 36 / 20,
     letterSpacing: 0,
+    fontVariations: [FontVariation('wght', 700)],
   );
 
   /// 折叠后顶栏小标题：18.5sp Bold。
-  /// 出处：Title.kt:1063-1067。
+  /// 出处：Title.kt:1063-1067。wght 轴同理（见 [largeTitle] 注释）。
   static const TextStyle barTitle = TextStyle(
     fontSize: 18.5,
     fontWeight: FontWeight.w700,
+    fontVariations: [FontVariation('wght', 700)],
   );
 
   /// 正文基准：16sp，lineHeight 21，letterSpacing 0.0618sp。
@@ -792,9 +800,11 @@ abstract final class SonifyTextStyles {
   );
 
   /// 分区标题：18sp Bold（统计 18 处，Bold 17 处）。
+  /// wght 轴同理（见 [largeTitle] 注释）。
   static const TextStyle sectionTitle = TextStyle(
     fontSize: 18,
     fontWeight: FontWeight.w700,
+    fontVariations: [FontVariation('wght', 700)],
   );
 }
 

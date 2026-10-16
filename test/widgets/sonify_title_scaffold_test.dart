@@ -195,10 +195,78 @@ void main() {
       await tester.pump();
       expect(find.text('item 0'), findsOneWidget);
       expect(find.text('item 2'), findsOneWidget);
-      // 总 item = 大标题 + 3 业务 item
-      final list = tester.widget<ListView>(find.byType(ListView));
-      final delegate = list.childrenDelegate as SliverChildBuilderDelegate;
-      expect(delegate.childCount, 4);
+      // 总 item = 大标题 + 3 业务 item（主列表为 CustomScrollView +
+      // 单 SliverToBoxAdapter 包裹的整列，列内 children 数即 item 数）
+      final columns = tester.widgetList<Column>(find.byType(Column));
+      final mainColumn = columns.firstWhere(
+        (c) => c.children.length == 4,
+        orElse: () => throw StateError('未找到含 4 个 item 的主列表 Column'),
+      );
+      expect(mainColumn.children.length, 4);
+    });
+
+    testWidgets('内容不足一屏时仍可上滑折叠大标题（minHeight 兜底）',
+        (tester) async {
+      // 2 个 100dp item：内容 252dp << 600dp 视口——历史上这种短内容态
+      // maxScrollExtent == 0，上滑零位移（首页冷启动的真实反馈）。
+      final (widget, controller) = _host(title: '发现', itemCount: 2);
+      await tester.pumpWidget(widget);
+      await tester.pump();
+
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -300));
+      await tester.pumpAndSettle();
+
+      // 折叠区高度（zone = 首item高 − 状态栏0）内滚动必然产生位移
+      expect(controller.offset, greaterThan(0));
+      // 拖到折叠端：大标题完全没入、小标题浮现
+      expect(_largeTitleOpacity(tester), 0);
+      final smallAnimated = tester.widget<AnimatedOpacity>(
+        find
+            .ancestor(
+              of: find.text('发现').last,
+              matching: find.byType(AnimatedOpacity),
+            )
+            .first,
+      );
+      expect(smallAnimated.opacity, 1);
+    });
+
+    testWidgets('渐变模糊带自屏幕最顶开始（覆盖状态栏 + 栏体）', (tester) async {
+      final controller = ScrollController();
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(padding: EdgeInsets.only(top: 24)),
+          child: MaterialApp(
+            theme: _testTheme,
+            home: SonifyTitleScaffold(
+              title: '发现',
+              itemCount: 3,
+              controller: controller,
+              itemBuilder: (context, index) => SizedBox(
+                height: 100,
+                child: ListTile(title: Text('item $index')),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      final h = _titleItemHeight(tester);
+
+      controller.jumpTo(h * 0.1);
+      await tester.pump();
+
+      // 带体（ShaderMask 所在层）高度 = 状态栏 24 + 栏体 54 = 78：
+      // 曾只覆盖 54dp 栏体，状态栏区域透明导致内容从状态栏透出。
+      final bandSize = tester.getSize(find.byType(ShaderMask));
+      expect(bandSize.height, 24 + SonifySpacing.topBar);
+      expect(
+        find.ancestor(
+          of: find.byType(BackdropFilter),
+          matching: find.byType(ShaderMask),
+        ),
+        findsWidgets,
+      );
     });
 
     testWidgets('顶栏 trailing 内容渲染在栏体内', (tester) async {

@@ -8,7 +8,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:m3e_core/m3e_core.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/theme/squircle.dart';
 import '../../widgets/common/cover_rail.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
@@ -20,7 +19,7 @@ import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/song_list_item.dart';
 import 'home_discover_refill.dart';
 import '../album/album_detail_page.dart';
-import '../personal_fm/personal_fm_page.dart';
+import 'discover_home_cards.dart';
 import '../playlist/playlist_page.dart';
 import '../recognition/song_recognition_page.dart';
 import '../search/explore_sections.dart' show PlaylistBrowsePage, NewAlbumBrowsePage, RankDetailPage;
@@ -33,7 +32,8 @@ import '../search/search_page.dart';
 ///   没入后 18.5sp 小标题浮现，180ms EaseOutCubic 吸附）；
 /// - 顶栏右上**固定用户头像**（常驻不折叠，点击进设置页 /settings）；
 /// - 折叠后头像左侧浮现搜索/识曲两枚玻璃圆钮（点击行为同搜索框）；
-/// - 列表：胶囊搜索框（内右侧识曲按钮）→ 快捷入口行（FM/识曲）→ 每日推荐
+/// - 列表：胶囊搜索框（内右侧识曲按钮）→ 私人 FM 堆叠大卡片（档位切换/
+///   滑动切歌）→ 正在播放大卡片 → 每日推荐
 ///   → 编辑精选/主题歌单/热门歌单/新碟上架/排行榜 横滑 Rail（[CoverRail]）
 ///   → 刷歌推荐 → Dock 避让。
 ///
@@ -243,29 +243,33 @@ class _DiscoverPageState extends State<DiscoverPage> {
   }
 
   /// 列表 item 布局（方案 §1.2 线框顺序）。
-  static const int _kSectionCount = 10;
+  static const int _kSectionCount = 11;
 
   Widget _buildListItem(BuildContext context, int index) {
     switch (index) {
       case 0:
         return _buildSearchFieldItem();
       case 1:
-        return _buildQuickAccessRow();
+        // 私人 FM 堆叠大卡片（原 FM/识曲快捷行位置，快捷行已删）
+        return const DiscoverFmStackCard();
       case 2:
-        return _buildDailySection();
+        // 正在播放大卡片（无播放内容时整块隐藏）
+        return const DiscoverNowPlayingCard();
       case 3:
-        return _buildIpHomeSection();
+        return _buildDailySection();
       case 4:
-        return _buildThemeSection();
+        return _buildIpHomeSection();
       case 5:
-        return _buildPlaylistSection();
+        return _buildThemeSection();
       case 6:
-        return _buildNewAlbumSection();
+        return _buildPlaylistSection();
       case 7:
-        return _buildRankSection();
+        return _buildNewAlbumSection();
       case 8:
-        return _buildHomeDiscoverSection();
+        return _buildRankSection();
       case 9:
+        return _buildHomeDiscoverSection();
+      case 10:
         // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度），
         // 让最后一个分区停在悬浮 Dock 上方、可点击。
         return SizedBox(height: MediaQuery.paddingOf(context).bottom);
@@ -430,69 +434,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
       const SizedBox(width: 10),
       _buildGlassCircleButton(Icons.mic_none, _openRecognition),
     ];
-  }
-
-  /// 快捷入口行：FM / 识曲，56dp squircle 9dp 卡底色块（方案 §1.3）。
-  ///
-  /// 线框中的「场景」「榜单」两块未落地：场景点击链路（场景音乐列表页）与
-  /// 榜单浏览页在数据侧均未就绪（见批次回报），避免放死入口。
-  Widget _buildQuickAccessRow() {
-    final cs = Theme.of(context).colorScheme;
-    final sonify = SonifyColors.of(context);
-    Widget block(IconData icon, String label, VoidCallback onTap) {
-      return GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: SmoothClipRRect(
-          borderRadius: BorderRadius.circular(SonifyRadius.card),
-          child: Container(
-            width: 64,
-            height: 56,
-            color: sonify.surfaceCard,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, size: 24, color: cs.onSurface),
-                const Gap(3),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: sonify.textSecondary,
-                  ),
-                  maxLines: 1,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        SonifySpacing.titleMargin, AppSpacing.sm, SonifySpacing.titleMargin, 0,
-      ),
-      child: Row(
-        children: [
-          block(
-            Icons.radio,
-            '私人 FM',
-            () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const PersonalFmPage()),
-            ),
-          ),
-          const Gap(AppSpacing.sm),
-          block(
-            Icons.mic_none,
-            '识曲',
-            () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SongRecognitionPage()),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   /// 分区标题行：18sp Bold 标题 + 可选「更多」（13sp 次级灰 + 24dp primary
