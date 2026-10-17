@@ -15,10 +15,11 @@ import '../../core/theme/app_theme.dart';
 ///   水平 20dp，滚动过程中**不位移、不缩放、不溶解**（用户反馈①：
 ///   "上滑时标题位置会变，不想要"）。列表首项只保留同尺寸占位
 ///  （[_TitlePlaceholderItem]，含高度实测），业务内容从标题下方滚过；
-/// - 顶栏悬浮叠加在列表之上：背景为**两层渐变模糊带**（blur 14dp +
-///   页面色 α0.7 的磨砂带，Title.kt:976-977；文字区域再叠一层
-///   **加深带**——blur 22dp + surface 高 alpha 叠色，渐变 stops
-///   非线性分布，用户反馈②）随滚动 120ms 淡入出（Title.kt:952-953），
+/// - 顶栏悬浮叠加在列表之上：背景为**两层渐变模糊带**（材质对齐
+///   `LiquidGlassSurface` dock 配方：blur 18dp + cs.surface 系叠色——
+///   磨砂带 α0.7、文字区加深带 α0.85，均高于 dock 的 0.12，差异原因见
+///   [_TopBar] 类文档「图层纪律」；加深带渐变 stops 非线性分布，用户
+///   反馈②）随滚动 120ms 淡入出（Title.kt:952-953），
 ///   保证滚过内容时固定标题仍清晰可读；
 /// - 顶栏右侧内容（如固定用户头像）**常驻渲染**；[actions] 动作钮随
 ///   栏体 120ms 淡入（滚动即出现，展开态隐藏不挡内容）。
@@ -289,10 +290,10 @@ class _PinnedLargeTitle extends StatelessWidget {
 ///
 /// - 背景：**两层渐变模糊带**，Positioned.fill 覆盖「状态栏 + 栏体」全带
 ///   （y=0 起），随滚动 120ms 淡入出；内容在带下可滚动（悬浮语义）：
-///   1. 磨砂带（底层）：blur 14dp + 页面色 α0.7（Title.kt:976-977），
-///      竖向 LinearGradient stops [0, 0.6, 1] 自上而下衰减；
-///   2. **加深带**（文字区）：blur 22dp + surface 高 alpha（约 0.85）
-///      叠色，LinearGradient stops **非线性**分布（[_kBarDeepenStops]：
+///   1. 磨砂带（底层）：blur 18dp + surface α0.7，竖向 LinearGradient
+///      stops [0, 0.6, 1] 自上而下衰减；
+///   2. **加深带**（文字区）：blur 18dp + surface 高 alpha（0.85）叠色，
+///      LinearGradient stops **非线性**分布（[kSonifyBarDeepenStops]：
 ///      顶部全强度覆盖标题文字区，底部加速淡出）——文字上方更浓，
 ///      滚过内容时固定标题仍清晰（反馈②）。
 ///   覆盖状态栏是既有修正项：曾只覆盖 54dp 栏体，上滑时页面内容从状态栏透出。
@@ -306,12 +307,21 @@ class _PinnedLargeTitle extends StatelessWidget {
 /// 的 ShaderMask(dstIn) 结构即因此真机全无模糊）。渐变衰减改由叠色层
 /// 自身 LinearGradient 承担（DecoratedBox/BoxDecoration.gradient）。
 /// 加深带叠色走 cs.surface 系：亮色主题浅色带、暗色主题深色带，跟随
-/// 主题；"加深"靠更强 blur + 更高 alpha 实现，不用黑白蒙层（scrim 语义
+/// 主题；"加深"靠更高 alpha 实现，不用黑白蒙层（scrim 语义
 /// 是次级文字色，亮=黑/暗=白，用在顶栏会导致主题色翻转——构建号 104
 /// 真机反馈的回归根源）。
 /// 两条 BackdropFilter 为 Stack 兄弟节点叠放（第二条 backdrop 天然含
 /// 第一条输出 = "双重模糊更浓"，官方支持；勿共享 BackdropKey——两者
 /// 输入不同）。
+///
+/// **材质来源（对齐 dock 配方）**：两条带 blur sigma 统一 18
+/// （[kSonifyBarBlurSigma]）、叠色统一 cs.surface 系，均取自
+/// `LiquidGlassSurface`（lib/widgets/common/liquid_glass_surface.dart，
+/// 默认参数 = 悬浮 Dock 玻璃配方：blurSigma 18 + surface α0.12 叠色）。
+/// 叠色 alpha 高于 dock 的 0.12（磨砂带 0.7 / 加深带 0.85）：dock 是
+/// 大面积独立悬浮件、内容自带对比，低 alpha 即可；顶栏是全宽可读性带、
+/// 固定大标题直接叠在其上，必须更高不透明度保证文字对比度——结构
+/// （顶部浓→底部渐隐）与色系与 dock 一致，仅浓度按可读性上调。
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.showBarBackground,
@@ -351,16 +361,21 @@ class _TopBar extends StatelessWidget {
               },
               child: Stack(
                 children: [
-                  // ① 磨砂带：blur 14 + 页面色 α0.7，竖向
+                  // ① 磨砂带：blur 18 + surface α0.7，竖向
                   //    stops [0, 0.6, 1] 自上而下衰减
                   Positioned.fill(
                     child: ClipRect(
                       child: BackdropFilter(
-                        // sonify 回退磨砂：blur 14dp（Title.kt:976）
-                        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                        // 对齐 LiquidGlassSurface dock 配方 blurSigma 18
+                        //（原 sonify 回退磨砂 14，材质统一，见类文档）
+                        filter: ImageFilter.blur(
+                          sigmaX: kSonifyBarBlurSigma,
+                          sigmaY: kSonifyBarBlurSigma,
+                        ),
                         child: DecoratedBox(
-                          // 页面色 α0.7（Title.kt:977），渐变自带衰减
-                          // （替代旧 ShaderMask dstIn——勿包回）
+                          // surface 系 α0.7（保持顶部浓→底部渐隐结构），
+                          // 高于 dock 的 0.12：全宽可读性带、固定大标题
+                          // 叠其上，需更高浓度保证文字对比度（见类文档）
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
@@ -378,18 +393,22 @@ class _TopBar extends StatelessWidget {
                       ),
                     ),
                   ),
-                  // ② 加深带（文字区域）：blur 22 + surface 高 alpha 叠色，
+                  // ② 加深带（文字区域）：blur 18 + surface 高 alpha 叠色，
                   //    竖向非线性 stops——顶部保持全强度覆盖标题文字区，
                   //    底部加速淡出
                   Positioned.fill(
                     child: ClipRect(
                       child: BackdropFilter(
-                        // 比磨砂带更糊：文字区"浓"的手感来源
-                        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                        // 与磨砂带统一 sigma 18（对齐 dock 配方）；"浓"的
+                        // 手感来源改为更高叠色 alpha（0.85）
+                        filter: ImageFilter.blur(
+                          sigmaX: kSonifyBarBlurSigma,
+                          sigmaY: kSonifyBarBlurSigma,
+                        ),
                         child: DecoratedBox(
                           // surface 系高 alpha：亮=浅带/暗=深带，跟随主题；
-                          // "加深"= 更强 blur + 更高 alpha（禁改回 scrim
-                          // 黑白蒙层——会主题色翻转，见类文档）
+                          // "加深"= 更高 alpha（禁改回 scrim 黑白蒙层——
+                          // 会主题色翻转，见类文档）
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
@@ -466,6 +485,12 @@ class _TopBar extends StatelessWidget {
     );
   }
 }
+
+/// 顶栏两条渐变模糊带统一的背景模糊 sigma：对齐 `LiquidGlassSurface`
+/// dock 配方（默认 blurSigma 18），磨砂带与加深带共用同一强度——
+/// 原磨砂 14 / 加深 22 的双强度取消，"浓淡"层级完全由叠色 alpha 承担。
+/// 非私有：供 widget 测试断言（见 test/widgets/sonify_title_scaffold_test.dart）。
+const double kSonifyBarBlurSigma = 18;
 
 /// 顶栏加深带（文字区域）的竖向渐变 stops：**非线性分布**——
 /// 0→0.85 保持全强度（覆盖固定标题所在文字区），0.85→1 加速淡出到

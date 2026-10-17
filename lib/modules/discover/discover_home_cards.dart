@@ -160,26 +160,51 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   }
 
   /// 列表见底时按当前档位补一批（只进 provider 列表，不动播放队列）。
+  ///
+  /// 必须先带游标（上一批最后一首）请求，整批重复或返回空时退回不带游标
+  /// 再要一次——服务端对同游标可能原样回放已消费的批次，而 getPersonalFm
+  /// 从不抛异常（_get 吞错返回 null），靠 catch 兜是死代码。与 FmRefill 的
+  /// _append/_fetch 同一条兜底规则；没有这一步，最后一张滑走后堆叠区变
+  /// 空白（GestureDetector 随卡片一起消失，再没有滑动/重建能触发补货）。
   Future<void> _prefetchMore() async {
     if (_prefetching) return;
     _prefetching = true;
     try {
       final kugou = context.read<KugouProvider>();
       final songs = kugou.personalFmSongs;
+      final known = songs.map((s) => s.hash).toSet();
       final last = songs.isNotEmpty ? songs.last : null;
-      final fresh = await kugou.fetchMorePersonalFm(
+      var fresh = await kugou.fetchMorePersonalFm(
         mode: _station.mode,
         songPoolId: _station.songPoolId,
         hash: last?.hash,
         songId: last?.songId,
       );
-      if (fresh != null && fresh.isNotEmpty && mounted) {
-        kugou.appendFmSongs(fresh);
+      var usable = _freshOnly(fresh, known);
+      if (usable.isEmpty && mounted) {
+        final fallback = await kugou.fetchMorePersonalFm(
+          mode: _station.mode,
+          songPoolId: _station.songPoolId,
+        );
+        usable = _freshOnly(fallback, known);
+      }
+      if (usable.isNotEmpty && mounted) {
+        kugou.appendFmSongs(usable);
       }
     } catch (_) {
     } finally {
       _prefetching = false;
     }
+  }
+
+  /// 去掉列表里已有的歌（appendFmSongs 按 hash 去重，这里先算一遍才能
+  /// 判断「带游标那批是否真的有新歌」）。
+  List<KugouSongDetail> _freshOnly(
+    List<KugouSongDetail>? batch,
+    Set<String> known,
+  ) {
+    if (batch == null) return const [];
+    return batch.where((s) => !known.contains(s.hash)).toList();
   }
 
   // —— 播放控制（与 PersonalFmSection 同语义） ——
@@ -295,8 +320,11 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   @override
   Widget build(BuildContext context) {
     return Padding(
+      // bottom 给 md：与下方「最近播放」标题行（top=sm + 标题行纵向 xs）
+      // 合计 24dp，拉开分区间隔（此前 bottom=0 时视觉上贴死）。
       padding: const EdgeInsets.fromLTRB(
-        SonifySpacing.titleMargin, AppSpacing.sm, SonifySpacing.titleMargin, 0,
+        SonifySpacing.titleMargin, AppSpacing.sm, SonifySpacing.titleMargin,
+        AppSpacing.md,
       ),
       child: Selector2<KugouProvider, PlayerProvider,
           (bool, List<KugouSongDetail>, String?, bool)>(

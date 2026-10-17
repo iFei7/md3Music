@@ -9,6 +9,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:md3music/core/theme/app_dimens.dart';
 import 'package:md3music/core/theme/app_theme.dart';
 import 'package:md3music/data/models/song.dart';
 import 'package:md3music/modules/discover/discover_home_cards.dart';
@@ -116,6 +117,48 @@ class _FmAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+/// 分页假响应：模拟真机失败路径——带 hash 游标的补货请求一律回放空列表
+/// （服务端对同游标返回已消费批次），不带游标的 normal 请求按调用次序依次
+/// 给新批次（首刷 → 兜底补货 1 → 兜底补货 2 …）。
+class _FmPaginationAdapter extends _FmAdapter {
+  final List<List<Map<String, String>>> _batches = const [
+    [
+      {'hash': 'ha', 'name': '甲'},
+      {'hash': 'hb', 'name': '乙'},
+    ],
+    [
+      {'hash': 'hc', 'name': '丙'},
+      {'hash': 'hd', 'name': '丁'},
+    ],
+    [
+      {'hash': 'he', 'name': '戊'},
+    ],
+  ];
+
+  int noCursorNormalRequests = 0;
+  int cursorRequests = 0;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.uri.path == '/personal/fm') {
+      if (options.uri.queryParameters['hash'] != null) {
+        cursorRequests++;
+        // 真机失败路径：带游标的补货请求拿不到新歌
+        return _songs(const []);
+      }
+      if ((options.uri.queryParameters['mode'] ?? 'normal') == 'normal') {
+        final i = noCursorNormalRequests++;
+        return _songs(i < _batches.length ? _batches[i] : const []);
+      }
+    }
+    return super.fetch(options, requestStream, cancelFuture);
+  }
+}
+
 /// 默认滚动宿主：纵向 SingleChildScrollView（与首页列表同轴）。
 Widget _defaultScrollHost(Widget child) => Scaffold(
       body: SingleChildScrollView(
@@ -152,7 +195,11 @@ void main() {
     FavoritesProvider,
     LocalFavoritesProvider,
     _FmAdapter,
-  )> _pumpCard(WidgetTester tester, {Widget Function(Widget child)? host}) async {
+  )> _pumpCard(
+    WidgetTester tester, {
+    Widget Function(Widget child)? host,
+    _FmAdapter? adapterOverride,
+  }) async {
     SharedPreferences.setMockInitialValues({});
     installFakeSecureStorage();
     // mock path_provider：switchAccount 会触发 DefaultCacheManager 清头像缓存，
@@ -169,7 +216,7 @@ void main() {
           },
         );
     final client = KugouApiClient();
-    final adapter = _FmAdapter();
+    final adapter = adapterOverride ?? _FmAdapter();
     client.dio.httpClientAdapter = adapter;
     // 登录态：FM 卡片内容分支需要 isLoggedIn（token+userid 写假存储）
     await client.setLoginCookies('test-token', 'test-uid');
@@ -328,6 +375,78 @@ void main() {
         expect(find.text('乙'), findsOneWidget,
             reason: '前卡滑出后下一首（乙）应前移为前卡（真机滑动手感）');
         expect(find.text('甲'), findsNothing);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('滑走最后一张后自动补货：游标请求回放空时兜底不带游标拿到新一批',
+        (tester) async {
+      final pagination = _FmPaginationAdapter();
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester, adapterOverride: pagination);
+      try {
+        expect(kugou.personalFmSongs.length, 2);
+        expect(find.text('甲'), findsOneWidget);
+
+        // 滑走甲：视觉指针 1，build 内触发补货——游标请求回放空 →
+        // 兜底不带游标再要一批（丙/丁）→ append 后新层出现
+        await tester.drag(find.text('甲'), const Offset(-500, 0));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(pagination.cursorRequests, 1,
+            reason: '补货先带上一批最后一首的游标');
+        expect(pagination.noCursorNormalRequests, 2,
+            reason: '游标批次为空 → 兜底不带游标请求（首刷 + 兜底共 2 次）');
+        expect(kugou.personalFmSongs.length, 4, reason: '兜底批次应追加 丙/丁');
+        expect(find.text('乙'), findsOneWidget, reason: '前卡前移到乙');
+        expect(find.text('丙'), findsOneWidget, reason: '补货的新歌应出现在下方层');
+
+        // 继续滑走 乙、丙：前卡到丁（最后一张）时再次触发补货 → 追加戊
+        await tester.drag(find.text('乙'), const Offset(-500, 0));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.drag(find.text('丙'), const Offset(-500, 0));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(pagination.cursorRequests, 2);
+        expect(pagination.noCursorNormalRequests, 3);
+        expect(kugou.personalFmSongs.length, 5);
+        expect(find.text('丁'), findsOneWidget, reason: '前卡 = 列表最后一张');
+        expect(find.text('戊'), findsOneWidget,
+            reason: '滑到列表末尾时应自动补上新层，而非空白');
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('FM 卡与「最近播放」标题之间保留分区间隔（bottom=md）',
+        (tester) async {
+      final (kugou, player, favorites, localFavorites, _) =
+          await _pumpCard(tester);
+      try {
+        final padding = tester.widget<Padding>(
+          find.descendant(
+            of: find.byType(DiscoverFmStackCard),
+            matching: find.byWidgetPredicate(
+              (w) =>
+                  w is Padding &&
+                  w.padding ==
+                      const EdgeInsets.fromLTRB(
+                        SonifySpacing.titleMargin, AppSpacing.sm,
+                        SonifySpacing.titleMargin, AppSpacing.md,
+                      ),
+            ),
+          ),
+        ).padding as EdgeInsets;
+        expect(padding.bottom, AppSpacing.md,
+            reason: 'bottom=md（12）+ 最近播放标题 top=sm（8）+ 标题行纵向 xs（4）'
+                '合计 24dp 分区间隔');
       } finally {
         _teardown(kugou, player, favorites, localFavorites);
       }

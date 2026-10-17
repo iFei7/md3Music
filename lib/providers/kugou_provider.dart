@@ -1226,11 +1226,14 @@ class KugouProvider extends ChangeNotifier {
   }
 
   void appendFmSongs(List<KugouSongDetail> songs) {
-    for (final song in songs) {
-      if (!_personalFmSongs.any((s) => s.hash == song.hash)) {
-        _personalFmSongs.add(song);
-      }
-    }
+    final fresh = songs
+        .where((s) => !_personalFmSongs.any((e) => e.hash == s.hash))
+        .toList();
+    if (fresh.isEmpty) return;
+    // 必须整体替换出**新列表实例**，不能原地 add：订阅方（首页 FM 卡的
+    // Selector2）拿含本列表的 record 做相等判定，实例不变时即使 notify
+    // 也会被判「没变」而跳过重建——追加的新歌永远不上屏。
+    _personalFmSongs = [..._personalFmSongs, ...fresh];
     notifyListeners();
   }
 

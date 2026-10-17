@@ -248,7 +248,7 @@ void main() {
       controller.jumpTo(h * 0.1);
       await tester.pump();
 
-      // ① 两层带：磨砂带（blur 14 + 页面色 α0.7）+ 加深带（树中第二个
+      // ① 两层带：磨砂带（blur 18 + surface α0.7）+ 加深带（树中第二个
       //    BackdropFilter）——加深带即"文字上方区域更浓"的那层（反馈②）
       final backdrops = find.byType(BackdropFilter);
       expect(backdrops, findsNWidgets(2));
@@ -285,6 +285,47 @@ void main() {
           reason: 'stops 差分不全等 = 非线性渐变曲线');
       // 顶部保持全强度覆盖标题文字区（0.85 之前不衰减）
       expect(stops[1], greaterThanOrEqualTo(0.8));
+    });
+
+    testWidgets('两条带 blur sigma 统一 18（对齐 dock 材质）且叠色均为 surface 系',
+        (tester) async {
+      final (widget, controller) = _host(title: '发现');
+      await tester.pumpWidget(widget);
+      await tester.pump();
+      final h = _titleItemHeight(tester);
+      controller.jumpTo(h * 0.1);
+      await tester.pump();
+
+      // 材质来源：LiquidGlassSurface dock 配方（blurSigma 18 + cs.surface
+      // 叠色）——两条带 sigma 统一 18（原 14/22 双强度取消，浓淡层级完全
+      // 由叠色 alpha 承担）
+      expect(kSonifyBarBlurSigma, 18);
+
+      final backdrops = find.byType(BackdropFilter);
+      expect(backdrops, findsNWidgets(2));
+
+      // 两条带叠色均为 cs.surface 系（dock 同色系）：磨砂带顶缘 α0.7、
+      // 加深带顶缘 α0.85（高于 dock 0.12：全宽可读性带，见类文档）
+      final surface =
+          Theme.of(tester.element(backdrops.first)).colorScheme.surface;
+      LinearGradient bandGradient(Finder band) => (tester
+              .widget<DecoratedBox>(
+                find
+                    .descendant(
+                      of: band,
+                      matching: find.byType(DecoratedBox),
+                    )
+                    .first,
+              )
+              .decoration as BoxDecoration)
+          .gradient! as LinearGradient;
+      final frosted = bandGradient(backdrops.first);
+      final deepen = bandGradient(backdrops.last);
+      expect(frosted.colors.first, surface.withValues(alpha: 0.7));
+      expect(deepen.colors.first, surface.withValues(alpha: 0.85));
+      // 两带底缘均衰减到全透明（顶部浓→底部渐隐结构保持）
+      expect(frosted.colors.last, surface.withValues(alpha: 0));
+      expect(deepen.colors.last, surface.withValues(alpha: 0));
     });
 
     testWidgets('顶栏 trailing 内容渲染在栏体内', (tester) async {

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,15 +8,15 @@ import 'package:md3music/widgets/apple_lyrics/models/lyric_line.dart';
 /// AppleMusicLyricsView 跟随态交互测试（渐变焦点层 / 选中行高亮 / 固定基准线胶囊）。
 ///
 /// 状态机：
-/// - 跟随中：ShaderMask 渐变焦点层生效，无选中行高亮；播放胶囊**常驻**
-///   固定基准线（600 × 1/3 = 200，不随行走），指向当前行；
+/// - 跟随中：ShaderMask 渐变焦点层生效，无选中行高亮；播放胶囊**隐藏**
+///   （自动滚动不渲染，见 `_baselineBubbleLine`）；
 /// - 手动滚动中（拖动/惯性）：焦点层立即移除，选中行逐帧跟踪基准线，
-///   胶囊随之逐帧换向（滚动态下暂不高亮）；
+///   胶囊出现并随之逐帧换向（滚动态下暂不高亮）；
 /// - 手动停止：选中行（基准线对齐行）品牌红文字高亮（**无背景装饰**），
-///   胶囊仍常驻基准线、指向选中行；
+///   胶囊仍显示在基准线、指向选中行；
 /// - 点胶囊/点行：seek **就近生效**（点按当帧即把目标行送到基准线，
-///   不等下一轮 position 上报）并恢复跟随；
-/// - 3 秒无操作：恢复跟随（选中行高亮消失，胶囊改指向当前行）。
+///   不等下一轮 position 上报）并恢复跟随（胶囊随跟随态恢复而隐藏）；
+/// - 3 秒无操作：恢复跟随（选中行高亮消失，胶囊隐藏）。
 ///
 /// 回归锁定（历史 bug）：跟随态焦点层在「ShaderMask 包裹 / 裸列表」两种树形间
 /// 切换时，列表子树经 GlobalKey 原地转移——手动滚动后滚动偏移必须保持
@@ -72,6 +72,12 @@ void main() {
   Rect capsuleRect(WidgetTester tester) =>
       tester.getRect(find.byKey(AppleMusicLyricsView.capsulePlayKey));
 
+  /// 手动拖动进入浏览停止态（胶囊出现、选中行定格）。
+  Future<void> dragToBrowsing(WidgetTester tester) async {
+    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.pumpAndSettle();
+  }
+
   /// 选中行高亮行数：AnimatedDefaultTextStyle 目标文字色为 colorScheme.primary
   /// （品牌红）的行。跟随态/拖动中应为 0，手动停止态应恰为 1。
   int highlightedLineCount(WidgetTester tester) {
@@ -107,7 +113,7 @@ void main() {
       )
       .top;
 
-  testWidgets('挂载后一帧内上报初始跟随态；跟随中挂焦点层、胶囊常驻基准线',
+  testWidgets('挂载后一帧内上报初始跟随态；跟随中挂焦点层、胶囊隐藏',
       (tester) async {
     final followLog = <bool>[];
     final position = ValueNotifier<Duration>(Duration.zero);
@@ -117,22 +123,24 @@ void main() {
 
     expect(followLog, [true], reason: '初始跟随态应在首帧后上报一次');
     expect(hasFocusFade(tester), isTrue, reason: '跟随中应有渐变焦点层');
-    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
-        reason: '胶囊常驻：跟随态也应显示，指向当前行');
-    expect(capsuleRect(tester).center.dy, closeTo(200, 1),
-        reason: '跟随态胶囊同样固定在视口 1/3 基准线（center.dy=200）');
+    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsNothing,
+        reason: '跟随态（自动滚动）不渲染播放胶囊：不遮挡歌词焦点展示');
     expect(highlightedLineCount(tester), 0,
         reason: '跟随态无选中行高亮（当前行自有 32px 扫色强调）');
     expect(listBackgroundCount(tester), 0, reason: '列表内不应有背景装饰');
   });
 
-  testWidgets('播放胶囊为模糊玻璃材质（外形裁剪 + BackdropFilter）', (tester) async {
+  testWidgets('播放胶囊为模糊玻璃材质（sigma 18 + surface 叠色 + 渐变描边）',
+      (tester) async {
     final position = ValueNotifier<Duration>(Duration.zero);
     addTearDown(position.dispose);
     await pumpView(tester, position);
     await tester.pumpAndSettle();
 
+    // 浏览态才有胶囊：先手动滚动
+    await dragToBrowsing(tester);
     final capsule = find.byKey(AppleMusicLyricsView.capsulePlayKey);
+    expect(capsule, findsOneWidget);
     expect(
       find.descendant(of: capsule, matching: find.byType(BackdropFilter)),
       findsOneWidget,
@@ -143,6 +151,19 @@ void main() {
       findsOneWidget,
       reason: '模糊须经气泡外形 ClipPath 裁剪，只作用于胶囊区域',
     );
+    // 模糊 sigma 对齐 LiquidGlassSurface dock 配方（18）
+    expect(kAppleLyricsBubbleBlurSigma, 18,
+        reason: '胶囊模糊 sigma 应与 dock 配方一致（原 14 已统一为 18）');
+    // 叠色走 cs.surface 系（dock 同色系，α0.35 高于 dock 0.12：小尺寸
+    // 胶囊叠在歌词文字上，需更强体色保证图标可读，见常量注释）
+    final surface = Theme.of(tester.element(capsule)).colorScheme.surface;
+    final painter = tester
+        .widget<CustomPaint>(
+          find.descendant(of: capsule, matching: find.byType(CustomPaint)).first,
+        )
+        .painter as dynamic;
+    expect(painter.fill, surface.withValues(alpha: 0.35),
+        reason: '胶囊叠色应为 cs.surface 系 α0.35（原 primaryContainer 品牌色弃用）');
     // 图层纪律：BackdropFilter 不得被 ShaderMask/Opacity 包裹（那样模糊
     // 完全失效，flutter/flutter#164079）——胶囊 overlay 不在任何 ShaderMask 内。
     expect(
@@ -155,27 +176,25 @@ void main() {
     );
   });
 
-  testWidgets('跟随播放推进后胶囊常驻基准线（位置变化不消失）', (tester) async {
+  testWidgets('跟随播放推进中胶囊保持隐藏（自动滚动不渲染）', (tester) async {
     final position = ValueNotifier<Duration>(Duration.zero);
     addTearDown(position.dispose);
     await pumpView(tester, position);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
-        reason: '初始跟随态胶囊应常驻');
+    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsNothing,
+        reason: '初始跟随态胶囊应隐藏');
 
-    // 播放推进到第 5 行（触发自动跟随滚动）：仍为跟随态，胶囊不消失
+    // 播放推进到第 5 行（触发自动跟随滚动）：仍为跟随态，胶囊保持隐藏
     position.value = const Duration(milliseconds: 5 * 5000 + 100);
     await tester.pumpAndSettle();
-    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
-        reason: '自动跟随播放中胶囊常驻不消失');
-    expect(capsuleRect(tester).center.dy, closeTo(200, 1),
-        reason: '胶囊固定在基准线，不随自动滚动行走');
+    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsNothing,
+        reason: '自动跟随播放中胶囊不渲染');
     expect(hasFocusFade(tester), isTrue, reason: '跟随态焦点层应保持');
     expect(highlightedLineCount(tester), 0, reason: '跟随态无选中行高亮');
   });
 
-  testWidgets('手动拖动立即移除焦点层；滚动停止后选中行高亮、胶囊固定基准线',
+  testWidgets('手动拖动立即移除焦点层；滚动停止后选中行高亮、胶囊出现固定基准线',
       (tester) async {
     final followLog = <bool>[];
     final position = ValueNotifier<Duration>(Duration.zero);
@@ -189,7 +208,7 @@ void main() {
     expect(followLog.last, false, reason: '拖动起手即上报非跟随');
     expect(hasFocusFade(tester), isFalse, reason: '手动滚动中应立即去模糊');
     expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
-        reason: '滚动停止后基准线位置应显示播放胶囊');
+        reason: '手动滚动进入浏览态后，基准线位置应显示播放胶囊（指向选中行）');
     expect(highlightedLineCount(tester), 1,
         reason: '滚动停止后选中行（基准线对齐行）应高亮');
     expect(listBackgroundCount(tester), 0,
@@ -207,8 +226,7 @@ void main() {
     await pumpView(tester, position);
     await tester.pumpAndSettle();
 
-    await tester.drag(find.byType(ListView), const Offset(0, -300));
-    await tester.pumpAndSettle();
+    await dragToBrowsing(tester);
 
     expect(highlightedLineCount(tester), 1,
         reason: '浏览停止态选中行应恰有一行品牌红文字高亮');
@@ -224,8 +242,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 第一次滚动 → 浏览停止态：胶囊出现在基准线，右缘与列表 padding 对齐
-    await tester.drag(find.byType(ListView), const Offset(0, -300));
-    await tester.pumpAndSettle();
+    await dragToBrowsing(tester);
     final capsule = find.byKey(AppleMusicLyricsView.capsulePlayKey);
     expect(capsule, findsOneWidget, reason: '浏览停止态应显示固定胶囊');
     final firstRect = capsuleRect(tester);
@@ -247,7 +264,7 @@ void main() {
     expect(secondRect.right, firstRect.right, reason: '胶囊水平位置不变');
   });
 
-  testWidgets('点击胶囊播放按钮：seek 到该行并恢复自动跟随（胶囊常驻不消失）',
+  testWidgets('点击胶囊播放按钮：seek 到该行并恢复自动跟随（胶囊随跟随态隐藏）',
       (tester) async {
     final followLog = <bool>[];
     final seeks = <Duration>[];
@@ -261,8 +278,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.drag(find.byType(ListView), const Offset(0, -300));
-    await tester.pumpAndSettle();
+    await dragToBrowsing(tester);
     expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget);
 
     await tester.tap(find.byKey(AppleMusicLyricsView.capsulePlayKey));
@@ -273,10 +289,8 @@ void main() {
         reason: 'seek 目标应为某行 startTime（5000ms 网格）');
     expect(followLog.last, true, reason: '点胶囊应恢复自动跟随');
     expect(hasFocusFade(tester), isTrue, reason: '恢复跟随后焦点层回归');
-    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
-        reason: '胶囊常驻：恢复跟随后不消失，改指向当前行');
-    expect(capsuleRect(tester).center.dy, closeTo(200, 1),
-        reason: '恢复跟随后胶囊仍固定在基准线');
+    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsNothing,
+        reason: '恢复跟随后胶囊隐藏（浏览态常驻语义：仅浏览态显示）');
     expect(highlightedLineCount(tester), 0,
         reason: '恢复跟随后无选中行高亮');
   });
@@ -290,8 +304,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 先滚到浏览停止态，让胶囊指向一个非当前行（远于第 0 行）
-    await tester.drag(find.byType(ListView), const Offset(0, -300));
-    await tester.pumpAndSettle();
+    await dragToBrowsing(tester);
 
     await tester.tap(find.byKey(AppleMusicLyricsView.capsulePlayKey));
     await tester.pumpAndSettle();
@@ -307,11 +320,11 @@ void main() {
       closeTo(viewportRect.top + 200, 2),
       reason: 'seek 就近生效：点按当帧目标行即锚定基准线，不等下一轮上报',
     );
-    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
-        reason: '胶囊常驻：seek 后仍显示并指向新当前行');
+    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsNothing,
+        reason: 'seek 后恢复跟随，胶囊随之隐藏');
   });
 
-  testWidgets('手动滚动停止 3 秒无操作后恢复自动跟随（胶囊仍常驻）',
+  testWidgets('手动滚动停止 3 秒无操作后恢复自动跟随（胶囊随之隐藏）',
       (tester) async {
     final followLog = <bool>[];
     final position = ValueNotifier<Duration>(Duration.zero);
@@ -319,9 +332,10 @@ void main() {
     await pumpView(tester, position, followLog: followLog);
     await tester.pumpAndSettle();
 
-    await tester.drag(find.byType(ListView), const Offset(0, -200));
-    await tester.pumpAndSettle();
+    await dragToBrowsing(tester);
     expect(followLog.last, false);
+    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
+        reason: '浏览态胶囊显示');
 
     // 推进假时钟越过 3 秒恢复延迟，再让 animateTo 收敛
     await tester.pump(const Duration(seconds: 3, milliseconds: 100));
@@ -329,10 +343,8 @@ void main() {
 
     expect(followLog.last, true, reason: '3 秒无操作应恢复跟随');
     expect(hasFocusFade(tester), isTrue, reason: '恢复跟随后焦点层回归');
-    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
-        reason: '胶囊常驻：恢复跟随后不消失，改指向当前行（第 0 行）');
-    expect(capsuleRect(tester).center.dy, closeTo(200, 1),
-        reason: '恢复跟随后胶囊仍固定在基准线');
+    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsNothing,
+        reason: '恢复跟随后胶囊隐藏（预期行为：自动滚动不渲染胶囊）');
     expect(highlightedLineCount(tester), 0,
         reason: '恢复跟随后无选中行高亮');
     // 恢复跟随应把列表滚回当前行（第 0 行）锚点：初始偏移 10（视口 1/3 处）。
@@ -404,8 +416,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 先滚动进入手动浏览停止态（胶囊 overlay 固定在基准线显示）
-    await tester.drag(find.byType(ListView), const Offset(0, -300));
-    await tester.pumpAndSettle();
+    await dragToBrowsing(tester);
     final capsule = find.byKey(AppleMusicLyricsView.capsulePlayKey);
     expect(capsule, findsOneWidget, reason: '浏览停止态基准线处应显示胶囊');
     final before = scrollOffset(tester);
@@ -421,38 +432,32 @@ void main() {
         reason: '拖动结束后回到浏览停止态，胶囊仍在基准线显示');
   });
 
-  testWidgets('从跟随态胶囊起手拖动：立即进入手动浏览并正常滚动',
+  testWidgets('跟随态不渲染胶囊；手动滚动进入浏览态后胶囊出现指向选中行',
       (tester) async {
     final followLog = <bool>[];
-    final seeks = <Duration>[];
     final position = ValueNotifier<Duration>(Duration.zero);
     addTearDown(position.dispose);
-    await pumpView(
-      tester,
-      position,
-      onSeek: seeks.add,
-      followLog: followLog,
-    );
+    await pumpView(tester, position, followLog: followLog);
     await tester.pumpAndSettle();
 
-    // 胶囊常驻后无需先滚列表：跟随态基准线上直接抓住胶囊起手拖动
-    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
-        reason: '跟随态胶囊应常驻基准线');
+    // 跟随态（自动滚动）：胶囊隐藏，无法从胶囊起手拖动
+    final capsule = find.byKey(AppleMusicLyricsView.capsulePlayKey);
+    expect(capsule, findsNothing, reason: '跟随态不渲染播放胶囊');
     final before = scrollOffset(tester);
 
-    await tester.drag(
-      find.byKey(AppleMusicLyricsView.capsulePlayKey),
-      const Offset(0, -200),
-    );
+    // 手动滚动进入浏览态：胶囊出现在基准线（指向选中行）
+    await tester.drag(find.byType(ListView), const Offset(0, -200));
     await tester.pumpAndSettle();
-
-    expect(followLog.last, isFalse, reason: '从胶囊起手拖动应进入手动浏览');
-    expect(hasFocusFade(tester), isFalse, reason: '手动浏览应立即去模糊');
-    expect(seeks, isEmpty, reason: '从胶囊上起手的拖动是滚动，不得 seek');
+    expect(followLog.last, isFalse, reason: '手动滚动应进入浏览态');
+    expect(hasFocusFade(tester), isFalse, reason: '浏览态去模糊');
+    expect(capsule, findsOneWidget,
+        reason: '浏览态常驻：手动滚动后显示指向选中行的胶囊');
+    expect(capsuleRect(tester).center.dy, closeTo(200, 1),
+        reason: '胶囊固定在视口 1/3 基准线');
+    expect(highlightedLineCount(tester), 1,
+        reason: '基准线对齐行（即胶囊指向行）品牌红高亮');
     expect(scrollOffset(tester), greaterThan(before + 150),
-        reason: '从跟随态胶囊起手的拖动应经 jumpTo 转发正常滚动');
-    expect(find.byKey(AppleMusicLyricsView.capsulePlayKey), findsOneWidget,
-        reason: '浏览停止态胶囊仍常驻（指向选中行，不得闪烁消失）');
+        reason: '手动滚动偏移保持');
   });
 
   testWidgets('点行 seek 到该行并恢复自动跟随（就近生效）', (tester) async {

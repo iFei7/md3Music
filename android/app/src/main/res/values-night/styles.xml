@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is on -->
     <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
         <!-- Show a splash screen on the activity. Automatically removed when
@@ -14,5 +14,20 @@
          This Theme is only used starting with V2 of Flutter's Android embedding. -->
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
+        <!-- 系统栏在主题层显式透明（edge-to-edge）：按住底部手势条唤出 transient
+             提示条、三按钮导航兜底等系统路径会用 Activity 主题的 statusBarColor /
+             navigationBarColor 绘制底色——父主题（Holo 系）默认不透明，且
+             Android 15+ 三按钮下未声明时取窗口背景色兜底，均导致导航条区域
+             变色、不沉浸。运行时 Dart 侧 applyMainEdgeToEdge 同样置透明，
+             此处保证冷启动首帧前与任何 transient 系统路径都拿到透明值。 -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- 关闭 API 29+ 的导航栏对比度遮罩（与 Dart 侧
+             systemNavigationBarContrastEnforced:false 一致，避免透明导航条上
+             叠加系统 80% 不透明灰底）。低版本自动忽略。 -->
+        <item name="android:navigationBarContrastEnforced" tools:targetApi="29">false</item>
+        <!-- 透明导航条上手势条图标用浅色（深色主题）；运行时由 Flutter 的
+             systemNavigationBarIconBrightness 覆写。 -->
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
     </style>
 </resources>

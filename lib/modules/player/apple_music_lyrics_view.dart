@@ -34,11 +34,13 @@ import '../../widgets/md3_lyric_preferences.dart';
 /// - 跟随态交互：自动跟随时整视图渐变焦点层（离当前行越远越淡出，视口级
 ///   单层 ShaderMask，见 [_AppleMusicLyricsViewState._buildFollowFocusFade]），
 ///   并经 [AppleMusicLyricsView.onFollowChanged] 上报跟随态供播放器收起
-///   底部进度条/传输行；播放胶囊**常驻**视口固定基准线（上部 1/3，不随
-///   行走）：跟随态指向当前行、手动浏览态指向选中行（基准线对齐行）。
+///   底部进度条/传输行；播放胶囊**浏览态常驻**视口固定基准线（上部 1/3，
+///   不随行走）：手动滚动/拖拽浏览时显示、指向选中行（基准线对齐行），
+///   自动跟随态隐藏（不遮挡歌词焦点展示）。
 ///   手动拖动立即去模糊并恢复操作区，滚动停止后选中行以品牌红文字高亮
-///   （无背景装饰），点按胶囊 seek 到该行并就近生效、恢复跟随，从胶囊
-///   起手的拖动转发给列表正常浏览；3 秒无操作自动恢复跟随。
+///   （无背景装饰），点按胶囊 seek 到该行并就近生效、恢复跟随（胶囊随
+///   跟随态恢复而隐藏），从胶囊起手的拖动转发给列表正常浏览；3 秒无操作
+///   自动恢复跟随（胶囊随之隐藏）。
 class AppleMusicLyricsView extends StatefulWidget {
   const AppleMusicLyricsView({
     super.key,
@@ -133,8 +135,8 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
 
   /// 用户滚动物理进行中（拖动起手 → 滚动完全停止，含惯性滑行）。
   /// 决定选中行高亮的显隐：仅「非跟随 且 滚动已停止」时高亮，拖动/
-  /// 惯性途中不高亮。固定基准线胶囊（[_buildBaselineBubble]）则常驻
-  /// （见 [_baselineBubbleLine]），滚动态只改变其指向的行。
+  /// 惯性途中不高亮。固定基准线胶囊（[_buildBaselineBubble]）同为
+  /// 浏览态常驻（见 [_baselineBubbleLine]），滚动态只改变其指向的行。
   bool _isUserScrolling = false;
 
   /// 播放胶囊 overlay 上的拖动进行中（见 [_onBubbleDragStart]）：胶囊是
@@ -148,8 +150,8 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
   /// 跟随态不反算（选中行高亮仅在浏览态有意义），由
   /// [_onScrollOffsetChanged] 在滚动偏移变化时按 [_computeSelectedLine]
   /// 逐帧刷新（仅下标变化才 setState，一次拖动约每行高一次重建）。
-  /// 注：胶囊常驻后，从跟随态胶囊起手拖动时 [_onBubbleDragStart] 会先
-  /// 初始化本字段，避免首帧指向上一轮浏览的陈旧行。
+  /// 注：浏览态起手拖动时 [_onBubbleDragStart] 会先初始化本字段
+  /// （兜底，如边界时序下选中行尚未跟踪到位），避免首帧指向陈旧行。
   int? _selectedLine;
 
   // ===== 行高估算缓存（TextPainter 预测，仅用于滚动偏移计算）=====
@@ -384,14 +386,14 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
   /// dragDetails == null，不会误判为用户滚动。
   ///
   /// 状态机（跟随态 [_follow] × 滚动态 [_isUserScrolling]）：
-  /// - 跟随中：渐变焦点层生效（模糊淡出），无选中行高亮；胶囊常驻基准线，
-  ///   指向当前行（[_currentIndex]，此刻正锚定在基准线上）；
+  /// - 跟随中：渐变焦点层生效（模糊淡出），无选中行高亮；播放胶囊隐藏
+  ///   （自动滚动不渲染，见 [_baselineBubbleLine]）；
   /// - 手动滚动中（拖动起手/惯性滑行）：立即去模糊，选中行逐帧跟踪基准线，
-  ///   胶囊随之逐帧换向（不高亮、不 seek）；
+  ///   胶囊出现并随之逐帧换向（不高亮、不 seek）；
   /// - 手动停止（滚动结束、3 秒延迟窗内）：无模糊，选中行品牌红文字高亮，
-  ///   胶囊仍常驻基准线（overlay，见 [_buildBaselineBubble]）；
+  ///   胶囊仍显示在基准线（overlay，见 [_buildBaselineBubble]）；
   /// - 恢复跟随（3 秒无操作 / 点胶囊 / 点行 seek）：回到跟随态（选中行
-  ///   高亮消失，胶囊改指向当前行）。
+  ///   高亮消失，胶囊隐藏）。
   bool _onScrollNotification(ScrollNotification notification) {
     final isUserDrag =
         notification is ScrollStartNotification &&
@@ -412,7 +414,7 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     } else if (notification is ScrollEndNotification &&
         _isUserScrolling &&
         !_bubbleDragging) {
-      // 滚动完全停止（含惯性结束）：选中行定格，显示行高亮（胶囊常驻，
+      // 滚动完全停止（含惯性结束）：选中行定格，显示行高亮（胶囊显示，
       // 指向不再变化）。
       // [_bubbleDragging] 期间豁免：胶囊拖动经 jumpTo 转发滚动，每帧补发
       // Start/Update/End 通知，误命中会把 [_isUserScrolling] 逐帧打灭、
@@ -454,7 +456,7 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
 
   /// 滚动偏移变化（用户拖动/惯性/程序滚动）：手动浏览态逐帧刷新选中行，
   /// 驱动选中行高亮与固定基准线胶囊的指向（点胶囊 seek 到选中行）；
-  /// 仅下标变化才 setState。跟随态不反算（胶囊指向当前行、选中行高亮
+  /// 仅下标变化才 setState。跟随态不反算（跟随态胶囊隐藏、选中行高亮
   /// 仅在浏览态有意义）。
   void _onScrollOffsetChanged() {
     if (_follow) return;
@@ -716,8 +718,8 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
           // 首尾各留视口高度 35% 的空白：首行可锚定到视口上部 1/3 处
           _topPadding = constraints.maxHeight * _edgeViewportRatio;
           // 列表 + 固定基准线胶囊 overlay 同栈：胶囊渲染在视口上部 1/3
-          // 基准线的固定 Y（不随行走），常驻显示（跟随态指向当前行、
-          // 浏览态指向选中行，见 [_baselineBubbleLine]）。
+          // 基准线的固定 Y（不随行走），**浏览态常驻**（指向选中行；
+          // 自动跟随态隐藏，见 [_baselineBubbleLine]）。
           // StackFit.expand：列表子树继续拿 LayoutBuilder 的紧约束
           // （视口高度参与锚定计算，与改造前一致）。
           // 列表子树挂 [_lyricsListKey]：焦点层树形切换时原地转移、不重挂。
@@ -755,22 +757,24 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     );
   }
 
-  /// 固定基准线播放胶囊的指向行（常驻：除「尚无当前行」外不返回 null）。
-  /// - 跟随态：指向当前行 [_currentIndex]（此刻正锚定在基准线上）；
+  /// 固定基准线播放胶囊的指向行（**浏览态常驻**：手动滚动/拖拽浏览时
+  /// 显示指向选中行；自动跟随态返回 null——胶囊隐藏，不遮挡歌词焦点
+  /// 展示）。
+  /// - 跟随态（自动滚动）：返回 null，不渲染胶囊；
   /// - 手动浏览态（含拖动/惯性途中）：指向选中行 [_selectedLine]
   ///   （基准线对齐行，由 [_onScrollOffsetChanged] 逐帧刷新）。
   ///
   /// 与选中行高亮不同条件（高亮另需「滚动已停止」，见 [_buildLine] 的
-  /// isSelected）——滚动态下高亮暂隐、胶囊仍常驻且逐帧换向。
+  /// isSelected）——滚动态下高亮暂隐、胶囊仍显示且逐帧换向。
   int? get _baselineBubbleLine {
-    if (_follow) return _currentIndex >= 0 ? _currentIndex : null;
+    if (_follow) return null;
     return _selectedLine;
   }
 
-  /// 固定基准线播放胶囊（常驻，见 [_baselineBubbleLine]）：overlay 定位在
-  /// 视口固定基准线 Y（上部 1/3，见 build 的 Stack），不随列表行走；点按
-  /// seek 到指向行 startTime 并就近生效、恢复自动跟随（[_playLineAt]
-  /// withHaptic）。
+  /// 固定基准线播放胶囊（浏览态显示，见 [_baselineBubbleLine]）：overlay
+  /// 定位在视口固定基准线 Y（上部 1/3，见 build 的 Stack），不随列表行走；
+  /// 点按 seek 到指向行 startTime 并就近生效、恢复自动跟随（[_playLineAt]
+  /// withHaptic，胶囊随跟随态恢复而隐藏）。
   ///
   /// 从胶囊起手的垂直拖动转发给歌词列表（[_onBubbleDragUpdate] → jumpTo
   /// 1:1 跟手，松手按速度外推惯性），不误触 seek、不挡住歌词浏览——
@@ -800,9 +804,8 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
 
   /// 从固定胶囊起手拖动：进入手动浏览态（暂停跟随、选中行逐帧跟踪），
   /// 3 秒恢复窗自此起算（拖动中 [_resumeFollow] 空转，见其注释）。
-  /// 选中行先初始化为基准线对齐行：胶囊常驻后从跟随态起手拖动时，
-  /// [_selectedLine] 可能还是上一轮浏览的陈旧值（跟随态不反算），
-  /// 不初始化会让胶囊首帧指向陈旧行、随后跳变。
+  /// 选中行兜底初始化为基准线对齐行：浏览态起手时 [_selectedLine] 理论上
+  /// 已由逐帧跟踪保持，此处兜底防边界时序下首帧指向陈旧行、随后跳变。
   void _onBubbleDragStart(DragStartDetails _) {
     _resumeFollowTimer?.cancel();
     _resumeFollowTimer = Timer(_followResumeDelay, _resumeFollow);
@@ -825,7 +828,7 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     position.jumpTo(target);
   }
 
-  /// 胶囊拖动结束：收口滚动态（选中行定格、行高亮回归显示，胶囊常驻不变），
+  /// 胶囊拖动结束：收口滚动态（选中行定格、行高亮回归显示，胶囊保持显示），
   /// 按松手垂直速度外推 0.2s 位移做一次 animateTo 近似惯性（低于阈值即静停），
   /// 并重启 3 秒恢复跟随计时。
   void _onBubbleDragEnd(DragEndDetails details) {
@@ -896,13 +899,14 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
   /// 播放胶囊视觉本体（lyric-bubble 样式玻璃化：胶囊体 + 左尖角指向歌词行）。
   /// 定位与手势由 [_buildBaselineBubble] 的 overlay 承载，本方法只画外形。
   ///
-  /// 玻璃分层（自下而上，材质模型同 LiquidGlassSurface）：
-  /// 1. [BackdropFilter] 背景模糊（sigma [_bubbleBlurSigma]），经外层
-  ///    [ClipPath] 裁剪，只作用于气泡自身区域；
-  /// 2. 半透明品牌叠色（primaryContainer 系降 alpha 约 0.6，玻璃「体色」，
-  ///    真机反馈构建号 104：实心填充改模糊玻璃）；
-  /// 3. 1px 描边（onPrimaryContainer 系低 alpha，strokeWidth 2 经裁剪留
-  ///    内半像素，避免外半被切得发虚）；
+  /// 玻璃分层（自下而上，材质模型同 LiquidGlassSurface dock 配方）：
+  /// 1. [BackdropFilter] 背景模糊（sigma [_bubbleBlurSigma] = dock 同款
+  ///    18），经外层 [ClipPath] 裁剪，只作用于气泡自身区域；
+  /// 2. 半透明 surface 叠色（cs.surface α0.35，玻璃「体色」，真机反馈
+  ///    构建号 104：实心填充改模糊玻璃；alpha 高于 dock 的 0.12，差异
+  ///    原因见 [_bubbleFillAlpha] 注释）；
+  /// 3. 1px 渐变描边（思路同 liquid_glass_surface._GlassBorderPainter：
+  ///    左上白高光 → 右下 onSurface 渐隐，strokeWidth 2 经裁剪留内 1px）；
   /// 4. 播放图标（居中于胶囊体，尖角左侧 8px 不计入，配色走 token）。
   ///
   /// 图层纪律：BackdropFilter 直接位于 [ClipPath] 裁剪层内（clip 非
@@ -938,15 +942,21 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
                 child: const SizedBox.expand(),
               ),
             ),
-            // 2/3. 半透明叠色 + 1px 描边（同一次绘制，外形见 [_bubblePath]）
+            // 2/3. 半透明叠色 + 1px 渐变描边（同一次绘制，外形见 [_bubblePath]）
             Positioned.fill(
               child: IgnorePointer(
                 child: CustomPaint(
                   painter: _LyricBubblePainter(
-                    fill: colorScheme.primaryContainer
+                    // surface 系叠色：随主题（亮=浅玻璃/暗=深玻璃），
+                    // 与 dock 材质同色系（原 primaryContainer 品牌色弃用）
+                    fill: colorScheme.surface
                         .withValues(alpha: _bubbleFillAlpha),
-                    border: colorScheme.onPrimaryContainer
-                        .withValues(alpha: _bubbleBorderAlpha),
+                    // 渐变描边：左上白高光 → 右下 onSurface 渐隐
+                    //（思路同 _GlassBorderPainter，暗色主题可感知）
+                    borderColors: [
+                      Colors.white.withValues(alpha: 0.35),
+                      colorScheme.onSurface.withValues(alpha: 0.06),
+                    ],
                   ),
                 ),
               ),
@@ -958,7 +968,7 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
                 child: Icon(
                   Icons.play_arrow_rounded,
                   size: 18,
-                  color: colorScheme.onPrimaryContainer,
+                  color: colorScheme.onSurface,
                 ),
               ),
             ),
@@ -979,14 +989,19 @@ const double _bubbleTipWidth = 8;
 const double _bubbleTipHalfHeight = 1.6;
 const double _bubbleRadius = 10;
 
-/// 播放胶囊玻璃材质参数（真机反馈构建号 104：模糊玻璃效果）。
-/// - 模糊 sigma：同顶栏磨砂带（14），44×24 小尺寸足够起沫；
-/// - 叠色 alpha：primaryContainer 系降 alpha（约 0.6），保留品牌色调同时
-///   透出模糊后的底层内容；
-/// - 描边 alpha：onPrimaryContainer 系低 alpha，1px 勾勒玻璃边缘。
-const double _bubbleBlurSigma = 14;
-const double _bubbleFillAlpha = 0.6;
-const double _bubbleBorderAlpha = 0.3;
+/// 播放胶囊玻璃材质参数（真机反馈构建号 104：模糊玻璃；批次 10 材质
+/// 对齐 LiquidGlassSurface dock 配方）。
+/// - 模糊 sigma：对齐 dock blurSigma 18（原 14；44×24 小尺寸下 18 仍
+///   足够起沫）。公开为 [kAppleLyricsBubbleBlurSigma] 供测试断言；
+/// - 叠色：cs.surface 系 α0.35——高于 dock 的 0.12：胶囊仅 44×24 且
+///   叠在歌词文字上方，需要更强体色保证播放图标与轮廓可读（dock 面大、
+///   内容自带对比，低 alpha 即可）；弃用原 primaryContainer α0.6 品牌
+///   色，改随主题 surface（与 dock 同色系）；
+/// - 描边：参考 _GlassBorderPainter 渐变描边思路——左上白 α0.35 →
+///   右下 onSurface α0.06 的 1px 渐变边（strokeWidth 2 经裁剪留内 1px）。
+const double kAppleLyricsBubbleBlurSigma = 18;
+const double _bubbleBlurSigma = kAppleLyricsBubbleBlurSigma;
+const double _bubbleFillAlpha = 0.35;
 
 /// 气泡外形路径：胶囊体（RRect r10，右端与左端均为圆角，左边缘中段平直）
 /// + 左尖角（等腰三角形，顶点指向左侧歌词行）取并集。
@@ -1029,22 +1044,25 @@ class _LyricBubbleClipper extends CustomClipper<Path> {
   bool shouldReclip(_LyricBubbleClipper oldClipper) => false;
 }
 
-/// 播放胶囊玻璃体：半透明品牌叠色（primaryContainer 系降 alpha）+ 1px
-/// 描边（onPrimaryContainer 系低 alpha），外形同 [_bubblePath]。背景模糊
-/// 由 [_buildPlayBubble] 的 BackdropFilter 承担（绘在本体之下）。
+/// 播放胶囊玻璃体：半透明 surface 叠色（cs.surface 系降 alpha，dock 同
+/// 色系）+ 1px 渐变描边（左上白高光 → 右下 onSurface 渐隐，思路同
+/// liquid_glass_surface._GlassBorderPainter），外形同 [_bubblePath]。
+/// 背景模糊由 [_buildPlayBubble] 的 BackdropFilter 承担（绘在本体之下）。
 class _LyricBubblePainter extends CustomPainter {
-  _LyricBubblePainter({required this.fill, required this.border});
+  _LyricBubblePainter({required this.fill, required this.borderColors});
 
   /// 半透明叠色（玻璃「体色」）。
   final Color fill;
 
-  /// 描边色（1px，跟随 token）。
-  final Color border;
+  /// 渐变描边色（[Alignment.topLeft] → [Alignment.bottomRight] 两端色）。
+  final List<Color> borderColors;
 
   @override
   void paint(Canvas canvas, Size size) {
     final path = _bubblePath(size);
     canvas.drawPath(path, Paint()..color = fill);
+    // 渐变描边（思路同 _GlassBorderPainter）：左上白高光 → 右下渐隐
+    //（混入 onSurface 保证暗色主题可感知）。
     // strokeWidth 2 而非 1：描边以路径为中心线向内外各扩 1px，外层
     // ClipPath 裁剪后恰留内侧 1px 实边（中心线 1px 会被切掉外半、发虚）。
     canvas.drawPath(
@@ -1052,11 +1070,15 @@ class _LyricBubblePainter extends CustomPainter {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2
-        ..color = border,
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: borderColors,
+        ).createShader(path.getBounds()),
     );
   }
 
   @override
   bool shouldRepaint(_LyricBubblePainter oldDelegate) =>
-      oldDelegate.fill != fill || oldDelegate.border != border;
+      oldDelegate.fill != fill || !listEquals(oldDelegate.borderColors, borderColors);
 }
