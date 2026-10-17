@@ -1,8 +1,9 @@
-/// 音乐库一级页（LibraryHubPage）测试。
+/// 音乐库一级页（LibraryHubPage）测试（IA 改版：收藏｜本地｜已购｜云盘）。
 ///
-/// 覆盖：骨架渲染（SonifyTitleScaffold + 搜索胶囊 + 4 段分段控件）、
-/// 分段切换（PageView 联动 + 各段空态/内容）、tab label「音乐库」、
-/// 歌曲段入口行跳转语义（本地收藏/文件夹 → LibraryPage initialTab 契约）。
+/// 覆盖：骨架渲染（SonifyTitleScaffold + 搜索玻璃圆钮、无搜索胶囊 +
+/// 4 段分段控件）、分段切换（PageView 联动 + 各段空态/未登录引导态）、
+/// 已购/云盘段未登录空态、tab label「音乐库」、歌曲段入口行跳转语义
+/// （本地收藏/文件夹 → LibraryPage initialTab 契约）、排序钮仅本地段显示。
 library;
 
 import 'dart:convert';
@@ -24,6 +25,7 @@ import 'package:md3music/providers/tab_config_provider.dart';
 import 'package:md3music/services/kugou_api/kugou_api_client.dart';
 import 'package:md3music/widgets/common/sonify_segmented_control.dart';
 import 'package:md3music/widgets/common/sonify_title_scaffold.dart';
+import 'package:md3music/widgets/m3e_sort_sheet.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -80,7 +82,7 @@ Future<void> _pumpHub(WidgetTester tester) async {
       child: const MaterialApp(home: LibraryHubPage()),
     ),
   );
-  // initState postFrame：loadSavedSongs / loadScanFolders / 云端缓存 /
+  // initState postFrame：loadSavedSongs / loadScanFolders / 歌单缓存 /
   // 播放历史 / 排序偏好（多次 await SharedPreferences 均为 mock 即时完成）
   await tester.pump();
   await tester.pump();
@@ -107,7 +109,7 @@ void main() {
     HistoryRepository.debugResetForTest();
   });
 
-  testWidgets('骨架渲染：大标题「音乐库」+ 搜索胶囊 + 4 段分段控件；tab label 已升级', (
+  testWidgets('骨架渲染：大标题「音乐库」+ 搜索图标按钮（无搜索胶囊）+ 4 段分段控件', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -116,9 +118,12 @@ void main() {
     // 头部：SonifyTitleScaffold 固定大标题
     expect(find.byType(SonifyTitleScaffold), findsOneWidget);
     expect(find.text('音乐库'), findsWidgets);
-    // 搜索胶囊（点击跳全局搜索页的入口，非行内过滤框）
-    expect(find.text('搜索音乐库'), findsOneWidget);
-    // 4 段分段控件
+    // 旧版搜索胶囊已移除，改为顶栏搜索图标按钮
+    expect(find.text('搜索音乐库'), findsNothing);
+    expect(find.byIcon(Icons.search), findsOneWidget);
+    // 扫描钮保留（原 FAB 职责）
+    expect(find.byIcon(Icons.add), findsOneWidget);
+    // 4 段分段控件（收藏｜本地｜已购｜云盘）
     expect(find.byType(SonifySegmentedControl), findsOneWidget);
     for (final segment in kHubSegments) {
       expect(find.text(segment), findsOneWidget, reason: '分段控件应包含「$segment」');
@@ -130,48 +135,49 @@ void main() {
     );
   });
 
-  testWidgets('空库默认段（最近添加）渲染空态，扫描/云/历史缺数据不显示空壳分区', (
-    tester,
-  ) async {
+  testWidgets('默认收藏段：无数据时渲染空态，排序钮不显示', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await _pumpHub(tester);
 
-    // 全空：本地无音乐 + 云端缓存空 + 无播放历史 → C1 空态
-    expect(find.text('你的音乐库还是空的'), findsOneWidget);
-    expect(find.text('扫描设备中的音乐，或先去主页听听看'), findsOneWidget);
-    // 无数据分区不渲染
-    expect(find.text('歌单'), findsNothing);
-    expect(find.text('最近播放'), findsNothing);
+    // 收藏段（默认）：歌单缓存空 + 无播放历史 → 空态
+    expect(find.text('暂无收藏内容'), findsOneWidget);
+    expect(find.text('我的歌单'), findsNothing);
+    expect(find.text('收藏的歌单'), findsNothing);
+    expect(find.text('最近'), findsNothing);
+    // 排序钮仅本地段显示
+    expect(find.byType(M3ESortButton<HubSongSort>), findsNothing);
   });
 
-  testWidgets('分段切换：专辑/歌手/歌曲段各自渲染，歌曲段含入口行与随机播放胶囊', (
-    tester,
-  ) async {
+  testWidgets('分段切换：本地段空态、已购/云盘段未登录引导空态', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await _pumpHub(tester);
 
-    // 切到「专辑」段：本地与云端均无 → 分段空态兜底
-    await tester.tap(find.text('专辑'));
-    await tester.pumpAndSettle();
-    expect(find.text('暂无专辑'), findsOneWidget);
-
-    // 切到「歌手」段
-    await tester.tap(find.text('歌手'));
-    await tester.pumpAndSettle();
-    expect(find.text('暂无歌手'), findsOneWidget);
-
-    // 切到「歌曲」段：无本地音乐 → 空态（非「暂无专辑」）
-    await tester.tap(find.text('歌曲'));
-    await tester.pumpAndSettle();
-    expect(find.text('暂无专辑'), findsNothing);
-
-    // 回到默认段：空态恢复
-    await tester.tap(find.text('最近添加'));
+    // 本地段：无本地音乐 → 空库空态
+    await tester.tap(find.text('本地'));
     await tester.pumpAndSettle();
     expect(find.text('你的音乐库还是空的'), findsOneWidget);
+
+    // 已购段：未登录 → 引导登录空态（PurchasedPanel 内嵌 + 单曲/专辑二次切换）
+    await tester.tap(find.text('已购'));
+    await tester.pumpAndSettle();
+    expect(find.text('登录后查看已购内容'), findsOneWidget);
+    expect(find.text('去登录'), findsOneWidget);
+    expect(find.text('单曲'), findsWidgets);
+    expect(find.text('专辑'), findsWidgets);
+
+    // 云盘段：未登录 → 引导登录空态（CloudHubPanel 精简列表）
+    await tester.tap(find.text('云盘'));
+    await tester.pumpAndSettle();
+    expect(find.text('登录后查看云盘音乐'), findsOneWidget);
+    expect(find.text('去登录'), findsOneWidget);
+
+    // 回到默认收藏段：空态恢复
+    await tester.tap(find.text('收藏'));
+    await tester.pumpAndSettle();
+    expect(find.text('暂无收藏内容'), findsOneWidget);
   });
 
-  testWidgets('有本地音乐：C1 显示最近添加的专辑轨道，歌曲段显示入口行/随机胶囊/曲目列表', (
+  testWidgets('本地段：有本地音乐时渲染入口行/随机胶囊/专辑歌手网格/歌曲列表，排序钮显示', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
@@ -179,26 +185,38 @@ void main() {
     });
     await _pumpHub(tester);
 
-    // C1（默认段）：本地的专辑进入「最近添加的专辑」轨道
-    expect(find.text('最近添加的专辑'), findsOneWidget);
-    expect(find.text('测试专辑一'), findsOneWidget);
-    expect(find.text('测试专辑二'), findsOneWidget);
-    // 歌手轨道：扫描出的两位歌手（「歌手甲」在专辑副行与歌手轨道各出现一次）
-    expect(find.text('歌手'), findsWidgets);
-    expect(find.text('歌手甲'), findsWidgets);
-    expect(find.text('歌手乙'), findsWidgets);
+    // 收藏段（默认）：无歌单无历史 → 空态；排序钮不显示
+    expect(find.text('暂无收藏内容'), findsOneWidget);
+    expect(find.byType(M3ESortButton<HubSongSort>), findsNothing);
 
-    // 切到「歌曲」段：入口行 + 随机播放胶囊 + 曲目列表
-    await tester.tap(find.text('歌曲'));
+    // 切到「本地」段：入口行 + 随机播放胶囊 + 专辑/歌手网格 + 歌曲列表
+    await tester.tap(find.text('本地'));
     await tester.pumpAndSettle();
     expect(find.text('本地收藏'), findsOneWidget);
     expect(find.text('文件夹'), findsOneWidget);
     expect(find.text('随机播放'), findsOneWidget);
+    expect(find.text('专辑'), findsOneWidget);
+    expect(find.text('歌手'), findsOneWidget);
+    expect(find.text('测试专辑一'), findsOneWidget);
+    expect(find.text('测试专辑二'), findsOneWidget);
+    // 排序钮仅本地段（歌曲列表）显示
+    expect(find.byType(M3ESortButton<HubSongSort>), findsOneWidget);
+    // 歌曲列表在专辑/歌手网格下方（测试视口较小），滚动到可见再断言；
+    // 本地段的 CustomScrollView 在 PageView 内（与 SonifyTitleScaffold
+    // 自身的 CustomScrollView 区分）
+    await tester.dragUntilVisible(
+      find.text('测试歌曲一'),
+      find.descendant(
+        of: find.byType(PageView),
+        matching: find.byType(CustomScrollView),
+      ),
+      const Offset(0, -400),
+    );
+    expect(find.text('歌曲'), findsOneWidget);
     expect(find.text('测试歌曲一'), findsOneWidget);
-    expect(find.text('测试歌曲二'), findsOneWidget);
   });
 
-  testWidgets('歌曲段入口行跳转语义：本地收藏 → LibraryPage(initialTab: 4)', (
+  testWidgets('本地段入口行跳转语义：本地收藏 → LibraryPage(initialTab: 4)', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
@@ -206,7 +224,7 @@ void main() {
     });
     await _pumpHub(tester);
 
-    await tester.tap(find.text('歌曲'));
+    await tester.tap(find.text('本地'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('本地收藏'));
     await tester.pumpAndSettle();

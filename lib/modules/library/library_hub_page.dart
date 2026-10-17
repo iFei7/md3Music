@@ -17,6 +17,7 @@ import '../../data/repositories/settings_repository.dart';
 import '../../providers/library_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../../providers/player_provider.dart';
+import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/m3e_pull_to_refresh_fixed.dart';
 import '../../widgets/m3e_sort_sheet.dart';
@@ -24,31 +25,35 @@ import '../../widgets/smart_artwork_image.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
 import '../../widgets/common/sonify_segmented_control.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
-import '../artist/artist_detail_page.dart';
 import '../playlist/playlist_page.dart';
 import '../search/search_page.dart';
 import '../user/favorites_page.dart';
 import '../user/play_history_page.dart';
+import '../user/purchased_page.dart';
 import 'albums_page.dart' show AlbumSongsPage;
 import 'artists_page.dart' show ArtistSongsPage;
+import 'hub_cloud_panel.dart';
 import 'library_page.dart' show LibraryPage, showLibraryScanMenu;
 
-/// 音乐库一级页（设计方案 P0 全部 + P1 质感项）。
+/// 音乐库一级页（IA 改版：收藏 / 本地 / 已购 / 云盘 四段）。
 ///
-/// 页面定位：资产聚合中枢——本地扫描资产（曲目/专辑/歌手）与云端收藏
-/// 资产（歌单/专辑/歌手）同屏呈现，对标 Apple Music「资料库」：
+/// 页面定位：资产聚合中枢，按「资产归属」重新分段（对标 Apple Music
+/// 「资料库」+ 云端内容）：
 /// - 骨架：[SonifyTitleScaffold] 固定悬浮大标题「音乐库」+ 顶栏 actions
-///   （扫描钮承载原 FAB 职责 / 歌曲段排序钮）+ 搜索胶囊（跳全局搜索页，
-///   与首页同语义）；
-/// - 分段：[SonifySegmentedControl] 4 段（最近添加｜专辑｜歌手｜歌曲），
-///   固定于内容上方（与 SonifyTitleScaffold 结构兼容的吸顶等价实现：
-///   分段控件不随内容滚动，内容在 PageView 内各自滚动、各自记忆位置）；
-/// - 内容：PageView 四段联动，切段 [HapticFeedback.selectionClick]。
-///
-/// 与现有子页面的归并关系见设计方案 §1.3：云端歌单/专辑/歌手数据与
-/// [FavoritesPage] 同源（[FavoriteListsCache] 缓存链路），「显示全部」
-/// 仍跳 FavoritesPage 预选对应 tab；本地收藏/文件夹入口行跳
-/// [LibraryPage]（initialTab 契约不变，独立路由复用）。
+///   （扫描钮承载原 FAB 职责 / 本地段排序钮 / 搜索玻璃圆钮——形态与首页
+///   顶栏搜索钮一致，点击跳全局搜索页）；
+/// - 分段：[SonifySegmentedControl] 4 段（收藏｜本地｜已购｜云盘），
+///   固定于内容上方（吸顶等价实现：分段控件不随内容滚动，内容在 PageView
+///   内各自滚动、各自记忆位置），切段 [HapticFeedback.selectionClick]；
+/// - 收藏段（默认）：「我的歌单」（创建）+「收藏的歌单」（收藏他人）
+///   +「最近播放」Top 10；歌单创建/收藏区分与 [FavoritesPage] 同款规则
+///   （listCreateUserid 比对当前用户，兜底 type/source/名称启发式）；
+/// - 本地段：批次 11 本地资产浏览收编——本地收藏/文件夹入口行、随机播放
+///   胶囊、本地专辑/歌手网格、歌曲列表（排序钮持久化）；
+/// - 已购段：内嵌 [PurchasedPanel]（单曲/专辑双 tab 二次切换，未登录
+///   引导登录）；
+/// - 云盘段：内嵌 [CloudHubPanel]（精简列表 + 查看全部跳 CloudMusicPage，
+///   未登录引导登录）。
 class LibraryHubPage extends StatefulWidget {
   const LibraryHubPage({super.key});
 
@@ -57,17 +62,14 @@ class LibraryHubPage extends StatefulWidget {
 }
 
 /// 分段文案（顺序即布局顺序）。
-const List<String> kHubSegments = ['最近添加', '专辑', '歌手', '歌曲'];
+const List<String> kHubSegments = ['收藏', '本地', '已购', '云盘'];
 
-/// 音乐库页面局部尺寸规格（设计方案 §2.4 参数表，页面内唯一来源）。
+/// 音乐库页面局部尺寸规格（页面内唯一来源）。
 abstract final class _HubDimens {
-  /// 歌单/专辑轨道封面边长。
+  /// 歌单轨道封面边长。
   static const double railCover = 120;
 
-  /// 歌手轨道头像边长（正圆）。
-  static const double railAvatar = 96;
-
-  /// 最近播放/歌曲列表行高。
+  /// 最近播放列表行高。
   static const double rowHeight = 56;
 
   /// 列表行封面边长。
@@ -78,25 +80,31 @@ abstract final class _HubDimens {
 
   /// 随机播放胶囊高度。
   static const double randomPillHeight = 36;
+
+  /// 顶栏玻璃圆钮边长（与首页顶栏搜索钮同规格，discover_page 42dp）。
+  static const double barButton = 42;
+
+  /// 顶栏玻璃圆钮图标边长（同首页 20dp）。
+  static const double barButtonIcon = 20;
 }
 
-/// 「歌曲」段排序项（顶栏排序钮选项，设计方案 §4.4）。
+/// 「歌曲」排序项（本地段顶栏排序钮选项，§4.4）。
 enum HubSongSort { title, artist, dateAdded, playCount }
 
 class _LibraryHubPageState extends State<LibraryHubPage> {
   final PageController _pageController = PageController();
   int _segmentIndex = 0;
 
-  // 云端收藏资产（FavoritesPage 同源缓存链路，§5.1）
+  // 云端歌单（FavoritesPage 同源缓存链路；区分「创建 vs 收藏」见
+  // _isCreatedPlaylist。云端收藏专辑/歌手不进 IA（归属收藏语义，由
+  // FavoritesPage 承载）。
   List<KugouPlaylistBrief> _playlists = [];
-  List<KugouPlaylistBrief> _cloudAlbums = [];
-  List<Map<String, dynamic>> _cloudArtists = [];
 
-  // 最近播放（Top 10 数据源 + 歌曲段「播放次数」排序）
+  // 最近播放（收藏段 Top 10 数据源 + 本地段「播放次数」排序）
   List<Song> _history = [];
   Map<String, int> _playCounts = {};
 
-  // 歌曲段排序偏好（SettingsRepository 新 key，分段上下文持久化）
+  // 歌曲排序偏好（SettingsRepository，分段上下文持久化）
   final SettingsRepository _settings = SettingsRepository();
   HubSongSort _sortBy = HubSongSort.title;
   bool _sortDescending = false;
@@ -110,9 +118,9 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
       // 再加载扫描目录，不自动触发扫描。
       provider.loadSavedSongs();
       provider.loadScanFolders();
-      // 云端分区直读 FavoriteListsCache，最近播放直读 HistoryRepository；
+      // 歌单分区直读 FavoriteListsCache，最近播放直读 HistoryRepository；
       // 实时网络同步仍由收藏页承载。
-      _loadCloudData();
+      _loadPlaylists();
       _loadHistory();
       _loadSortPrefs();
     });
@@ -124,16 +132,10 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     super.dispose();
   }
 
-  Future<void> _loadCloudData() async {
+  Future<void> _loadPlaylists() async {
     final playlists = await FavoriteListsCache.readPlaylists();
-    final albums = await FavoriteListsCache.readAlbums();
-    final artists = await FavoriteListsCache.readArtists();
     if (!mounted) return;
-    setState(() {
-      _playlists = playlists;
-      _cloudAlbums = albums;
-      _cloudArtists = artists;
-    });
+    setState(() => _playlists = playlists);
   }
 
   Future<void> _loadHistory() async {
@@ -164,13 +166,37 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     await _settings.setHubSongSortDescending(_sortDescending);
   }
 
-  /// 下拉刷新（§4.1 上下文刷新）：本地段 loadSavedSongs + 云端缓存链路
-  /// + 最近播放重读。
+  /// 下拉刷新：本地段 loadSavedSongs + 歌单缓存链路 + 最近播放重读。
   Future<void> _refresh() async {
     await context.read<LibraryProvider>().loadSavedSongs();
-    await _loadCloudData();
+    await _loadPlaylists();
     await _loadHistory();
   }
+
+  // ==================== 歌单「创建 vs 收藏」区分 ====================
+
+  /// 与 FavoritesPage._isCreated 同款规则：listCreateUserid 比对当前登录
+  /// 用户优先；缺失时按 type/source 与默认收藏名称启发式兜底。
+  bool _isCreatedPlaylist(KugouPlaylistBrief p) {
+    final uid = KugouApiClient().userid;
+    if (uid != null &&
+        uid.isNotEmpty &&
+        p.listCreateUserid != null &&
+        p.listCreateUserid!.isNotEmpty) {
+      return p.listCreateUserid == uid;
+    }
+    if (p.type == 0 && p.source != 2) return true;
+    if (p.name == '我喜欢' || p.name == '默认收藏') return true;
+    return false;
+  }
+
+  List<KugouPlaylistBrief> get _createdPlaylists =>
+      _playlists.where(_isCreatedPlaylist).toList();
+
+  List<KugouPlaylistBrief> get _collectedPlaylists =>
+      _playlists.where((p) => !_isCreatedPlaylist(p)).toList();
+
+  // ==================== 交互 ====================
 
   void _onSegmentChanged(int index) {
     setState(() => _segmentIndex = index);
@@ -193,8 +219,9 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     return SonifyTitleScaffold(
       title: '音乐库',
       itemCount: 1,
-      // 扫描钮承载原 FAB 职责（§2.2）：扫描中转圈禁用防重复触发；
-      // 排序钮仅歌曲段显示（最近添加固定时间线，专辑/歌手暂无独立排序）。
+      // 顶栏 actions：扫描钮（原 FAB 职责，扫描中转圈禁用防重复触发）+
+      // 排序钮（仅本地段显示，歌曲列表排序）+ 搜索玻璃圆钮（与首页顶栏
+      // 同形态）。
       actions: [
         IconButton(
           tooltip: '扫描音乐',
@@ -209,7 +236,7 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
               ? null
               : () => showLibraryScanMenu(context),
         ),
-        if (_segmentIndex == 3)
+        if (_segmentIndex == 1)
           M3ESortButton<HubSongSort>(
             tooltip: '排序',
             icon: _sortDescending
@@ -234,6 +261,7 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
               _saveSortPrefs();
             },
           ),
+        _buildSearchButton(context),
       ],
       itemBuilder: (context, index) {
         final media = MediaQuery.of(context);
@@ -245,7 +273,6 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _buildSearchCapsule(context),
               Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: SonifySpacing.titleMargin,
@@ -262,10 +289,10 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
                   controller: _pageController,
                   onPageChanged: _onPageChanged,
                   children: [
-                    _buildRecentSegment(context, library),
-                    _buildAlbumsSegment(context, library),
-                    _buildArtistsSegment(context, library),
-                    _buildSongsSegment(context, library),
+                    _buildFavoritesSegment(context),
+                    _buildLocalSegment(context, library),
+                    const PurchasedPanel(),
+                    const CloudHubPanel(),
                   ],
                 ),
               ),
@@ -276,103 +303,64 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     );
   }
 
-  // ==================== A. 搜索胶囊 ====================
-
-  /// 玻璃胶囊搜索入口（§2.2）：点击跳全局搜索页（与首页同语义，
-  /// 同 discover_page 的 MaterialPageRoute push）。
-  Widget _buildSearchCapsule(BuildContext context) {
-    final sonify = SonifyColors.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: SonifySpacing.titleMargin,
-        vertical: AppSpacing.xs,
-      ),
-      child: InkWell(
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const SearchPage()),
-          );
-        },
-        borderRadius: BorderRadius.circular(AppRadius.full),
-        child: LiquidGlassSurface(
-          shape: GlassShape.pill,
-          child: SizedBox(
-            height: _HubDimens.entryRowHeight,
-            child: Row(
-              children: [
-                const Gap(AppSpacing.md),
-                Icon(Icons.search, size: 20, color: sonify.textSecondary),
-                const Gap(AppSpacing.sm),
-                Text(
-                  '搜索音乐库',
-                  style: SonifyTextStyles.body.copyWith(
-                    color: sonify.textSecondary,
-                  ),
-                ),
-              ],
-            ),
+  /// 顶栏玻璃圆钮（与 discover_page 顶栏搜索钮同形态：42dp 圆形液态玻璃 +
+  /// 20dp 图标），点击跳全局搜索页。
+  Widget _buildSearchButton(BuildContext context) {
+    return LiquidGlassSurface(
+      shape: GlassShape.circle,
+      child: SizedBox(
+        width: _HubDimens.barButton,
+        height: _HubDimens.barButton,
+        child: IconButton(
+          // 顶满玻璃圆钮（默认 48dp 会溢出 42dp 容器）
+          constraints: BoxConstraints.tightFor(
+            width: _HubDimens.barButton,
+            height: _HubDimens.barButton,
           ),
+          padding: EdgeInsets.zero,
+          tooltip: '搜索',
+          icon: const Icon(Icons.search, size: _HubDimens.barButtonIcon),
+          onPressed: () => _push(context, const SearchPage()),
         ),
       ),
     );
   }
 
-  // ==================== C1. 最近添加 ====================
+  // ==================== A. 收藏段 ====================
 
-  Widget _buildRecentSegment(BuildContext context, LibraryProvider library) {
+  Widget _buildFavoritesSegment(BuildContext context) {
+    final created = _createdPlaylists;
+    final collected = _collectedPlaylists;
     final hasAnyContent =
-        library.hasMusic ||
-        _playlists.isNotEmpty ||
-        _cloudAlbums.isNotEmpty ||
-        _cloudArtists.isNotEmpty ||
-        _history.isNotEmpty;
-
+        created.isNotEmpty || collected.isNotEmpty || _history.isNotEmpty;
     if (!hasAnyContent) {
-      return library.isScanning
-          ? const _ScanningState()
-          : const _EmptyLibraryState();
+      return const _SegmentEmptyState(text: '暂无收藏内容');
     }
-
-    // 「最近添加的专辑」= 本地专辑（扫描序倒序 ≈ 添加时间序）+ 云端收藏专辑
-    final recentLocalAlbums = library.albums.reversed.take(12).toList();
-    final localArtists = library.artists;
 
     return M3EPullToRefreshIndicator(
       onRefresh: _refresh,
       child: ListView(
-        key: const PageStorageKey('hub_recent'),
+        key: const PageStorageKey('hub_favorites'),
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.only(
           bottom: MediaQuery.paddingOf(context).bottom,
         ),
         children: [
-          if (_playlists.isNotEmpty)
+          if (created.isNotEmpty)
             _Section(
-              title: '歌单',
+              title: '我的歌单',
               onShowAll: () => _push(context, const FavoritesPage(initialTab: 0)),
-              child: _PlaylistRail(playlists: _playlists),
+              child: _PlaylistRail(playlists: created),
             ),
-          if (recentLocalAlbums.isNotEmpty || _cloudAlbums.isNotEmpty)
+          if (collected.isNotEmpty)
             _Section(
-              title: '最近添加的专辑',
-              child: _AlbumRail(
-                localAlbums: recentLocalAlbums,
-                cloudAlbums: _cloudAlbums.take(12).toList(),
-              ),
-            ),
-          if (localArtists.isNotEmpty || _cloudArtists.isNotEmpty)
-            _Section(
-              title: '歌手',
-              onShowAll: () => _push(context, const FavoritesPage(initialTab: 3)),
-              child: _ArtistRail(
-                localArtists: localArtists.take(12).toList(),
-                cloudArtists: _cloudArtists.take(12).toList(),
-              ),
+              title: '收藏的歌单',
+              onShowAll: () => _push(context, const FavoritesPage(initialTab: 0)),
+              child: _PlaylistRail(playlists: collected),
             ),
           if (_history.isNotEmpty)
             _Section(
-              title: '最近播放',
+              title: '最近',
               onShowAll: () => _push(context, const PlayHistoryPage()),
               child: _RecentPlayList(
                 songs: _history.take(10).toList(),
@@ -384,99 +372,9 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     );
   }
 
-  // ==================== C2. 专辑 ====================
+  // ==================== B. 本地段 ====================
 
-  Widget _buildAlbumsSegment(BuildContext context, LibraryProvider library) {
-    final localAlbums = library.albums;
-    if (localAlbums.isEmpty && _cloudAlbums.isEmpty) {
-      return const _SegmentEmptyState(text: '暂无专辑');
-    }
-
-    return CustomScrollView(
-      key: const PageStorageKey('hub_albums'),
-      physics: const AlwaysScrollableScrollPhysics(),
-      slivers: [
-        if (localAlbums.isNotEmpty) ...[
-          const SliverToBoxAdapter(child: _SectionHeaderRow(title: '本地的专辑')),
-          _SliverCoverGrid(
-            key: const PageStorageKey('hub_albums_local'),
-            itemCount: localAlbums.length,
-            itemBuilder: (context, index) {
-              final album = localAlbums[index];
-              return _LocalAlbumTile(album: album);
-            },
-          ),
-        ],
-        if (_cloudAlbums.isNotEmpty) ...[
-          SliverToBoxAdapter(
-            child: _SectionHeaderRow(
-              title: '来自云音乐',
-              trailing: '显示全部',
-              onTrailingTap: () =>
-                  _push(context, const FavoritesPage(initialTab: 2)),
-            ),
-          ),
-          _SliverCoverGrid(
-            key: const PageStorageKey('hub_albums_cloud'),
-            itemCount: _cloudAlbums.length,
-            itemBuilder: (context, index) =>
-                _CloudAlbumTile(album: _cloudAlbums[index]),
-          ),
-        ],
-        SliverToBoxAdapter(
-          child: SizedBox(height: MediaQuery.paddingOf(context).bottom),
-        ),
-      ],
-    );
-  }
-
-  // ==================== C3. 歌手 ====================
-
-  Widget _buildArtistsSegment(BuildContext context, LibraryProvider library) {
-    final localArtists = library.artists;
-    if (localArtists.isEmpty && _cloudArtists.isEmpty) {
-      return const _SegmentEmptyState(text: '暂无歌手');
-    }
-
-    return CustomScrollView(
-      key: const PageStorageKey('hub_artists'),
-      physics: const AlwaysScrollableScrollPhysics(),
-      slivers: [
-        if (localArtists.isNotEmpty) ...[
-          const SliverToBoxAdapter(child: _SectionHeaderRow(title: '本地的歌手')),
-          _SliverCoverGrid(
-            key: const PageStorageKey('hub_artists_local'),
-            itemCount: localArtists.length,
-            itemBuilder: (context, index) =>
-                _LocalArtistTile(artist: localArtists[index]),
-          ),
-        ],
-        if (_cloudArtists.isNotEmpty) ...[
-          SliverToBoxAdapter(
-            child: _SectionHeaderRow(
-              title: '来自云音乐',
-              trailing: '显示全部',
-              onTrailingTap: () =>
-                  _push(context, const FavoritesPage(initialTab: 3)),
-            ),
-          ),
-          _SliverCoverGrid(
-            key: const PageStorageKey('hub_artists_cloud'),
-            itemCount: _cloudArtists.length,
-            itemBuilder: (context, index) =>
-                _CloudArtistTile(artist: _cloudArtists[index]),
-          ),
-        ],
-        SliverToBoxAdapter(
-          child: SizedBox(height: MediaQuery.paddingOf(context).bottom),
-        ),
-      ],
-    );
-  }
-
-  // ==================== C4. 歌曲 ====================
-
-  Widget _buildSongsSegment(BuildContext context, LibraryProvider library) {
+  Widget _buildLocalSegment(BuildContext context, LibraryProvider library) {
     if (library.isScanning && !library.hasMusic) {
       return const _ScanningState();
     }
@@ -485,75 +383,111 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     }
 
     final songs = _sortedSongs(library.songs);
+    final albums = library.albums;
+    final artists = library.artists;
 
-    return Column(
-      children: [
-        // 入口行（§2.4）：本地收藏 / 文件夹，squircle 卡底 surfaceContainerHigh α0.6
-        Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: SonifySpacing.titleMargin,
-          ),
-          child: Column(
-            children: [
-              _EntryRow(
-                key: const ValueKey('hub-entry-local-favorites'),
-                icon: Icons.favorite,
-                iconColor: Theme.of(context).colorScheme.primary,
-                label: '本地收藏',
-                detail:
-                    '${context.watch<LocalFavoritesProvider>().favoriteIds.length} 首',
-                onTap: () => _push(context, const LibraryPage(initialTab: 4)),
-              ),
-              const Gap(AppSpacing.xs),
-              _EntryRow(
-                key: const ValueKey('hub-entry-folders'),
-                icon: Icons.folder_outlined,
-                iconColor: Theme.of(context).colorScheme.onSurfaceVariant,
-                label: '文件夹',
-                detail: '${library.scanFolders.length} 个目录',
-                onTap: () => _push(context, const LibraryPage(initialTab: 3)),
-              ),
-            ],
-          ),
-        ),
-        const Gap(AppSpacing.sm),
-        // 随机播放胶囊（§2.4）：stadium，primaryContainer
-        Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: SonifySpacing.titleMargin,
-          ),
-          child: Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: _RandomPlayPill(songs: songs),
-          ),
-        ),
-        const Gap(AppSpacing.sm),
-        Expanded(
-          child: M3EPullToRefreshIndicator(
-            onRefresh: _refresh,
-            child: ListView.builder(
-              key: const PageStorageKey('hub_songs'),
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.paddingOf(context).bottom,
-              ),
-              itemCount: songs.length,
-              itemBuilder: (context, index) {
-                return _SongRow(
-                  song: songs[index],
-                  onTap: () {
-                    context.read<PlayerProvider>().playPlaylist(songs, index);
-                  },
-                );
-              },
+    return M3EPullToRefreshIndicator(
+      onRefresh: _refresh,
+      child: CustomScrollView(
+        key: const PageStorageKey('hub_local'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          // 入口行（本地收藏 / 文件夹）+ 随机播放胶囊
+          SliverToBoxAdapter(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: SonifySpacing.titleMargin,
+                  ),
+                  child: Column(
+                    children: [
+                      _EntryRow(
+                        key: const ValueKey('hub-entry-local-favorites'),
+                        icon: Icons.favorite,
+                        iconColor: Theme.of(context).colorScheme.primary,
+                        label: '本地收藏',
+                        detail:
+                            '${context.watch<LocalFavoritesProvider>().favoriteIds.length} 首',
+                        onTap: () =>
+                            _push(context, const LibraryPage(initialTab: 4)),
+                      ),
+                      const Gap(AppSpacing.xs),
+                      _EntryRow(
+                        key: const ValueKey('hub-entry-folders'),
+                        icon: Icons.folder_outlined,
+                        iconColor:
+                            Theme.of(context).colorScheme.onSurfaceVariant,
+                        label: '文件夹',
+                        detail: '${library.scanFolders.length} 个目录',
+                        onTap: () =>
+                            _push(context, const LibraryPage(initialTab: 3)),
+                      ),
+                    ],
+                  ),
+                ),
+                const Gap(AppSpacing.sm),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: SonifySpacing.titleMargin,
+                  ),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: _RandomPlayPill(songs: songs),
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
-      ],
+          // 本地专辑网格
+          if (albums.isNotEmpty) ...[
+            const SliverToBoxAdapter(child: _SectionHeaderRow(title: '专辑')),
+            _SliverCoverGrid(
+              key: const PageStorageKey('hub_local_albums'),
+              itemCount: albums.length,
+              itemBuilder: (context, index) =>
+                  _LocalAlbumTile(album: albums[index]),
+            ),
+          ],
+          // 本地歌手网格
+          if (artists.isNotEmpty) ...[
+            const SliverToBoxAdapter(child: _SectionHeaderRow(title: '歌手')),
+            _SliverCoverGrid(
+              key: const PageStorageKey('hub_local_artists'),
+              itemCount: artists.length,
+              itemBuilder: (context, index) =>
+                  _LocalArtistTile(artist: artists[index]),
+            ),
+          ],
+          // 歌曲列表（顶栏排序钮作用于本列表）
+          const SliverToBoxAdapter(child: _SectionHeaderRow(title: '歌曲')),
+          SliverPadding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.paddingOf(context).bottom,
+            ),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  return _SongRow(
+                    song: songs[index],
+                    onTap: () {
+                      context
+                          .read<PlayerProvider>()
+                          .playPlaylist(songs, index);
+                    },
+                  );
+                },
+                childCount: songs.length,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  /// 歌曲段排序（顶栏排序钮语义，§4.4）。
+  /// 歌曲排序（顶栏排序钮语义，§4.4）。
   /// 添加时间：原列表顺序视为添加顺序（与 SongsPage 同口径）。
   List<Song> _sortedSongs(List<Song> songs) {
     final list = List<Song>.from(songs);
@@ -579,7 +513,7 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
 
 // ==================== 通用子组件 ====================
 
-/// 分区（C1 纵向列表用）：分区标题 + 可选「显示全部」+ 内容。
+/// 分区（收藏段纵向列表用）：分区标题 + 可选「显示全部」+ 内容。
 class _Section extends StatelessWidget {
   const _Section({
     required this.title,
@@ -638,21 +572,14 @@ class _Section extends StatelessWidget {
   }
 }
 
-/// C2/C3 分区标题行（由 SliverToBoxAdapter 直接承载）。
+/// 本地段分区标题行（由 SliverToBoxAdapter 直接承载）。
 class _SectionHeaderRow extends StatelessWidget {
-  const _SectionHeaderRow({
-    required this.title,
-    this.trailing,
-    this.onTrailingTap,
-  });
+  const _SectionHeaderRow({required this.title});
 
   final String title;
-  final String? trailing;
-  final VoidCallback? onTrailingTap;
 
   @override
   Widget build(BuildContext context) {
-    final sonify = SonifyColors.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         SonifySpacing.gridEdge,
@@ -660,37 +587,17 @@ class _SectionHeaderRow extends StatelessWidget {
         SonifySpacing.gridEdge,
         AppSpacing.md,
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              title,
-              style: SonifyTextStyles.sectionTitle.copyWith(
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
-            ),
-          ),
-          if (trailing != null && onTrailingTap != null)
-            InkWell(
-              onTap: onTrailingTap,
-              borderRadius: BorderRadius.circular(AppRadius.xs),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
-                child: Text(
-                  trailing ?? '',
-                  style: SonifyTextStyles.listItem.copyWith(
-                    color: sonify.primary,
-                  ),
-                ),
-              ),
-            ),
-        ],
+      child: Text(
+        title,
+        style: SonifyTextStyles.sectionTitle.copyWith(
+          color: Theme.of(context).colorScheme.onSurface,
+        ),
       ),
     );
   }
 }
 
-/// C2/C3 封面网格 sliver：按 150dp 最小封面自适应列数（coverRailMin），
+/// 封面网格 sliver：按 150dp 最小封面自适应列数（coverRailMin），
 /// 列距 gridH 15 / 行距 gridV 20 / 边缘 gridEdge 18（§2.4）。
 class _SliverCoverGrid extends StatelessWidget {
   const _SliverCoverGrid({
@@ -767,38 +674,9 @@ class _TileText extends StatelessWidget {
   }
 }
 
-/// 网络封面（云端歌单/专辑/歌手，缓存链路同 FavoritesPage）。
-class _NetworkCover extends StatelessWidget {
-  const _NetworkCover({this.url, required this.placeholderIcon});
+// ==================== 收藏段轨道与列表 ====================
 
-  final String? url;
-  final IconData placeholderIcon;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final placeholder = Container(
-      color: cs.surfaceContainerHighest,
-      child: Icon(placeholderIcon, size: 24, color: cs.onSurfaceVariant),
-    );
-    if (url == null || url!.isEmpty) return placeholder;
-    return CachedNetworkImage(
-      // http:// 混合资源按 FavoritesPage 同款规则升级 https
-      imageUrl: url!.startsWith('http://')
-          ? url!.replaceFirst('http://', 'https://')
-          : url!,
-      memCacheWidth: 300,
-      memCacheHeight: 300,
-      fit: BoxFit.cover,
-      placeholder: (_, _) => placeholder,
-      errorWidget: (_, _, _) => placeholder,
-    );
-  }
-}
-
-// ==================== C1 轨道与列表 ====================
-
-/// 歌单横滑轨道（FavoritesPage 同源数据）。
+/// 歌单横滑轨道（FavoritesPage 同源数据；创建/收藏两个分区共用）。
 class _PlaylistRail extends StatelessWidget {
   const _PlaylistRail({required this.playlists});
 
@@ -874,214 +752,31 @@ class _PlaylistRail extends StatelessWidget {
   }
 }
 
-/// 最近添加专辑横滑轨道：本地（扫描序倒序）+ 云端收藏。
-class _AlbumRail extends StatelessWidget {
-  const _AlbumRail({required this.localAlbums, required this.cloudAlbums});
+/// 网络封面（云端歌单，缓存链路同 FavoritesPage）。
+class _NetworkCover extends StatelessWidget {
+  const _NetworkCover({this.url, required this.placeholderIcon});
 
-  final List<Album> localAlbums;
-  final List<KugouPlaylistBrief> cloudAlbums;
+  final String? url;
+  final IconData placeholderIcon;
 
   @override
   Widget build(BuildContext context) {
-    final library = context.read<LibraryProvider>();
-    const cover = _HubDimens.railCover;
-    return SizedBox(
-      height: cover + AppSpacing.xs + 44,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(
-          SonifySpacing.titleMargin,
-          0,
-          AppSpacing.sm,
-          0,
-        ),
-        itemCount: localAlbums.length + cloudAlbums.length,
-        itemBuilder: (context, index) {
-          if (index < localAlbums.length) {
-            final album = localAlbums[index];
-            return _RailCoverItem(
-              width: cover,
-              artwork: SmartArtworkImage(
-                artworkUri: album.artworkUri,
-                size: cover,
-                borderRadius: AppRadius.sm,
-              ),
-              title: album.name,
-              subtitle: album.artist,
-              onTap: () {
-                AdaptiveNav.openDetail(
-                  context,
-                  (_) => AlbumSongsPage(
-                    album: album,
-                    songs: library.getSongsInAlbum(album.name),
-                  ),
-                );
-              },
-            );
-          }
-          final cloud = cloudAlbums[index - localAlbums.length];
-          return _RailCoverItem(
-            width: cover,
-            artwork: _NetworkCover(url: cloud.coverUrl, placeholderIcon: Icons.album),
-            title: cloud.name,
-            subtitle: '${cloud.songCount} 首',
-            onTap: () {
-              AdaptiveNav.openDetail(
-                context,
-                (_) => PlaylistPage(
-                  playlist: cloud.toPlaylist(),
-                  isInMyFavorites: true,
-                  isAlbum: true,
-                ),
-              );
-            },
-          );
-        },
-      ),
+    final cs = Theme.of(context).colorScheme;
+    final placeholder = Container(
+      color: cs.surfaceContainerHighest,
+      child: Icon(placeholderIcon, size: 24, color: cs.onSurfaceVariant),
     );
-  }
-}
-
-/// 歌手头像横滑轨道：本地（正圆 96）+ 云端关注歌手。
-class _ArtistRail extends StatelessWidget {
-  const _ArtistRail({required this.localArtists, required this.cloudArtists});
-
-  final List<Artist> localArtists;
-  final List<Map<String, dynamic>> cloudArtists;
-
-  @override
-  Widget build(BuildContext context) {
-    final library = context.read<LibraryProvider>();
-    const avatar = _HubDimens.railAvatar;
-    return SizedBox(
-      height: avatar + AppSpacing.xs + 22,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(
-          SonifySpacing.titleMargin,
-          0,
-          AppSpacing.sm,
-          0,
-        ),
-        itemCount: localArtists.length + cloudArtists.length,
-        itemBuilder: (context, index) {
-          if (index < localArtists.length) {
-            final artist = localArtists[index];
-            return _RailCoverItem(
-              width: avatar,
-              artwork: ClipOval(
-                child: SmartArtworkImage(
-                  artworkUri: artist.artworkUri,
-                  size: avatar,
-                ),
-              ),
-              title: artist.name,
-              onTap: () {
-                AdaptiveNav.openDetail(
-                  context,
-                  (_) => ArtistSongsPage(
-                    artist: artist,
-                    songs: library.getSongsByArtist(artist.name),
-                  ),
-                );
-              },
-            );
-          }
-          final cloud = cloudArtists[index - localArtists.length];
-          final name =
-              (cloud['nickname'] ?? cloud['user_name'] ?? cloud['name'] ?? '')
-                  .toString();
-          final avatarUrl = _fixImageUrl(
-            (cloud['pic'] ??
-                    cloud['user_pic'] ??
-                    cloud['user_img'] ??
-                    cloud['avatar'])
-                ?.toString(),
-          );
-          final id =
-              cloud['singerid']?.toString() ??
-              cloud['userid']?.toString() ??
-              cloud['id']?.toString() ??
-              '';
-          return _RailCoverItem(
-            width: avatar,
-            artwork: ClipOval(
-              child: _NetworkCover(url: avatarUrl, placeholderIcon: Icons.person),
-            ),
-            title: name,
-            onTap: () {
-              AdaptiveNav.openDetail(
-                context,
-                (_) => ArtistDetailPage(
-                  artistId: id,
-                  artistName: name,
-                  avatarUrl: avatarUrl,
-                  initialIsFollowed: true,
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-
-  String? _fixImageUrl(String? url) {
-    if (url == null) return null;
-    return url.startsWith('http://')
-        ? url.replaceFirst('http://', 'https://')
-        : url;
-  }
-}
-
-/// 轨道通用封面项：封面 + 名称（+ 次级行）。
-class _RailCoverItem extends StatelessWidget {
-  const _RailCoverItem({
-    required this.width,
-    required this.artwork,
-    required this.title,
-    this.subtitle,
-    required this.onTap,
-  });
-
-  final double width;
-  final Widget artwork;
-  final String title;
-  final String? subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: width,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.sm),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(width: width, height: width, child: artwork),
-            const Gap(AppSpacing.xs),
-            Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: SonifyTextStyles.listItem.copyWith(
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
-            ),
-            if (subtitle != null)
-              Text(
-                subtitle!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: SonifyTextStyles.listItem.copyWith(
-                  color: SonifyColors.of(context).textSecondary,
-                ),
-              ),
-          ],
-        ),
-      ),
+    if (url == null || url!.isEmpty) return placeholder;
+    return CachedNetworkImage(
+      // http:// 混合资源按 FavoritesPage 同款规则升级 https
+      imageUrl: url!.startsWith('http://')
+          ? url!.replaceFirst('http://', 'https://')
+          : url!,
+      memCacheWidth: 300,
+      memCacheHeight: 300,
+      fit: BoxFit.cover,
+      placeholder: (_, _) => placeholder,
+      errorWidget: (_, _, _) => placeholder,
     );
   }
 }
@@ -1158,7 +853,7 @@ class _RecentPlayList extends StatelessWidget {
   }
 }
 
-// ==================== C2/C3 网格瓦片 ====================
+// ==================== 本地段网格瓦片 ====================
 
 class _LocalAlbumTile extends StatelessWidget {
   const _LocalAlbumTile({required this.album});
@@ -1196,42 +891,6 @@ class _LocalAlbumTile extends StatelessWidget {
           ),
           const Gap(AppSpacing.xs),
           _TileText(title: album.name, subtitle: album.artist),
-        ],
-      ),
-    );
-  }
-}
-
-class _CloudAlbumTile extends StatelessWidget {
-  const _CloudAlbumTile({required this.album});
-
-  final KugouPlaylistBrief album;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () {
-        AdaptiveNav.openDetail(
-          context,
-          (_) => PlaylistPage(
-            playlist: album.toPlaylist(),
-            isInMyFavorites: true,
-            isAlbum: true,
-          ),
-        );
-      },
-      borderRadius: BorderRadius.circular(AppRadius.sm),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-              child: _NetworkCover(url: album.coverUrl, placeholderIcon: Icons.album),
-            ),
-          ),
-          const Gap(AppSpacing.xs),
-          _TileText(title: album.name, subtitle: '${album.songCount} 首'),
         ],
       ),
     );
@@ -1281,64 +940,9 @@ class _LocalArtistTile extends StatelessWidget {
   }
 }
 
-class _CloudArtistTile extends StatelessWidget {
-  const _CloudArtistTile({required this.artist});
+// ==================== 本地段入口行 / 胶囊 / 歌曲行 ====================
 
-  final Map<String, dynamic> artist;
-
-  @override
-  Widget build(BuildContext context) {
-    final name =
-        (artist['nickname'] ?? artist['user_name'] ?? artist['name'] ?? '')
-            .toString();
-    final avatarUrl = _fixImageUrl(
-      (artist['pic'] ?? artist['user_pic'] ?? artist['user_img'] ?? artist['avatar'])
-          ?.toString(),
-    );
-    final id =
-        artist['singerid']?.toString() ??
-        artist['userid']?.toString() ??
-        artist['id']?.toString() ??
-        '';
-    return InkWell(
-      onTap: () {
-        AdaptiveNav.openDetail(
-          context,
-          (_) => ArtistDetailPage(
-            artistId: id,
-            artistName: name,
-            avatarUrl: avatarUrl,
-            initialIsFollowed: true,
-          ),
-        );
-      },
-      borderRadius: BorderRadius.circular(AppRadius.sm),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: ClipOval(
-              child: _NetworkCover(url: avatarUrl, placeholderIcon: Icons.person),
-            ),
-          ),
-          const Gap(AppSpacing.xs),
-          _TileText(title: name),
-        ],
-      ),
-    );
-  }
-
-  String? _fixImageUrl(String? url) {
-    if (url == null) return null;
-    return url.startsWith('http://')
-        ? url.replaceFirst('http://', 'https://')
-        : url;
-  }
-}
-
-// ==================== C4 入口行 / 胶囊 / 歌曲行 ====================
-
-/// C4 入口行（§2.4）：44dp、squircle 卡底 surfaceContainerHigh α0.6。
+/// 入口行（§2.4）：44dp、squircle 卡底 surfaceContainerHigh α0.6。
 class _EntryRow extends StatelessWidget {
   const _EntryRow({
     super.key,

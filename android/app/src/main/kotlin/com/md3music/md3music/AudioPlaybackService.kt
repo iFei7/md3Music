@@ -1,6 +1,5 @@
 package com.md3music.md3music
 
-import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -54,19 +53,21 @@ class AudioPlaybackService : Service() {
         // 隐藏渠道（v3 全新 ID——渠道重要度创建后不可改，同 ID 删重建不保证生效）。
         // 旧 ID（历史可见保活渠道 + 占位通知渠道）在 createNotificationChannel 中删除。
         // 批次11：IMPORTANCE_NONE 渠道在部分 ROM 仍会把 FGS 通知展示在通知栏，
-        // 出现媒体通知 + 保活通知双条。稳态收敛为单条：确认 media3 服务已连接、
-        // 其通知（ID 1001）已发布且其 FGS 激活后，本服务撤除自身保活前台通知
-        // （服务保持 started 继续运行，不 stopSelf），由 media3 通知充当进程唯一
-        // 前台载体；media3 断连/绑定死亡/FGS 丢失时本服务恢复保活前台
-        // （见 media3ServiceConnection / scheduleKeepaliveForegroundRemoval）。
+        // 出现媒体通知 + 保活通知双条。曾以「四条件轮询」（media3 已连接 + 播放中 +
+        // 通知 1001 已发布 + getRunningServices 读到其 FGS 标志）驱动撤除，Android 14
+        // 真机实测失效：isMedia3ServiceForeground 依赖的 foreground 标志在该设备上
+        // 不可靠（轮询永不满足或撤除后被 800ms 复查拉回），保活通知依旧常驻。
+        // 批次12：改为确定性撤除——startForeground（满足 5 秒合规）后固定延时无条件
+        // stopForeground(STOP_FOREGROUND_REMOVE)。撤除是尽力而为：此刻 media3 FGS 已
+        // 激活则进程无缝受其保护；未激活则短暂降级为服务进程优先级，media3 通知出现
+        // 后即恢复 FGS。showNotification 重入在保活已撤除且 media3 连接正常时跳过
+        // startForeground，避免切歌/周期刷新反复闪现保活通知；恢复仅由 media3 断连/
+        // 绑定死亡事件触发（见 media3ServiceConnection / restoreKeepaliveForeground）。
         // fork DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID 同步此值。
         private const val MEDIA3_NOTIFICATION_ID = 1001
-        // 批次11：保活前台撤除轮询参数——media3 通知仅在播放态 startForeground，
-        // 绑定成功后轮询确认，超时放弃（保留自身保活通知，宁双条不裸奔）。
-        private const val KEEPALIVE_REMOVAL_POLL_MS = 500L
-        private const val KEEPALIVE_REMOVAL_MAX_ATTEMPTS = 10
-        // 撤除后延迟复查：确认 media3 FGS 仍存活，否则立即恢复保活前台
-        private const val KEEPALIVE_REMOVAL_VERIFY_DELAY_MS = 800L
+        // 批次12：startForeground 合规后到确定性撤除保活前台的固定延时
+        //（覆盖 media3 播放启动并 startForeground 的典型耗时，实现通知载体无缝交接）。
+        private const val KEEPALIVE_REMOVAL_DELAY_MS = 1500L
         private const val LEGACY_KEEPALIVE_CHANNEL_ID = "md3music_keepalive"
         private const val LEGACY_KEEPALIVE_CHANNEL_ID_V2 = "md3music_keepalive_v2"
         private const val LEGACY_VISIBLE_CHANNEL_ID = "md3music_audio_playback"
@@ -538,7 +539,6 @@ class AudioPlaybackService : Service() {
         }
     }
 
-    private var notificationManager: NotificationManager? = null
     private var receiver: BroadcastReceiver? = null
     private var flutterEngine: FlutterEngine? = null
 
@@ -582,23 +582,23 @@ class AudioPlaybackService : Service() {
 
     // 方案B阶段1：绑定媒体3会话承载服务，使其 onCreate 注册为 fork 的 host（渲染 now playing 通知）
     private var media3ServiceBound = false
-    // 批次11：media3 服务连接状态 + 保活前台撤除状态（跨线程读写，标 volatile）
+    // 批次12：media3 服务连接状态 + 保活前台撤除状态（跨线程读写，标 volatile）
     @Volatile
     private var media3ServiceConnected = false
     @Volatile
     private var keepaliveForegroundHidden = false
     private val keepaliveForegroundHandler = Handler(Looper.getMainLooper())
-    private var keepaliveForegroundRemovalAttempts = 0
     private val media3ServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             media3ServiceConnected = true
-            Log.i(TAG, "media3 service connected, schedule keepalive foreground removal")
-            scheduleKeepaliveForegroundRemoval()
+            Log.i(TAG, "media3 service connected")
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            // 批次11：media3 服务被杀/被系统单独停止（同进程下少见，防御性处理）。
-            // 进程失去 FGS 载体，立即恢复本服务保活前台，避免后台裸奔（阶段7 后遗症）。
+            // media3 服务被杀/被系统单独停止（同进程下少见，防御性处理）。
+            // 进程失去 FGS 载体，恢复本服务保活前台（批次12：保活前台唯一的自动
+            // 恢复路径；重挂后不再排定撤除，保持到 media3 重新就绪并由下一次
+            // 通知更新走确定性撤除流程收敛稳态）。
             media3ServiceConnected = false
             Log.w(TAG, "media3 service disconnected, restore keepalive foreground")
             restoreKeepaliveForeground("onServiceDisconnected")
@@ -653,7 +653,6 @@ class AudioPlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        notificationManager = getSystemService(NotificationManager::class.java)
         registerReceiver()
         // P0: 不再在 onCreate 无条件持有 WakeLock（此时未必在播放）。
         // 仅当 onStartCommand 收到 isPlaying=true 时才持有，暂停时释放。
@@ -894,14 +893,16 @@ class AudioPlaybackService : Service() {
     ///
     /// 阶段9：保活通知改走 IMPORTANCE_NONE 隐藏渠道（见 KEEPALIVE_CHANNEL_ID）。
     ///
-    /// 批次11：IMPORTANCE_NONE 渠道在部分 ROM 仍会把 FGS 通知展示在通知栏，
-    /// 出现媒体通知 + 保活通知双条。稳态收敛为单条：确认 media3 服务已连接、
-    /// 其通知已发布且其 FGS 激活后，本服务 stopForeground(STOP_FOREGROUND_REMOVE)
-    /// 撤除保活通知（服务保持 started 继续保活后台 Flutter 引擎/WakeLock/SuperLyric，
-    /// 不 stopSelf），进程前台优先级由 media3 FGS 提供。media3 断连/绑定死亡/
-    /// 撤除后复查发现 FGS 丢失时，恢复本服务保活前台（restoreKeepaliveForeground）。
-    /// 注意：startForeground 仍每次保留（startForegroundService 5 秒合规），
-    /// 撤除在其成功之后进行（hideKeepaliveForeground）。
+    /// 批次12：IMPORTANCE_NONE 渠道在部分 ROM 仍会把 FGS 通知展示在通知栏，
+    /// 出现媒体通知 + 保活通知双条。v1 的四条件轮询撤除在 Android 14 真机失效
+    /// （getRunningServices 的 foreground 标志不可靠，轮询永不满足或撤除后被复查
+    /// 拉回），保活通知常驻。v2 改为确定性撤除：startForeground（满足 5 秒合规）
+    /// 后固定延时无条件 stopForeground(STOP_FOREGROUND_REMOVE)，不再探测 media3
+    /// FGS 状态。撤除是尽力而为：此刻 media3 FGS 已激活（大多数播放场景）则进程
+    /// 无缝受其保护；未激活则短暂降级为服务进程优先级，可接受（播放由 media3
+    /// 承载，其通知出现后即恢复 FGS 保护）。
+    /// 注意：恢复仅由 media3 断连/绑定死亡事件触发（restoreKeepaliveForeground），
+    /// 撤除后不再做任何复查拉回。
     private fun startForegroundDetached(builder: NotificationCompat.Builder) {
         // 不再给桌面歌词或 Media3 服务让位。播放服务自身保持 FGS，避免其他前台
         // 服务状态切换期间出现保活空档，导致后台网络、切歌和歌曲留存被系统限制。
@@ -909,10 +910,12 @@ class AudioPlaybackService : Service() {
             startForeground(NOTIFICATION_ID, builder.build())
             foregroundStarted = true
             keepaliveForegroundHidden = false
-            Log.d(TAG, "startForegroundDetached: foreground kept (no detach)")
-            // 批次11：每次重新进入前台后重试撤除——若 media3 FGS 已激活则立即/轮询
-            // 撤掉本服务保活通知，收敛为单条媒体通知（撤除条件见 keepaliveForegroundProbe）。
-            scheduleKeepaliveForegroundRemoval()
+            Log.d(TAG, "startForegroundDetached: foreground kept, removal in ${KEEPALIVE_REMOVAL_DELAY_MS}ms")
+            // 批次12：确定性撤除——固定延时后无条件撤掉本服务保活通知，收敛为
+            // 单条媒体通知；撤除后不复查（恢复仅由断连/绑定死亡事件驱动）。
+            keepaliveForegroundHandler.removeCallbacksAndMessages(null)
+            keepaliveForegroundHandler.postDelayed(
+                keepaliveForegroundRemoval, KEEPALIVE_REMOVAL_DELAY_MS)
         } catch (e: Throwable) {
             // 阶段6修复：导航等 App 夺走音频焦点后本 App 转后台，此时通知更新触发
             // 的服务启动可能被系统拒绝（ForegroundServiceStartNotAllowedException，
@@ -933,8 +936,9 @@ class AudioPlaybackService : Service() {
         }
     }
 
-    /// 批次11：保活通知 builder 工厂（refreshKeepaliveForeground / showNotification /
-    /// restoreKeepaliveForeground 共用，IMPORTANCE_NONE 隐藏渠道 + PRIORITY_MIN）。
+    /// 批次12：保活通知 builder 工厂（refreshKeepaliveForeground / showNotification /
+    /// restoreKeepaliveForeground / ensureForeground 共用，IMPORTANCE_NONE 隐藏渠道
+    /// + PRIORITY_MIN）。
     private fun keepaliveNotificationBuilder(): NotificationCompat.Builder {
         return NotificationCompat.Builder(this, KEEPALIVE_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_monochrome)
@@ -948,73 +952,12 @@ class AudioPlaybackService : Service() {
             .setSilent(true)
     }
 
-    /// 批次11：media3 媒体通知（ID 1001）是否已发布。
-    /// DefaultMediaNotificationProvider 仅在播放态发布；暂停时通知保留但
-    /// media3 服务会退出前台（fork startInForegroundWhenPaused=false），
-    /// 故还需 isMedia3ServiceForeground 确认 FGS 实际存活。
-    private fun isMedia3NotificationPosted(): Boolean {
-        return try {
-            notificationManager?.activeNotifications?.any {
-                it.packageName == packageName && it.id == MEDIA3_NOTIFICATION_ID
-            } ?: false
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    /// 批次11：MD3MusicMediaSessionService 是否处于前台服务状态。
-    /// fork 的 MediaNotificationManager 在后台启动播放被系统拒绝时会降级为
-    /// 纯 notify()（通知已发布但服务并非 FGS），仅凭通知可见性判断会误撤，
-    /// 这里用 getRunningServices（仅查询本进程，仍可用）读服务的 foreground 标志。
-    private fun isMedia3ServiceForeground(): Boolean {
-        return try {
-            val am = getSystemService(ActivityManager::class.java)
-            @Suppress("DEPRECATION")
-            am.getRunningServices(Int.MAX_VALUE)?.any {
-                it.service.className == MD3MusicMediaSessionService::class.java.name &&
-                    it.foreground
-            } ?: false
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    /// 批次11：重置并启动保活前台撤除轮询（onServiceConnected / startForegroundDetached
-    /// 成功后调用）。撤除条件：media3 已连接 + 播放中 + 其通知已发布 + 其 FGS 已激活。
-    private fun scheduleKeepaliveForegroundRemoval() {
-        keepaliveForegroundHandler.removeCallbacksAndMessages(null)
-        keepaliveForegroundRemovalAttempts = 0
-        keepaliveForegroundHandler.post(keepaliveForegroundProbe)
-    }
-
-    // 批次11：撤除轮询。media3 FGS 就绪 → 撤除本服务保活通知；未就绪 → 短轮询，
-    // 超时放弃并保留自身保活通知（宁双条不裸奔，日志便于定位 ROM 行为）。
-    private val keepaliveForegroundProbe = object : Runnable {
-        override fun run() {
-            if (keepaliveForegroundHidden) return
-            if (!media3ServiceBound || !media3ServiceConnected) return
-            if (!lastIsPlaying) return
-            if (isMedia3NotificationPosted() && isMedia3ServiceForeground()) {
-                hideKeepaliveForeground()
-                return
-            }
-            keepaliveForegroundRemovalAttempts++
-            if (keepaliveForegroundRemovalAttempts <= KEEPALIVE_REMOVAL_MAX_ATTEMPTS) {
-                keepaliveForegroundHandler.postDelayed(this, KEEPALIVE_REMOVAL_POLL_MS)
-            } else {
-                Log.d(
-                    TAG,
-                    "keepalive foreground removal: media3 FGS not confirmed in " +
-                        "$KEEPALIVE_REMOVAL_MAX_ATTEMPTS polls, keep own notification"
-                )
-            }
-        }
-    }
-
-    /// 批次11：撤除本服务保活前台通知（服务保持 started，不 stopSelf）。
-    /// 撤除后延迟复查 media3 FGS 是否仍存活：丢失则立即恢复保活前台，
-    /// 避免进程在后台裸奔导致网络受限（阶段7）或播放进程被杀。
-    private fun hideKeepaliveForeground() {
+    /// 批次12：确定性撤除——startForeground 满足 5 秒合规后由
+    /// startForegroundDetached 延时调度。无条件撤除本服务保活前台通知
+    /// （服务保持 started，不 stopSelf），进程前台优先级交给 media3 FGS；
+    /// 此后不再复查拉回，恢复仅由 media3 断连/绑定死亡事件触发。
+    private val keepaliveForegroundRemoval = Runnable {
+        if (keepaliveForegroundHidden) return@Runnable
         try {
             stopForeground(STOP_FOREGROUND_REMOVE)
             keepaliveForegroundHidden = true
@@ -1023,26 +966,20 @@ class AudioPlaybackService : Service() {
                 "Keepalive foreground removed (id=$NOTIFICATION_ID), " +
                     "media3 notification (id=$MEDIA3_NOTIFICATION_ID) is the sole FGS carrier"
             )
-            keepaliveForegroundHandler.postDelayed({
-                if (keepaliveForegroundHidden && lastIsPlaying && !isMedia3ServiceForeground()) {
-                    Log.w(TAG, "media3 FGS lost after keepalive removal, restore keepalive foreground")
-                    restoreKeepaliveForeground("post-removal-check")
-                }
-            }, KEEPALIVE_REMOVAL_VERIFY_DELAY_MS)
         } catch (e: Throwable) {
-            Log.w(TAG, "hideKeepaliveForeground failed: ${e.javaClass.simpleName}: ${e.message}")
+            Log.w(TAG, "keepalive foreground removal failed: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
-    /// 批次11：恢复本服务保活前台（media3 断连/绑定死亡/撤除后 FGS 丢失）。
-    /// 复用隐藏渠道 builder，重新 startForeground；若随后 media3 重新就绪，
-    /// onServiceConnected / 下一次通知更新会再次走撤除流程收敛稳态。
+    /// 批次12：恢复本服务保活前台（media3 断连/绑定死亡，保活前台唯一的自动
+    /// 恢复路径）。重挂后不排定撤除——保活前台保持到 media3 重新就绪，并由
+    /// 下一次通知更新走确定性撤除流程收敛稳态。复用隐藏渠道 builder。
     private fun restoreKeepaliveForeground(reason: String) {
         keepaliveForegroundHandler.removeCallbacksAndMessages(null)
         keepaliveForegroundHidden = false
         if (!foregroundStarted) return
         try {
-            startForegroundDetached(keepaliveNotificationBuilder())
+            startForeground(NOTIFICATION_ID, keepaliveNotificationBuilder().build())
             Log.i(TAG, "Keepalive foreground restored (reason=$reason)")
         } catch (e: Throwable) {
             Log.w(TAG, "restoreKeepaliveForeground failed: ${e.javaClass.simpleName}: ${e.message}")
@@ -1056,13 +993,10 @@ class AudioPlaybackService : Service() {
         if (foregroundStarted) return
         foregroundStarted = true
         try {
-            val builder = NotificationCompat.Builder(this, KEEPALIVE_CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launcher_monochrome)
-                .setContentTitle("Grace Music")
-                .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .setPriority(NotificationCompat.PRIORITY_MIN)
-            startForegroundDetached(builder)
+            // 批次12：builder 收敛到 keepaliveNotificationBuilder（隐藏渠道共用工厂）。
+            // 媒体键唤醒必须先 startForeground（startForegroundService 5 秒合规），
+            // 随后由确定性撤除在延时后移交 media3 FGS。
+            startForegroundDetached(keepaliveNotificationBuilder())
         } catch (_: Exception) {}
     }
 
@@ -1076,8 +1010,10 @@ class AudioPlaybackService : Service() {
             try { stopSelf() } catch (_: Throwable) {}
             return
         }
+        // 批次12：保活已撤除且 media3 连接正常时无需重挂（media3 FGS 是当前
+        // 进程前台载体，重挂只会在撤除延时内闪现保活通知）。
+        if (keepaliveForegroundHidden && media3ServiceConnected) return
         try {
-            // 批次11：builder 收敛到 keepaliveNotificationBuilder（隐藏渠道共用工厂）
             startForegroundDetached(keepaliveNotificationBuilder())
         } catch (_: Throwable) {}
     }
@@ -1743,7 +1679,8 @@ class AudioPlaybackService : Service() {
         lastIsPlaying = isPlaying
         lastIsFavorited = isFavorited
         lastDuration = duration
-        // 通知会在下方所有分支中调用 startForeground，标记已进入前台
+        // 常规分支会调用 startForeground，标记已进入前台；跳过分支（见下）说明
+        // 本实例此前已成功 startForeground（保活已撤除 implies 合规已完成）
         foregroundStarted = true
         // 方案B阶段4：随通知更新把收藏状态推到媒体3会话（渲染成通知栏按钮）。
         pushMedia3CustomActions(isFavorited)
@@ -1758,11 +1695,10 @@ class AudioPlaybackService : Service() {
         // 封面大图/标题/艺术家/上一首/播放暂停/下一首/收藏按钮，点击回 App）。
         // 本服务仍须 startForeground 保持前台（后台 Flutter 引擎/WakeLock 保活，
         // 阶段7 实测 DETACH 会被部分 ROM 降级为 SVC 导致后台网络受限）。
-        // 批次11：IMPORTANCE_NONE 隐藏渠道在部分 ROM 仍会把 FGS 通知展示在
-        // 通知栏，故本服务仅在 startForeground（5 秒合规）后由
-        // scheduleKeepaliveForegroundRemoval 在 media3 FGS 就绪时撤除保活通知，
-        // 稳态用户可见的通知收敛为唯一一条原生媒体通知（播放中）；
-        // media3 断连/FGS 丢失时自动恢复保活前台。
+        // 批次12：IMPORTANCE_NONE 隐藏渠道在部分 ROM 仍会把 FGS 通知展示在
+        // 通知栏，故 startForeground 后由确定性延时撤除保活通知，稳态用户可见的
+        // 通知收敛为唯一一条原生媒体通知（播放中）；media3 断连/绑定死亡时
+        // 自动恢复保活前台。
 
         // 封面加载：支持 http(s):// / content:// / local:// / file:// / 文件路径
         val effectiveArtUrl = artUrl ?: fallbackFilePath
@@ -1770,8 +1706,15 @@ class AudioPlaybackService : Service() {
         // 先立即进入前台（保活通知常驻，避免 startForegroundService 的 5 秒限制；
         // 不再 DETACH，防止服务被系统降级导致后台网络受限）；
         // 元数据由媒体3会话注入（见下），无需本服务发布 MediaSession 元数据。
-        // 批次11：startForegroundDetached 成功后会自动尝试撤除保活通知。
-        startForegroundDetached(keepaliveNotificationBuilder())
+        // 批次12：保活已撤除且 media3 连接正常时不重挂 startForeground——切歌/
+        // 周期刷新的重入只更新元数据，避免保活通知（ID 1002）在撤除延时内反复
+        // 闪现。仅当未撤除过（需 startForeground 合规）或 media3 断连（恢复路径）
+        // 时才重新 startForeground（撤除延时随即重新排定）。
+        if (keepaliveForegroundHidden && media3ServiceConnected) {
+            Log.d(TAG, "showNotification: keepalive foreground hidden, skip startForeground")
+        } else {
+            startForegroundDetached(keepaliveNotificationBuilder())
+        }
         scheduleMetadataRefresh()
 
         // P0: 不再广播「无 bitmap」的首帧 metadata——SystemUI 控制中心主面板
@@ -1977,7 +1920,7 @@ class AudioPlaybackService : Service() {
         }
         // P0: 取消排期中的 setMetadata 合并刷新，防止服务销毁后仍回调
         metadataRefreshHandler.removeCallbacksAndMessages(null)
-        // 批次11：取消保活前台撤除/复查回调，防止服务销毁后仍触发 restore
+        // 批次12：取消保活前台确定性撤除回调，防止服务销毁后仍触发撤除
         keepaliveForegroundHandler.removeCallbacksAndMessages(null)
         releaseWakeLock()
         // lastArtBitmap 可能仍由 MediaSession 或桌面组件引用，销毁服务时不能 recycle。

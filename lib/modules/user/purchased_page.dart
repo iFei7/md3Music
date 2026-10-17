@@ -10,8 +10,25 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/song_list_item.dart';
 import '../album/album_detail_page.dart';
+import '../login/login_page.dart';
 
-/// 「已购」页：单曲 / 专辑两个 Tab。
+/// 「已购」页：单曲 / 专辑两个 Tab（内容承载见 [PurchasedPanel]）。
+class PurchasedPage extends StatelessWidget {
+  const PurchasedPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('已购')),
+      body: const PurchasedPanel(),
+    );
+  }
+}
+
+/// 已购内容面板：单曲 / 专辑双 tab + 已购数据加载，无 Scaffold 的内容组件。
+///
+/// 独立路由页（[PurchasedPage]）与音乐库「已购」段（LibraryHubPage 嵌入，
+/// 段内保留单曲/专辑二次切换）共用。
 ///
 /// 数据来自酷狗已购接口（需登录）：
 /// - 单曲：/user/purchased/songs
@@ -20,14 +37,14 @@ import '../album/album_detail_page.dart';
 /// 酷狗返回 JSON 字段结构不固定，这里采用**自适应多字段解析**：
 /// 优先复用 KugouSongDetail / KugouAlbumBrief 的多兜底解析，
 /// 失败时回退到宽松字段映射，并兼容多种返回形状（info/audio_list/list/...）。
-class PurchasedPage extends StatefulWidget {
-  const PurchasedPage({super.key});
+class PurchasedPanel extends StatefulWidget {
+  const PurchasedPanel({super.key});
 
   @override
-  State<PurchasedPage> createState() => _PurchasedPageState();
+  State<PurchasedPanel> createState() => _PurchasedPanelState();
 }
 
-class _PurchasedPageState extends State<PurchasedPage> {
+class _PurchasedPanelState extends State<PurchasedPanel> {
   static const int _tabSongs = 0;
   static const int _tabAlbums = 1;
 
@@ -250,32 +267,31 @@ class _PurchasedPageState extends State<PurchasedPage> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('已购'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: M3EToggleButtonGroup(
-              actions: const [
-                M3EToggleButtonGroupAction(label: Text('单曲')),
-                M3EToggleButtonGroupAction(label: Text('专辑')),
-              ],
-              selectedIndex: _currentTab,
-              onSelectedIndexChanged: (index) {
-                if (index != null) _switchTab(index);
-              },
-            ),
+    // 单曲/专辑切换原挂 AppBar.bottom，抽为面板后置于面板顶部（嵌入音乐库
+    // 「已购」段时即段内二次切换），布局与原页一致。
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: M3EToggleButtonGroup(
+            actions: const [
+              M3EToggleButtonGroupAction(label: Text('单曲')),
+              M3EToggleButtonGroupAction(label: Text('专辑')),
+            ],
+            selectedIndex: _currentTab,
+            onSelectedIndexChanged: (index) {
+              if (index != null) _switchTab(index);
+            },
           ),
         ),
-      ),
-      body: _buildBody(cs),
+        Expanded(child: _buildBody(cs)),
+      ],
     );
   }
 
   Widget _buildBody(ColorScheme cs) {
     if (_isLoading) return const Center(child: M3ELoadingIndicator());
+    if (_error == '请先登录') return _buildLoginPrompt(cs);
     if (_error != null) return _buildMessage(cs, _error!, Icons.error_outline);
     if (_currentTab == _tabSongs) {
       if (_songs.isEmpty) return _buildMessage(cs, '暂无已购单曲', Icons.music_note);
@@ -390,6 +406,32 @@ class _PurchasedPageState extends State<PurchasedPage> {
     return Container(
       color: cs.surfaceContainerHighest,
       child: const Center(child: Icon(Icons.album, size: 48)),
+    );
+  }
+
+  /// 未登录引导空态（与音乐库各段登录引导同款模式：图标 + 文案 + 去登录）。
+  Widget _buildLoginPrompt(ColorScheme cs) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.person_outline, size: 64, color: cs.onSurfaceVariant.withValues(alpha: 0.4)),
+          const SizedBox(height: 12),
+          Text(
+            '登录后查看已购内容',
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.tonal(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const LoginPage()),
+            ),
+            child: const Text('去登录'),
+          ),
+        ],
+      ),
     );
   }
 

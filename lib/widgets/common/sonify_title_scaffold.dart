@@ -290,9 +290,10 @@ class _PinnedLargeTitle extends StatelessWidget {
 ///
 /// - 背景：**两层渐变模糊带**，Positioned.fill 覆盖「状态栏 + 栏体」全带
 ///   （y=0 起），随滚动 120ms 淡入出；内容在带下可滚动（悬浮语义）：
-///   1. 磨砂带（底层）：blur 18dp + surface α0.40，竖向 LinearGradient
-///      stops [0, 0.6, 1] 自上而下衰减；
-///   2. **加深带**（文字区）：blur 18dp + surface 较高 alpha（0.60）叠色，
+///   1. 磨砂带（底层）：blur 18dp + surface α0.32，竖向 LinearGradient
+///      stops [0, 0.45, 1] 自上而下衰减（实心平台压短到上 45%，
+///      底缘严格全透明）；
+///   2. **加深带**（文字区）：blur 18dp + surface 较高 alpha（0.35）叠色，
 ///      LinearGradient stops **非线性**分布（[kSonifyBarDeepenStops]：
 ///      顶部全强度覆盖标题文字区，底部加速淡出）——文字上方更浓，
 ///      滚过内容时固定标题仍清晰（反馈②）。
@@ -320,10 +321,14 @@ class _PinnedLargeTitle extends StatelessWidget {
 /// 默认参数 = 悬浮 Dock 玻璃配方：blurSigma 18 + surface α0.12 叠色）。
 /// 批次 11：叠色 alpha 由磨砂带 0.7 / 加深带 0.85 下调至 0.40 / 0.60，
 /// 让 blur 主导玻璃质感、消除白/黑遮罩感（批次 10 叠色过高，用户反馈
-/// 顶栏像蒙了层浅色/深色遮罩）；浅色深色主题同一组参数（cs.surface
-/// 自带深浅差异）。仍高于 dock 的 0.12：顶栏是全宽可读性带、固定大
-/// 标题直接叠在其上，需保证文字对比度——结构（顶部浓→底部渐隐）与
-/// 色系与 dock 一致，仅浓度按可读性上调。
+/// 顶栏像蒙了层浅色/深色遮罩）。
+/// 批次 12：用户反馈顶栏中段"几乎实心、观感偏实"——再次收敛：磨砂带
+/// 0.40 → 0.32、加深带 0.60 → 0.35；实心平台同步压短（磨砂带 stops
+/// 0.6 → 0.45、加深带 0.85 → 0.72），顶栏底缘严格全透明、渐变自状态
+/// 栏下方即开始向下衰减；浅色深色主题同一组参数（cs.surface 自带深
+/// 浅差异）。仍高于 dock 的 0.12：顶栏是全宽可读性带、固定大标题直接
+/// 叠在其上，需保证文字对比度——结构（顶部浓→底部渐隐）与色系与
+/// dock 一致，仅浓度按可读性上调。
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.showBarBackground,
@@ -363,9 +368,9 @@ class _TopBar extends StatelessWidget {
               },
               child: Stack(
                 children: [
-                  // ① 磨砂带：blur 18 + surface α0.40，竖向
-                  //    stops [0, 0.6, 1] 自上而下衰减（批次 11：叠色
-                  //    下调让 blur 主导，遮罩感修复）
+                  // ① 磨砂带：blur 18 + surface α0.32，竖向
+                  //    stops [0, 0.45, 1] 自上而下衰减（批次 12：实心
+                  //    平台压短到上 45%，底缘严格全透明，观感更透）
                   Positioned.fill(
                     child: ClipRect(
                       child: BackdropFilter(
@@ -376,21 +381,21 @@ class _TopBar extends StatelessWidget {
                           sigmaY: kSonifyBarBlurSigma,
                         ),
                         child: DecoratedBox(
-                          // surface 系 α0.40（保持顶部浓→底部渐隐结构），
+                          // surface 系 α0.32（保持顶部浓→底部渐隐结构），
                           // 高于 dock 的 0.12：全宽可读性带、固定大标题
-                          // 叠其上；批次 10 的 0.7 过高产生遮罩感，下调让
-                          // blur 主导（见类文档）
+                          // 叠其上；批次 10 的 0.7 / 批次 11 的 0.40 均被
+                          // 反馈"偏实"，批次 12 收敛（见类文档）
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
-                              // 顶部 ~60% 全强度毛玻璃，之后淡出到底缘全透明
+                              // 顶部 ~45% 全强度毛玻璃，之后淡出到底缘全透明
                               colors: [
-                                cs.surface.withValues(alpha: 0.40),
-                                cs.surface.withValues(alpha: 0.40),
+                                cs.surface.withValues(alpha: 0.32),
+                                cs.surface.withValues(alpha: 0.32),
                                 cs.surface.withValues(alpha: 0),
                               ],
-                              stops: const [0, 0.6, 1],
+                              stops: const [0, 0.45, 1],
                             ),
                           ),
                         ),
@@ -405,7 +410,7 @@ class _TopBar extends StatelessWidget {
                       child: BackdropFilter(
                         // 与磨砂带统一 sigma 18（对齐 dock 配方）；"浓"的
                         // 手感来源为较高叠色 alpha（批次 11：0.85 → 0.60，
-                        // 让 blur 主导、遮罩感修复，见类文档）
+                        // 批次 12：0.60 → 0.35，见类文档）
                         filter: ImageFilter.blur(
                           sigmaX: kSonifyBarBlurSigma,
                           sigmaY: kSonifyBarBlurSigma,
@@ -419,12 +424,12 @@ class _TopBar extends StatelessWidget {
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                               colors: [
-                                cs.surface.withValues(alpha: 0.60),
-                                cs.surface.withValues(alpha: 0.60),
-                                cs.surface.withValues(alpha: 0.60),
+                                cs.surface.withValues(alpha: 0.35),
+                                cs.surface.withValues(alpha: 0.35),
+                                cs.surface.withValues(alpha: 0.35),
                                 cs.surface.withValues(alpha: 0),
                               ],
-                              // 非线性分布：0→0.85 全强度，0.85→1 加速淡出
+                              // 非线性分布：0→0.72 全强度，0.72→1 加速淡出
                               stops: kSonifyBarDeepenStops,
                             ),
                           ),
@@ -498,9 +503,10 @@ class _TopBar extends StatelessWidget {
 const double kSonifyBarBlurSigma = 18;
 
 /// 顶栏加深带（文字区域）的竖向渐变 stops：**非线性分布**——
-/// 0→0.85 保持全强度（覆盖固定标题所在文字区），0.85→1 加速淡出到
+/// 0→0.72 保持全强度（覆盖固定标题所在文字区），0.72→1 加速淡出到
 /// 全透明（ease-out 手感，带底缘与内容柔和衔接）。
-/// 禁止改成线性均分 stops（反馈②）；差分 [0.85, 0.08, 0.07] 即非线性证据。
+/// 批次 12：平台由 0.85 压短到 0.72（用户反馈中段偏实）。
+/// 禁止改成线性均分 stops（反馈②）；差分 [0.72, 0.16, 0.12] 即非线性证据。
 ///
 /// 供加深带叠色层（DecoratedBox/BoxDecoration.gradient 的
 /// LinearGradient）使用；**禁止**把 BackdropFilter 包进 ShaderMask 再用
@@ -509,7 +515,7 @@ const double kSonifyBarBlurSigma = 18;
 ///
 /// 非私有：供 widget 测试直接断言非线性分布（见
 /// test/widgets/sonify_title_scaffold_test.dart 加深带用例）。
-const List<double> kSonifyBarDeepenStops = <double>[0.0, 0.85, 0.93, 1.0];
+const List<double> kSonifyBarDeepenStops = <double>[0.0, 0.72, 0.88, 1.0];
 
 /// 子树尺寸实测（一帧延迟回传），用于大标题占位 item 高度自适应。
 class _MeasureSize extends StatefulWidget {

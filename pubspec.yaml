@@ -1,7 +1,7 @@
 name: md3music
 description: "Grace Music - Music player with Material Design 3"
 publish_to: 'none'
-version: 5.9.6+53
+version: 5.9.7+54
 
 environment:
   sdk: ^3.12.0
