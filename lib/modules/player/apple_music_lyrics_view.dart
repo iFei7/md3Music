@@ -1,7 +1,7 @@
 import 'dart:async';
 // FontVariation / ScrollDirection / ValueListenable 等不经 material_ui 完整导出，
 // 显式引入（同 player_seek_bar / lyrics_view 的做法）
-import 'dart:ui' show FontVariation;
+import 'dart:ui' show FontVariation, ImageFilter;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
@@ -893,30 +893,76 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
     );
   }
 
-  /// 播放胶囊视觉本体（lyric-bubble 样式：胶囊体 + 左尖角指向歌词行）。
+  /// 播放胶囊视觉本体（lyric-bubble 样式玻璃化：胶囊体 + 左尖角指向歌词行）。
   /// 定位与手势由 [_buildBaselineBubble] 的 overlay 承载，本方法只画外形。
+  ///
+  /// 玻璃分层（自下而上，材质模型同 LiquidGlassSurface）：
+  /// 1. [BackdropFilter] 背景模糊（sigma [_bubbleBlurSigma]），经外层
+  ///    [ClipPath] 裁剪，只作用于气泡自身区域；
+  /// 2. 半透明品牌叠色（primaryContainer 系降 alpha 约 0.6，玻璃「体色」，
+  ///    真机反馈构建号 104：实心填充改模糊玻璃）；
+  /// 3. 1px 描边（onPrimaryContainer 系低 alpha，strokeWidth 2 经裁剪留
+  ///    内半像素，避免外半被切得发虚）；
+  /// 4. 播放图标（居中于胶囊体，尖角左侧 8px 不计入，配色走 token）。
+  ///
+  /// 图层纪律：BackdropFilter 直接位于 [ClipPath] 裁剪层内（clip 非
+  /// saveLayer，模糊正常），**不得**包进 ShaderMask / Opacity 等图层边界
+  /// widget（那样模糊会完全失效，flutter/flutter#164079、#175537）。
+  /// 胶囊 overlay 是列表 Stack 的兄弟节点，不在跟随态列表的 ShaderMask
+  /// 内，backdrop 采样正常——保持该结构，勿把 overlay 挪进任何图层边界
+  /// widget 内。
   ///
   /// 命中行为：overlay 侧 GestureDetector 整块 [_bubbleWidth]×
   /// [_bubbleHeight] 不透明可点（[HitTestBehavior.opaque]），垂直拖动经
   /// [_onBubbleDragUpdate] 转发给列表——「从胶囊上起手的滚动」依然正常
   /// 滚动，不会误触 seek、也不会挡住歌词浏览。
   Widget _buildPlayBubble(ColorScheme colorScheme) {
-    return CustomPaint(
-      painter: _LyricBubblePainter(fill: colorScheme.primaryContainer),
+    return ClipPath(
+      clipper: const _LyricBubbleClipper(),
       // SizedBox 锁死 44×24（overlay Positioned 不施加拉伸约束，这里显式
-      // 定量）；图标居中于胶囊体（尖角左侧 8px 不计入），配色走 token。
+      // 定量）；Stack 各层 Positioned.fill 填满该定量盒，图标层经
+      // StackFit.expand 拿紧约束、居中行为与改造前一致。
       child: SizedBox(
         width: _bubbleWidth,
         height: _bubbleHeight,
-        child: Padding(
-          padding: const EdgeInsets.only(left: _bubbleTipWidth),
-          child: Center(
-            child: Icon(
-              Icons.play_arrow_rounded,
-              size: 18,
-              color: colorScheme.onPrimaryContainer,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // 1. 背景模糊：只覆盖气泡区域（外形裁剪见外层 ClipPath）
+            Positioned.fill(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(
+                  sigmaX: _bubbleBlurSigma,
+                  sigmaY: _bubbleBlurSigma,
+                ),
+                child: const SizedBox.expand(),
+              ),
             ),
-          ),
+            // 2/3. 半透明叠色 + 1px 描边（同一次绘制，外形见 [_bubblePath]）
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: _LyricBubblePainter(
+                    fill: colorScheme.primaryContainer
+                        .withValues(alpha: _bubbleFillAlpha),
+                    border: colorScheme.onPrimaryContainer
+                        .withValues(alpha: _bubbleBorderAlpha),
+                  ),
+                ),
+              ),
+            ),
+            // 4. 播放图标
+            Padding(
+              padding: const EdgeInsets.only(left: _bubbleTipWidth),
+              child: Center(
+                child: Icon(
+                  Icons.play_arrow_rounded,
+                  size: 18,
+                  color: colorScheme.onPrimaryContainer,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -926,48 +972,91 @@ class _AppleMusicLyricsViewState extends State<AppleMusicLyricsView>
 /// 固定基准线播放胶囊（lyric-bubble 样式）几何：整体宽高 / 左尖角宽与半高 /
 /// 胶囊体圆角。扁大圆角造型：体高 24（较旧值 30 更扁），圆角 10（占体高
 /// 42%，旧值 9/30=30%）。尖角底高 3.2 < 体高 24 − 2×圆角 10 = 4，底边完全
-/// 落在胶囊体左边缘的平直段内，同色并集无凹口。
+/// 落在胶囊体左边缘的平直段内，并集无凹口。
 const double _bubbleWidth = 44;
 const double _bubbleHeight = 24;
 const double _bubbleTipWidth = 8;
 const double _bubbleTipHalfHeight = 1.6;
 const double _bubbleRadius = 10;
 
-/// 播放胶囊外形：扁圆角胶囊体 + 左尖角（气泡指向歌词行）。
-///
-/// 体与尖角同色不透明分绘（同一 canvas 先后绘制，取并集），避免
-/// [Path.combine] 的布尔运算开销；尖角底边完全落在胶囊体左边缘的平直段内
-/// （底高 3.2 < 体高 24 − 2×圆角 10 = 4），并集无凹口、无接缝。
-class _LyricBubblePainter extends CustomPainter {
-  _LyricBubblePainter({required this.fill});
+/// 播放胶囊玻璃材质参数（真机反馈构建号 104：模糊玻璃效果）。
+/// - 模糊 sigma：同顶栏磨砂带（14），44×24 小尺寸足够起沫；
+/// - 叠色 alpha：primaryContainer 系降 alpha（约 0.6），保留品牌色调同时
+///   透出模糊后的底层内容；
+/// - 描边 alpha：onPrimaryContainer 系低 alpha，1px 勾勒玻璃边缘。
+const double _bubbleBlurSigma = 14;
+const double _bubbleFillAlpha = 0.6;
+const double _bubbleBorderAlpha = 0.3;
 
+/// 气泡外形路径：胶囊体（RRect r10，右端与左端均为圆角，左边缘中段平直）
+/// + 左尖角（等腰三角形，顶点指向左侧歌词行）取并集。
+///
+/// 玻璃化后描边需沿整圈连续外形绘制，体与尖角不能再分绘（接缝处会双重
+/// 叠色），故用 [Path.combine] 求并集：尖角底边完全落在胶囊体左边缘的
+/// 平直段内（底高 3.2 < 体高 24 − 2×圆角 10 = 4），并集无凹口、无接缝。
+/// 路径极小（44×24）且胶囊静态（仅主题切换重绘），布尔开销可忽略。
+Path _bubblePath(Size size) {
+  final cy = size.height / 2;
+  final body = Path()
+    ..addRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          _bubbleTipWidth,
+          0,
+          size.width - _bubbleTipWidth,
+          size.height,
+        ),
+        const Radius.circular(_bubbleRadius),
+      ),
+    );
+  final tip = Path()
+    ..moveTo(_bubbleTipWidth, cy - _bubbleTipHalfHeight)
+    ..lineTo(0, cy)
+    ..lineTo(_bubbleTipWidth, cy + _bubbleTipHalfHeight)
+    ..close();
+  return Path.combine(PathOperation.union, body, tip);
+}
+
+/// 气泡外形裁剪器：供 [_buildPlayBubble] 的 [ClipPath] 按播放胶囊外形
+/// （胶囊体 + 左尖角，见 [_bubblePath]）裁剪玻璃层（模糊 + 叠色 + 描边）。
+class _LyricBubbleClipper extends CustomClipper<Path> {
+  const _LyricBubbleClipper();
+
+  @override
+  Path getClip(Size size) => _bubblePath(size);
+
+  @override
+  bool shouldReclip(_LyricBubbleClipper oldClipper) => false;
+}
+
+/// 播放胶囊玻璃体：半透明品牌叠色（primaryContainer 系降 alpha）+ 1px
+/// 描边（onPrimaryContainer 系低 alpha），外形同 [_bubblePath]。背景模糊
+/// 由 [_buildPlayBubble] 的 BackdropFilter 承担（绘在本体之下）。
+class _LyricBubblePainter extends CustomPainter {
+  _LyricBubblePainter({required this.fill, required this.border});
+
+  /// 半透明叠色（玻璃「体色」）。
   final Color fill;
+
+  /// 描边色（1px，跟随 token）。
+  final Color border;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = fill;
-    final cy = size.height / 2;
-    // 胶囊体（右端与左端均为圆角，左边缘中段平直供尖角拼接）
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(_bubbleTipWidth, 0, size.width - _bubbleTipWidth,
-            size.height),
-        const Radius.circular(_bubbleRadius),
-      ),
-      paint,
-    );
-    // 左尖角（等腰三角形，顶点指向左侧歌词行）
+    final path = _bubblePath(size);
+    canvas.drawPath(path, Paint()..color = fill);
+    // strokeWidth 2 而非 1：描边以路径为中心线向内外各扩 1px，外层
+    // ClipPath 裁剪后恰留内侧 1px 实边（中心线 1px 会被切掉外半、发虚）。
     canvas.drawPath(
-      Path()
-        ..moveTo(_bubbleTipWidth, cy - _bubbleTipHalfHeight)
-        ..lineTo(0, cy)
-        ..lineTo(_bubbleTipWidth, cy + _bubbleTipHalfHeight)
-        ..close(),
-      paint,
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = border,
     );
   }
 
   @override
   bool shouldRepaint(_LyricBubblePainter oldDelegate) =>
-      oldDelegate.fill != fill;
+      oldDelegate.fill != fill || oldDelegate.border != border;
 }

@@ -10,7 +10,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/layout/adaptive_content_grid.dart';
 import '../../core/layout/adaptive_navigator.dart';
-import '../../core/layout/page_title_alignment.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/utils/app_toast.dart';
 import '../../data/repositories/favorite_lists_cache.dart';
@@ -20,6 +19,7 @@ import '../../providers/player_provider.dart';
 import '../../providers/playlist_collection_notifier.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
 import '../artist/artist_detail_page.dart';
 import '../library/library_page.dart' show LibraryMusicPanel;
 import '../playlist/playlist_page.dart';
@@ -948,7 +948,6 @@ class _FavoritesPageState extends State<FavoritesPage>
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
     // 批量管理模式下拦截系统返回：退出管理模式而非退出 App
     return PopScope(
       canPop: !_isManaging,
@@ -956,28 +955,58 @@ class _FavoritesPageState extends State<FavoritesPage>
         if (didPop) return;
         _exitManageMode();
       },
-      child: Scaffold(
-        appBar: AppBar(
-          // 统一对齐规则：作为底部导航栏一级页面时左对齐，被 push 成二级页面时居中
-          centerTitle: centerPageTitle(context, tabId: 'favorites'),
-          title: Text(
-            '我的收藏',
-            style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          actions: [
-            // 新建歌单入口已移到「我创建的歌单」分组标题右侧，
-            // 这里只在批量管理模式下保留删除按钮。
-            if (_isManaging)
-              IconButton(
+      // 头部与主页统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
+      // 4 tab 的 TabBar/TabBarView 整体作为单个业务 item 固定在标题下方；
+      // 批量管理删除钮放 trailing 槽（常驻渲染）——actions 槽滚动后才浮现，
+      // 不满足管理模式的常驻可见需求。
+      child: SonifyTitleScaffold(
+        title: '我的收藏',
+        trailing: _isManaging
+            ? IconButton(
                 icon: const Icon(Icons.delete),
+                tooltip: '删除选中',
                 onPressed: _managingTab == 1
                     ? _deleteSelectedAlbums
                     : _deleteSelectedPlaylists,
-              ),
-          ],
-          bottom: TabBar(
+              )
+            : null,
+        itemCount: 1,
+        itemBuilder: (context, index) => _buildTabbedBody(),
+      ),
+    );
+  }
+
+  /// 业务区（单 item 固定高度）：离线 banner + 分类 TabBar + 四个 tab 内容。
+  ///
+  /// 固定高度 = 视口 − 状态栏 − 标题区（8dp 顶距 + 36dp 标题行高 + 8dp 底距，
+  /// 与 [SonifyTitleScaffold] 占位 item 同口径）；键盘弹出时再让出视口底部
+  /// （内层 Scaffold resizeToAvoidBottomInset 收缩视口，本高度同步收缩，
+  /// 不产生溢出）。
+  Widget _buildTabbedBody() {
+    final textTheme = Theme.of(context).textTheme;
+    final media = MediaQuery.of(context);
+    final height = media.size.height -
+        media.padding.top -
+        52 -
+        media.viewInsets.bottom;
+    return SizedBox(
+      height: height,
+      child: Column(
+        children: [
+          // 监听 dio 拦截器维护的全局网络状态：任意 dio 请求失败 → 显示 banner
+          ValueListenableBuilder<bool>(
+            valueListenable: KugouApiClient.networkReachable,
+            builder: (context, reachable, _) {
+              if (reachable) return const SizedBox.shrink();
+              return OfflineBanner(
+                lastSyncTime: _lastSyncTime,
+                onRetry: _retryFromBanner,
+              );
+            },
+          ),
+          // 分类 TabBar：图标与文字都比顶栏标题小一档；分组标题（_GroupSection）再小一档
+          TabBar(
             controller: _tabController,
-            // 图标与文字都比顶栏标题小一档；分组标题（_GroupSection）再小一档
             labelStyle: textTheme.labelMedium?.copyWith(
               fontWeight: FontWeight.w600,
             ),
@@ -998,33 +1027,18 @@ class _FavoritesPageState extends State<FavoritesPage>
               Tab(height: 52, icon: Icon(Icons.person, size: 18), text: '歌手'),
             ],
           ),
-        ),
-        body: Column(
-          children: [
-            // 监听 dio 拦截器维护的全局网络状态：任意 dio 请求失败 → 显示 banner
-            ValueListenableBuilder<bool>(
-              valueListenable: KugouApiClient.networkReachable,
-              builder: (context, reachable, _) {
-                if (reachable) return const SizedBox.shrink();
-                return OfflineBanner(
-                  lastSyncTime: _lastSyncTime,
-                  onRetry: _retryFromBanner,
-                );
-              },
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _buildPlaylistsTab(),
+                const LibraryMusicPanel(),
+                _buildAlbumsTab(),
+                _buildArtistsTab(),
+              ],
             ),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  _buildPlaylistsTab(),
-                  const LibraryMusicPanel(),
-                  _buildAlbumsTab(),
-                  _buildArtistsTab(),
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

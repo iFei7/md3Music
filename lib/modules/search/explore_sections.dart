@@ -10,6 +10,7 @@ import '../../providers/player_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/album_card.dart';
 import '../../widgets/common/cover_rail.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/song_list_item.dart';
 import '../album/album_detail_page.dart';
@@ -274,34 +275,47 @@ class _NewAlbumBrowsePageState extends State<NewAlbumBrowsePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('新碟上架')),
-      body: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : Selector<KugouProvider, List<KugouAlbumBrief>>(
-              selector: (_, kugou) => kugou.topAlbums,
-              builder: (context, list, _) {
-                if (list.isEmpty) return const Center(child: Text('暂无数据'));
-                return PinchableGridView(
-                  padding: EdgeInsets.fromLTRB(
-                    AppSpacing.lg, AppSpacing.lg, AppSpacing.lg,
-                    AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
-                  ),
-                  childAspectRatio: 0.8,
-                  spacing: 12,
-                  itemCount: list.length,
-                  itemBuilder: (context, i) => AlbumCard(
-                    album: list[i].toAlbum(),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            AlbumDetailPage(album: list[i].toAlbum()),
+    // 头部与主页统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
+    // 业务区为单 item 固定高度（视口 − 状态栏 − 标题区 8+36+8），
+    // 加载/空态/网格在标题下方同一区域切换。
+    return SonifyTitleScaffold(
+      title: '新碟上架',
+      itemCount: 1,
+      itemBuilder: (context, index) {
+        final media = MediaQuery.of(context);
+        final height = media.size.height - media.padding.top - 52;
+        return SizedBox(
+          height: height,
+          child: _isLoading
+              ? const Center(child: M3ELoadingIndicator())
+              : Selector<KugouProvider, List<KugouAlbumBrief>>(
+                  selector: (_, kugou) => kugou.topAlbums,
+                  builder: (context, list, _) {
+                    if (list.isEmpty) {
+                      return const Center(child: Text('暂无数据'));
+                    }
+                    return PinchableGridView(
+                      padding: EdgeInsets.fromLTRB(
+                        AppSpacing.lg, AppSpacing.lg, AppSpacing.lg,
+                        AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
                       ),
-                    ),
-                  ),
-                );
-              },
-            ),
+                      childAspectRatio: 0.8,
+                      spacing: 12,
+                      itemCount: list.length,
+                      itemBuilder: (context, i) => AlbumCard(
+                        album: list[i].toAlbum(),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                AlbumDetailPage(album: list[i].toAlbum()),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        );
+      },
     );
   }
 }
@@ -534,40 +548,53 @@ class _PlaylistBrowsePageState extends State<PlaylistBrowsePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('热门歌单')),
-      body: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : Selector<KugouProvider, List<KugouPlaylistBrief>>(
-              selector: (_, kugou) => kugou.playlistList,
-              builder: (context, list, _) {
-                if (list.isEmpty) return const Center(child: Text('暂无数据'));
-                return PinchableGridView(
-                  padding: EdgeInsets.fromLTRB(
-                    AppSpacing.lg, AppSpacing.lg, AppSpacing.lg,
-                    AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
-                  ),
-                  childAspectRatio: 0.8,
-                  spacing: 12,
-                  itemCount: list.length,
-                  itemBuilder: (context, i) => AlbumCard(
-                    album: Album(
-                      id: list[i].id,
-                      name: list[i].name,
-                      artist: '',
-                      artworkUri: list[i].coverUrl,
-                      songCount: list[i].songCount,
-                    ),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            PlaylistPage(playlist: list[i].toPlaylist()),
+    // 头部与主页统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
+    // 业务区为单 item 固定高度（视口 − 状态栏 − 标题区 8+36+8），
+    // 加载/空态/网格在标题下方同一区域切换。
+    return SonifyTitleScaffold(
+      title: '热门歌单',
+      itemCount: 1,
+      itemBuilder: (context, index) {
+        final media = MediaQuery.of(context);
+        final height = media.size.height - media.padding.top - 52;
+        return SizedBox(
+          height: height,
+          child: _isLoading
+              ? const Center(child: M3ELoadingIndicator())
+              : Selector<KugouProvider, List<KugouPlaylistBrief>>(
+                  selector: (_, kugou) => kugou.playlistList,
+                  builder: (context, list, _) {
+                    if (list.isEmpty) {
+                      return const Center(child: Text('暂无数据'));
+                    }
+                    return PinchableGridView(
+                      padding: EdgeInsets.fromLTRB(
+                        AppSpacing.lg, AppSpacing.lg, AppSpacing.lg,
+                        AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
                       ),
-                    ),
-                  ),
-                );
-              },
-            ),
+                      childAspectRatio: 0.8,
+                      spacing: 12,
+                      itemCount: list.length,
+                      itemBuilder: (context, i) => AlbumCard(
+                        album: Album(
+                          id: list[i].id,
+                          name: list[i].name,
+                          artist: '',
+                          artworkUri: list[i].coverUrl,
+                          songCount: list[i].songCount,
+                        ),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                PlaylistPage(playlist: list[i].toPlaylist()),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        );
+      },
     );
   }
 }

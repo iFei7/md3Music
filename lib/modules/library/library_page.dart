@@ -12,6 +12,7 @@ import '../player/full_player_route.dart';
 import '../user/favorites_page.dart';
 import '../user/play_history_page.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
 import 'albums_page.dart';
 import 'artists_page.dart';
 import 'folders_page.dart';
@@ -41,23 +42,29 @@ class LibraryPage extends StatefulWidget {
 class _LibraryPageState extends State<LibraryPage> {
   @override
   Widget build(BuildContext context) {
+    // 头部与主页统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
+    // 入口区 + 面板整体作为单个业务 item 固定在标题下方；扫描 FAB 仍由
+    // 外层 Scaffold 承载（SonifyTitleScaffold 不提供 FAB 槽位）。
     return Scaffold(
-      appBar: AppBar(
-        centerTitle: true,
-        title: Text(
-          '本地音乐',
-          style: Theme.of(
-            context,
-          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-        ),
-      ),
-      body: Column(
-        children: [
-          const _LibraryHubEntries(),
-          Expanded(child: LibraryMusicPanel(initialTab: widget.initialTab)),
-        ],
-      ),
       floatingActionButton: _buildScanFAB(context),
+      body: SonifyTitleScaffold(
+        title: '本地音乐',
+        itemCount: 1,
+        itemBuilder: (context, index) {
+          final media = MediaQuery.of(context);
+          // 固定高度 = 视口 − 状态栏 − 标题区（8+36+8，与占位 item 同口径）
+          final height = media.size.height - media.padding.top - 52;
+          return SizedBox(
+            height: height,
+            child: Column(
+              children: [
+                const _LibraryHubEntries(),
+                Expanded(child: LibraryMusicPanel(initialTab: widget.initialTab)),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 

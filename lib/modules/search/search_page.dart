@@ -21,6 +21,7 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/song_list_item.dart';
+import '../../widgets/common/liquid_glass_surface.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
 import '../playlist/playlist_page.dart';
@@ -269,8 +270,8 @@ class _SearchPageState extends State<SearchPage>
                         )
                       : null,
                   surfaceTintColor: Colors.transparent,
-                  // sonify 规格（方案 §2.3）：squircle 9dp、卡底色、高 52dp、
-                  // 左放大镜 20dp、右清空钮 28dp 命中区、聚焦 1.5dp primary 描边。
+                  // 批次 9（真机反馈）：与主页/音乐库统一的玻璃胶囊搜索框
+                  // （LiquidGlassSurface pill、44dp、聚焦 1.5dp primary 描边）。
                   title: _buildSearchField(colorScheme),
                 ),
                 if (_hasSearched)
@@ -325,11 +326,13 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
-  /// 搜索框（sonify 规格，方案 §2.3）：
-  /// - squircle 9dp、卡底色（surfaceCard），高 52dp，水平边距 16.5dp 由
-  ///   SliverAppBar title 布局承担；
-  /// - placeholder 16sp 次级灰；聚焦时 1.5dp primary 描边；
-  /// - 左放大镜 20dp、右清空钮 28dp 命中区。
+  /// 搜索框（批次 9 真机反馈：与主页/音乐库统一玻璃胶囊）：
+  /// - LiquidGlassSurface + GlassShape.pill、高 44dp（对齐首页
+  ///   _buildSearchFieldItem 与 library_page 批次 8 基准），水平边距
+  ///   16.5dp 由 SliverAppBar title 布局承担；
+  /// - 聚焦时 1.5dp primary 描边：StadiumBorder foregroundDecoration
+  ///   外覆玻璃面（等价原 ShapeDecoration.side 写法）；
+  /// - 左放大镜 20dp、右清空钮 28dp 命中区（视觉 18dp 图标）。
   /// 行为不变：textInputAction=search、onSubmitted 搜索、onChanged 实时联想。
   Widget _buildSearchField(ColorScheme colorScheme) {
     final sonify = SonifyColors.of(context);
@@ -338,68 +341,74 @@ class _SearchPageState extends State<SearchPage>
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: SonifySpacing.cardMargin),
       child: Container(
-        height: 52,
-        decoration: ShapeDecoration(
-          color: sonify.surfaceCard,
-          shape: SmoothRectangleBorder(
-            borderRadius: BorderRadius.circular(SonifyRadius.card),
+        foregroundDecoration: ShapeDecoration(
+          shape: StadiumBorder(
             side: isFocused
                 ? BorderSide(color: colorScheme.primary, width: 1.5)
                 : BorderSide.none,
           ),
         ),
-        child: Row(
-          children: [
-            const SizedBox(width: 16),
-            Icon(Icons.search, size: 20, color: sonify.textSecondary),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: _searchController,
-                focusNode: _searchFocusNode,
-                style: SonifyTextStyles.body.copyWith(
-                  color: colorScheme.onSurface,
-                ),
-                decoration: InputDecoration(
-                  hintText: '搜索歌曲、歌手、专辑',
-                  hintStyle: SonifyTextStyles.body.copyWith(
-                    color: sonify.textSecondary,
+        child: LiquidGlassSurface(
+          shape: GlassShape.pill,
+          child: SizedBox(
+            height: 44,
+            child: Row(
+              children: [
+                const SizedBox(width: 16),
+                Icon(Icons.search, size: 20, color: sonify.textSecondary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    focusNode: _searchFocusNode,
+                    style: SonifyTextStyles.body.copyWith(
+                      color: colorScheme.onSurface,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: '搜索歌曲、歌手、专辑',
+                      hintStyle: SonifyTextStyles.body.copyWith(
+                        color: sonify.textSecondary,
+                      ),
+                      border: InputBorder.none,
+                      isCollapsed: true,
+                    ),
+                    // InputDecorator 默认 textAlignVertical 为 top，固定
+                    // 44dp 高度下需显式居中（批次 8 library_page 教训）
+                    textAlignVertical: TextAlignVertical.center,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: _performSearch,
+                    onChanged: (value) {
+                      setState(() {});
+                      if (value.trim().isNotEmpty) {
+                        context.read<KugouProvider>().getSearchSuggest(
+                          value.trim(),
+                        );
+                      }
+                    },
                   ),
-                  border: InputBorder.none,
-                  isCollapsed: true,
                 ),
-                textInputAction: TextInputAction.search,
-                onSubmitted: _performSearch,
-                onChanged: (value) {
-                  setState(() {});
-                  if (value.trim().isNotEmpty) {
-                    context.read<KugouProvider>().getSearchSuggest(
-                      value.trim(),
-                    );
-                  }
-                },
-              ),
+                if (hasText)
+                  IconButton(
+                    // 28dp 命中区（视觉 18dp 图标），顶满 44dp 行高便于点按
+                    constraints: const BoxConstraints.tightFor(width: 36, height: 44),
+                    padding: const EdgeInsets.only(right: 6),
+                    icon: Icon(
+                      Icons.clear,
+                      size: 18,
+                      color: sonify.textSecondary,
+                    ),
+                    onPressed: () {
+                      _searchController.clear();
+                      setState(() {
+                        _query = '';
+                        _hasSearched = false;
+                      });
+                    },
+                  ),
+                if (!hasText) const SizedBox(width: 10),
+              ],
             ),
-            if (hasText)
-              IconButton(
-                // 28dp 命中区（视觉 18dp 图标），顶满 52dp 行高便于点按
-                constraints: const BoxConstraints.tightFor(width: 36, height: 52),
-                padding: const EdgeInsets.only(right: 6),
-                icon: Icon(
-                  Icons.clear,
-                  size: 18,
-                  color: sonify.textSecondary,
-                ),
-                onPressed: () {
-                  _searchController.clear();
-                  setState(() {
-                    _query = '';
-                    _hasSearched = false;
-                  });
-                },
-              ),
-            if (!hasText) const SizedBox(width: 10),
-          ],
+          ),
         ),
       ),
     );

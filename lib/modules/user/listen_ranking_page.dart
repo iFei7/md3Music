@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../data/repositories/history_repository.dart';
 import '../../providers/player_provider.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/song_list_item.dart';
 
 /// 听歌排行页面（本地实现）
@@ -52,12 +53,32 @@ class _ListenRankingPageState extends State<ListenRankingPage> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('听歌排行'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: Padding(
+    // 头部与主页统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
+    // 周期切换组 + 统计头 + 榜单列表整体作为单个业务 item 固定在标题下方
+    // （原 AppBar.bottom 切换组与 body 结构原样搬入，交互不变）。
+    return SonifyTitleScaffold(
+      title: '听歌排行',
+      itemCount: 1,
+      itemBuilder: (context, index) => _buildContent(cs),
+    );
+  }
+
+  /// 业务区（单 item 固定高度）：切换组常驻顶部，加载/空态/榜单在其下。
+  ///
+  /// 固定高度 = 视口 − 状态栏 − 标题区（8dp 顶距 + 36dp 标题行高 + 8dp 底距，
+  /// 与 [SonifyTitleScaffold] 占位 item 同口径）；榜单保留 ListView.builder
+  /// 惰性构建。
+  Widget _buildContent(ColorScheme cs) {
+    final media = MediaQuery.of(context);
+    final height = media.size.height -
+        media.padding.top -
+        52 -
+        media.viewInsets.bottom;
+    return SizedBox(
+      height: height,
+      child: Column(
+        children: [
+          Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: M3EToggleButtonGroup(
               actions: const [
@@ -70,25 +91,27 @@ class _ListenRankingPageState extends State<ListenRankingPage> {
               },
             ),
           ),
-        ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: M3ELoadingIndicator())
+                : _rankedSongs.isEmpty
+                    ? _buildEmpty(cs)
+                    : Column(
+                        children: [
+                          _buildHeader(cs),
+                          Expanded(
+                            child: ListView.builder(
+                              itemCount: _rankedSongs.length,
+                              itemBuilder: (context, index) {
+                                return _buildRankingItem(context, index, cs);
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+          ),
+        ],
       ),
-      body: _isLoading
-        ? const Center(child: M3ELoadingIndicator())
-        : _rankedSongs.isEmpty
-            ? _buildEmpty(cs)
-            : Column(
-                children: [
-                  _buildHeader(cs),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: _rankedSongs.length,
-                      itemBuilder: (context, index) {
-                        return _buildRankingItem(context, index, cs);
-                      },
-                    ),
-                  ),
-                ],
-              ),
     );
   }
 

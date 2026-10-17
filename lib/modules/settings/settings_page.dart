@@ -43,6 +43,7 @@ import '../../providers/theme_provider.dart';
 import '../../services/kugou_server.dart';
 import '../../utils/landscape_immersive.dart';
 import '../../widgets/seed_color_picker.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
 import '../sound/sounds_page.dart';
 import 'equalizer_settings_page.dart';
 import 'settings_group_heading.dart';
@@ -425,7 +426,13 @@ class _SettingsPageState extends State<SettingsPage>
         if (didPop) return;
         _onBackInvoked();
       },
-      child: Scaffold(
+      // 总览单列形态与主页头部统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
+      // 二级/三级层与 Pad 双列布局保留 AppBar：层级返回键（leading）与
+      // 「分类名 + 子页名」双行居中标题需要 AppBar 槽位，SonifyTitleScaffold
+      // 无对应槽位（其 actions 槽滚动后才浮现，且在右侧，不满足返回键语义）。
+      child: (level == SettingsLevel.overview && !_useTwoPane)
+          ? _buildOverviewTitleScaffold(colorScheme)
+          : Scaffold(
         backgroundColor: groupBackground,
         appBar: AppBar(
           // 分组底色模式下顶栏同步透明，与页面底色连成一体
@@ -456,6 +463,51 @@ class _SettingsPageState extends State<SettingsPage>
             ? _buildTwoPaneBody(colorScheme, level, category)
             : _buildSinglePaneBody(colorScheme, level, category),
       ),
+    );
+  }
+
+  /// 总览单列形态（手机）：SonifyTitleScaffold 固定悬浮大标题「设置」。
+  ///
+  /// 搜索框 + 分组卡列表作为单个业务 item 固定在标题下方（宽屏仍约束到
+  /// [AppLayout.maxContentWidth] 居中），ListView 保留滚动。
+  /// 注：sonify 分组底色（surfaceGroup）不再应用于总览单列形态——
+  /// [SonifyTitleScaffold] 不提供背景色参数，与首页/发现页同用页面默认底色。
+  Widget _buildOverviewTitleScaffold(ColorScheme colorScheme) {
+    final media = MediaQuery.of(context);
+    // 固定高度 = 视口 − 状态栏 − 标题区（8dp 顶距 + 36dp 行高 + 8dp 底距）
+    final height = media.size.height -
+        media.padding.top -
+        52 -
+        media.viewInsets.bottom;
+    return SonifyTitleScaffold(
+      title: '设置',
+      itemCount: 1,
+      itemBuilder: (context, index) {
+        return SizedBox(
+          height: height,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: AppLayout.maxContentWidth,
+              ),
+              child: _transitioned(
+                ListView(
+                  children: [
+                    _buildSearchField(colorScheme),
+                    if (_searchQuery.trim().isNotEmpty)
+                      ..._buildSearchResults(colorScheme)
+                    else
+                      ..._buildCategoryEntries(colorScheme),
+                    const Gap(AppSpacing.xxl),
+                    // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+                    SizedBox(height: MediaQuery.paddingOf(context).bottom),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 

@@ -10,6 +10,7 @@ import 'package:md3music/modules/user/favorites_page.dart';
 import 'package:md3music/providers/playlist_collection_notifier.dart';
 import 'package:md3music/providers/tab_config_provider.dart';
 import 'package:md3music/services/kugou_api/kugou_api_client.dart';
+import 'package:md3music/widgets/common/sonify_title_scaffold.dart';
 
 import '../../test_helpers/fake_secure_storage.dart';
 
@@ -33,6 +34,11 @@ void main() {
       );
       await _pushFavoritesPage(tester);
       await _settleInitialProbe(tester);
+
+      // 批次 9：头部统一走 SonifyTitleScaffold，固定大标题「我的收藏」
+      expect(find.byType(SonifyTitleScaffold), findsOneWidget);
+      expect(find.text('我的收藏'), findsWidgets);
+
       await _popFavoritesPage(tester);
 
       expect(tester.takeException(), isNull);

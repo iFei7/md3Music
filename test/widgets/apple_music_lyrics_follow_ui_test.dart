@@ -126,6 +126,35 @@ void main() {
     expect(listBackgroundCount(tester), 0, reason: '列表内不应有背景装饰');
   });
 
+  testWidgets('播放胶囊为模糊玻璃材质（外形裁剪 + BackdropFilter）', (tester) async {
+    final position = ValueNotifier<Duration>(Duration.zero);
+    addTearDown(position.dispose);
+    await pumpView(tester, position);
+    await tester.pumpAndSettle();
+
+    final capsule = find.byKey(AppleMusicLyricsView.capsulePlayKey);
+    expect(
+      find.descendant(of: capsule, matching: find.byType(BackdropFilter)),
+      findsOneWidget,
+      reason: '胶囊玻璃化（真机构建号 104 反馈）：子树应含背景模糊层',
+    );
+    expect(
+      find.descendant(of: capsule, matching: find.byType(ClipPath)),
+      findsOneWidget,
+      reason: '模糊须经气泡外形 ClipPath 裁剪，只作用于胶囊区域',
+    );
+    // 图层纪律：BackdropFilter 不得被 ShaderMask/Opacity 包裹（那样模糊
+    // 完全失效，flutter/flutter#164079）——胶囊 overlay 不在任何 ShaderMask 内。
+    expect(
+      find.ancestor(
+        of: find.descendant(of: capsule, matching: find.byType(BackdropFilter)),
+        matching: find.byType(ShaderMask),
+      ),
+      findsNothing,
+      reason: 'BackdropFilter 在 ShaderMask 内会失效，玻璃模糊必须真实生效',
+    );
+  });
+
   testWidgets('跟随播放推进后胶囊常驻基准线（位置变化不消失）', (tester) async {
     final position = ValueNotifier<Duration>(Duration.zero);
     addTearDown(position.dispose);

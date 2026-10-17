@@ -17,6 +17,7 @@ import 'package:md3music/modules/library/library_page.dart';
 import 'package:md3music/providers/library_provider.dart';
 import 'package:md3music/providers/local_favorites_provider.dart';
 import 'package:md3music/providers/player_provider.dart';
+import 'package:md3music/widgets/common/sonify_title_scaffold.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -48,6 +49,10 @@ void main() {
     }
     // 入口区与既有面板共存：空库态提示照常渲染（页面结构未破坏）
     expect(find.text('还没有本地音乐'), findsOneWidget);
+
+    // 批次 9：头部统一走 SonifyTitleScaffold，固定大标题「本地音乐」
+    expect(find.byType(SonifyTitleScaffold), findsOneWidget);
+    expect(find.text('本地音乐'), findsWidgets);
   });
 
   testWidgets('本地音乐页 initialTab 预选对应分类（文件夹/本地收藏复用本页）', (tester) async {

@@ -216,20 +216,30 @@ void main() {
 
       // 带体高度 = 状态栏 24 + 栏体 54 = 78（磨砂带 + 加深带两层同尺寸）：
       // 曾只覆盖 54dp 栏体，状态栏区域透明导致内容从状态栏透出。
-      final shaderMasks = find.byType(ShaderMask);
-      expect(shaderMasks, findsNWidgets(2));
-      expect(tester.getSize(shaderMasks.first).height, 24 + SonifySpacing.topBar);
-      expect(tester.getSize(shaderMasks.last).height, 24 + SonifySpacing.topBar);
+      final backdrops = find.byType(BackdropFilter);
+      expect(backdrops, findsNWidgets(2));
+      expect(tester.getSize(backdrops.first).height, 24 + SonifySpacing.topBar);
+      expect(tester.getSize(backdrops.last).height, 24 + SonifySpacing.topBar);
+      // 图层纪律：BackdropFilter 不被 ShaderMask 包裹（saveLayer 内嵌
+      // 模糊失效，flutter/flutter#164079、#175537）
       expect(
         find.ancestor(
           of: find.byType(BackdropFilter),
           matching: find.byType(ShaderMask),
         ),
-        findsWidgets,
+        findsNothing,
+      );
+      // ClipRect 裁剪保留（clip 非 saveLayer，不影响模糊）
+      expect(
+        find.ancestor(
+          of: find.byType(BackdropFilter),
+          matching: find.byType(ClipRect),
+        ),
+        findsNWidgets(2),
       );
     });
 
-    testWidgets('加深带：文字区域更浓（scrim 蒙层 + 强模糊）且 stops 非线性分布',
+    testWidgets('加深带：文字区域更浓（surface 高 alpha + 强模糊）且 stops 非线性分布',
         (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
@@ -243,25 +253,29 @@ void main() {
       final backdrops = find.byType(BackdropFilter);
       expect(backdrops, findsNWidgets(2));
 
-      // ② 加深带着色走 SonifyColors.scrim token（玻璃下内容淡出蒙层），
-      //    非硬编码颜色
-      final scrim = SonifyColors.of(
-        tester.element(backdrops.last),
-      ).scrim;
-      final deepenColor = tester
-          .widget<ColoredBox>(
+      // ② 加深带着色走 cs.surface 系高 alpha（0.85）：亮=浅带/暗=深带，
+      //    跟随主题；非 scrim 黑白蒙层（亮=黑/暗=白，会主题色翻转——
+      //    构建号 104 真机回归根源）、非硬编码颜色
+      final surface =
+          Theme.of(tester.element(backdrops.last)).colorScheme.surface;
+      final deepenGradient = tester
+          .widget<DecoratedBox>(
             find
                 .descendant(
                   of: backdrops.last,
-                  matching: find.byType(ColoredBox),
+                  matching: find.byType(DecoratedBox),
                 )
                 .first,
           )
-          .color;
-      expect(deepenColor, scrim);
+          .decoration as BoxDecoration;
+      final deepenLinear = deepenGradient.gradient! as LinearGradient;
+      // 顶缘全强度 surface α0.85，底缘衰减到全透明
+      expect(deepenLinear.colors.first, surface.withValues(alpha: 0.85));
+      expect(deepenLinear.colors.last, surface.withValues(alpha: 0));
 
-      // ③ dstIn stops 非线性分布（禁线性均分）：差分不全等
+      // ③ 渐变 stops 非线性分布（禁线性均分）：差分不全等
       final stops = kSonifyBarDeepenStops;
+      expect(deepenLinear.stops, stops);
       expect(stops.first, 0.0);
       expect(stops.last, 1.0);
       final diffs = <double>[
@@ -342,7 +356,7 @@ void main() {
       expect(tester.getSize(find.text('发现').last).height, 36);
     });
 
-    testWidgets('上滑后顶栏渐变模糊带出现（ShaderMask 渐变包裹 BackdropFilter）',
+    testWidgets('上滑后顶栏渐变模糊带出现（渐变叠色层承载衰减，BackdropFilter 无图层包裹）',
         (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
@@ -356,28 +370,43 @@ void main() {
       controller.jumpTo(h * 0.1);
       await tester.pump();
 
-      // 磨砂带 = 第一个 ShaderMask（加深带在后）
-      final shaderMask = tester.widget<ShaderMask>(
-        find.byType(ShaderMask).first,
-      );
-      // dstIn 混合：渐变 alpha 自上而下衰减整层（模糊 + 叠色）
-      expect(shaderMask.blendMode, BlendMode.dstIn);
-      // 渐变回调产出竖向（上→下）线性渐变着色器
-      final shader = shaderMask.shaderCallback(
-        const Rect.fromLTWH(0, 0, 100, 54),
-      );
-      expect(shader, isNotNull);
-
-      // 磨砂层（blur 14dp BackdropFilter）位于 ShaderMask 之内、栏背景
-      // 透明度门控之下（目标值 1）
+      // 磨砂带 = 第一个 BackdropFilter（加深带在后）
+      final backdrops = find.byType(BackdropFilter);
+      expect(backdrops, findsNWidgets(2));
       expect(_barOpacity(tester), 1);
+
+      // 图层纪律：BackdropFilter 不得被 ShaderMask / 裸 Opacity 包裹
+      // （saveLayer 内嵌模糊失效，flutter/flutter#164079、#175537；
+      // AnimatedOpacity 全显不产生 saveLayer，允许保留）
       expect(
-        find.ancestor(
-          of: find.byType(BackdropFilter),
-          matching: find.byType(ShaderMask),
-        ),
-        findsWidgets,
+        find.ancestor(of: backdrops, matching: find.byType(ShaderMask)),
+        findsNothing,
       );
+      expect(
+        find.ancestor(of: backdrops, matching: find.byType(Opacity)),
+        findsNothing,
+      );
+
+      // 磨砂带叠色 = surface α0.7，竖向（上→下）渐变 stops [0, 0.6, 1]
+      final surface =
+          Theme.of(tester.element(backdrops.first)).colorScheme.surface;
+      final frostedGradient = (tester
+              .widget<DecoratedBox>(
+                find
+                    .descendant(
+                      of: backdrops.first,
+                      matching: find.byType(DecoratedBox),
+                    )
+                    .first,
+              )
+              .decoration as BoxDecoration)
+          .gradient! as LinearGradient;
+      expect(frostedGradient.begin, Alignment.topCenter);
+      expect(frostedGradient.end, Alignment.bottomCenter);
+      expect(frostedGradient.stops, const [0, 0.6, 1]);
+      // 顶缘全强度页面色 α0.7（Title.kt:977），底缘衰减到全透明
+      expect(frostedGradient.colors.first, surface.withValues(alpha: 0.7));
+      expect(frostedGradient.colors.last, surface.withValues(alpha: 0));
     });
   });
 }
