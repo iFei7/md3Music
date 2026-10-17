@@ -51,7 +51,7 @@ Future<void> _pumpDock(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('默认配置下 Dock 展开态含「本地音乐」导航项，点击可切换', (tester) async {
+  testWidgets('默认配置下 Dock 展开态含「音乐库」导航项，点击可切换', (tester) async {
     String? selected;
     await _pumpDock(
       tester,
@@ -59,18 +59,19 @@ void main() {
       onSelectTab: (id) => selected = id,
     );
 
-    // 音乐库（本地音乐）导航项存在：outlined 图标 + 语义标签
+    // 音乐库导航项存在：outlined 图标 + 语义标签
+    // （音乐库改版：library 标签由「本地音乐」升级为「音乐库」）
     expect(find.byIcon(Icons.library_music_outlined), findsOneWidget,
         reason: '默认 Tab 配置下 Dock 应渲染 library 导航项');
-    expect(find.bySemanticsLabel('本地音乐'), findsOneWidget,
-        reason: 'library 导航项应带「本地音乐」无障碍标签');
+    expect(find.bySemanticsLabel('音乐库'), findsOneWidget,
+        reason: 'library 导航项应带「音乐库」无障碍标签');
 
     // 点击导航项 → 回调携带 library tab id（可切换）
     await tester.tap(find.byIcon(Icons.library_music_outlined));
     // AppHaptics.tick（_DockNavItem 点击反馈）fire-and-forget 注册 300ms
     // 超时 Timer，必须推进 fake 时间到期，否则测试结束时 pending timer 断言失败
     await tester.pump(const Duration(milliseconds: 300));
-    expect(selected, 'library', reason: '点击「本地音乐」应回调 onSelectTab(library)');
+    expect(selected, 'library', reason: '点击「音乐库」应回调 onSelectTab(library)');
   });
 
   testWidgets('选中 library 时导航项呈现选中态（filled 图标）', (tester) async {

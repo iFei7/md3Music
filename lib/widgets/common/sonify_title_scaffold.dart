@@ -17,9 +17,9 @@ import '../../core/theme/app_theme.dart';
 ///  （[_TitlePlaceholderItem]，含高度实测），业务内容从标题下方滚过；
 /// - 顶栏悬浮叠加在列表之上：背景为**两层渐变模糊带**（材质对齐
 ///   `LiquidGlassSurface` dock 配方：blur 18dp + cs.surface 系叠色——
-///   磨砂带 α0.7、文字区加深带 α0.85，均高于 dock 的 0.12，差异原因见
-///   [_TopBar] 类文档「图层纪律」；加深带渐变 stops 非线性分布，用户
-///   反馈②）随滚动 120ms 淡入出（Title.kt:952-953），
+///   磨砂带 α0.40、文字区加深带 α0.60，批次 11：叠色下调让 blur 主导，
+///   遮罩感修复；加深带渐变 stops 非线性分布，用户反馈②）随滚动
+///   120ms 淡入出（Title.kt:952-953），
 ///   保证滚过内容时固定标题仍清晰可读；
 /// - 顶栏右侧内容（如固定用户头像）**常驻渲染**；[actions] 动作钮随
 ///   栏体 120ms 淡入（滚动即出现，展开态隐藏不挡内容）。
@@ -290,9 +290,9 @@ class _PinnedLargeTitle extends StatelessWidget {
 ///
 /// - 背景：**两层渐变模糊带**，Positioned.fill 覆盖「状态栏 + 栏体」全带
 ///   （y=0 起），随滚动 120ms 淡入出；内容在带下可滚动（悬浮语义）：
-///   1. 磨砂带（底层）：blur 18dp + surface α0.7，竖向 LinearGradient
+///   1. 磨砂带（底层）：blur 18dp + surface α0.40，竖向 LinearGradient
 ///      stops [0, 0.6, 1] 自上而下衰减；
-///   2. **加深带**（文字区）：blur 18dp + surface 高 alpha（0.85）叠色，
+///   2. **加深带**（文字区）：blur 18dp + surface 较高 alpha（0.60）叠色，
 ///      LinearGradient stops **非线性**分布（[kSonifyBarDeepenStops]：
 ///      顶部全强度覆盖标题文字区，底部加速淡出）——文字上方更浓，
 ///      滚过内容时固定标题仍清晰（反馈②）。
@@ -318,10 +318,12 @@ class _PinnedLargeTitle extends StatelessWidget {
 /// （[kSonifyBarBlurSigma]）、叠色统一 cs.surface 系，均取自
 /// `LiquidGlassSurface`（lib/widgets/common/liquid_glass_surface.dart，
 /// 默认参数 = 悬浮 Dock 玻璃配方：blurSigma 18 + surface α0.12 叠色）。
-/// 叠色 alpha 高于 dock 的 0.12（磨砂带 0.7 / 加深带 0.85）：dock 是
-/// 大面积独立悬浮件、内容自带对比，低 alpha 即可；顶栏是全宽可读性带、
-/// 固定大标题直接叠在其上，必须更高不透明度保证文字对比度——结构
-/// （顶部浓→底部渐隐）与色系与 dock 一致，仅浓度按可读性上调。
+/// 批次 11：叠色 alpha 由磨砂带 0.7 / 加深带 0.85 下调至 0.40 / 0.60，
+/// 让 blur 主导玻璃质感、消除白/黑遮罩感（批次 10 叠色过高，用户反馈
+/// 顶栏像蒙了层浅色/深色遮罩）；浅色深色主题同一组参数（cs.surface
+/// 自带深浅差异）。仍高于 dock 的 0.12：顶栏是全宽可读性带、固定大
+/// 标题直接叠在其上，需保证文字对比度——结构（顶部浓→底部渐隐）与
+/// 色系与 dock 一致，仅浓度按可读性上调。
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.showBarBackground,
@@ -361,8 +363,9 @@ class _TopBar extends StatelessWidget {
               },
               child: Stack(
                 children: [
-                  // ① 磨砂带：blur 18 + surface α0.7，竖向
-                  //    stops [0, 0.6, 1] 自上而下衰减
+                  // ① 磨砂带：blur 18 + surface α0.40，竖向
+                  //    stops [0, 0.6, 1] 自上而下衰减（批次 11：叠色
+                  //    下调让 blur 主导，遮罩感修复）
                   Positioned.fill(
                     child: ClipRect(
                       child: BackdropFilter(
@@ -373,17 +376,18 @@ class _TopBar extends StatelessWidget {
                           sigmaY: kSonifyBarBlurSigma,
                         ),
                         child: DecoratedBox(
-                          // surface 系 α0.7（保持顶部浓→底部渐隐结构），
+                          // surface 系 α0.40（保持顶部浓→底部渐隐结构），
                           // 高于 dock 的 0.12：全宽可读性带、固定大标题
-                          // 叠其上，需更高浓度保证文字对比度（见类文档）
+                          // 叠其上；批次 10 的 0.7 过高产生遮罩感，下调让
+                          // blur 主导（见类文档）
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                               // 顶部 ~60% 全强度毛玻璃，之后淡出到底缘全透明
                               colors: [
-                                cs.surface.withValues(alpha: 0.7),
-                                cs.surface.withValues(alpha: 0.7),
+                                cs.surface.withValues(alpha: 0.40),
+                                cs.surface.withValues(alpha: 0.40),
                                 cs.surface.withValues(alpha: 0),
                               ],
                               stops: const [0, 0.6, 1],
@@ -393,14 +397,15 @@ class _TopBar extends StatelessWidget {
                       ),
                     ),
                   ),
-                  // ② 加深带（文字区域）：blur 18 + surface 高 alpha 叠色，
+                  // ② 加深带（文字区域）：blur 18 + surface 较高 alpha 叠色，
                   //    竖向非线性 stops——顶部保持全强度覆盖标题文字区，
                   //    底部加速淡出
                   Positioned.fill(
                     child: ClipRect(
                       child: BackdropFilter(
                         // 与磨砂带统一 sigma 18（对齐 dock 配方）；"浓"的
-                        // 手感来源改为更高叠色 alpha（0.85）
+                        // 手感来源为较高叠色 alpha（批次 11：0.85 → 0.60，
+                        // 让 blur 主导、遮罩感修复，见类文档）
                         filter: ImageFilter.blur(
                           sigmaX: kSonifyBarBlurSigma,
                           sigmaY: kSonifyBarBlurSigma,
@@ -414,9 +419,9 @@ class _TopBar extends StatelessWidget {
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                               colors: [
-                                cs.surface.withValues(alpha: 0.85),
-                                cs.surface.withValues(alpha: 0.85),
-                                cs.surface.withValues(alpha: 0.85),
+                                cs.surface.withValues(alpha: 0.60),
+                                cs.surface.withValues(alpha: 0.60),
+                                cs.surface.withValues(alpha: 0.60),
                                 cs.surface.withValues(alpha: 0),
                               ],
                               // 非线性分布：0→0.85 全强度，0.85→1 加速淡出

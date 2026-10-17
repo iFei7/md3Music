@@ -26,6 +26,11 @@ class LocalMusicRepository {
   static const String _cachedSongsKey = 'local_music_cached_songs';
   static const String _cachedAtKey = 'local_music_cached_at';
 
+  /// 仅测试用：缓存歌曲的 SharedPreferences key（widget 测试用
+  /// SharedPreferences.setMockInitialValues 注入种子歌曲）。
+  @visibleForTesting
+  static String get cachedSongsKeyForTest => _cachedSongsKey;
+
   /// 获取用户保存的自定义扫描文件夹列表。
   Future<List<String>> getSavedFolders() async {
     final prefs = await SharedPreferences.getInstance();

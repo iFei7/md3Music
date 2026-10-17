@@ -248,14 +248,15 @@ void main() {
       controller.jumpTo(h * 0.1);
       await tester.pump();
 
-      // ① 两层带：磨砂带（blur 18 + surface α0.7）+ 加深带（树中第二个
+      // ① 两层带：磨砂带（blur 18 + surface α0.40）+ 加深带（树中第二个
       //    BackdropFilter）——加深带即"文字上方区域更浓"的那层（反馈②）
       final backdrops = find.byType(BackdropFilter);
       expect(backdrops, findsNWidgets(2));
 
-      // ② 加深带着色走 cs.surface 系高 alpha（0.85）：亮=浅带/暗=深带，
-      //    跟随主题；非 scrim 黑白蒙层（亮=黑/暗=白，会主题色翻转——
-      //    构建号 104 真机回归根源）、非硬编码颜色
+      // ② 加深带着色走 cs.surface 系较高 alpha（批次 11：0.60，让 blur
+      //    主导、遮罩感修复）：亮=浅带/暗=深带，跟随主题；非 scrim 黑白
+      //    蒙层（亮=黑/暗=白，会主题色翻转——构建号 104 真机回归根源）、
+      //    非硬编码颜色
       final surface =
           Theme.of(tester.element(backdrops.last)).colorScheme.surface;
       final deepenGradient = tester
@@ -269,8 +270,8 @@ void main() {
           )
           .decoration as BoxDecoration;
       final deepenLinear = deepenGradient.gradient! as LinearGradient;
-      // 顶缘全强度 surface α0.85，底缘衰减到全透明
-      expect(deepenLinear.colors.first, surface.withValues(alpha: 0.85));
+      // 顶缘全强度 surface α0.60，底缘衰减到全透明
+      expect(deepenLinear.colors.first, surface.withValues(alpha: 0.60));
       expect(deepenLinear.colors.last, surface.withValues(alpha: 0));
 
       // ③ 渐变 stops 非线性分布（禁线性均分）：差分不全等
@@ -304,8 +305,9 @@ void main() {
       final backdrops = find.byType(BackdropFilter);
       expect(backdrops, findsNWidgets(2));
 
-      // 两条带叠色均为 cs.surface 系（dock 同色系）：磨砂带顶缘 α0.7、
-      // 加深带顶缘 α0.85（高于 dock 0.12：全宽可读性带，见类文档）
+      // 两条带叠色均为 cs.surface 系（dock 同色系）：磨砂带顶缘 α0.40、
+      // 加深带顶缘 α0.60（批次 11 下调让 blur 主导；仍高于 dock 0.12：
+      // 全宽可读性带，见类文档）
       final surface =
           Theme.of(tester.element(backdrops.first)).colorScheme.surface;
       LinearGradient bandGradient(Finder band) => (tester
@@ -321,8 +323,8 @@ void main() {
           .gradient! as LinearGradient;
       final frosted = bandGradient(backdrops.first);
       final deepen = bandGradient(backdrops.last);
-      expect(frosted.colors.first, surface.withValues(alpha: 0.7));
-      expect(deepen.colors.first, surface.withValues(alpha: 0.85));
+      expect(frosted.colors.first, surface.withValues(alpha: 0.40));
+      expect(deepen.colors.first, surface.withValues(alpha: 0.60));
       // 两带底缘均衰减到全透明（顶部浓→底部渐隐结构保持）
       expect(frosted.colors.last, surface.withValues(alpha: 0));
       expect(deepen.colors.last, surface.withValues(alpha: 0));
@@ -428,7 +430,7 @@ void main() {
         findsNothing,
       );
 
-      // 磨砂带叠色 = surface α0.7，竖向（上→下）渐变 stops [0, 0.6, 1]
+      // 磨砂带叠色 = surface α0.40，竖向（上→下）渐变 stops [0, 0.6, 1]
       final surface =
           Theme.of(tester.element(backdrops.first)).colorScheme.surface;
       final frostedGradient = (tester
@@ -445,8 +447,8 @@ void main() {
       expect(frostedGradient.begin, Alignment.topCenter);
       expect(frostedGradient.end, Alignment.bottomCenter);
       expect(frostedGradient.stops, const [0, 0.6, 1]);
-      // 顶缘全强度页面色 α0.7（Title.kt:977），底缘衰减到全透明
-      expect(frostedGradient.colors.first, surface.withValues(alpha: 0.7));
+      // 顶缘全强度页面色 α0.40（批次 11 下调），底缘衰减到全透明
+      expect(frostedGradient.colors.first, surface.withValues(alpha: 0.40));
       expect(frostedGradient.colors.last, surface.withValues(alpha: 0));
     });
   });

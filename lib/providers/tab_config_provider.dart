@@ -43,7 +43,9 @@ class TabItem {
 const List<TabItem> kDefaultTabs = [
   TabItem(id: 'discover', label: '主页'),
   TabItem(id: 'favorites', label: '收藏'),
-  TabItem(id: 'library', label: '本地音乐'),
+  // 音乐库方案：标签文案由「本地音乐」升级为「音乐库」（label 文案改动
+  // 不涉及持久化结构，tabConfigMigrationVersion 无需升级，仍维持 v6）。
+  TabItem(id: 'library', label: '音乐库'),
   TabItem(id: 'user', label: '我的', isRemovable: false),
 ];
 
@@ -74,7 +76,7 @@ const List<TabItem> kOptionalTabs = [
 const List<TabItem> kAllAvailableTabs = [
   TabItem(id: 'discover', label: '主页'),
   TabItem(id: 'favorites', label: '收藏'),
-  TabItem(id: 'library', label: '本地音乐'),
+  TabItem(id: 'library', label: '音乐库'),
   TabItem(id: 'fm', label: '私人FM'),
   TabItem(id: 'search', label: '搜索'),
   TabItem(id: 'recognition', label: '听歌识曲'),

@@ -595,6 +595,31 @@ class SettingsRepository {
   List<String> _splitPlaylistOrder(String? raw) =>
       raw == null || raw.isEmpty ? [] : raw.split(',');
 
+  // ===== 音乐库（LibraryHubPage）分段上下文排序 =====
+  static const String _keyHubSongSort = 'settings_hub_song_sort';
+
+  /// 音乐库「歌曲」段的排序项：0=标题 1=歌手 2=添加时间 3=播放次数。
+  Future<int> getHubSongSort() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_keyHubSongSort) ?? 0;
+  }
+
+  Future<void> setHubSongSort(int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_keyHubSongSort, value);
+  }
+
+  /// 音乐库「歌曲」段排序方向：false=正序，true=倒序。
+  Future<bool> getHubSongSortDescending() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('${_keyHubSongSort}_desc') ?? false;
+  }
+
+  Future<void> setHubSongSortDescending(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('${_keyHubSongSort}_desc', value);
+  }
+
   // ===== Pad 端网格列数 =====
 
   /// 读取 Pad 端网格页面列数偏好，默认 4。

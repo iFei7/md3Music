@@ -38,6 +38,7 @@ import 'modules/player/player_drag_overlay.dart';
 import 'modules/playlist/playlist_page.dart';
 import 'modules/search/search_page.dart';
 import 'modules/settings/settings_page.dart';
+import 'modules/library/library_hub_page.dart';
 import 'modules/library/library_page.dart';
 import 'modules/library/scan_status_page.dart';
 import 'modules/login/login_page.dart';
@@ -647,8 +648,10 @@ class _MainLayoutState extends State<_MainLayout>
         page = const FavoritesPage();
         break;
       case 'library':
-        // 本地音乐 tab（可选 Tab，默认隐藏）：与快捷方式路由共用 LibraryPage
-        page = const LibraryPage();
+        // 音乐库 tab：一级聚合中枢页（设计方案 P0+P1）。旧 LibraryPage
+        // 保留为兼容路由（'/library' 与 folders/local_favorites 可选 Tab
+        // 的 initialTab 路由映射不变）。
+        page = const LibraryHubPage();
         break;
       // v6 起音乐库 9 项子页面注册为可选 Tab（默认隐藏，主页管理可开启）。
       // 复用优先：歌单/专辑/歌手落「我的收藏」对应 tab；文件夹/本地收藏
