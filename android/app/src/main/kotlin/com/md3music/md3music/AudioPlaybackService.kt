@@ -666,12 +666,7 @@ class AudioPlaybackService : Service() {
         restoreBluetoothLyricState()
         // 方案B阶段1：绑定媒体3会话承载服务（实例化 host，供 fork 会话渲染 now playing 通知）。
         // 用带 SERVICE_INTERFACE action 的 Intent 绑定，确保 onBind 返回非空 binder 使连接成功。
-        try {
-            val m3Intent = Intent(this, MD3MusicMediaSessionService::class.java)
-                .setAction("androidx.media3.session.MediaSessionService")
-            bindService(m3Intent, media3ServiceConnection, Context.BIND_AUTO_CREATE)
-            media3ServiceBound = true
-        } catch (_: Exception) {}
+        bindMedia3Service()
         // 方案B阶段4：注册媒体3自定义命令监听。媒体3通知栏按钮（桌面歌词/收藏）
         // 触发后路由到与既有 ACTION 相同的 Flutter 通道处理逻辑。
         // 阶段6：原生上一首/下一首命令拦截后也走这里，转发 App 自有切歌逻辑。
@@ -689,6 +684,24 @@ class AudioPlaybackService : Service() {
             })
             Log.i(TAG, "Media3 command listener registered")
         } catch (_: Throwable) {}
+    }
+
+    /// 方案B阶段1：绑定媒体3会话承载服务（onCreate 首次绑定 + 批次12 v3 有界重绑共用）。
+    /// 用带 SERVICE_INTERFACE action 的 Intent 绑定，确保 onBind 返回非空 binder 使连接成功。
+    /// 批次12 v3：绑定失败不再静默吞掉——此前 catch 吞掉异常后 media3ServiceBound /
+    /// media3ServiceConnected 均停留在 false，showNotification 的挂载分支每次刷新都重挂
+    /// 1002（1.5s 撤除后周期性再现）。改为打 warn 日志（含全栈）便于真机定位，且不崩溃。
+    private fun bindMedia3Service() {
+        try {
+            val m3Intent = Intent(this, MD3MusicMediaSessionService::class.java)
+                .setAction("androidx.media3.session.MediaSessionService")
+            bindService(m3Intent, media3ServiceConnection, Context.BIND_AUTO_CREATE)
+            // 置位后同一实例不再重复绑定（防绑定风暴）；连接状态由
+            // media3ServiceConnection 回调维护，与绑定标志相互独立。
+            media3ServiceBound = true
+        } catch (e: Exception) {
+            Log.w(TAG, "bind media3 service failed", e)
+        }
     }
 
     /// 从 SharedPreferences 恢复蓝牙歌词开关状态。
@@ -967,7 +980,8 @@ class AudioPlaybackService : Service() {
                     "media3 notification (id=$MEDIA3_NOTIFICATION_ID) is the sole FGS carrier"
             )
         } catch (e: Throwable) {
-            Log.w(TAG, "keepalive foreground removal failed: ${e.javaClass.simpleName}: ${e.message}")
+            // 批次12 v3：补全栈，便于真机诊断撤除失败（缺栈时只能看到异常类名）。
+            Log.w(TAG, "keepalive foreground removal failed", e)
         }
     }
 
@@ -1660,6 +1674,14 @@ class AudioPlaybackService : Service() {
         duration: Long,
         isFavorited: Boolean = false
     ) {
+        // 批次12 v3：有界重绑。onCreate 绑定若静默失败（media3ServiceBound /
+        // media3ServiceConnected 均停留 false），下方挂载分支会在每次刷新时重挂
+        // 1002（1.5s 撤除后周期性再现）。仅当未绑定且未连接时重试；绑定成功后
+        // media3ServiceBound 置位即不再重试（防绑定风暴）；持续失败时重试频率
+        // 由通知更新频率天然限制（播放中约 30s 一次 + 切歌/暂停/seek 事件）。
+        if (!media3ServiceBound && !media3ServiceConnected) {
+            bindMedia3Service()
+        }
         if (mediaId.isNotEmpty() && mediaId != originalMediaId) {
             originalMediaId = mediaId
             metadataGeneration++
