@@ -980,7 +980,7 @@ class AudioPlaybackService : Service() {
     /// （后台切歌/缓冲被拒降级、暂停 DETACH 等）时每 500ms 复查，直到确认
     /// 或播放停止（ACTION_STOP / hideNotification / onDestroy 会取消本回调）。
     /// 撤除后服务保持 started，不 stopSelf。
-    private val keepaliveForegroundRemoval = Runnable {
+    private val keepaliveForegroundRemoval: Runnable = Runnable {
         if (keepaliveForegroundHidden) return@Runnable
         if (isMedia3Foreground()) {
             removeKeepaliveIfMounted()
