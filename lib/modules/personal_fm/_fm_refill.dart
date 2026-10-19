@@ -2,7 +2,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 // personal_fm_section 的补货相关依赖统一从此 re-export。
 export '../../widgets/sliding_segmented_control.dart';
-export '../../widgets/wavy_playback_line.dart';
 export '../login/login_page.dart';
 export '../player/full_player_route.dart';
 

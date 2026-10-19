@@ -37,18 +37,4 @@ class CommentDisplayProvider extends ChangeNotifier {
       notifyListeners();
     }
   }
-
-  /// 设置楼主评论字号（10.0 ~ 24.0 px），楼中楼字号自动 = 楼主 - 3。
-  /// 持久化到 SharedPreferences。
-  Future<void> setCommentFontSize(double size) async {
-    final clamped = size.clamp(10.0, 24.0);
-    if ((_commentFontSize - clamped).abs() < 0.01) return;
-    _commentFontSize = clamped;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keyCommentFontSize, clamped);
-  }
-
-  /// 重置为默认值（楼主 17.0）。
-  Future<void> resetToDefault() => setCommentFontSize(17.0);
 }

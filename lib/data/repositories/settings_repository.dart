@@ -6,7 +6,6 @@ import '../../core/services/volume_normalization_service.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 
 class SettingsRepository {
-  static const String _keyThemeMode = 'settings_theme_mode';
   static const String _keyDefaultQuality = 'settings_default_quality';
   // 按网络区分的音质（WiFi / 移动网络）；未设置时回退到 _keyDefaultQuality
   static const String _keyQualityWifi = 'settings_default_quality_wifi';
@@ -78,20 +77,6 @@ class SettingsRepository {
     await prefs.setDouble(_keyDesktopDetailRatio, ratio);
   }
 
-  Future<ThemeMode> getThemeMode() async {
-    final prefs = await SharedPreferences.getInstance();
-    final index = prefs.getInt(_keyThemeMode);
-    if (index != null && index >= 0 && index < ThemeMode.values.length) {
-      return ThemeMode.values[index];
-    }
-    return ThemeMode.system;
-  }
-
-  Future<void> setThemeMode(ThemeMode mode) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_keyThemeMode, mode.index);
-  }
-
   Future<String> getDefaultQuality() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_keyDefaultQuality) ?? '128';
@@ -129,11 +114,6 @@ class SettingsRepository {
   /// 按网络类型写入对应音质（[isWifi] 为 true 写 WiFi 键，否则写移动网络键）。
   Future<void> setQualityForNetwork(bool isWifi, String quality) =>
       isWifi ? setWifiQuality(quality) : setMobileQuality(quality);
-
-  Future<int> getCacheSize() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_keyCacheSize) ?? 500;
-  }
 
   Future<void> setCacheSize(int sizeMb) async {
     final prefs = await SharedPreferences.getInstance();
@@ -541,33 +521,6 @@ class SettingsRepository {
     await prefs.setBool(_keySortCollectedByLatestClick, value);
   }
 
-  static const String _keyCreatedPlaylistSort =
-      'settings_created_playlist_sort';
-  static const String _keyCollectedPlaylistSort =
-      'settings_collected_playlist_sort';
-
-  /// 收藏页「我创建的歌单」手动排序方向：0=默认顺序，1=升序（A→Z），2=降序（Z→A）。
-  Future<int> getCreatedPlaylistSort() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_keyCreatedPlaylistSort) ?? 0;
-  }
-
-  Future<void> setCreatedPlaylistSort(int value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_keyCreatedPlaylistSort, value);
-  }
-
-  /// 收藏页「我收藏的歌单」手动排序方向：0=默认顺序，1=升序（A→Z），2=降序（Z→A）。
-  Future<int> getCollectedPlaylistSort() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_keyCollectedPlaylistSort) ?? 0;
-  }
-
-  Future<void> setCollectedPlaylistSort(int value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_keyCollectedPlaylistSort, value);
-  }
-
   static const String _keyCreatedPlaylistOrder =
       'settings_created_playlist_order';
   static const String _keyCollectedPlaylistOrder =
@@ -597,31 +550,6 @@ class SettingsRepository {
 
   List<String> _splitPlaylistOrder(String? raw) =>
       raw == null || raw.isEmpty ? [] : raw.split(',');
-
-  // ===== 音乐库（LibraryHubPage）分段上下文排序 =====
-  static const String _keyHubSongSort = 'settings_hub_song_sort';
-
-  /// 音乐库「歌曲」段的排序项：0=标题 1=歌手 2=添加时间 3=播放次数。
-  Future<int> getHubSongSort() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_keyHubSongSort) ?? 0;
-  }
-
-  Future<void> setHubSongSort(int value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_keyHubSongSort, value);
-  }
-
-  /// 音乐库「歌曲」段排序方向：false=正序，true=倒序。
-  Future<bool> getHubSongSortDescending() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('${_keyHubSongSort}_desc') ?? false;
-  }
-
-  Future<void> setHubSongSortDescending(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('${_keyHubSongSort}_desc', value);
-  }
 
   // ===== Pad 端网格列数 =====
 
