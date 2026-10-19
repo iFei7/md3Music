@@ -15,6 +15,7 @@ import 'dart:typed_data';
 // material_ui re-export 了 MaterialApp 等组件；LibraryHubPage 的
 // Scaffold 消费 material_ui 类型体系，harness 必须用
 // material_ui 的 MaterialApp（见 library_hub_entries_test.dart 同款约定）。
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
@@ -24,6 +25,7 @@ import 'package:md3music/data/repositories/favorite_lists_cache.dart';
 import 'package:md3music/data/repositories/hidden_playlists_cache.dart';
 import 'package:md3music/data/repositories/history_repository.dart';
 import 'package:md3music/data/repositories/local_music_repository.dart';
+import 'package:md3music/data/repositories/playlist_cover_cache.dart';
 import 'package:md3music/modules/library/library_hub_page.dart';
 import 'package:md3music/modules/library/library_page.dart';
 import 'package:md3music/modules/user/cloud_music_page.dart';
@@ -322,6 +324,29 @@ void main() {
     );
     expect(find.text('他人分享歌单'), findsOneWidget);
     expect(find.text('12 首'), findsOneWidget);
+  });
+
+  testWidgets('无封面歌单：读取首曲封面缓存并用于封面卡', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await _seedPlaylists();
+    // 预置首曲封面缓存（playlistKey = created_1，无 globalCollectionId）
+    await PlaylistCoverCache.put('created_1', 'https://img.example/first.jpg');
+    await _pumpHub(tester);
+
+    // 滚到歌单分区，让 CoverRail 内的封面卡进入构建范围
+    await tester.dragUntilVisible(
+      find.text('我的私藏歌单'),
+      find.byType(CustomScrollView),
+      const Offset(0, -80),
+    );
+    await tester.pump();
+
+    // 缓存命中 → 封面卡渲染 CachedNetworkImage，且 url 为缓存值
+    final urls = tester
+        .widgetList<CachedNetworkImage>(find.byType(CachedNetworkImage))
+        .map((w) => w.imageUrl)
+        .toList();
+    expect(urls, contains('https://img.example/first.jpg'));
   });
 
   testWidgets('最近播放只渲染最近 3 条（注入 5 条）', (tester) async {

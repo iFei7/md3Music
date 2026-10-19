@@ -1,3 +1,5 @@
+import 'dart:ui' as ui show ImageFilter;
+
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:md3music/core/theme/app_theme.dart';
@@ -62,29 +64,37 @@ void _expectStops(List<double>? stops, List<double> expected) {
   }
 }
 
-/// 栏背景两套渐变（ClipRect → Stack 内两层，返回（遮罩，tint））：
-/// ① 遮罩渐变 = BackdropFilter 子树内的 DecoratedBox——dstIn 塑形模糊
-///    强度，白系仅 alpha 起作用（颜色被 dstIn 丢弃）；
-/// ② tint 叠色渐变 = ClipRect 子树内遮罩之后的 DecoratedBox——
-///    BackdropFilter 同 Stack 兄弟层（普通 srcOver；不能放进
-///    BackdropFilter 内部：会被 dstIn 遮罩按 alpha 一起裁掉）。
-/// ClipRect 子树内 DecoratedBox 恰为这两层（顺序：遮罩先、tint 后）。
-(LinearGradient, LinearGradient) _bandGradients(WidgetTester tester) {
-  LinearGradient gradientOf(Finder decorator) =>
-      (tester.widget<DecoratedBox>(decorator).decoration as BoxDecoration)
-          .gradient! as LinearGradient;
+/// 带内 tint 叠色渐变：切片层（[_BarBlurSlice] → ClipRect →
+/// BackdropFilter → SizedBox）不含 DecoratedBox，故整条带内唯一的
+/// DecoratedBox 即 tint 兄弟层（本函数自带断言，结构一旦回退会立刻失败）。
+LinearGradient _tintGradient(WidgetTester tester) {
   final backdrops = find.byType(BackdropFilter);
-  final band = find.ancestor(of: backdrops, matching: find.byType(ClipRect));
-  final layers =
-      find.descendant(of: band, matching: find.byType(DecoratedBox));
-  expect(layers, findsNWidgets(2),
-      reason: '带内恰为「遮罩（BackdropFilter 内）+ tint（兄弟层）」两层');
-  return (
-    gradientOf(
-      find.descendant(of: backdrops, matching: find.byType(DecoratedBox)),
-    ),
-    gradientOf(layers.last),
-  );
+  final band = find
+      .ancestor(of: backdrops.first, matching: find.byType(ClipRect))
+      .last;
+  final tint = find.descendant(of: band, matching: find.byType(DecoratedBox));
+  expect(tint, findsOneWidget,
+      reason: '带内仅 tint 一层 DecoratedBox（切片只包 BackdropFilter）');
+  return (tester.widget<DecoratedBox>(tint).decoration as BoxDecoration)
+      .gradient! as LinearGradient;
+}
+
+/// 切片几何 + 滤镜（按屏幕 y 自上而下）：返回 [(高度, filter)]。
+/// sigma 通过 [ui.ImageFilter] 的值相等比对（ImageFilter.blur 重写了 ==）。
+List<(double, ui.ImageFilter)> _barSlices(WidgetTester tester) {
+  final backdrops = find.byType(BackdropFilter);
+  final order = List<int>.generate(backdrops.evaluate().length, (i) => i)
+    ..sort((a, b) => tester
+        .getRect(backdrops.at(a))
+        .top
+        .compareTo(tester.getRect(backdrops.at(b)).top));
+  return [
+    for (final i in order)
+      (
+        tester.getSize(backdrops.at(i)).height,
+        tester.widget<BackdropFilter>(backdrops.at(i)).filter!,
+      ),
+  ];
 }
 
 /// 大标题 item 总高度（状态栏占位 0 + 顶距 8 + 文本行高 + 底距 8）。
@@ -248,11 +258,12 @@ void main() {
       controller.jumpTo(h * 0.1);
       await tester.pump();
 
-      // 带体高度 = 状态栏 24 + 栏体 54 = 78（单层磨砂带覆盖）：
+      // 带体高度 = 状态栏 24 + 栏体 54 = 78（切片带覆盖）：
       // 曾只覆盖 54dp 栏体，状态栏区域透明导致内容从状态栏透出。
+      const bandHeight = 24 + SonifySpacing.topBar;
       final backdrops = find.byType(BackdropFilter);
-      expect(backdrops, findsNWidgets(1));
-      expect(tester.getSize(backdrops.first).height, 24 + SonifySpacing.topBar);
+      expect(backdrops, findsNWidgets(3),
+          reason: '切片式渐变模糊：H=78 分 3 片（18/9/3）');
       // 图层纪律：BackdropFilter 不被 ShaderMask 包裹（saveLayer 内嵌
       // 模糊失效，flutter/flutter#164079、#175537）
       expect(
@@ -262,33 +273,50 @@ void main() {
         ),
         findsNothing,
       );
-      // ClipRect 裁剪保留（clip 非 saveLayer，不影响模糊）
-      expect(
-        find.ancestor(
-          of: find.byType(BackdropFilter),
-          matching: find.byType(ClipRect),
-        ),
-        findsNWidgets(1),
-      );
+      // 切片共用一次 backdrop 采样（避免 3 次全宽回采）
+      expect(find.byType(BackdropGroup), findsOneWidget);
+      // 外层带裁剪壳：覆盖「状态栏 + 栏体」全带
+      final bandClip = find
+          .ancestor(of: backdrops.first, matching: find.byType(ClipRect))
+          .last;
+      expect(tester.getSize(bandClip).height, bandHeight);
+      // 每片自带 ClipRect（裁剪壳在内、BackdropFilter 只包自身切片），
+      // 且横向铺满整带（BackdropFilter 的 child 为 SizedBox.expand，
+      // child 缺失时框架不生成滤镜层——真机表现为无模糊）
+      for (var i = 0; i < 3; i++) {
+        final clip = find
+            .ancestor(
+              of: backdrops.at(i),
+              matching: find.byType(ClipRect),
+            )
+            .first;
+        final sliceSize = tester.getSize(backdrops.at(i));
+        expect(tester.getSize(clip), sliceSize,
+            reason: '第 $i 片自带 ClipRect，与切片同尺寸');
+        expect(sliceSize.width, tester.getSize(bandClip).width,
+            reason: '第 $i 片横向铺满整带');
+      }
 
-      // 渐变形态（状态栏锚定，本用例注入 sb=24）：两套渐变 stops 同为
-      // [0, 24/78, 1]——
-      // ① 遮罩（BackdropFilter 内，dstIn 塑形模糊强度）：白@1→白@1→
-      //    白@0——状态栏区域（0 → 24/78）满模糊，自状态栏下缘线性衰减，
-      //    带底缘模糊强度 0（颜色被 dstIn 丢弃，仅 alpha 起作用）；
-      // ② tint 叠色（BackdropFilter 兄弟层）：surface@0.42→
-      //    surface@0.42→surface@0——同锚点叠色渐变（surface 层不能被
-      //    dstIn 遮罩裁切，故在 BackdropFilter 之外）。
-      final (maskGradient, tintGradient) = _bandGradients(tester);
+      // 切片形态：自上而下 sigma 18/9/3、高度 0.52H/0.30H/剩余
+      final slices = _barSlices(tester);
+      expect(slices.length, 3);
+      expect(slices[0].$2, ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          reason: '顶片 sigma 18（对齐 dock 配方）');
+      expect(slices[1].$2, ui.ImageFilter.blur(sigmaX: 9, sigmaY: 9));
+      expect(slices[2].$2, ui.ImageFilter.blur(sigmaX: 3, sigmaY: 3));
+      expect(slices[0].$1, closeTo(bandHeight * 0.52, 1e-6));
+      expect(slices[1].$1, closeTo(bandHeight * 0.30, 1e-6));
+      // 三段高度之和必须精确等于带高（减法兜底，不留 1px 缝隙）
+      final total = slices.fold<double>(0, (sum, s) => sum + s.$1);
+      expect(total, closeTo(bandHeight, 1e-6),
+          reason: '切片高度之和 == 状态栏 + 栏体（无接缝/无越界）');
+
+      // tint 叠色层（切片兄弟层，普通 srcOver）：状态栏锚定，
+      // 本用例 sb=24 → stops [0, 24/78, 1]，
+      // surface@0.42 → surface@0.42 → surface@0
+      final tintGradient = _tintGradient(tester);
       final surface =
           Theme.of(tester.element(backdrops.first)).colorScheme.surface;
-
-      expect(maskGradient.begin, Alignment.topCenter);
-      expect(maskGradient.end, Alignment.bottomCenter);
-      _expectStops(maskGradient.stops, const [0, 24 / 78, 1]);
-      expect(maskGradient.colors.first, const Color(0xFFFFFFFF));
-      expect(maskGradient.colors[1], const Color(0xFFFFFFFF));
-      expect(maskGradient.colors.last, const Color(0x00FFFFFF));
 
       expect(tintGradient.begin, Alignment.topCenter);
       expect(tintGradient.end, Alignment.bottomCenter);
@@ -314,23 +342,31 @@ void main() {
       await tester.pump();
 
       // 材质来源：LiquidGlassSurface dock 配方（blurSigma 18 + cs.surface
-      // 叠色）——双带合并为单层后 blur sigma 18 不变（原 14/22 双强度
-      // 早已取消；批次 14 起模糊强度衰减由 BackdropFilter dstIn 遮罩
-      // 承担，sigma 仍取 18）
+      // 叠色）——双带合并后顶片 sigma 18 不变（原 14/22 双强度早已取消；
+      // 批次 16 起模糊强度衰减改由切片 sigma 阶梯 18/9/3 承担）
       expect(kSonifyBarBlurSigma, 18);
       // 单带收敛后的状态栏区域叠色单值（双带合并，反馈③）
       expect(kSonifyBarTopAlpha, 0.42);
 
+      // 本宿主无系统 inset（sb=0，H=54）→ 退化为 2 片（18 → 6）
       final backdrops = find.byType(BackdropFilter);
-      expect(backdrops, findsNWidgets(1));
+      expect(backdrops, findsNWidgets(2));
+      final slices = _barSlices(tester);
+      expect(slices[0].$2, ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18));
+      expect(slices[1].$2, ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6));
+      expect(slices[0].$1, closeTo(54 * 0.65, 1e-6));
+      expect(
+        slices.fold<double>(0, (sum, s) => sum + s.$1),
+        closeTo(54, 1e-6),
+        reason: '横屏/无 inset 退化分支：两片高度和 == 带高 54',
+      );
 
       // 带叠色为 cs.surface 系（dock 同色系）：状态栏区域全强度
       // kSonifyBarTopAlpha，底缘衰减到全透明；高于 dock 0.12：全宽
-      // 可读性带，见类文档。叠色层在 BackdropFilter 之外（兄弟层），
-      // 不能被 dstIn 遮罩裁切——这里取回的是 tint 渐变而非遮罩
+      // 可读性带，见类文档
       final surface =
           Theme.of(tester.element(backdrops.first)).colorScheme.surface;
-      final (_, tintGradient) = _bandGradients(tester);
+      final tintGradient = _tintGradient(tester);
       expect(
         tintGradient.colors.first,
         surface.withValues(alpha: kSonifyBarTopAlpha),
@@ -407,7 +443,7 @@ void main() {
       expect(tester.getSize(find.text('发现').last).height, 36);
     });
 
-    testWidgets('上滑后顶栏渐变模糊带出现（dstIn 遮罩承载模糊衰减、tint 兄弟层，BackdropFilter 无图层包裹）',
+    testWidgets('上滑后顶栏渐变模糊带出现（切片 18/9/3 承载模糊衰减、tint 兄弟层，BackdropFilter 无图层包裹）',
         (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
@@ -421,9 +457,9 @@ void main() {
       controller.jumpTo(h * 0.1);
       await tester.pump();
 
-      // 磨砂带 = 唯一 BackdropFilter（加深带已合并入磨砂带，反馈③）
+      // 渐变带 = 2 片（本宿主 sb=0，H=54 → 横屏退化分支 18/6）
       final backdrops = find.byType(BackdropFilter);
-      expect(backdrops, findsNWidgets(1));
+      expect(backdrops, findsNWidgets(2));
       expect(_barOpacity(tester), 1);
 
       // 图层纪律：BackdropFilter 不得被 ShaderMask / 裸 Opacity 包裹
@@ -438,21 +474,12 @@ void main() {
         findsNothing,
       );
 
-      // 两套渐变（本宿主无系统 inset，sb=0）走退化分支 stops [0, 1]：
-      // ① 遮罩（BackdropFilter 内，dstIn）：白@1→白@0——模糊强度顶缘
-      //    满、底缘 0；
-      // ② tint（BackdropFilter 兄弟层）：surface@0.42→surface@0。
-      // 状态栏锚定三 stops [0, 24/78, 1] 由上面注入 sb=24 的用例覆盖。
-      final (maskGradient, tintGradient) = _bandGradients(tester);
+      // tint（切片兄弟层，本宿主无系统 inset → 退化 stops [0, 1]）：
+      // surface@0.42 → surface@0。状态栏锚定三 stops [0, 24/78, 1]
+      // 由上面注入 sb=24 的用例覆盖。
+      final tintGradient = _tintGradient(tester);
       final surface =
           Theme.of(tester.element(backdrops.first)).colorScheme.surface;
-
-      expect(maskGradient.begin, Alignment.topCenter);
-      expect(maskGradient.end, Alignment.bottomCenter);
-      _expectStops(maskGradient.stops, const [0, 1]);
-      // 遮罩顶缘模糊满保留（白@1），底缘模糊强度 0（白@0）
-      expect(maskGradient.colors.first, const Color(0xFFFFFFFF));
-      expect(maskGradient.colors.last, const Color(0x00FFFFFF));
 
       expect(tintGradient.begin, Alignment.topCenter);
       expect(tintGradient.end, Alignment.bottomCenter);

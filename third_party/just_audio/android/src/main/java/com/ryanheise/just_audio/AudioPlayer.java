@@ -1079,6 +1079,16 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 builder.setLivePlaybackSpeedControl(livePlaybackSpeedControl);
             }
             player = builder.build();
+            // MD3Music fork（批次15·P0）：ExoPlayer 自持 CPU WakeLock。
+            // 此前仅由 AudioPlaybackService 单点管理 WakeLock，任意 isPlaying=false
+            // 通知或 service onDestroy 都会全局释放，导致息屏播放被系统断流。
+            // WAKE_MODE_LOCAL 只持 CPU 锁、不持 WifiLock，避免与本工程
+            // AudioPlaybackService 现有 wifiLock 形成双 WifiLock（额外耗电）。
+            try {
+                player.setWakeMode(C.WAKE_MODE_LOCAL);
+            } catch (Throwable ignore) {
+                // 旧版本/部分 ROM 不支持时忽略：仍由 AudioPlaybackService WakeLock 兜底。
+            }
             // MD3Music fork: 固定 audioSessionId，使 Media3 MediaSession 与 AudioTrack
             // 关联。系统（小米等）按「AudioTrack 的 audioSessionId 是否与 MediaSession
             // 关联」判定播放器可识别性（hasUid）：未关联时独占型中断（如 B 站视频

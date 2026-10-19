@@ -7,6 +7,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/theme/squircle.dart';
 import '../../core/utils/app_toast.dart';
 import '../../providers/kugou_provider.dart';
+import '../login/login_page.dart';
 import 'sign_in_calendar_page.dart';
 
 /// 设置页签到迷你日历卡：账号卡下方的紧凑签到入口。
@@ -16,11 +17,14 @@ import 'sign_in_calendar_page.dart';
 /// + 主按钮「签到」。整卡点击进入 [SignInCalendarPage]（完整签到 /
 /// 听歌领取 / 广告领取 / 验证码流程都在那一页）。
 ///
-/// 数据面（Selector 最小重建，选择面 `(本月已签天数, 今日是否已签, 签到中)`）：
+/// 数据面（Selector 最小重建，选择面 `(本月已签天数, 今日是否已签,
+/// 签到中, 是否登录)`）：
 /// - 已签日期：服务端 [KugouProvider.vipMonthRecord]（仅概念版 svip 记录）
 ///   合并本地兜底 [KugouProvider.localSignedDays]（按 userid 隔离）；
-/// - 今日已签：[KugouProvider.isTodayYouthVip]；
-/// - 签到中：[KugouProvider.manualSignInRunning]（provider 侧防重入）。
+/// - 今日已签：[KugouProvider.hasSignedToday]（签到语义，与概念版徽章
+///   [KugouProvider.isTodayYouthVip] 解耦）；
+/// - 签到中：[KugouProvider.manualSignInRunning]（provider 侧防重入）；
+/// - 是否登录：[KugouProvider.isLoggedIn]（未登录按钮引导去登录页）。
 class SignInMiniCard extends StatefulWidget {
   const SignInMiniCard({super.key});
 
@@ -72,12 +76,32 @@ class _SignInMiniCardState extends State<SignInMiniCard> {
     );
   }
 
+  /// 进入签到日历页（整卡点击与「今日已签到」按钮共用同一跳转路径）。
+  void _openSignInCalendar() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SignInCalendarPage()),
+    );
+  }
+
+  /// 未登录点击签到按钮：提示后进入登录页（与全站其它未登录入口一致）。
+  void _onLoginRequired() {
+    showToast('请先登录后再签到');
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+    );
+  }
+
   /// 签到按钮点击：调 provider 手动签到（防重入由 manualSignInRunning +
   /// 按钮禁用双重保证），完成后 SnackBar 反馈。
   /// 本地已签标记与服务端记录刷新由 provider 内部完成（_markSignedToday /
   /// getVipMonthRecord），此处无需重复调用。
   Future<void> _onSignIn() async {
     final kugou = context.read<KugouProvider>();
+    // 未登录守卫：按钮态已前置拦截，这里兜底避免直接调用 provider 只拿到失败文案
+    if (!kugou.isLoggedIn) {
+      showToast('请先登录后再签到');
+      return;
+    }
     _awaitingSignIn = true;
     // 每次发起签到都重置委托去重：本次若再遇验证码仍可跳转一次
     _captchaDelegated = false;
@@ -119,23 +143,22 @@ class _SignInMiniCardState extends State<SignInMiniCard> {
           color: Colors.transparent,
           child: InkWell(
             // 整卡进入签到日历页（按钮区域由按钮自身消费手势，不冒泡）
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SignInCalendarPage()),
-            ),
+            onTap: _openSignInCalendar,
             borderRadius: BorderRadius.circular(SonifyRadius.card),
             child: Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: 16,
                 vertical: 12,
               ),
-              child: Selector<KugouProvider, (int, bool, bool)>(
+              child: Selector<KugouProvider, (int, bool, bool, bool)>(
                 selector: (_, kugou) => (
                   _currentMonthSignedDays(kugou).length,
-                  kugou.isTodayYouthVip,
+                  kugou.hasSignedToday,
                   kugou.manualSignInRunning,
+                  kugou.isLoggedIn,
                 ),
                 builder: (context, state, _) {
-                  final (signedCount, todaySigned, running) = state;
+                  final (signedCount, todaySigned, running, loggedIn) = state;
                   final signedDays = _currentMonthSignedDays(
                     context.read<KugouProvider>(),
                   );
@@ -153,6 +176,7 @@ class _SignInMiniCardState extends State<SignInMiniCard> {
                         colorScheme,
                         running: running,
                         todaySigned: todaySigned,
+                        loggedIn: loggedIn,
                       ),
                     ],
                   );
@@ -274,12 +298,40 @@ class _SignInMiniCardState extends State<SignInMiniCard> {
     );
   }
 
-  /// 签到主按钮：签到中 = loading 禁用；今日已签 = 「今日已签到」禁用。
+  /// 签到主按钮四态：
+  /// - 签到中 → loading + 禁用；
+  /// - 未登录 → 「登录后签到」可点，进登录页；
+  /// - 今日已签 → 「今日已签到」可点，进签到日历看记录；
+  /// - 未签 → 「签到」。
   Widget _buildSignInButton(
     ColorScheme colorScheme, {
     required bool running,
     required bool todaySigned,
+    required bool loggedIn,
   }) {
+    final VoidCallback? onPressed;
+    final Widget icon;
+    final String label;
+    if (running) {
+      onPressed = null;
+      icon = M3ELoadingIndicator(
+        constraints: BoxConstraints.tightFor(width: 16, height: 16),
+        color: colorScheme.onSecondaryContainer,
+      );
+      label = '签到中';
+    } else if (!loggedIn) {
+      onPressed = _onLoginRequired;
+      icon = const Icon(Icons.login, size: 16);
+      label = '登录后签到';
+    } else if (todaySigned) {
+      onPressed = _openSignInCalendar;
+      icon = const Icon(Icons.check_circle, size: 16);
+      label = '今日已签到';
+    } else {
+      onPressed = _onSignIn;
+      icon = const Icon(Icons.check_circle_outline, size: 16);
+      label = '签到';
+    }
     return Align(
       alignment: Alignment.centerLeft,
       child: FilledButton.tonalIcon(
@@ -291,19 +343,9 @@ class _SignInMiniCardState extends State<SignInMiniCard> {
           ),
           minimumSize: const Size(0, 32),
         ),
-        onPressed: (running || todaySigned) ? null : _onSignIn,
-        icon: running
-            ? M3ELoadingIndicator(
-                constraints: BoxConstraints.tightFor(width: 16, height: 16),
-                color: colorScheme.onSecondaryContainer,
-              )
-            : Icon(
-                todaySigned ? Icons.check_circle : Icons.check_circle_outline,
-                size: 16,
-              ),
-        label: Text(
-          running ? '签到中' : (todaySigned ? '今日已签到' : '签到'),
-        ),
+        onPressed: onPressed,
+        icon: icon,
+        label: Text(label),
       ),
     );
   }

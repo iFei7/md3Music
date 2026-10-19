@@ -14,6 +14,8 @@ import '../../core/theme/app_dimens.dart';
 import '../../core/utils/app_toast.dart';
 import '../../data/repositories/favorite_lists_cache.dart';
 import '../../data/repositories/hidden_playlists_cache.dart';
+import '../../data/repositories/playlist_cover_cache.dart';
+import '../../data/repositories/playlist_cover_resolver.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/player_provider.dart';
@@ -130,6 +132,16 @@ class _FavoritesPageState extends State<FavoritesPage>
   static const String _kMyFavoriteCoverKey = 'fav_my_favorite_cover_v1';
   bool _resolvingMyFavoriteCover = false;
 
+  /// 普通歌单「首曲封面」解析结果（playlistKey → https url）。
+  /// 「我喜欢」走上面的动态封面机制，两者互相独立。
+  Map<String, String> _covers = {};
+
+  /// 首曲封面解析中（防重入）。
+  bool _resolvingCovers = false;
+
+  /// 本页面已尝试解析过的歌单 key（重复加载不重复请求）。
+  final Set<String> _coverAttempted = {};
+
   /// 正在「点击封面一键播放」的歌单行下标：封面上显示进度并防重复点击。
   final Set<int> _coverPlayingIndices = {};
 
@@ -213,6 +225,8 @@ class _FavoritesPageState extends State<FavoritesPage>
       final cachedArtists = await FavoriteListsCache.readArtists();
       final lastSync = await FavoriteListsCache.readLastSyncTime();
       final hidden = await HiddenPlaylistsCache.readHidden();
+      // 普通歌单首曲封面持久化缓存（与 hub 共用同一仓库）
+      final covers = await PlaylistCoverCache.readAll();
       // 「我喜欢」缓存封面：离线启动即可显示最近解析出的专辑封面
       String? cachedCover;
       try {
@@ -231,6 +245,7 @@ class _FavoritesPageState extends State<FavoritesPage>
           _artists = cachedArtists;
           _lastSyncTime = lastSync;
           _myFavoriteCoverUrl = cachedCover;
+          _covers = covers;
           _isLoadingPlaylists = false;
           _isLoadingAlbums = false;
           _isLoadingArtists = false;
@@ -239,6 +254,7 @@ class _FavoritesPageState extends State<FavoritesPage>
         setState(() {
           _lastSyncTime = lastSync;
           _myFavoriteCoverUrl = cachedCover;
+          _covers = covers;
         });
       }
     } catch (_) {
@@ -301,6 +317,36 @@ class _FavoritesPageState extends State<FavoritesPage>
     ]);
     // 歌单就位后解析「我喜欢」动态封面（不阻塞主加载）
     unawaited(_resolveMyFavoriteCover());
+    // 普通歌单无封面时旁路解析首曲封面（串行限流，失败静默）
+    unawaited(_resolveMissingCovers());
+  }
+
+  /// 为 `coverUrl` 为空的普通歌单解析首曲封面，限流口径同 hub：
+  /// 每轮最多 8 个、串行 for（并发 1）、同 key 只尝试一次、失败静默。
+  /// 「我喜欢」由 [_resolveMyFavoriteCover] 独立处理，不在此列。
+  Future<void> _resolveMissingCovers() async {
+    if (_resolvingCovers) return;
+    _resolvingCovers = true;
+    try {
+      final pending = _playlists
+          .where((p) => p.name != '我喜欢' && (p.coverUrl ?? '').isEmpty)
+          .take(8)
+          .toList();
+      for (final playlist in pending) {
+        final key = HiddenPlaylistsCache.playlistKey(playlist);
+        if (_covers.containsKey(key)) continue;
+        if (!_coverAttempted.add(key)) continue;
+        final url = await resolveFirstSongCover(playlist, cached: _covers);
+        if (!mounted) return;
+        if (url != null && url.isNotEmpty) {
+          setState(() => _covers[key] = url);
+        }
+      }
+    } catch (_) {
+      // 静默：封面解析失败保留占位图
+    } finally {
+      _resolvingCovers = false;
+    }
   }
 
   /// 按 [HiddenPlaylistsCache] 维护的隐藏 key 集合过滤歌单列表。
@@ -1309,7 +1355,10 @@ class _FavoritesPageState extends State<FavoritesPage>
     );
     if (url == null || url.isEmpty) return placeholder;
     return CachedNetworkImage(
-      imageUrl: url,
+      // http:// 混合资源按 hub _NetworkCover 同款规则升级 https
+      imageUrl: url.startsWith('http://')
+          ? url.replaceFirst('http://', 'https://')
+          : url,
       memCacheWidth: 156,
       memCacheHeight: 156,
       fit: BoxFit.cover,
@@ -1346,7 +1395,11 @@ class _FavoritesPageState extends State<FavoritesPage>
               return _coverImage(url, cs);
             },
           )
-        : _coverImage(playlist.coverUrl, cs);
+        : _coverImage(
+            _covers[HiddenPlaylistsCache.playlistKey(playlist)] ??
+                playlist.coverUrl,
+            cs,
+          );
 
     final clipped = ClipRRect(
       borderRadius: AppRadius.smAll,

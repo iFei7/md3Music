@@ -470,6 +470,18 @@ class AudioPlaybackService : Service() {
         }
 
         fun releaseWakeLock() {
+            // 批次15（P0）：播放中保留 WakeLock。任意 isPlaying=false 通知或 service
+            // onDestroy 都会走到这里，单点释放会让息屏播放失去 CPU 锁被系统断流；
+            // 真正的暂停/停止由 playWhenReady 变 false 后的下一次调用释放。
+            val playing = try {
+                AudioPlayer.getActiveMediaSession()?.player?.playWhenReady == true
+            } catch (_: Throwable) {
+                false
+            }
+            if (playing) {
+                Log.i(TAG, "releaseWakeLock skipped: playback ongoing")
+                return
+            }
             wakeLock?.let {
                 if (it.isHeld) it.release()
             }
@@ -721,6 +733,18 @@ class AudioPlaybackService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 批次15（P0）：统一满足 5 秒合规。服务可能由 startForegroundService 拉起
+        // （通知更新/桌面歌词关闭/媒体键等），任何一条分支都必须在本方法内调用
+        // startForeground，否则 Android 12+ 抛
+        // "Context.startForegroundService() did not then call Service.startForeground()"。
+        // 快速路径：已在前台则跳过（省主线程开销）；ACTION_STOP 是显式停止，不补挂。
+        if (intent?.action != ACTION_STOP && !foregroundStarted) {
+            try {
+                startForegroundDetached(keepaliveNotificationBuilder())
+            } catch (_: Throwable) {
+                // startForegroundDetached 内部已记录原因；此处只保证不因兜底再抛
+            }
+        }
         when (intent?.action) {
             ACTION_STOP -> {
                 // 批次14：停止时取消条件撤除复查回调（含 media3 未接管前台时的
@@ -935,9 +959,9 @@ class AudioPlaybackService : Service() {
             Log.d(TAG, "startForegroundDetached: foreground kept, conditional removal in ${KEEPALIVE_REMOVAL_DELAY_MS}ms")
             // 批次14：条件撤除——固定延时后仅当 media3 真正在前台才撤除，
             // 未确认前每 500ms 复查（见 keepaliveForegroundRemoval）。
-            keepaliveForegroundHandler.removeCallbacksAndMessages(null)
-            keepaliveForegroundHandler.postDelayed(
-                keepaliveForegroundRemoval, KEEPALIVE_REMOVAL_DELAY_MS)
+            // 批次15（P0）：改用幂等排程（先移除同一 Runnable 再 postDelayed），
+            // 避免与看护自身的复查排程叠加成多条消息。
+            scheduleKeepaliveWatchdog(KEEPALIVE_REMOVAL_DELAY_MS)
         } catch (e: Throwable) {
             // 阶段6修复：导航等 App 夺走音频焦点后本 App 转后台，此时通知更新触发
             // 的服务启动可能被系统拒绝（ForegroundServiceStartNotAllowedException，
@@ -952,8 +976,14 @@ class AudioPlaybackService : Service() {
             // 若服务已在运行（foregroundStarted=true，本次只是通知更新被拒），保留服务，
             // 否则 onDestroy 会 recycle lastArtBitmap，导致后台封面线程注入时
             // bitmap 已被回收（Can't compress a recycled bitmap），封面缺失。
+            // 批次15（P0）：播放中即使从未进过前台也不自停——停服会连播放一起中止；
+            // 仅在确认已暂停/停止（!lastIsPlaying）时才 stopSelf 规避 5 秒合规崩溃。
             if (!foregroundStarted) {
-                try { stopSelf() } catch (_: Throwable) {}
+                if (!lastIsPlaying) {
+                    try { stopSelf() } catch (_: Throwable) {}
+                } else {
+                    Log.w(TAG, "startForeground rejected while playing, keep service alive")
+                }
             }
         }
     }
@@ -974,23 +1004,43 @@ class AudioPlaybackService : Service() {
             .setSilent(true)
     }
 
-    /// 批次14：条件撤除——startForeground 满足 5 秒合规后由
-    /// startForegroundDetached 延时调度。仅当 media3 真正处于前台（fork
-    /// startedInForeground 直读）才撤除本服务保活前台；media3 未接管前台
-    /// （后台切歌/缓冲被拒降级、暂停 DETACH 等）时每 500ms 复查，直到确认
-    /// 或播放停止（ACTION_STOP / hideNotification / onDestroy 会取消本回调）。
-    /// 撤除后服务保持 started，不 stopSelf。
+    /// 批次15（P0）：常驻看护。只要仍在播放就持续复查前台载体：
+    /// - media3 未在前台：已撤除（hidden）则重挂保活，未撤除则确保挂载；
+    /// - media3 已在前台：撤掉多余保活，收敛为单条可见通知。
+    /// 旧实现「keepaliveForegroundHidden 时直接 return」会在撤除后终止看护，
+    /// 一旦 media3 因切歌 STATE_IDLE 掉前台就再没人挂回来 → 进程零 FGS 被回收。
+    /// 注意：SAM 转换的 Runnable lambda 内 this 指外层类实例，属性必须显式
+    /// `: Runnable` 才能自引用（历史编译失败根因）。
     private val keepaliveForegroundRemoval: Runnable = Runnable {
-        if (keepaliveForegroundHidden) return@Runnable
-        if (isMedia3Foreground()) {
-            removeKeepaliveIfMounted()
-        } else {
-            // media3 尚未接管前台：保持隐形保活，稍后复查（不撤除=不出现零 FGS）
-            // 注意：SAM 转换的 Runnable lambda 内 this 指外层类实例，必须引用
-            // 属性自身才能重排同一 Runnable。
-            keepaliveForegroundHandler.postDelayed(
-                keepaliveForegroundRemoval, KEEPALIVE_RECHECK_DELAY_MS)
+        // 已暂停/停止：结束看护（续排程见下方 finally）
+        if (!lastIsPlaying) return@Runnable
+        try {
+            if (!isMedia3Foreground()) {
+                // media3 尚未接管前台：保持/恢复隐形保活，杜绝零 FGS
+                if (keepaliveForegroundHidden) {
+                    restoreKeepaliveForeground("watchdog")
+                } else {
+                    startForegroundDetached(keepaliveNotificationBuilder())
+                }
+            } else if (!keepaliveForegroundHidden) {
+                // media3 已接管前台：撤除本服务保活，避免双条通知
+                removeKeepaliveIfMounted()
+            }
+        } catch (e: Throwable) {
+            // 看护必须自愈：任何一次挂载/撤除失败都不得让循环终止
+            Log.w(TAG, "keepalive watchdog failed: ${e.javaClass.simpleName}: ${e.message}")
+        } finally {
+            if (lastIsPlaying) {
+                scheduleKeepaliveWatchdog(KEEPALIVE_RECHECK_DELAY_MS)
+            }
         }
+    }
+
+    /// 批次15（P0）：幂等排程看护（先移除同一 Runnable 的旧回调再排程），
+    /// 防止 startForegroundDetached / showNotification / 看护自身重复入队。
+    private fun scheduleKeepaliveWatchdog(delayMs: Long) {
+        keepaliveForegroundHandler.removeCallbacks(keepaliveForegroundRemoval)
+        keepaliveForegroundHandler.postDelayed(keepaliveForegroundRemoval, delayMs)
     }
 
     /// 批次14：media3 是否真正处于前台（fork MediaSessionService
@@ -1024,12 +1074,20 @@ class AudioPlaybackService : Service() {
     private fun restoreKeepaliveForeground(reason: String) {
         keepaliveForegroundHandler.removeCallbacksAndMessages(null)
         keepaliveForegroundHidden = false
-        if (!foregroundStarted) return
+        // 批次15（P0）：首次调用也必须继续尝试——旧实现 `if (!foregroundStarted) return`
+        // 使冷启动（进程重建后尚未成功 startForeground）恢复路径永远不生效。
+        // 此处只表示「已尝试进入前台生命周期」，真正成功仍以 startForeground 调用为准。
+        foregroundStarted = true
         try {
             startForeground(NOTIFICATION_ID, keepaliveNotificationBuilder().build())
             Log.i(TAG, "Keepalive foreground restored (reason=$reason)")
         } catch (e: Throwable) {
             Log.w(TAG, "restoreKeepaliveForeground failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
+        // 恢复看护：restore 会清空本 handler 的全部回调，必须重新排程，
+        // 否则播放中 media3 再次掉前台时无人重挂（看护常驻要求）。
+        if (lastIsPlaying) {
+            scheduleKeepaliveWatchdog(KEEPALIVE_RECHECK_DELAY_MS)
         }
     }
 
@@ -1038,7 +1096,8 @@ class AudioPlaybackService : Service() {
     /// 阶段9：占位通知同样走隐藏渠道，不再向用户闪现「准备播放」空控件通知。
     private fun ensureForeground() {
         if (foregroundStarted) return
-        foregroundStarted = true
+        // 批次15（P0）：不再预先置位 foregroundStarted——该标志只代表
+        // 「已真正 startForeground 成功」，由 startForegroundDetached 成功分支置位。
         try {
             // 批次12：builder 收敛到 keepaliveNotificationBuilder（隐藏渠道共用工厂）。
             // 媒体键唤醒必须先 startForeground（startForegroundService 5 秒合规），
@@ -1059,7 +1118,27 @@ class AudioPlaybackService : Service() {
         }
         // 批次12：保活已撤除且 media3 连接正常时无需重挂（media3 FGS 是当前
         // 进程前台载体，重挂只会在撤除延时内闪现保活通知）。
-        if (keepaliveForegroundHidden && media3ServiceConnected) return
+        // 批次15（P0）：本方法可能由 startForegroundService 触发（桌面歌词关闭通知），
+        // 若直接 return 会跳过 Service.startForeground 义务 → 5 秒后
+        // RemoteServiceException 崩溃。此处补一次 startForeground 后恢复撤除态，
+        // 由常驻看护在 media3 仍前台时重新收敛。
+        if (keepaliveForegroundHidden && media3ServiceConnected) {
+            try {
+                startForeground(NOTIFICATION_ID, keepaliveNotificationBuilder().build())
+                foregroundStarted = true
+                keepaliveForegroundHidden = false
+                Log.i(TAG, "refreshKeepaliveForeground: re-armed foreground for 5s compliance")
+            } catch (e: Throwable) {
+                Log.w(
+                    TAG,
+                    "refreshKeepaliveForeground re-arm failed: " +
+                        "${e.javaClass.simpleName}: ${e.message}"
+                )
+            }
+            // 交回常驻看护收敛（media3 仍在前台时按固定延时撤除）
+            scheduleKeepaliveWatchdog(KEEPALIVE_REMOVAL_DELAY_MS)
+            return
+        }
         try {
             startForegroundDetached(keepaliveNotificationBuilder())
         } catch (_: Throwable) {}
@@ -1736,10 +1815,10 @@ class AudioPlaybackService : Service() {
         lastIsPlaying = isPlaying
         lastIsFavorited = isFavorited
         lastDuration = duration
-        // 本实例已进入过 startForeground 合规生命周期（无论本次是挂载、撤除还是
-        // 暂停 no-op），标记置位；下方条件分支按播放态 × media3 前台态决定
-        // 挂载/撤除（批次14）。
-        foregroundStarted = true
+        // 批次15（P0）：不再在此无条件置位 foregroundStarted。旧逻辑让
+        // startForegroundDetached 的 `if (!foregroundStarted) stopSelf()` 永假，
+        // 5 秒合规兜底完全失效；该标志只应在真正 startForeground 成功后置位
+        // （见 startForegroundDetached / restoreKeepaliveForeground）。
         // 方案B阶段4：随通知更新把收藏状态推到媒体3会话（渲染成通知栏按钮）。
         pushMedia3CustomActions(isFavorited)
         val displayTitle = originalTitle
@@ -1778,6 +1857,11 @@ class AudioPlaybackService : Service() {
         } else {
             // 暂停/停止：无 FGS 载体需求，撤除保活（幂等，已撤则 no-op）
             removeKeepaliveIfMounted()
+        }
+        if (isPlaying) {
+            // 批次15（P0）：播放中启动/续期常驻看护（幂等：先移除旧回调再排程），
+            // 保证 media3 掉前台后能立即重挂，而不是等下一次通知更新。
+            scheduleKeepaliveWatchdog(KEEPALIVE_RECHECK_DELAY_MS)
         }
         scheduleMetadataRefresh()
 
@@ -1978,17 +2062,31 @@ class AudioPlaybackService : Service() {
 
     /**
      * 批次14：任务被移除（最近任务卡片划掉）。manifest 已声明
-     * stopWithTask=false，本服务不随任务销毁；此处显式调用 super 保持
-     * Service 默认语义。播放中若保活未挂载（media3 后台被拒未接管的
-     * 窗口期），补挂隐形保活 FGS，杜绝划卡片瞬间零 FGS 进程被系统回收。
+     * stopWithTask=false，本服务不随任务销毁。
+     * 批次15（P0）：不再以 keepaliveForegroundHidden 为前提——该标志只表示
+     * 「保活曾让位给 media3」，而 Android 12 后台 media3 掉前台后无法自行恢复，
+     * 划卡瞬间必须无条件补挂本服务保活 FGS。失败只记日志，不影响 super 回调。
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.i(TAG, "onTaskRemoved")
-        if (lastIsPlaying && keepaliveForegroundHidden) {
+        Log.i(
+            TAG,
+            "onTaskRemoved playing=$lastIsPlaying media3Fg=${isMedia3Foreground()} " +
+                "keepaliveHidden=$keepaliveForegroundHidden"
+        )
+        if (lastIsPlaying) {
             try {
-                startForegroundDetached(keepaliveNotificationBuilder())
+                startForeground(NOTIFICATION_ID, keepaliveNotificationBuilder().build())
+                foregroundStarted = true
+                keepaliveForegroundHidden = false
+                scheduleKeepaliveWatchdog(KEEPALIVE_RECHECK_DELAY_MS)
                 Log.i(TAG, "onTaskRemoved: keepalive re-mounted while playing")
-            } catch (_: Throwable) {}
+            } catch (e: Throwable) {
+                Log.w(
+                    TAG,
+                    "onTaskRemoved: keepalive re-mount failed: " +
+                        "${e.javaClass.simpleName}: ${e.message}"
+                )
+            }
         }
         super.onTaskRemoved(rootIntent)
     }
@@ -2003,6 +2101,8 @@ class AudioPlaybackService : Service() {
         metadataRefreshHandler.removeCallbacksAndMessages(null)
         // 批次12：取消保活前台确定性撤除回调，防止服务销毁后仍触发撤除
         keepaliveForegroundHandler.removeCallbacksAndMessages(null)
+        // 批次15（P0）：播放中（playWhenReady=true）由 releaseWakeLock 内部跳过释放，
+        // 避免服务销毁瞬间把仍在播放的 CPU 锁摘掉导致断流。
         releaseWakeLock()
         // lastArtBitmap 可能仍由 MediaSession 或桌面组件引用，销毁服务时不能 recycle。
         lastArtBitmap = null

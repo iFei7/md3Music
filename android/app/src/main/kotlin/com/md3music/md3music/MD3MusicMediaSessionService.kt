@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.annotation.OptIn
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaNotification
@@ -99,12 +100,41 @@ class MD3MusicMediaSessionService : MediaSessionService() {
     }
 
     /**
-     * 批次14：任务被移除（最近任务卡片划掉）。显式固化 fork 默认语义——
-     * 播放中不自杀（isPlaybackOngoing 时 super 不 stopSelf）；manifest 已声明
-     * stopWithTask=false，服务不随任务销毁。
+     * 批次15（P0）：任务被移除（最近任务卡片划掉）。
+     *
+     * 有意**不调用 super**：fork 默认实现为
+     * `if (!isPlaybackOngoing()) stopSelf()`，而 isPlaybackOngoing() 取自
+     * startedInForeground（是否已 startForeground）。Android 12 后台掉前台后该值
+     * 恒为 false，划卡会被误判为「未播放」进而 stopSelf 并删除通知（即使服务因
+     * 绑定仍在，也会掉 FGS）。fork 的 MediaSessionService#onTaskRemoved 未标注
+     * @CallSuper，允许子类完全接管。
+     *
+     * 以真实播放意愿判定：playWhenReady 且非 STATE_IDLE（排除切歌/跨 fade 的
+     * IDLE 过渡态）。播放中若 media3 不在前台，补一次通知更新以重新
+     * startForeground（onUpdateNotification(session, true)）。
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.i(TAG, "onTaskRemoved")
-        super.onTaskRemoved(rootIntent)
+        val playing = try {
+            getSessions().any { s ->
+                val p = s.player
+                p.playWhenReady && p.playbackState != Player.STATE_IDLE
+            }
+        } catch (_: Throwable) {
+            // 会话查询失败时退回前台标志，宁可保持服务存活
+            isNotificationStartedInForeground()
+        }
+        Log.i(
+            TAG,
+            "onTaskRemoved playing=$playing media3Fg=${isNotificationStartedInForeground()}"
+        )
+        if (!playing) {
+            stopSelf()
+            return
+        }
+        if (!isNotificationStartedInForeground()) {
+            try {
+                getSessions().firstOrNull()?.let { onUpdateNotification(it, true) }
+            } catch (_: Throwable) {}
+        }
     }
 }

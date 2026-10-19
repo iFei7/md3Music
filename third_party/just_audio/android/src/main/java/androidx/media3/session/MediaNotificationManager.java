@@ -146,7 +146,12 @@ import java.util.concurrent.TimeoutException;
    */
   public void updateNotification(MediaSession session, boolean startInForegroundRequired) {
     if (!mediaSessionService.isSessionAdded(session) || !shouldShowNotification(session)) {
-      maybeStopForegroundService(/* removeNotifications= */ true);
+      // MD3Music fork（批次15·P0）：切歌/跨 fade 时 STATE_IDLE 是过渡常态，
+      // shouldShowNotification 会短暂为 false。此处只允许 DETACH（不删除通知），
+      // 否则通知被移除后需重新 startForeground，而 Android 12 后台会拒绝，
+      // 通知永久消失且进程失去前台载体。真实停止（playWhenReady=false）仍由
+      // maybeStopForegroundService 内部的 shouldRunInForeground 判定后撤除。
+      maybeStopForegroundService(/* removeNotifications= */ false);
       return;
     }
 
@@ -188,10 +193,15 @@ import java.util.concurrent.TimeoutException;
   /* package */ boolean shouldRunInForeground(
       MediaSession session, boolean startInForegroundWhenPaused) {
     @Nullable MediaController controller = getConnectedControllerForSession(session);
+    // MD3Music fork（批次15·P0）：不再要求 STATE_READY/BUFFERING。
+    // 本工程自维护播放队列并做跨 fade 切歌，切歌瞬间播放器会短暂进入
+    // STATE_IDLE——这是过渡态而非停止播放。若此时判定「不需前台」，会执行
+    // stopForeground 掉前台；而 Android 12 起应用在后台既不能 startForegroundService
+    // 也不能 startForeground（ForegroundServiceStartNotAllowedException），
+    // 该窗口一旦掉前台就永久无法恢复，进程随后被冻结/回收 → 播放中止。
+    // 因此只以播放意愿（playWhenReady）为准：只要用户仍希望播放就保持前台。
     return controller != null
-        && (controller.getPlayWhenReady() || startInForegroundWhenPaused)
-        && (controller.getPlaybackState() == Player.STATE_READY
-            || controller.getPlaybackState() == Player.STATE_BUFFERING);
+        && (controller.getPlayWhenReady() || startInForegroundWhenPaused);
   }
 
   private void onNotificationUpdated(

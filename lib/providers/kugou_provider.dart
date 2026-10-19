@@ -97,11 +97,17 @@ class KugouProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// 日期键（'yyyy-MM-dd'）：本地已签持久化、跨天判定统一口径。
+  static String _dayKeyOf(DateTime time) {
+    final year = time.year.toString().padLeft(4, '0');
+    final month = time.month.toString().padLeft(2, '0');
+    final day = time.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
+  }
+
   /// 打卡成功后标记今天已签（本地兜底，保证日历立即打勾并持久化）
   Future<void> _markSignedToday() async {
-    final now = DateTime.now();
-    final key =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final key = _dayKeyOf(DateTime.now());
     if (_localSignedDays.add(key)) {
       notifyListeners();
       try {
@@ -1442,6 +1448,7 @@ class KugouProvider extends ChangeNotifier {
     _vipInfo = null;
     _gradeInfo = null;
     _vipMonthRecord = null;
+    _clearUserScopedSignInState();
     _qrKey = null;
     _qrData = null;
     await _fetchUserInfo();
@@ -1505,6 +1512,7 @@ class KugouProvider extends ChangeNotifier {
     _vipInfo = null;
     _gradeInfo = null;
     _vipMonthRecord = null;
+    _clearUserScopedSignInState();
     _userHistoryData = null;
     _everydayHistory = null;
 
@@ -1555,6 +1563,7 @@ class KugouProvider extends ChangeNotifier {
       _vipInfo = null;
       _gradeInfo = null;
       _vipMonthRecord = null;
+      _clearUserScopedSignInState();
       _userHistoryData = null;
       _everydayHistory = null;
       _localSignedDays.clear();
@@ -1681,7 +1690,7 @@ class KugouProvider extends ChangeNotifier {
                 upgrade['error_code'] == 0 ||
                 upgrade['error_code'] == 20030 ||
                 upgrade['error_code'] == 131001)) {
-          _todayUpgradedToConcept = true;
+          _upgradedDayKey = receiveDay;
         }
       } catch (_) {}
 
@@ -1701,16 +1710,68 @@ class KugouProvider extends ChangeNotifier {
   bool get manualSignInRunning => _manualSignInRunning;
 
   /// 今天是否已成功签到并升级概念版（用于 UI 显示"概念版会员"徽章）。
-  /// 概念版双签到第二步（upgradeDayVip）成功后置 true，
-  /// 跨天/重启后由 `_localSignedDays` 重新判定（见 `isTodayYouthVip`）。
-  bool _todayUpgradedToConcept = false;
+  /// 记录的是日期键而不是布尔值：跨天自动失效，无需额外的定时复位。
+  /// 概念版双签到第二步（upgradeDayVip）成功后写入当日键，
+  /// 登出/切换账号时随用户级缓存一起清空（见 [_clearUserScopedSignInState]）。
+  String? _upgradedDayKey;
   bool get isTodayYouthVip {
-    if (_todayUpgradedToConcept) return true;
+    final key = _dayKeyOf(DateTime.now());
     // 跨重启兜底：只要今天在本地已签列表里，就认为概念版已激活
+    return _upgradedDayKey == key || _localSignedDays.contains(key);
+  }
+
+  /// 今日是否已签到（本地已签列表 ∪ 服务端 [vipMonthRecord] 今日 svip 条目）。
+  ///
+  /// 与 [isTodayYouthVip] 解耦：后者是「概念版徽章」语义，本 getter 只回答
+  /// 「今天还能不能签到」，供设置页签到卡决定按钮形态。
+  bool get hasSignedToday {
     final now = DateTime.now();
-    final key =
-        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-    return _localSignedDays.contains(key);
+    if (_localSignedDays.contains(_dayKeyOf(now))) return true;
+
+    final record = _vipMonthRecord;
+    if (record == null) return false;
+    final data = record['data'];
+    final list = (data is Map ? (data['list'] ?? data['record_list']) : null) ??
+        record['list'];
+    if (list is! List) return false;
+    for (final item in list) {
+      if (item is! Map) continue;
+      // 只认概念版(svip)签到记录，过滤畅听(tvip)
+      if (item['vip_type']?.toString() != 'svip') continue;
+      final day = _parseVipRecordDay(item['day']);
+      if (day != null &&
+          day.year == now.year &&
+          day.month == now.month &&
+          day.day == now.day) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// 解析服务端打卡条目的日期字段：'yyyy-MM-dd' 字符串或 epoch 秒/毫秒。
+  static DateTime? _parseVipRecordDay(dynamic raw) {
+    if (raw is String) {
+      final m = RegExp(r'^(\d{4})[-/](\d{1,2})[-/](\d{1,2})').firstMatch(raw);
+      if (m != null) {
+        return DateTime(
+          int.parse(m.group(1)!),
+          int.parse(m.group(2)!),
+          int.parse(m.group(3)!),
+        );
+      }
+    }
+    if (raw is int && raw > 1000000000) {
+      final ms = raw > 1e12 ? raw : raw * 1000;
+      return DateTime.fromMillisecondsSinceEpoch(ms);
+    }
+    return null;
+  }
+
+  /// 清理用户级签到状态：登出 / 切换 / 登录新账号时调用，
+  /// 避免上一账号的「今日已升级概念版」带到新账号。
+  void _clearUserScopedSignInState() {
+    _upgradedDayKey = null;
   }
 
   /// 手动签到/领取: 不依赖 autoReceive 开关，强制调 claim + upgrade
@@ -1875,7 +1936,7 @@ class KugouProvider extends ChangeNotifier {
     }
 
     await _markSignedToday();
-    _todayUpgradedToConcept = true;
+    _upgradedDayKey = receiveDay;
     return (true, '签到成功（概念版会员）', null);
   }
 

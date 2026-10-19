@@ -16,6 +16,7 @@ class FakeKugouProvider extends KugouProvider {
     List<KugouAccount> savedAccounts = const [],
     Set<String> localSignedDays = const {},
     bool todaySigned = false,
+    bool hasSignedToday = false,
     bool signInRunning = false,
     Map<String, dynamic>? vipMonthRecord,
     (bool, String) signInResult = (true, '签到成功（概念版会员）'),
@@ -25,6 +26,7 @@ class FakeKugouProvider extends KugouProvider {
        _savedAccounts = savedAccounts,
        _localSignedDays = localSignedDays,
        _todaySigned = todaySigned,
+       _hasSignedToday = hasSignedToday,
        _signInRunning = signInRunning,
        _vipMonthRecord = vipMonthRecord,
        _signInResult = signInResult,
@@ -36,6 +38,7 @@ class FakeKugouProvider extends KugouProvider {
   List<KugouAccount> _savedAccounts;
   Set<String> _localSignedDays;
   bool _todaySigned;
+  bool _hasSignedToday;
   bool _signInRunning;
   Map<String, dynamic>? _vipMonthRecord;
   (bool, String) _signInResult;
@@ -60,6 +63,19 @@ class FakeKugouProvider extends KugouProvider {
 
   @override
   bool get isTodayYouthVip => _todaySigned;
+
+  /// 今日已签（签到按钮语义）：显式注入口径，或本地已签列表含今日。
+  /// 服务端记录在替身里不解析，相关口径由 provider 单测覆盖。
+  @override
+  bool get hasSignedToday =>
+      _hasSignedToday || _localSignedDays.contains(_todayKey);
+
+  String get _todayKey {
+    final now = DateTime.now();
+    final m = now.month.toString().padLeft(2, '0');
+    final d = now.day.toString().padLeft(2, '0');
+    return '${now.year}-$m-$d';
+  }
 
   @override
   bool get manualSignInRunning => _signInRunning;

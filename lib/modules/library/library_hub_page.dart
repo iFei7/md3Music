@@ -16,6 +16,8 @@ import '../../data/models/song.dart';
 import '../../data/repositories/favorite_lists_cache.dart';
 import '../../data/repositories/hidden_playlists_cache.dart';
 import '../../data/repositories/history_repository.dart';
+import '../../data/repositories/playlist_cover_cache.dart';
+import '../../data/repositories/playlist_cover_resolver.dart';
 import '../../providers/library_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
@@ -108,6 +110,17 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   // 已隐藏歌单 key 集合（HiddenPlaylistsCache，与收藏页共用同一仓库）
   Set<String> _hiddenKeys = {};
 
+  // 无封面歌单的「首曲封面」解析结果（playlistKey → https url），
+  // 与本地持久化缓存（PlaylistCoverCache）合并后的视图。
+  Map<String, String> _covers = {};
+
+  // 首曲封面解析中（防重入：重复加载不并发发请求）
+  bool _resolvingCovers = false;
+
+  // 本页面生命周期内已尝试解析过的歌单 key：避免每次刷新都对
+  // 「解析不到封面」的歌单重复发请求（刷新时保留，不随 _loadPlaylists 清空）
+  final Set<String> _coverAttempted = {};
+
   // 歌单分区多选管理态：null=非管理；_kGroupCreated / _kGroupCollected
   int? _managingGroup;
   final Set<String> _selectedKeys = {};
@@ -132,11 +145,45 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   Future<void> _loadPlaylists() async {
     final playlists = await FavoriteListsCache.readPlaylists();
     final hidden = await HiddenPlaylistsCache.readHidden();
+    // 已解析过的首曲封面（与歌单列表同批落地，避免先占位再跳图闪烁）
+    final covers = await PlaylistCoverCache.readAll();
     if (!mounted) return;
     setState(() {
       _playlists = playlists;
       _hiddenKeys = hidden;
+      _covers = covers;
     });
+    // 无封面歌单旁路解析：不阻塞列表首屏（串行限流见 _resolveMissingCovers）
+    unawaited(_resolveMissingCovers());
+  }
+
+  /// 为 `coverUrl` 为空的歌单解析首曲封面（缓存 → 本地歌曲 → 单次轻请求）。
+  ///
+  /// 限流：每轮最多 8 个歌单；串行 for（并发 1）；同一歌单在本页生命周期
+  /// 内最多尝试一次（[_coverAttempted]）；整体失败静默，只回退占位图。
+  Future<void> _resolveMissingCovers() async {
+    if (_resolvingCovers) return;
+    _resolvingCovers = true;
+    try {
+      final pending = _playlists
+          .where((p) => (p.coverUrl ?? '').isEmpty)
+          .take(8)
+          .toList();
+      for (final playlist in pending) {
+        final key = HiddenPlaylistsCache.playlistKey(playlist);
+        if (_covers.containsKey(key)) continue;
+        if (!_coverAttempted.add(key)) continue;
+        final url = await resolveFirstSongCover(playlist, cached: _covers);
+        if (!mounted) return;
+        if (url != null && url.isNotEmpty) {
+          setState(() => _covers[key] = url);
+        }
+      }
+    } catch (_) {
+      // 静默：封面解析失败不影响歌单列表
+    } finally {
+      _resolvingCovers = false;
+    }
   }
 
   Future<void> _loadHistory() async {
@@ -351,7 +398,9 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
                         width: 40,
                         height: 40,
                         child: _NetworkCover(
-                          url: p.coverUrl,
+                          // 与横滑轨同口径：解析出的首曲封面优先
+                          url: _covers[HiddenPlaylistsCache.playlistKey(p)] ??
+                              p.coverUrl,
                           placeholderIcon: Icons.queue_music,
                         ),
                       ),
@@ -606,7 +655,9 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
         final playlist = playlists[i];
         final card = CoverRailCard(
           cover: _NetworkCover(
-            url: playlist.coverUrl,
+            // 无封面歌单：优先用解析出的首曲封面，回退歌单自带封面
+            url: _covers[HiddenPlaylistsCache.playlistKey(playlist)] ??
+                playlist.coverUrl,
             placeholderIcon: Icons.queue_music,
           ),
           title: playlist.name,
