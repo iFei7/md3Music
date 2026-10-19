@@ -159,7 +159,7 @@ Future<(bool, bool, bool)> runBootstrap() async {
   // 启动听歌等级：本地听歌时长累计 + 自动上报（内部按平台/登录态自行处理）
   ListeningGradeService.instance.init();
   // CSCC 真实播放事件上报（/user/listen/report）：由 PlayerProvider 在切歌/播放
-  // 边沿驱动，开关复用 settings_upload_listening_duration（默认关闭）。
+  // 边沿驱动，开关复用 settings_upload_listening_duration（默认开启，批次14）。
   ListenReportService.instance.init();
 
   // 懒启动策略（lite）：本地 API 服务器不再于启动时无条件启动（此前后台

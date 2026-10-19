@@ -30,6 +30,10 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <!-- 均衡器功能需要此权限 -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 后台播放进程保活：申请电池优化白名单豁免（批次14 P0）。系统弹窗由
+         Dart 端经 com.md3music.md3music/battery 通道调起；用户拒绝也不影响
+         播放本身，仅降低后台进程被系统回收的概率。 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 应用内更新：下载并校验 APK 后调起系统安装器（Android 8+ 需要此权限
          才能请求「安装未知应用」授权；最终安装仍由用户在系统界面确认） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -102,10 +106,13 @@
         </receiver>
         <!-- 方案B阶段1：媒体3会话承载服务，渲染系统 now playing 通知。
              不改变 fork 自建会话的关联行为；仅把会话归入本服务以生成通知。
-             exported=false：仅本进程承载通知渲染，不对外暴露绑定（后续阶段再放开）。 -->
+             exported=false：仅本进程承载通知渲染，不对外暴露绑定（后续阶段再放开）。
+             stopWithTask=false（批次14）：划掉最近任务卡片时不销毁本服务，
+             播放由 media3 FGS 承载，杜绝任务移除即进程被杀。 -->
         <service
             android:name=".MD3MusicMediaSessionService"
             android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="false"
             android:exported="true">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />

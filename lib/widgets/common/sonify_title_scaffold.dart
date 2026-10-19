@@ -1,4 +1,4 @@
-import 'dart:ui' show ImageFilter;
+import 'dart:ui' show BlendMode, Color, ImageFilter;
 
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
@@ -16,9 +16,11 @@ import '../../core/theme/app_theme.dart';
 ///   "上滑时标题位置会变，不想要"）。列表首项只保留同尺寸占位
 ///  （[_TitlePlaceholderItem]，含高度实测），业务内容从标题下方滚过；
 /// - 顶栏悬浮叠加在列表之上：背景为**单层渐变模糊带**（材质对齐
-///   `LiquidGlassSurface` dock 配方：blur 18dp + cs.surface 系叠色——
-///   状态栏区域全强度 [kSonifyBarTopAlpha]，自状态栏下缘起线性淡出至
-///   带底缘严格 α0）随滚动 120ms 淡入出（Title.kt:952-953），
+///   `LiquidGlassSurface` dock 配方：blur 18dp 模糊强度自上而下线性
+///   衰减至带底缘严格 0——[BackdropFilter] `BlendMode.dstIn` 遮罩塑形：
+///   状态栏段满模糊、栏体段线性衰减、底缘与内容自然融合；叠色层为
+///   cs.surface 系 [kSonifyBarTopAlpha] 同锚点渐变，是与 BackdropFilter
+///   同 Stack 的兄弟层）随滚动 120ms 淡入出（Title.kt:952-953），
 ///   保证滚过内容时固定标题仍清晰可读；
 /// - 顶栏右侧内容（如固定用户头像）**常驻渲染**；[actions] 动作钮随
 ///   栏体 120ms 淡入（滚动即出现，展开态隐藏不挡内容）。
@@ -287,23 +289,38 @@ class _PinnedLargeTitle extends StatelessWidget {
 
 /// 顶栏：状态栏区域 + 54dp 栏体（Title.kt:989）。
 ///
-/// - 背景：**单层渐变模糊带**（磨砂带 + 加深带双带合并，用户反馈③：
-///   "偏实、渐变位置不对、两层叠加"），Positioned.fill 覆盖「状态栏 +
-///   栏体」全带（y=0 起），随滚动 120ms 淡入出；内容在带下可滚动
-///   （悬浮语义）：blur 18dp + cs.surface 系叠色，竖向 LinearGradient
-///   **状态栏锚定**——状态栏区域（stops 0 → sb/(sb+[SonifySpacing.topBar])）
-///   全强度 [kSonifyBarTopAlpha]，自状态栏下缘起对栏体线性淡出，至带
-///   底缘严格 α0；sb<=0 时退化为 stops [0, 1]、colors [α, 0]。
+/// - 背景：**单层渐变模糊带**（磨砂带 + 加深带双带合并于前批；批次 14
+///   用户反馈"模糊在底缘硬切"：改为模糊强度本身自上而下衰减），
+///   Positioned.fill → ClipRect → Stack 两层覆盖「状态栏 + 栏体」全带
+///   （y=0 起），随滚动 120ms 淡入出；内容在带下可滚动（悬浮语义）：
+///   ① 模糊塑形层：`BackdropFilter` blur 18dp + `BlendMode.dstIn`，
+///      child 为白不透明 → 白透明竖向遮罩（仅 alpha 起作用，颜色被
+///      dstIn 丢弃）——已模糊的 backdrop 按遮罩 alpha 渐变保留：状态栏
+///      区域（stops 0 → sb/(sb+[SonifySpacing.topBar])）满模糊，自状态栏
+///      下缘起对栏体线性衰减，至带底缘模糊强度严格 0；blur 强度衰减
+///      不再依赖叠色层硬切；
+///   ② tint 叠色层：与 BackdropFilter **同 Stack 的兄弟层**
+///      （Positioned.fill + DecoratedBox，普通 srcOver），cs.surface 系
+///      竖向 LinearGradient **状态栏锚定**——stops 与遮罩同锚点，状态栏
+///      区域全强度 [kSonifyBarTopAlpha]，自状态栏下缘起对栏体线性淡出，
+///      至带底缘严格 α0；sb<=0 时两层同退化为 stops [0, 1]、colors
+///      [满, 0]。叠色层**不能**放进 BackdropFilter 内部：dstIn 会连同
+///      叠色按遮罩 alpha 一起裁掉。
 ///   覆盖状态栏是既有修正项：曾只覆盖 54dp 栏体，上滑时页面内容从状态栏透出。
 /// - 栏体内容：右侧动作区（[actions] 滚动后淡入 + [trailing] 常驻）；
 ///   大标题已固定悬浮，栏内不再放标题（避免双标题）。
 ///
-/// **图层纪律（批次 9 修复，勿回退）**：[BackdropFilter] 直接位于
-/// Positioned.fill → ClipRect 之内，**不得**包进 ShaderMask / Opacity /
-/// ColorFiltered 等图层边界 widget——它们创建 saveLayer，内嵌
-/// BackdropFilter 模糊完全失效（flutter/flutter#164079、#175537；批次 8
-/// 的 ShaderMask(dstIn) 结构即因此真机全无模糊）。渐变衰减改由叠色层
-/// 自身 LinearGradient 承担（DecoratedBox/BoxDecoration.gradient）。
+/// **图层纪律（批次 9 修复，勿回退；批次 14 复核仍成立）**：
+/// [BackdropFilter] 位于 Positioned.fill → ClipRect 之内，**不得**包进
+/// ShaderMask / Opacity / ColorFiltered 等图层边界 widget——它们创建
+/// saveLayer，内嵌 BackdropFilter 模糊完全失效（flutter/flutter#164079、
+/// #175537；批次 8 的 ShaderMask(dstIn) 包 BackdropFilter 结构即因此真机
+/// 全无模糊，禁止回退）。批次 14 的模糊渐变更改由 BackdropFilter
+/// **自身** blendMode 参数（dstIn）承担——它是构造参数而非额外图层
+/// 包裹，不产生 saveLayer；遮罩仍是普通 DecoratedBox/
+/// BoxDecoration.gradient，渐变衰减不走 Opacity/ColorFiltered 等图层
+/// 边界；动画透明度由外层 AnimatedOpacity 全显（opacity=1）免
+/// saveLayer 的特性保证。
 /// 带叠色走 cs.surface 系：亮色主题浅色带、暗色主题深色带，跟随
 /// 主题；深浅层级由叠色 alpha 承担，不用黑白蒙层（scrim 语义
 /// 是次级文字色，亮=黑/暗=白，用在顶栏会导致主题色翻转——构建号 104
@@ -314,8 +331,10 @@ class _PinnedLargeTitle extends StatelessWidget {
 /// `LiquidGlassSurface`（lib/widgets/common/liquid_glass_surface.dart，
 /// 默认参数 = 悬浮 Dock 玻璃配方：blurSigma 18 + surface α0.12 叠色）。
 /// 批次 11/12：叠色 alpha 逐步下调（0.7 → 0.40 → 0.32）、实心平台压短，
-/// 均因用户反馈"偏实/遮罩感"；本次合并单带后收敛为状态栏区域单值
-/// α0.42（[kSonifyBarTopAlpha]）+ 自状态栏下缘起线性淡出。仍高于 dock 的
+/// 均因用户反馈"偏实/遮罩感"；双带合并后收敛为状态栏区域单值
+/// α0.42（[kSonifyBarTopAlpha]）+ 自状态栏下缘起线性淡出。批次 14：
+/// 模糊强度衰减改由 [BackdropFilter] dstIn 遮罩承担（见背景段），
+/// blur sigma 仍取 18 不变。仍高于 dock 的
 /// 0.12：顶栏是全宽可读性带、固定大标题直接叠在其上，需保证文字对比度
 /// ——结构（顶部浓→底部渐隐）与色系与 dock 一致，仅浓度按可读性上调。
 class _TopBar extends StatelessWidget {
@@ -355,52 +374,107 @@ class _TopBar extends StatelessWidget {
                   ),
                 );
               },
-              // 磨砂带（唯一 BackdropFilter）：blur 18 + surface 叠色，
-              // 状态栏锚定竖向渐变 stops [0, sb/(sb+54), 1]——状态栏条
-              // 全强度，自状态栏下缘线性淡出，底缘严格全透明
+              // 磨砂带（唯一 BackdropFilter）：blur 18 + dstIn 遮罩——
+              // 模糊强度自上而下衰减至底缘 0（批次 14：旧实现 blur 全带
+              // 均匀、仅 tint 渐变，底缘模糊硬切）；tint 叠色为同 Stack
+              // 兄弟层（不能被 dstIn 遮罩一起裁掉，故移出）。
+              // 两层渐变同锚点：stops [0, sb/(sb+54), 1]——状态栏条
+              // 满强度，自状态栏下缘线性衰减，底缘严格 0（sb<=0 退化
+              // stops [0, 1]）
               child: ClipRect(
-                child: BackdropFilter(
-                  // 对齐 LiquidGlassSurface dock 配方 blurSigma 18
-                  //（原 sonify 回退磨砂 14，材质统一，见类文档）
-                  filter: ImageFilter.blur(
-                    sigmaX: kSonifyBarBlurSigma,
-                    sigmaY: kSonifyBarBlurSigma,
-                  ),
-                  child: DecoratedBox(
-                    // surface 系叠色：状态栏区域全强度
-                    // （[kSonifyBarTopAlpha]），自状态栏下缘线性淡出到
-                    // 底缘 α0；亮=浅带/暗=深带，跟随主题（禁改回
-                    // scrim 黑白蒙层——会主题色翻转，见类文档）
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        // 状态栏条全强度、栏体段线性淡出到底缘全透明；
-                        // sb<=0 退化：stops [0, 1]（避免 stops 重复）
-                        colors: statusBarHeight > 0
-                            ? [
-                                cs.surface
-                                    .withValues(alpha: kSonifyBarTopAlpha),
-                                cs.surface
-                                    .withValues(alpha: kSonifyBarTopAlpha),
-                                cs.surface.withValues(alpha: 0),
-                              ]
-                            : [
-                                cs.surface
-                                    .withValues(alpha: kSonifyBarTopAlpha),
-                                cs.surface.withValues(alpha: 0),
-                              ],
-                        stops: statusBarHeight > 0
-                            ? [
-                                0.0,
-                                statusBarHeight /
-                                    (statusBarHeight + SonifySpacing.topBar),
-                                1.0,
-                              ]
-                            : const [0.0, 1.0],
+                child: Stack(
+                  children: [
+                    // ① 模糊塑形层：dstIn 是 BackdropFilter 自身
+                    //   blendMode 参数——已模糊的 backdrop 按 child
+                    //   遮罩 alpha 保留（白@1 段满模糊 → 白@0 强度 0），
+                    //   不引入额外图层包裹（禁 ShaderMask 包
+                    //   BackdropFilter：批次 8 真机全无模糊，见类文档）
+                    Positioned.fill(
+                      child: BackdropFilter(
+                        // 对齐 LiquidGlassSurface dock 配方
+                        // blurSigma 18（原 sonify 回退磨砂 14，
+                        // 材质统一，见类文档）
+                        filter: ImageFilter.blur(
+                          sigmaX: kSonifyBarBlurSigma,
+                          sigmaY: kSonifyBarBlurSigma,
+                        ),
+                        // dstIn：模糊结果按 child 遮罩 alpha 保留；
+                        // 遮罩颜色被 dstIn 丢弃，仅 alpha 起作用
+                        blendMode: BlendMode.dstIn,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              // 状态栏条满强度（模糊满保留）、栏体段
+                              // 线性衰减到底缘模糊强度 0；sb<=0 退化：
+                              // stops [0, 1]（避免 stops 重复）。
+                              // 仅 alpha 参与 dstIn，颜色白系占位
+                              colors: statusBarHeight > 0
+                                  ? [
+                                      _kBarMaskOpaque,
+                                      _kBarMaskOpaque,
+                                      _kBarMaskTransparent,
+                                    ]
+                                  : [
+                                      _kBarMaskOpaque,
+                                      _kBarMaskTransparent,
+                                    ],
+                              stops: statusBarHeight > 0
+                                  ? [
+                                      0.0,
+                                      statusBarHeight /
+                                          (statusBarHeight +
+                                              SonifySpacing.topBar),
+                                      1.0,
+                                    ]
+                                  : const [0.0, 1.0],
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                    // ② tint 叠色层（BackdropFilter 兄弟层，普通
+                    //   srcOver 不受 dstIn 影响）：surface 系，状态栏
+                    //   区域全强度（[kSonifyBarTopAlpha]），自状态栏
+                    //   下缘线性淡出到底缘 α0；亮=浅带/暗=深带，跟随
+                    //   主题（禁改回 scrim 黑白蒙层——会主题色翻转，见
+                    //   类文档）
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            // 状态栏条全强度、栏体段线性淡出到底缘
+                            // 全透明；sb<=0 退化：stops [0, 1]
+                            colors: statusBarHeight > 0
+                                ? [
+                                    cs.surface.withValues(
+                                        alpha: kSonifyBarTopAlpha),
+                                    cs.surface.withValues(
+                                        alpha: kSonifyBarTopAlpha),
+                                    cs.surface.withValues(alpha: 0),
+                                  ]
+                                : [
+                                    cs.surface.withValues(
+                                        alpha: kSonifyBarTopAlpha),
+                                    cs.surface.withValues(alpha: 0),
+                                  ],
+                            stops: statusBarHeight > 0
+                                ? [
+                                    0.0,
+                                    statusBarHeight /
+                                        (statusBarHeight +
+                                            SonifySpacing.topBar),
+                                    1.0,
+                                  ]
+                                : const [0.0, 1.0],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -462,7 +536,9 @@ class _TopBar extends StatelessWidget {
 
 /// 顶栏单层渐变模糊带（磨砂带）的背景模糊 sigma：对齐 `LiquidGlassSurface`
 /// dock 配方（默认 blurSigma 18）——原磨砂 14 / 加深 22 的双强度早已取消，
-/// "浓淡"层级完全由叠色 alpha 承担。
+/// "浓淡"层级完全由叠色 alpha 承担。批次 14：模糊强度自上而下衰减至底缘
+/// 0 改由 [BackdropFilter] `BlendMode.dstIn` 遮罩承担（见 [_TopBar] 背景段
+/// 与类文档），sigma 仍取 18 不变。
 /// 非私有：供 widget 测试断言（见 test/widgets/sonify_title_scaffold_test.dart）。
 const double kSonifyBarBlurSigma = 18;
 
@@ -474,6 +550,15 @@ const double kSonifyBarBlurSigma = 18;
 /// 为了补回加深带撤掉后文字区的可读性余量。
 /// 非私有：供 widget 测试断言（见 test/widgets/sonify_title_scaffold_test.dart）。
 const double kSonifyBarTopAlpha = 0.42;
+
+/// [BackdropFilter] `BlendMode.dstIn` 遮罩的不透明色（白@1）：仅 alpha
+/// 参与 dstIn 混合（颜色被丢弃）——状态栏段模糊满保留（批次 14：模糊
+/// 强度自上而下衰减至底缘 0，见 [_TopBar] 背景段与类文档）。
+const Color _kBarMaskOpaque = Color(0xFFFFFFFF);
+
+/// [BackdropFilter] `BlendMode.dstIn` 遮罩的透明色（白@0）：带底缘模糊
+/// 强度严格 0，与内容自然融合（颜色被 dstIn 丢弃，仅 alpha 起作用）。
+const Color _kBarMaskTransparent = Color(0x00FFFFFF);
 
 /// 子树尺寸实测（一帧延迟回传），用于大标题占位 item 高度自适应。
 class _MeasureSize extends StatefulWidget {

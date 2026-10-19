@@ -480,6 +480,22 @@ public abstract class MediaSessionService extends Service {
   }
 
   /**
+   * MD3Music fork（批次14）：查询本服务的通知是否已真正处于前台（即
+   * {@link MediaNotificationManager#isStartedInForeground()}）。
+   *
+   * <p>供 App 侧（AudioPlaybackService）判断 media3 是否接管了 FGS 载体，
+   * 以决定隐形保活服务是否撤除。区别于 {@link #isPlaybackOngoing()}：
+   * 本方法不会为查询而实例化 {@code MediaNotificationManager}（未创建时返回
+   * {@code false}），查询无副作用。
+   */
+  @UnstableApi
+  public boolean isNotificationStartedInForeground() {
+    synchronized (lock) {
+      return mediaNotificationManager != null && mediaNotificationManager.isStartedInForeground();
+    }
+  }
+
+  /**
    * Pauses the player of each session managed by the service and calls {@link #stopSelf()}.
    *
    * <p>This terminates the service lifecycle and triggers {@link #onDestroy()} that an app can

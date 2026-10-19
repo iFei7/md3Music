@@ -25,7 +25,8 @@ class SettingsRepository {
   // Pad 端网格页面列数偏好
   static const String _keyGridColumns = 'grid_columns';
 
-  /// 上传听歌时长（听歌等级累计上报）开关。默认关闭：不上传任何听歌时长数据。
+  /// 上传听歌时长（听歌等级累计上报）开关。默认开启：播放中即累计并上报
+  /// 本地听歌时长（不分音源，本地文件时长也计入——用户批次14）。
   static const String _keyUploadListeningDuration =
       'settings_upload_listening_duration';
   // 逐字歌词时间偏移（ms，默认 0；仅在线音乐生效，正值 = 歌词延后显示）
@@ -182,10 +183,12 @@ class SettingsRepository {
     await prefs.setBool(_keyAutoReceiveVip, autoReceive);
   }
 
-  /// 上传听歌时长（听歌等级累计上报）开关，默认关闭。
+  /// 上传听歌时长（听歌等级累计上报）开关，默认开启（用户批次14：
+  /// 修复「本地听歌时长未上传」——默认开启后播放中即累计，不分音源）。
+  /// prefs 已存值优先于默认值：老用户手动关过的保持关闭。
   Future<bool> getUploadListeningDuration() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyUploadListeningDuration) ?? false;
+    return prefs.getBool(_keyUploadListeningDuration) ?? true;
   }
 
   Future<void> setUploadListeningDuration(bool value) async {

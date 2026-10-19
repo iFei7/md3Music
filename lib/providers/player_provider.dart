@@ -831,7 +831,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
        _isAndroidPlatform = isAndroidForTest ?? Platform.isAndroid {
     WidgetsBinding.instance.addObserver(this);
     _scheduleAudioServiceInit();
-    // 同步「是否正在播放在线歌曲」到听歌等级服务（累计本地听歌时长用）
+    // 同步「是否正在播放」到听歌等级服务（累计本地听歌时长用，不分音源）
     addListener(_syncListeningGradeOnline);
     // CSCC 真实播放事件上报（/user/listen/report）：切歌 → 补发前一首 end + 发新 start。
     // 与上面的差量链路并存，互不干扰；开关共用 settings_upload_listening_duration。
@@ -843,11 +843,39 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     );
   }
 
-  /// 推送当前「在线歌曲播放中」状态到听歌等级服务。
+  /// 听歌等级差量链路的累计门禁（即送入
+  /// [ListeningGradeService.setListeningOnline] 的实参）：
+  /// **正在播放即累计，不分音源**——本地文件听歌时长也计入等级时长上报
+  /// （用户批次14要求；服务端按 userid 记账，与音源无关）。
+  ///
+  /// 修复前语义为「在线歌曲且播放中」
+  /// （`(_currentSong?.isOnline ?? false) && _isPlaying`），本地文件播放的
+  /// 时长被完全丢弃，是「本地听歌时长未上传」的根因之一。
+  ///
+  /// [currentSong] 仅为调用点自文档与单测表达「本地/在线」场景而保留，
+  /// 音源已不参与判定。抽取为静态纯函数：单测可直钉真值表，无需驱动整个
+  /// PlayerProvider（听歌等级服务是 Android-only 单例，测试环境无累计
+  /// 可观察 seam）。
+  @visibleForTesting
+  static bool shouldAccumulateListeningDuration({
+    required Song? currentSong,
+    required bool isPlaying,
+  }) {
+    // 音源无关：本地/在线歌曲播放中均累计（用户批次14）
+    return isPlaying;
+  }
+
+  /// 推送当前「播放中」状态到听歌等级服务。
   /// notifyListeners 在播放/暂停/切歌时触发（高频位置更新走 positionNotifier，
   /// 不触发全量通知），此方法开销极小。
   void _syncListeningGradeOnline() {
-    final playingOnline = (_currentSong?.isOnline ?? false) && _isPlaying;
+    // 用户批次14：累计门禁放宽为「正在播放（不分音源）」——本地文件听歌时长
+    // 也计入等级时长上报。服务端按 userid 记账，与音源无关；修复前限定
+    // 「在线歌曲且播放中」，本地文件时长被完全丢弃（根因②）。
+    final playingOnline = shouldAccumulateListeningDuration(
+      currentSong: _currentSong,
+      isPlaying: _isPlaying,
+    );
     ListeningGradeService.instance.setListeningOnline(playingOnline);
     // 历史遗留：曾在「开始播放在线歌曲」时补发一次 /playhistory/upload，用于让
     // 按真实播放统计记账的账号累计时长。该补偿链路已由 CSCC 真实播放事件

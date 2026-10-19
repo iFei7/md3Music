@@ -1,9 +1,12 @@
-/// 音乐库一级页（LibraryHubPage）测试（IA 改版：2×2 入口卡片 + 列表分区）。
+/// 音乐库一级页（LibraryHubPage）测试（IA 改版 v2）。
 ///
 /// 覆盖：骨架渲染（SonifyTitleScaffold + 常驻搜索玻璃圆钮、无分段控件 /
-/// 无 PageView）、2×2 入口卡片文案与副标题计数、三个列表分区
-/// （最近播放 / 我创建的歌单 / 我收藏的歌单）空态与数据态、入口卡
-/// 导航契约（FavoritesPage / LibraryPage / PurchasedPage / CloudMusicPage）。
+/// 无 PageView）、2×2 入口卡片文案与副标题计数、收藏卡「直接播放」钮
+/// （存在性 + 未登录守卫）、最近播放 Top 3 截断与标题行跳转播放历史、
+/// 歌单调区 CoverRail/CoverRailCard 渲染与导航、四卡导航契约
+/// （FavoritesPage / LibraryPage / PurchasedPage / CloudMusicPage）、
+/// 隐藏歌单管理全流程（管理态多选 → 隐藏所选 → 已隐藏提示 → 底部弹层
+/// 恢复）。
 library;
 
 import 'dart:convert';
@@ -13,16 +16,20 @@ import 'dart:typed_data';
 // Scaffold 消费 material_ui 类型体系，harness 必须用
 // material_ui 的 MaterialApp（见 library_hub_entries_test.dart 同款约定）。
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:md3music/data/models/song.dart';
 import 'package:md3music/data/repositories/favorite_lists_cache.dart';
+import 'package:md3music/data/repositories/hidden_playlists_cache.dart';
 import 'package:md3music/data/repositories/history_repository.dart';
 import 'package:md3music/data/repositories/local_music_repository.dart';
 import 'package:md3music/modules/library/library_hub_page.dart';
 import 'package:md3music/modules/library/library_page.dart';
 import 'package:md3music/modules/user/cloud_music_page.dart';
 import 'package:md3music/modules/user/favorites_page.dart';
+import 'package:md3music/providers/favorites_provider.dart';
+import 'package:md3music/modules/user/play_history_page.dart';
 import 'package:md3music/modules/user/purchased_page.dart';
 import 'package:md3music/providers/library_provider.dart';
 import 'package:md3music/providers/local_favorites_provider.dart';
@@ -93,6 +100,16 @@ Future<void> _seedHistory() async {
   await repo.flush();
 }
 
+/// 播放历史种子：5 条互不相同的歌曲（最近播放 Top 3 截断断言用；
+/// addHistory 最新插到队首，故 getHistory 顺序为 5,4,3,2,1）。
+Future<void> _seedFiveHistory() async {
+  final repo = HistoryRepository();
+  for (var i = 1; i <= 5; i++) {
+    await repo.addHistory(_seedSong('m$i', '最近歌曲$i', '歌手甲'));
+  }
+  await repo.flush();
+}
+
 /// KugouApiClient 快速响应 adapter：HistoryRepository 读取账号隔离后缀、
 /// 二级子页（收藏/已购/云盘）构造链路会触达 KugouApiClient 单例
 /// （构造即发 /register/dev），注入快速失败/空响应 adapter 吸收请求，
@@ -126,6 +143,8 @@ Future<void> _pumpHub(WidgetTester tester) async {
         ChangeNotifierProvider(create: (_) => LocalFavoritesProvider()),
         // 收藏卡 push 的 FavoritesPage 在 postFrame 读取该通知器
         ChangeNotifierProvider(create: (_) => PlaylistCollectionNotifier()),
+        // 播放历史页 SongListItem 读取收藏态（FavoritesProvider）
+        ChangeNotifierProvider(create: (_) => FavoritesProvider()),
       ],
       child: const MaterialApp(home: LibraryHubPage()),
     ),
@@ -158,6 +177,45 @@ Future<void> _popBackToHub(WidgetTester tester) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 500));
   expect(find.byType(LibraryHubPage), findsOneWidget);
+}
+
+/// 把列表内目标滚进视口安全区（y∈[110,480]）——不点击。
+///
+/// 两个坑：① dragUntilVisible 末尾的 ensureVisible 会把目标送到视口顶部，
+/// 而悬浮顶栏（状态栏+54dp）吸收该区域的点击——分区标题行落到顶栏后面
+/// 时 tap 会 miss；② 数据异步加载使滚动落点在运行间漂移。故用收敛式
+/// 拖动：每轮按目标当前位置决定拖动方向（ListView.first = hub 内层
+/// 纵向列表，横滑轨是其后代）。
+Future<void> _scrollIntoSafeZone(WidgetTester tester, Finder finder) async {
+  for (var i = 0; i < 40; i++) {
+    if (finder.evaluate().isEmpty) {
+      await tester.pump(const Duration(milliseconds: 50));
+      continue;
+    }
+    final dy = tester.getCenter(finder).dy;
+    if (dy >= 110 && dy <= 480) return;
+    await tester.drag(
+      find.byType(ListView).first,
+      Offset(0, dy < 110 ? 140 : -140),
+    );
+    await tester.pump();
+  }
+}
+
+/// 在列表安全区点击指定目标（先 [_scrollIntoSafeZone] 再 tap）。
+Future<void> _tapInList(WidgetTester tester, Finder finder) async {
+  await _scrollIntoSafeZone(tester, finder);
+  await tester.tap(finder);
+  await tester.pump();
+}
+
+/// mock fluttertoast 插件通道：收藏卡播放钮未登录守卫会 showToast，
+/// 测试环境无插件宿主，必须拦截避免 MissingPluginException。
+void _mockFlutterToast(WidgetTester tester) {
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    const MethodChannel('PonnamKarthik/fluttertoast'),
+    (call) async => true,
+  );
 }
 
 void main() {
@@ -227,7 +285,7 @@ void main() {
     expect(find.text('0 首歌曲'), findsNothing);
   });
 
-  testWidgets('数据注入：入口卡副标题 + 创建/收藏歌单分区 + 最近播放', (
+  testWidgets('数据注入：入口卡副标题 + CoverRail 歌单调区 + 最近播放', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
@@ -248,13 +306,14 @@ void main() {
     expect(find.text('历史歌曲一'), findsOneWidget);
     expect(find.text('历史歌曲二'), findsOneWidget);
     expect(find.text('2 次'), findsOneWidget);
-    // 我创建的歌单分区：type=0/source=0 → 创建轨渲染
+    // 我创建的歌单分区：CoverRailCard 标题 + 副标题（歌曲数）
     await tester.dragUntilVisible(
       find.text('我的私藏歌单'),
       find.byType(CustomScrollView),
       const Offset(0, -80),
     );
     expect(find.text('我的私藏歌单'), findsOneWidget);
+    expect(find.text('8 首'), findsOneWidget);
     // 我收藏的歌单分区：type=1 → 收藏轨渲染
     await tester.dragUntilVisible(
       find.text('他人分享歌单'),
@@ -262,6 +321,61 @@ void main() {
       const Offset(0, -80),
     );
     expect(find.text('他人分享歌单'), findsOneWidget);
+    expect(find.text('12 首'), findsOneWidget);
+  });
+
+  testWidgets('最近播放只渲染最近 3 条（注入 5 条）', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await _seedFiveHistory();
+    await _pumpHub(tester);
+
+    // 最新 3 条（m5/m4/m3）渲染；更早的 m2/m1 被 take(3) 截断
+    expect(find.text('最近歌曲5'), findsOneWidget);
+    expect(find.text('最近歌曲4'), findsOneWidget);
+    expect(find.text('最近歌曲3'), findsOneWidget);
+    expect(find.text('最近歌曲2'), findsNothing);
+    expect(find.text('最近歌曲1'), findsNothing);
+  });
+
+  testWidgets('收藏卡播放钮：存在且位于收藏卡内；未登录点击不导航', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    _mockFlutterToast(tester);
+    await _pumpHub(tester);
+
+    // 播放钮（play_arrow_rounded）仅出现在收藏卡内
+    expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('hub-entry-favorites')),
+        matching: find.byIcon(Icons.play_arrow_rounded),
+      ),
+      findsOneWidget,
+    );
+    // 未登录（_StubAdapter 空响应无 token）点击：仅 toast 守卫，
+    // 不跳 FavoritesPage / 不退出 hub
+    await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(LibraryHubPage), findsOneWidget);
+    expect(find.byType(FavoritesPage), findsNothing);
+    // fluttertoast 插件内部有 1s 定时器；pump 足够时间让其结束后再收尾，
+    // 否则测试退出时 pending timer 断言失败。
+    await tester.pump(const Duration(seconds: 2));
+  });
+
+  testWidgets('点「最近播放」分区标题 → PlayHistoryPage', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await _seedHistory();
+    await _pumpHub(tester);
+
+    // 整个标题行可点（「显示全部」退化为视觉文案）
+    await tester.tap(find.text('最近播放'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byType(PlayHistoryPage), findsOneWidget);
+    await _popBackToHub(tester);
   });
 
   testWidgets('入口卡导航：收藏 → FavoritesPage(initialTab: 0)', (
@@ -308,5 +422,87 @@ void main() {
     // CloudMusicPage AppBar 标题「云盘音乐」
     expect(find.text('云盘音乐'), findsOneWidget);
     await _popBackToHub(tester);
+  });
+
+  testWidgets('隐藏歌单全流程：管理 → 选中 → 隐藏所选 → 恢复', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await _seedPlaylists();
+    await _pumpHub(tester);
+
+    // 初始：创建分区渲染歌单（只滚动不断言点击——普通态点卡会导航到
+    // 歌单详情，管理态入口在下一步）
+    await _scrollIntoSafeZone(tester, find.text('我的私藏歌单'));
+    expect(find.text('我的私藏歌单'), findsOneWidget);
+
+    // 进入创建分区管理态（标题行「管理」钮）
+    await _tapInList(tester, find.byKey(const ValueKey('hub-manage-created')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('完成'), findsOneWidget);
+    expect(find.text('取消'), findsOneWidget);
+    expect(find.text('隐藏所选(0)'), findsOneWidget);
+
+    // 点歌单卡切换选中（管理态不跳详情）
+    await _tapInList(tester, find.text('我的私藏歌单'));
+    await tester.pump();
+    expect(find.text('隐藏所选(1)'), findsOneWidget);
+
+    // 隐藏所选：该歌单从分区消失 + 空态 + 已隐藏提示行
+    await _tapInList(tester, find.text('隐藏所选(1)'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('我的私藏歌单'), findsNothing);
+    expect(find.text('暂无创建的歌单'), findsOneWidget);
+    final hintFinder = find.text('已隐藏 1 个歌单，点击管理');
+    expect(hintFinder, findsOneWidget);
+
+    // 底部弹层：列出被隐藏歌单 + 「恢复」
+    await _tapInList(tester, hintFinder);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('隐藏的创建歌单'), findsOneWidget);
+    expect(find.text('我的私藏歌单'), findsOneWidget);
+    expect(find.text('恢复'), findsOneWidget);
+
+    // 恢复：hub 重新渲染该歌单，弹层列表清空
+    await tester.tap(find.text('恢复'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('我的私藏歌单'), findsOneWidget);
+
+    // 关闭弹层后断言 hub 终态
+    final navigatorState = tester.state<NavigatorState>(
+      find.byType(Navigator).first,
+    );
+    navigatorState.pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('我的私藏歌单'), findsOneWidget);
+    expect(find.text('暂无创建的歌单'), findsNothing);
+    expect(find.text('已隐藏 1 个歌单，点击管理'), findsNothing);
+
+    // 仓库状态同步：隐藏集合已清空
+    expect(await HiddenPlaylistsCache.readHidden(), isEmpty);
+  });
+
+  testWidgets('隐藏歌单：取消退出管理态不写仓库', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await _seedPlaylists();
+    await _pumpHub(tester);
+
+    await _tapInList(tester, find.byKey(const ValueKey('hub-manage-created')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('完成'), findsOneWidget);
+
+    // 「取消」退出：歌单照常渲染、仓库无隐藏 key
+    await _tapInList(tester, find.text('取消'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('我的私藏歌单'), findsOneWidget);
+    expect(find.text('完成'), findsNothing);
+    expect(await HiddenPlaylistsCache.readHidden(), isEmpty);
   });
 }

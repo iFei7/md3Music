@@ -53,6 +53,40 @@ double _barOpacity(WidgetTester tester) => tester
     )
     .opacity;
 
+/// 逐元素 closeTo 断言渐变 stops（浮点相等不敏感）。
+void _expectStops(List<double>? stops, List<double> expected) {
+  expect(stops, isNotNull, reason: '渐变必须显式提供 stops');
+  expect(stops!.length, expected.length, reason: 'stops 数量一致');
+  for (var i = 0; i < expected.length; i++) {
+    expect(stops[i], closeTo(expected[i], 1e-9));
+  }
+}
+
+/// 栏背景两套渐变（ClipRect → Stack 内两层，返回（遮罩，tint））：
+/// ① 遮罩渐变 = BackdropFilter 子树内的 DecoratedBox——dstIn 塑形模糊
+///    强度，白系仅 alpha 起作用（颜色被 dstIn 丢弃）；
+/// ② tint 叠色渐变 = ClipRect 子树内遮罩之后的 DecoratedBox——
+///    BackdropFilter 同 Stack 兄弟层（普通 srcOver；不能放进
+///    BackdropFilter 内部：会被 dstIn 遮罩按 alpha 一起裁掉）。
+/// ClipRect 子树内 DecoratedBox 恰为这两层（顺序：遮罩先、tint 后）。
+(LinearGradient, LinearGradient) _bandGradients(WidgetTester tester) {
+  LinearGradient gradientOf(Finder decorator) =>
+      (tester.widget<DecoratedBox>(decorator).decoration as BoxDecoration)
+          .gradient! as LinearGradient;
+  final backdrops = find.byType(BackdropFilter);
+  final band = find.ancestor(of: backdrops, matching: find.byType(ClipRect));
+  final layers =
+      find.descendant(of: band, matching: find.byType(DecoratedBox));
+  expect(layers, findsNWidgets(2),
+      reason: '带内恰为「遮罩（BackdropFilter 内）+ tint（兄弟层）」两层');
+  return (
+    gradientOf(
+      find.descendant(of: backdrops, matching: find.byType(DecoratedBox)),
+    ),
+    gradientOf(layers.last),
+  );
+}
+
 /// 大标题 item 总高度（状态栏占位 0 + 顶距 8 + 文本行高 + 底距 8）。
 double _titleItemHeight(WidgetTester tester) {
   // 文本实测行高（测试字体下 = fontSize × height）；不可见占位与可见
@@ -237,34 +271,37 @@ void main() {
         findsNWidgets(1),
       );
 
-      // 渐变形态（状态栏锚定，本用例注入 sb=24）：stops [0, 24/78, 1]——
-      // 状态栏区域（0 → 24/78）全强度 kSonifyBarTopAlpha，自状态栏
-      // 下缘线性淡出，带底缘严格 α0
+      // 渐变形态（状态栏锚定，本用例注入 sb=24）：两套渐变 stops 同为
+      // [0, 24/78, 1]——
+      // ① 遮罩（BackdropFilter 内，dstIn 塑形模糊强度）：白@1→白@1→
+      //    白@0——状态栏区域（0 → 24/78）满模糊，自状态栏下缘线性衰减，
+      //    带底缘模糊强度 0（颜色被 dstIn 丢弃，仅 alpha 起作用）；
+      // ② tint 叠色（BackdropFilter 兄弟层）：surface@0.42→
+      //    surface@0.42→surface@0——同锚点叠色渐变（surface 层不能被
+      //    dstIn 遮罩裁切，故在 BackdropFilter 之外）。
+      final (maskGradient, tintGradient) = _bandGradients(tester);
       final surface =
           Theme.of(tester.element(backdrops.first)).colorScheme.surface;
-      final bandGradient = (tester
-              .widget<DecoratedBox>(
-                find
-                    .descendant(
-                      of: backdrops.first,
-                      matching: find.byType(DecoratedBox),
-                    )
-                    .first,
-              )
-              .decoration as BoxDecoration)
-          .gradient! as LinearGradient;
-      expect(bandGradient.begin, Alignment.topCenter);
-      expect(bandGradient.end, Alignment.bottomCenter);
-      expect(bandGradient.stops, const [0, 24 / 78, 1]);
+
+      expect(maskGradient.begin, Alignment.topCenter);
+      expect(maskGradient.end, Alignment.bottomCenter);
+      _expectStops(maskGradient.stops, const [0, 24 / 78, 1]);
+      expect(maskGradient.colors.first, const Color(0xFFFFFFFF));
+      expect(maskGradient.colors[1], const Color(0xFFFFFFFF));
+      expect(maskGradient.colors.last, const Color(0x00FFFFFF));
+
+      expect(tintGradient.begin, Alignment.topCenter);
+      expect(tintGradient.end, Alignment.bottomCenter);
+      _expectStops(tintGradient.stops, const [0, 24 / 78, 1]);
       expect(
-        bandGradient.colors.first,
+        tintGradient.colors.first,
         surface.withValues(alpha: kSonifyBarTopAlpha),
       );
       expect(
-        bandGradient.colors[1],
+        tintGradient.colors[1],
         surface.withValues(alpha: kSonifyBarTopAlpha),
       );
-      expect(bandGradient.colors.last, surface.withValues(alpha: 0));
+      expect(tintGradient.colors.last, surface.withValues(alpha: 0));
     });
 
     testWidgets('渐变模糊带 blur sigma 18（对齐 dock 材质）且叠色为 surface 系',
@@ -278,7 +315,8 @@ void main() {
 
       // 材质来源：LiquidGlassSurface dock 配方（blurSigma 18 + cs.surface
       // 叠色）——双带合并为单层后 blur sigma 18 不变（原 14/22 双强度
-      // 早已取消，浓淡层级完全由叠色 alpha 承担）
+      // 早已取消；批次 14 起模糊强度衰减由 BackdropFilter dstIn 遮罩
+      // 承担，sigma 仍取 18）
       expect(kSonifyBarBlurSigma, 18);
       // 单带收敛后的状态栏区域叠色单值（双带合并，反馈③）
       expect(kSonifyBarTopAlpha, 0.42);
@@ -288,25 +326,16 @@ void main() {
 
       // 带叠色为 cs.surface 系（dock 同色系）：状态栏区域全强度
       // kSonifyBarTopAlpha，底缘衰减到全透明；高于 dock 0.12：全宽
-      // 可读性带，见类文档
+      // 可读性带，见类文档。叠色层在 BackdropFilter 之外（兄弟层），
+      // 不能被 dstIn 遮罩裁切——这里取回的是 tint 渐变而非遮罩
       final surface =
           Theme.of(tester.element(backdrops.first)).colorScheme.surface;
-      final frosted = (tester
-              .widget<DecoratedBox>(
-                find
-                    .descendant(
-                      of: backdrops.first,
-                      matching: find.byType(DecoratedBox),
-                    )
-                    .first,
-              )
-              .decoration as BoxDecoration)
-          .gradient! as LinearGradient;
+      final (_, tintGradient) = _bandGradients(tester);
       expect(
-        frosted.colors.first,
+        tintGradient.colors.first,
         surface.withValues(alpha: kSonifyBarTopAlpha),
       );
-      expect(frosted.colors.last, surface.withValues(alpha: 0));
+      expect(tintGradient.colors.last, surface.withValues(alpha: 0));
     });
 
     testWidgets('顶栏 trailing 内容渲染在栏体内', (tester) async {
@@ -378,7 +407,7 @@ void main() {
       expect(tester.getSize(find.text('发现').last).height, 36);
     });
 
-    testWidgets('上滑后顶栏渐变模糊带出现（渐变叠色层承载衰减，BackdropFilter 无图层包裹）',
+    testWidgets('上滑后顶栏渐变模糊带出现（dstIn 遮罩承载模糊衰减、tint 兄弟层，BackdropFilter 无图层包裹）',
         (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
@@ -409,31 +438,31 @@ void main() {
         findsNothing,
       );
 
-      // 磨砂带叠色 = surface，竖向（上→下）渐变。本宿主无系统 inset
-      // （sb=0）走退化分支 stops [0, 1]；状态栏锚定 stops [0, 24/78, 1]
-      // 由上面注入 sb=24 的用例覆盖
+      // 两套渐变（本宿主无系统 inset，sb=0）走退化分支 stops [0, 1]：
+      // ① 遮罩（BackdropFilter 内，dstIn）：白@1→白@0——模糊强度顶缘
+      //    满、底缘 0；
+      // ② tint（BackdropFilter 兄弟层）：surface@0.42→surface@0。
+      // 状态栏锚定三 stops [0, 24/78, 1] 由上面注入 sb=24 的用例覆盖。
+      final (maskGradient, tintGradient) = _bandGradients(tester);
       final surface =
           Theme.of(tester.element(backdrops.first)).colorScheme.surface;
-      final frostedGradient = (tester
-              .widget<DecoratedBox>(
-                find
-                    .descendant(
-                      of: backdrops.first,
-                      matching: find.byType(DecoratedBox),
-                    )
-                    .first,
-              )
-              .decoration as BoxDecoration)
-          .gradient! as LinearGradient;
-      expect(frostedGradient.begin, Alignment.topCenter);
-      expect(frostedGradient.end, Alignment.bottomCenter);
-      expect(frostedGradient.stops, const [0, 1]);
+
+      expect(maskGradient.begin, Alignment.topCenter);
+      expect(maskGradient.end, Alignment.bottomCenter);
+      _expectStops(maskGradient.stops, const [0, 1]);
+      // 遮罩顶缘模糊满保留（白@1），底缘模糊强度 0（白@0）
+      expect(maskGradient.colors.first, const Color(0xFFFFFFFF));
+      expect(maskGradient.colors.last, const Color(0x00FFFFFF));
+
+      expect(tintGradient.begin, Alignment.topCenter);
+      expect(tintGradient.end, Alignment.bottomCenter);
+      _expectStops(tintGradient.stops, const [0, 1]);
       // 顶缘全强度页面色 α0.42（kSonifyBarTopAlpha），底缘衰减到全透明
       expect(
-        frostedGradient.colors.first,
+        tintGradient.colors.first,
         surface.withValues(alpha: kSonifyBarTopAlpha),
       );
-      expect(frostedGradient.colors.last, surface.withValues(alpha: 0));
+      expect(tintGradient.colors.last, surface.withValues(alpha: 0));
     });
   });
 }

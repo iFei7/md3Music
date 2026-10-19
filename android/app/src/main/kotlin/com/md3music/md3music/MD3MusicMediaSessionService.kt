@@ -1,7 +1,9 @@
 package com.md3music.md3music
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -23,6 +25,16 @@ import com.ryanheise.just_audio.AudioPlayer
 @SuppressLint("UnsafeOptInUsageError")
 class MD3MusicMediaSessionService : MediaSessionService() {
 
+    companion object {
+        /// 批次14：进程内单例引用（本服务的唯一实例）。AudioPlaybackService 经此
+        /// 直查 media3 是否真正处于前台（fork startedInForeground 直读），替代
+        /// 不可靠的系统 API 探测（v1 四条件轮询已证伪）。
+        @Volatile
+        var instance: MD3MusicMediaSessionService? = null
+
+        private const val TAG = "MD3MusicMediaSessionService"
+    }
+
     override fun onCreate() {
         // 必须在 onCreate() 返回前设置（fork 源码 MediaSessionService:594 的约束）。
         // 包一层 provider 才能拿到 Media3 真正生成的那条媒体通知（含 id 与 Notification
@@ -33,6 +45,8 @@ class MD3MusicMediaSessionService : MediaSessionService() {
             )
         )
         super.onCreate()
+        // 批次14：注册进程内单例（与 setMediaSessionServiceHost 相互独立）
+        instance = this
         // 注册为 fork 的会话 host：fork 创建/已有活跃会话后 addSession 到本服务渲染通知
         AudioPlayer.setMediaSessionServiceHost(this)
     }
@@ -70,9 +84,27 @@ class MD3MusicMediaSessionService : MediaSessionService() {
 
     override fun onDestroy() {
         AudioPlayer.setMediaSessionServiceHost(null)
+        // 批次14：注销单例引用（先于 super.onDestroy，避免销毁后仍被查询到）
+        instance = null
         super.onDestroy()
     }
 
-    // 阶段1 暂时不接管自定义通知的停止语义；播放停止时 media3 默认会取消 now playing 通知
-    // 并让本服务退回后台，无需额外处理。onTaskRemoved 使用默认实现。
+    /// 批次14：media3 是否真正处于前台（fork MediaNotificationManager 的
+    /// startedInForeground 直读）。查询异常/服务未就绪一律返回 false——
+    /// 宁可让 AudioPlaybackService 多挂隐形保活，不可出现零 FGS 进程被系统杀。
+    fun isMedia3Foreground(): Boolean = try {
+        super.isNotificationStartedInForeground()
+    } catch (_: Throwable) {
+        false
+    }
+
+    /**
+     * 批次14：任务被移除（最近任务卡片划掉）。显式固化 fork 默认语义——
+     * 播放中不自杀（isPlaybackOngoing 时 super 不 stopSelf）；manifest 已声明
+     * stopWithTask=false，服务不随任务销毁。
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "onTaskRemoved")
+        super.onTaskRemoved(rootIntent)
+    }
 }

@@ -8,6 +8,7 @@ import android.annotation.TargetApi
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -31,6 +32,8 @@ class MainActivity : FlutterActivity() {
     private val MEDIA_STORE_CHANNEL = "com.md3music.md3music/media_store"
     private val RECOGNITION_CHANNEL = "com.md3music.md3music/floating_recognition"
     private val TASK_CHANNEL = "com.md3music.md3music/task"
+    // 电池优化（批次14）：后台播放进程保活的系统弹窗通道
+    private val BATTERY_CHANNEL = "com.md3music.md3music/battery"
     // 应用内更新：Dart 侧下载并校验 APK 后经此通道调起系统安装器
     // （authority 由 Dart 端按运行时包名拼出传入，见 InAppUpdater.install）
     private val UPDATE_CHANNEL = "app.gracemusic/update"
@@ -718,6 +721,41 @@ class MainActivity : FlutterActivity() {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
                     result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // 注册电池优化 MethodChannel：后台播放进程保活的系统弹窗（批次14 P0）。
+        // Dart 侧契约：
+        //   isIgnoringBatteryOptimizations -> result.success(Boolean)
+        //   requestIgnoreBatteryOptimizations -> result.success(Boolean)
+        //     （true=已成功调起系统授权弹窗；false=调起失败，需引导用户手动设置）
+        val batteryChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            BATTERY_CHANNEL
+        )
+        batteryChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isIgnoringBatteryOptimizations" -> {
+                    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                }
+                "requestIgnoreBatteryOptimizations" -> {
+                    try {
+                        val intent = Intent(
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:$packageName")
+                        )
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.w(
+                            "MainActivity",
+                            "requestIgnoreBatteryOptimizations failed: ${e.javaClass.simpleName}: ${e.message}"
+                        )
+                        result.success(false)
+                    }
                 }
                 else -> result.notImplemented()
             }

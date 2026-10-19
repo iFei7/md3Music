@@ -36,10 +36,14 @@ import '../onboarding/onboarding_page.dart';
 import '../onboarding/user_agreement_page.dart';
 import '../update/in_app_updater.dart';
 import '../update/update_manifest.dart';
+import '../user/account_manager_sheet.dart';
+import '../user/grade_display.dart';
+import '../user/sign_in_mini_card.dart';
 import '../../providers/kugou_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/shortcut_config_provider.dart';
 import '../../providers/theme_provider.dart';
+import '../../services/kugou_api/kugou_models.dart';
 import '../../services/kugou_server.dart';
 import '../../utils/landscape_immersive.dart';
 import '../../widgets/seed_color_picker.dart';
@@ -834,18 +838,22 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   /// 分类总览条目列表（sonify 分组卡形态，方案 §6.2/§6.3）：
-  /// 顶部账号卡 → 组标题（13sp 次级灰、32dp 边距）→ 每组一张
+  /// 顶部账号卡 → 签到迷你日历卡 → 组标题（13sp 次级灰、32dp 边距）→ 每组一张
   /// squircle 9dp 卡（surfaceCard），卡内分类行（图标 24dp primary +
   /// 标题 16sp Medium + 副标 13sp 次级灰 + 0.5dp 分隔线）。
+  ///
+  /// 单列总览与 Pad 双列主列共用本方法，账号卡/签到卡插入一次即两态生效。
   List<Widget> _buildCategoryEntries(ColorScheme colorScheme) {
     final categories = _categories;
     return [
       ..._buildAccountCard(colorScheme),
+      // 签到迷你日历卡：账号卡之后、首个分组之前（完整入口见 SignInCalendarPage）
+      const SignInMiniCard(),
+      const Gap(AppSpacing.sm),
       ..._overviewGroup(
         '界面与显示',
         categories.take(3).toList(),
         colorScheme,
-        first: true,
       ),
       ..._overviewGroup(
         '播放与音频',
@@ -986,94 +994,14 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
-  /// 账号卡（方案 §6.1 新增）：白卡 squircle 9dp，头像 40dp +
-  /// 昵称/「点击登录」+ 箭头，整卡可点 → /user（未登录时用户中心自身
-  /// 展示登录引导）。消费 KugouProvider 登录态（Selector 最小重建面）。
+  /// 账号卡（方案 §6.1 新增）：白卡 squircle 9dp，头像 40dp + 昵称/
+  /// 「点击登录」+ 登录态副标题 + 等级/听歌时长行 + 箭头。
+  ///
+  /// 点击弹「账号管理」底部面板（未登录也弹：面板内可登录新账号，
+  /// 与跳 /user 等价且少一次页面跳转）。本体见 [SettingsAccountCard]
+  /// （抽为公开组件便于测试复用）。
   List<Widget> _buildAccountCard(ColorScheme colorScheme) {
-    final sonify = SonifyColors.of(context);
-    return [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(
-          SonifySpacing.cardMargin,
-          AppSpacing.sm,
-          SonifySpacing.cardMargin,
-          0,
-        ),
-        child: DecoratedBox(
-          decoration: ShapeDecoration(
-            color: sonify.surfaceCard,
-            shape: SmoothRectangleBorder(
-              borderRadius: BorderRadius.circular(SonifyRadius.card),
-            ),
-          ),
-          child: InkWell(
-            onTap: () => Navigator.of(context).pushNamed('/user'),
-            borderRadius: BorderRadius.circular(SonifyRadius.card),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Row(
-                children: [
-                  Selector<KugouProvider, String?>(
-                    selector: (_, kugou) => kugou.userInfo?.avatar,
-                    builder: (context, avatar, _) => CircleAvatar(
-                      radius: 20,
-                      backgroundColor: colorScheme.surfaceContainerHighest,
-                      backgroundImage:
-                          (avatar != null && avatar.isNotEmpty)
-                          ? CachedNetworkImageProvider(avatar)
-                          : null,
-                      child: (avatar == null || avatar.isEmpty)
-                          ? Icon(
-                              Icons.person,
-                              size: 22,
-                              color: colorScheme.onSurfaceVariant,
-                            )
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Selector<KugouProvider, (bool, String?)>(
-                      selector: (_, kugou) => (
-                        kugou.isLoggedIn,
-                        kugou.isLoggedIn ? kugou.userInfo?.nickname : null,
-                      ),
-                      builder: (context, state, _) {
-                        final (loggedIn, nickname) = state;
-                        final hasName =
-                            loggedIn && nickname != null && nickname.isNotEmpty;
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              hasName ? nickname : '点击登录',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: SonifyTextStyles.cardTitle.copyWith(
-                                color: colorScheme.onSurface,
-                              ),
-                            ),
-                            Text(
-                              hasName ? '已登录' : '登录后同步收藏与歌单',
-                              style: SonifyTextStyles.listItem.copyWith(
-                                color: sonify.textSecondary,
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
-                  Icon(Icons.chevron_right, size: 20, color: sonify.textSecondary),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-      const Gap(AppSpacing.sm),
-    ];
+    return [const SettingsAccountCard(), const Gap(AppSpacing.sm)];
   }
 
   /// 三级子页入口条目（二级 → 三级）
@@ -2491,6 +2419,9 @@ class _SettingsPageState extends State<SettingsPage>
             }
           },
         ),
+        // 电池优化白名单：后台播放保活入口，对接 native 新通道
+        // （isIgnoringBatteryOptimizations / requestIgnoreBatteryOptimizations）
+        const BatteryOptimizationTile(),
         // search: 左右滑切歌 dock 滑动 切歌 换歌 手势 播放器胶囊
         SwitchListTile(
           title: const Text('左右滑切歌'),
@@ -3635,6 +3566,236 @@ class _LyricTimeOffsetTileState extends State<_LyricTimeOffsetTile> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 设置页总览顶部账号卡（方案 §6.1）：白卡 squircle 9dp，头像 40dp +
+/// 昵称/「点击登录」+ 登录态副标题 + 等级/听歌时长行 + 箭头。
+///
+/// 交互：点击弹「账号管理」底部面板（[showAccountManagerSheet]）——
+/// 未登录也弹，面板内可直接登录新账号，与跳转 /user 等价且少一次
+/// 页面跳转。面板本体与「我的」页用户卡片共用同一实现。
+///
+/// 数据面（Selector 最小重建）：
+/// - 头像：[KugouProvider.userInfo] 的 avatar；
+/// - 昵称/登录态：(isLoggedIn, nickname)；
+/// - 等级行：(isLoggedIn, gradeInfo) —— 登录后由 _autoConnect 自动拉取，
+///   冷启动未就绪时显示占位文案。
+class SettingsAccountCard extends StatelessWidget {
+  const SettingsAccountCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final sonify = SonifyColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        SonifySpacing.cardMargin,
+        AppSpacing.sm,
+        SonifySpacing.cardMargin,
+        0,
+      ),
+      child: DecoratedBox(
+        decoration: ShapeDecoration(
+          color: sonify.surfaceCard,
+          shape: SmoothRectangleBorder(
+            borderRadius: BorderRadius.circular(SonifyRadius.card),
+          ),
+        ),
+        // Material(transparent)：让 InkWell 的水波纹画在卡面之上
+        // （此前最近的 Material 在卡片下层，反馈被白卡遮住）
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => showAccountManagerSheet(context),
+            borderRadius: BorderRadius.circular(SonifyRadius.card),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  Selector<KugouProvider, String?>(
+                    selector: (_, kugou) => kugou.userInfo?.avatar,
+                    builder: (context, avatar, _) => CircleAvatar(
+                      radius: 20,
+                      backgroundColor: colorScheme.surfaceContainerHighest,
+                      backgroundImage:
+                          (avatar != null && avatar.isNotEmpty)
+                          ? CachedNetworkImageProvider(avatar)
+                          : null,
+                      child: (avatar == null || avatar.isEmpty)
+                          ? Icon(
+                              Icons.person,
+                              size: 22,
+                              color: colorScheme.onSurfaceVariant,
+                            )
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Selector<KugouProvider, (bool, String?)>(
+                      selector: (_, kugou) => (
+                        kugou.isLoggedIn,
+                        kugou.isLoggedIn ? kugou.userInfo?.nickname : null,
+                      ),
+                      builder: (context, state, _) {
+                        final (loggedIn, nickname) = state;
+                        final hasName =
+                            loggedIn && nickname != null && nickname.isNotEmpty;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              hasName ? nickname : '点击登录',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: SonifyTextStyles.cardTitle.copyWith(
+                                color: colorScheme.onSurface,
+                              ),
+                            ),
+                            Text(
+                              hasName ? '已登录' : '登录后同步收藏与歌单',
+                              style: SonifyTextStyles.listItem.copyWith(
+                                color: sonify.textSecondary,
+                              ),
+                            ),
+                            // 等级/听歌时长行：独立 Selector，只在登录态或
+                            // gradeInfo 变化时重建；登录且有数据时显示
+                            // 「Lv.{等级} · 听歌 {时长}」，否则占位文案
+                            Selector<KugouProvider, (bool, KugouGradeInfo?)>(
+                              selector: (_, kugou) => (
+                                kugou.isLoggedIn,
+                                kugou.gradeInfo,
+                              ),
+                              builder: (context, gradeState, _) {
+                                final (gradeLoggedIn, grade) = gradeState;
+                                return GradeBriefChip(
+                                  grade: gradeLoggedIn ? grade : null,
+                                  style: SonifyTextStyles.listItem.copyWith(
+                                    color: sonify.textSecondary,
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 20,
+                    color: sonify.textSecondary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 「电池优化白名单」行（「播放行为」三级子页）：后台播放保活入口。
+///
+/// 对接 native 新通道 `com.md3music.md3music/battery`：
+/// - `isIgnoringBatteryOptimizations` → 查询当前是否已豁免（刷新副标题）；
+/// - `requestIgnoreBatteryOptimizations` → 拉起系统豁免对话框；
+/// 返回值 null（通道未实现 / 老包）或抛异常一律按「未豁免」保守处理，
+/// 不谎报已豁免。系统对话框在后台，用户切回应用（lifecycle resumed）
+/// 时再拉一次真实状态，保证副标题与系统判定一致。
+class BatteryOptimizationTile extends StatefulWidget {
+  const BatteryOptimizationTile({super.key});
+
+  @override
+  State<BatteryOptimizationTile> createState() =>
+      _BatteryOptimizationTileState();
+}
+
+class _BatteryOptimizationTileState extends State<BatteryOptimizationTile>
+    with WidgetsBindingObserver {
+  /// native 电池优化通道（契约由原生侧实现，见类文档）
+  static const MethodChannel _batteryChannel = MethodChannel(
+    'com.md3music.md3music/battery',
+  );
+
+  /// 当前是否已加入电池优化白名单；false = 未豁免或尚未查到。
+  bool _ignoring = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshStatus();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 从系统豁免对话框切回应用：重新拉取真实状态
+    if (state == AppLifecycleState.resumed) _refreshStatus();
+  }
+
+  /// 查询豁免状态；null / 异常按「未豁免」处理。
+  Future<bool> _queryIgnoring() async {
+    try {
+      final result = await _batteryChannel.invokeMethod<bool>(
+        'isIgnoringBatteryOptimizations',
+      );
+      return result ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _refreshStatus() async {
+    final ignoring = await _queryIgnoring();
+    if (!mounted) return;
+    setState(() => _ignoring = ignoring);
+  }
+
+  /// 点击：先拉起系统豁免对话框，再刷新真实状态。
+  Future<void> _requestIgnore() async {
+    HapticFeedback.lightImpact();
+    var launched = false;
+    try {
+      launched =
+          await _batteryChannel.invokeMethod<bool>(
+            'requestIgnoreBatteryOptimizations',
+          ) ??
+          false;
+    } catch (_) {
+      launched = false;
+    }
+    await _refreshStatus();
+    if (!mounted || launched) return;
+    // 拉起失败（老包 / 无对应 Activity）：提示去系统设置手动豁免
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('无法打开系统豁免设置，请在系统设置中手动允许后台运行')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return ListTile(
+      leading: const Icon(Icons.battery_charging_full),
+      title: const Text('电池优化白名单'),
+      subtitle: Text(
+        _ignoring ? '已豁免，后台播放不会被系统清理' : '未豁免，后台播放可能被系统终止',
+      ),
+      trailing: _ignoring
+          ? Icon(Icons.check_circle, color: colorScheme.primary)
+          : null,
+      onTap: _requestIgnore,
     );
   }
 }

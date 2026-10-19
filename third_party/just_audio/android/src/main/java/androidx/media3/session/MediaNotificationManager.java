@@ -369,13 +369,38 @@ import java.util.concurrent.TimeoutException;
       // MD3Music fork：后台切歌/跨fade 时 startForegroundService 被系统拒绝
       // （ForegroundServiceStartNotAllowedException，mAllowStartForeground=false）。
       // 若就此中止，通知内容（封面/标题）在后台永远无法刷新，媒体卡片停在旧歌。
-      // 这里降级为普通 notify() 更新通知内容：进程保活由 AudioPlaybackService
-      // 的前台服务承担，本服务无需置前台；回到前台后下一次更新会自动恢复
-      // startForegroundService 成功路径。
+      // 批次14：本服务已被 AudioPlaybackService 以 BIND_AUTO_CREATE 绑定而处于
+      // 运行态——对「已运行」的服务直接 startForeground 不走后台启动限制。
+      // 先尝试直接置前台：成功则本服务成为进程的 FGS 载体（杜绝保活撤除后
+      // 零 FGS 被系统杀）；直接置前台也失败（极端场景）才降级为纯 notify()
+      // 仅刷新通知内容，进程保活交回 AudioPlaybackService 保活 FGS。
+      try {
+        mediaSessionService.startForeground(
+            mediaNotification.notificationId,
+            mediaNotification.notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+        startedInForeground = true;
+        Log.i(
+            TAG,
+            "startForegroundService rejected, direct startForeground succeeded "
+                + "(id=" + mediaNotification.notificationId + ")");
+        return;
+      } catch (Throwable directError) {
+        Log.w(
+            TAG,
+            "direct startForeground rejected, fallback to notify(): "
+                + directError.getMessage(),
+            directError);
+      }
       try {
         notificationManagerCompat.notify(
             mediaNotification.notificationId, mediaNotification.notification);
-      } catch (Throwable ignore) {}
+      } catch (Throwable notifyError) {
+        Log.w(
+            TAG,
+            "notify() fallback failed: " + notifyError.getMessage(),
+            notifyError);
+      }
       return;
     }
     Util.setForegroundServiceNotification(
