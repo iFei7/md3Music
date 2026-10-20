@@ -30,20 +30,13 @@ const Map<String, _DockTab> _kDockTabById = {
   'discover': _DockTab('discover', Icons.home_outlined, Icons.home, '主页'),
   'favorites': _DockTab('favorites', Icons.favorite_outline, Icons.favorite, '收藏'),
   'library': _DockTab('library', Icons.library_music_outlined, Icons.library_music, '本地音乐'),
-  'user': _DockTab('user', Icons.person_outlined, Icons.person, '我的'),
   'fm': _DockTab('fm', Icons.radio_outlined, Icons.radio, '私人FM'),
   'search': _DockTab('search', Icons.search_outlined, Icons.search, '搜索'),
   'recognition': _DockTab('recognition', Icons.mic_none_outlined, Icons.mic, '听歌识曲'),
   'audiobook': _DockTab('audiobook', Icons.auto_stories_outlined, Icons.auto_stories, '听书'),
   'settings': _DockTab('settings', Icons.settings_outlined, Icons.settings, '设置'),
-  // v6 起音乐库子页面可选 Tab（图标与 app.dart / home_tab_manager 一致）
-  'playlists': _DockTab('playlists', Icons.queue_music_outlined, Icons.queue_music, '歌单'),
-  'albums': _DockTab('albums', Icons.album_outlined, Icons.album, '专辑'),
-  'artists': _DockTab('artists', Icons.people_outlined, Icons.people, '歌手'),
   'recent': _DockTab('recent', Icons.history_outlined, Icons.history, '最近播放'),
-  'folders': _DockTab('folders', Icons.folder_outlined, Icons.folder, '文件夹'),
   'scan': _DockTab('scan', Icons.radar_outlined, Icons.radar, '扫描状态'),
-  'local_favorites': _DockTab('local_favorites', Icons.favorite_outline, Icons.favorite, '本地收藏'),
 };
 
 _DockTab _dockTabFor(String id) => _kDockTabById[id] ??
@@ -121,7 +114,7 @@ class GlassDockPlayer extends StatefulWidget {
     required this.onNavExpandedChanged,
   });
 
-  /// 当前选中的 tab id（discover / favorites / user / search 等）。
+  /// 当前选中的 tab id（discover / library / fm / search 等）。
   final String selectedTabId;
 
   /// 点击导航项回调（tabId）。

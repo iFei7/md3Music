@@ -1501,6 +1501,11 @@ class KugouProvider extends ChangeNotifier {
           nickname: userInfo.nickname,
           avatar: userInfo.avatar,
         );
+        // 批次18：等级/听歌时长随用户信息一起拉取。此前仅冷启动
+        // _autoConnect / switchAccount 调 getGradeInfo，微信登录
+        // （login_page 直调 refreshUserInfo）等链路缺失，设置页用户栏
+        // 的等级与听歌时长停留在空态。
+        await getGradeInfo();
         notifyListeners();
       }
     } catch (_) {}

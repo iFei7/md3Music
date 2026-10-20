@@ -8,7 +8,8 @@ import '../../core/theme/app_dimens.dart';
 import '../../providers/kugou_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
-import '../../widgets/scroll_aware_app_bar.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import 'personal_fm_page_preferences.dart';
 
 class PersonalFmPage extends StatefulWidget {
@@ -28,9 +29,6 @@ class _PersonalFmPageState extends State<PersonalFmPage>
   final int _visibleSideCount = 3;
   late AnimationController _vinylRotationController;
   late AnimationController _slideController;
-
-  /// 顶栏渐变 ScrollController：与 ScrollAwareAppBar 共享
-  final ScrollController _scrollController = ScrollController();
 
   /// 防止 _playSong 期间 _syncFmListToPlayer 把已移到首位的歌曲移回去
   bool _syncEnabled = true;
@@ -208,7 +206,6 @@ class _PersonalFmPageState extends State<PersonalFmPage>
     }
     _vinylRotationController.dispose();
     _slideController.dispose();
-    _scrollController.dispose();
     super.dispose();
   }
 
@@ -400,51 +397,64 @@ class _PersonalFmPageState extends State<PersonalFmPage>
       sideTracks = songs.sublist(1).take(_visibleSideCount).toList();
     }
 
-    return Scaffold(
-      appBar: ScrollAwareAppBar(
-        title: '私人 FM',
-        opaque: true,
-        tabId: 'fm',
-        scrollController: _scrollController,
-      ),
-      body: SingleChildScrollView(
-        controller: _scrollController,
-        // 底部叠加系统手势条（小横条）高度，避免末项被压住
-        padding: EdgeInsets.only(
-          left: AppSpacing.lg,
-          right: AppSpacing.lg,
-          top: AppSpacing.lg,
-          bottom: AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Gap(AppSpacing.sm),
-            Text(
-              '实时推荐会根据你的反馈持续更新',
-              style: textTheme.bodyMedium?.copyWith(
-                color: cs.onSurfaceVariant.withValues(alpha: 0.58),
-              ),
+    // 批次 18 UI 统一：与其他三个 tab 页同款 SonifyTitleScaffold 大标题
+    // 骨架（固定悬浮大标题「私人FM」+ 左上角标题 + 右上角常驻用户头像），
+    // 原 ScrollAwareAppBar 折叠顶栏移除。业务 item 从标题占位（状态栏 +
+    // 8 + 36 + 8 = 状态栏 + 52）下方开始，固定高「视口 − 状态栏 − 52」，
+    // 内含原 SingleChildScrollView 子树自行纵向滚动（铁律：无界高度
+    // Column 内的 scrollable 必须包该固定高 SizedBox）。
+    return SonifyTitleScaffold(
+      title: '私人FM',
+      itemCount: 1,
+      // 右上角常驻用户头像（统一组件 UserAvatarButton，点击进设置页）
+      trailing: const UserAvatarButton(),
+      // 顶栏不放动作钮：页内 toolbar 已有「推荐方式」切换按钮
+      actions: const <Widget>[],
+      itemBuilder: (context, index) {
+        final media = MediaQuery.of(context);
+        final bodyHeight = media.size.height - media.padding.top - 52;
+        return SizedBox(
+          height: bodyHeight,
+          child: SingleChildScrollView(
+            // 底部叠加系统手势条（小横条）高度，避免末项被压住
+            padding: EdgeInsets.only(
+              left: AppSpacing.lg,
+              right: AppSpacing.lg,
+              top: AppSpacing.lg,
+              bottom: AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
             ),
-            const Gap(AppSpacing.lg),
-            if (isLoggedIn) _buildToolbar(cs, textTheme),
-            const SizedBox(height: 18),
-            isLoggedIn
-                ? _buildRadioHero(
-                    cs,
-                    textTheme,
-                    currentTrack,
-                    isPlaying,
-                    sideTracks,
-                  )
-                : _buildEmptyState(cs, textTheme),
-            if (isLoggedIn && currentTrack != null) const SizedBox(height: 28),
-            if (isLoggedIn)
-              _buildNowPanel(cs, textTheme, currentTrack, isPlaying),
-            const SizedBox(height: 30),
-          ],
-        ),
-      ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Gap(AppSpacing.sm),
+                Text(
+                  '实时推荐会根据你的反馈持续更新',
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: cs.onSurfaceVariant.withValues(alpha: 0.58),
+                  ),
+                ),
+                const Gap(AppSpacing.lg),
+                if (isLoggedIn) _buildToolbar(cs, textTheme),
+                const SizedBox(height: 18),
+                isLoggedIn
+                    ? _buildRadioHero(
+                        cs,
+                        textTheme,
+                        currentTrack,
+                        isPlaying,
+                        sideTracks,
+                      )
+                    : _buildEmptyState(cs, textTheme),
+                if (isLoggedIn && currentTrack != null)
+                  const SizedBox(height: 28),
+                if (isLoggedIn)
+                  _buildNowPanel(cs, textTheme, currentTrack, isPlaying),
+                const SizedBox(height: 30),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 

@@ -2088,14 +2088,16 @@ class AudioPlaybackService : Service() {
             generation == metadataGeneration
 
     /**
-     * 批次17（P0）：任务被移除（最近任务卡片划掉）→ 停播并结束进程。
+     * 批次18（回退）：任务被移除（最近任务卡片划掉）→ 停播并结束服务。
      *
-     * 用户明确要求「划掉即停、不保留进程」。批次15/16 的「播放中无条件补挂
-     * 保活 FGS」语义整体反转。manifest 已声明 stopWithTask=false，本服务不随
-     * 任务自动销毁，停播与退出在此显式完成。
+     * 批次17 曾在 stopSelf 后追加「独立 Handler 800ms 后 Process.killProcess」
+     * 兜底杀进程；实测该兜底在卸载重装 / 快速划卡重开时序下与 Flutter 引擎
+     * 启动竞态，导致应用「屡次异常停止」。经用户同意部分回退：
+     * killProcess 投递整段删除，进程回收交还系统处理。
+     * 划卡语义不变：仍停播 + 撤前台通知 + 释放 WakeLock + stopSelf。
      *
      * 顺序：取消看护 → 经原生直停播放器（保留进度，可续播）→ 撤前台通知 →
-     * 释放 WakeLock → stopSelf → 800ms 后 killProcess 兜底。
+     * 释放 WakeLock → stopSelf。
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         Log.i(TAG, "onTaskRemoved: stop playback and exit")
@@ -2129,17 +2131,11 @@ class AudioPlaybackService : Service() {
         // ④ 释放 WakeLock/WifiLock（播放器已停，内部 playing 判定为 false，
         //    会真正释放，不再走「playback ongoing」跳过分支）
         releaseWakeLock()
-        // ⑤ 结束服务生命周期（触发 onDestroy：解绑 media3、注销监听等）
+        // ⑤ 结束服务生命周期（触发 onDestroy：解绑 media3、注册监听等）
+        //    批次18 回退：原 ⑥「独立 Handler 800ms 后 killProcess 兜底」整段已删。
+        //    killProcess 与卸载重装/快速划卡重开时序竞态导致「屡次异常停止」，
+        //    进程回收交还系统；划卡仍保证停播 + 停服务 + 撤通知 + 放锁。
         stopSelf()
-        // ⑥ 兜底杀进程：用户要求「不保留进程」。stopSelf 后进程通常随之退出，
-        //    但 FlutterEngine / 绑定关系可能拖延；800ms 窗口覆盖 Dart 侧
-        //    playingStream 暂停事件与 _saveState 落盘，之后强制 killProcess。
-        //    独立 Handler：onDestroy 会清空 keepaliveForegroundHandler，
-        //    复用它会把这颗定时炸弹一起取消掉。
-        Handler(Looper.getMainLooper()).postDelayed({
-            Log.i(TAG, "onTaskRemoved: killProcess for user-requested exit")
-            android.os.Process.killProcess(android.os.Process.myPid())
-        }, 800L)
     }
 
     override fun onDestroy() {

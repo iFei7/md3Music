@@ -5,7 +5,7 @@ import '../data/repositories/settings_repository.dart';
 /// 主页 Tab 配置项。
 ///
 /// [id] 唯一标识，[label] 显示名称，[isRemovable] 是否允许隐藏。
-/// "我的"页面（user）不允许隐藏，保证用户始终有入口进入设置/登录。
+/// 设置/登录入口由各 tab 页右上角用户头像提供。
 class TabItem {
   final String id;
   final String label;
@@ -33,63 +33,54 @@ class TabItem {
   int get hashCode => id.hashCode;
 }
 
-/// 默认 Tab 定义（lite 版：主页 / 收藏 / 本地音乐 / 我的，顺序与底部玻璃 Dock 一致）。
+/// v7 起已下线的 tab id（「我的」user 与音乐库子页面歌单/专辑/歌手/
+/// 文件夹/本地收藏）：迁移时从持久化顺序与隐藏集合中剔除，避免残留。
+const Set<String> kRetiredTabIds = {
+  'user',
+  'playlists',
+  'albums',
+  'artists',
+  'folders',
+  'local_favorites',
+};
+
+/// 默认 Tab 定义（v7：首页 / 音乐库 / FM / 搜索，顺序与底部玻璃 Dock 一致）。
 ///
-/// v5 起 library（本地音乐，即音乐库页）回归默认 Tab；私人FM/听书等
-/// 仍为可选 Tab、默认隐藏，可在设置页「主页管理」手动开启；收藏页
-/// 「本地」tab 与桌面快捷方式入口保持不变。
-/// v6 起音乐库子页面（歌单/专辑/歌手/最近播放/文件夹/扫描状态/本地收藏）
-/// 注册为可选 Tab，默认隐藏（见 [kOptionalTabs]）。
+/// v7 起收藏由默认降级为可选 Tab（默认隐藏，可在设置页「主页管理」手动
+/// 开启）；「我的」tab（user）与音乐库子页面 tab 整体下线，设置/登录入口
+/// 改由各 tab 页右上角用户头像提供。
 const List<TabItem> kDefaultTabs = [
-  TabItem(id: 'discover', label: '主页'),
-  TabItem(id: 'favorites', label: '收藏'),
-  // 音乐库方案：标签文案由「本地音乐」升级为「音乐库」（label 文案改动
-  // 不涉及持久化结构，tabConfigMigrationVersion 无需升级，仍维持 v6）。
+  TabItem(id: 'discover', label: '首页'),
   TabItem(id: 'library', label: '音乐库'),
-  TabItem(id: 'user', label: '我的', isRemovable: false),
+  TabItem(id: 'fm', label: 'FM'),
+  TabItem(id: 'search', label: '搜索'),
 ];
 
 /// 可选 Tab（默认隐藏，需在设置页手动开启）。
 ///
-/// v6 起追加音乐库 9 项子页面中的可独立导航项：歌单/专辑/歌手（云，
-/// 落「我的收藏」对应 tab）、最近播放（播放历史）、文件夹/本地收藏
-/// （落本地音乐面板对应 tab）、扫描状态（本地音乐扫描状态页）。
+/// v7 起收藏由默认降级加入本列表；最近播放/扫描状态为原音乐库子页面中
+/// 保留的两个可独立导航项（歌单/专辑/歌手/文件夹/本地收藏已下线）。
 const List<TabItem> kOptionalTabs = [
-  TabItem(id: 'fm', label: '私人FM'),
-  TabItem(id: 'search', label: '搜索'),
+  TabItem(id: 'favorites', label: '收藏'),
   TabItem(id: 'recognition', label: '听歌识曲'),
   TabItem(id: 'audiobook', label: '听书'),
   TabItem(id: 'settings', label: '设置'),
-  TabItem(id: 'playlists', label: '歌单'),
-  TabItem(id: 'albums', label: '专辑'),
-  TabItem(id: 'artists', label: '歌手'),
   TabItem(id: 'recent', label: '最近播放'),
-  TabItem(id: 'folders', label: '文件夹'),
   TabItem(id: 'scan', label: '扫描状态'),
-  TabItem(id: 'local_favorites', label: '本地收藏'),
 ];
 
-/// 所有可用 Tab（默认显示 + 可选）。
-///
-/// 「我的」显式收尾：无论用户开启多少可选 Tab，默认顺序下它都排在最后
-/// （老用户由 v3/v4/v6 迁移统一移位，之后仍可自行拖动）。
+/// 所有可用 Tab（默认显示 + 可选，共 10 项）。
 const List<TabItem> kAllAvailableTabs = [
-  TabItem(id: 'discover', label: '主页'),
-  TabItem(id: 'favorites', label: '收藏'),
+  TabItem(id: 'discover', label: '首页'),
   TabItem(id: 'library', label: '音乐库'),
-  TabItem(id: 'fm', label: '私人FM'),
+  TabItem(id: 'fm', label: 'FM'),
   TabItem(id: 'search', label: '搜索'),
+  TabItem(id: 'favorites', label: '收藏'),
   TabItem(id: 'recognition', label: '听歌识曲'),
   TabItem(id: 'audiobook', label: '听书'),
   TabItem(id: 'settings', label: '设置'),
-  TabItem(id: 'playlists', label: '歌单'),
-  TabItem(id: 'albums', label: '专辑'),
-  TabItem(id: 'artists', label: '歌手'),
   TabItem(id: 'recent', label: '最近播放'),
-  TabItem(id: 'folders', label: '文件夹'),
   TabItem(id: 'scan', label: '扫描状态'),
-  TabItem(id: 'local_favorites', label: '本地收藏'),
-  TabItem(id: 'user', label: '我的', isRemovable: false),
 ];
 
 /// 管理主页底部导航 Tab 的显示/隐藏和排序。
@@ -128,24 +119,19 @@ class TabConfigProvider extends ChangeNotifier {
       // v1：恢复这两个默认入口，同时保留用户后续的手动配置。
       // v2（玻璃 Dock 改版）：tab 链收敛为 主页/收藏/我的，library 从
       // 主页 tab 迁出（隐藏），入口收敛到收藏页「本地」tab 与快捷方式。
-      // v3（FM/听书回归）：私人FM 与听书重新进入可选 Tab；「我的」统一
-      // 收尾（老用户持久化 order 中它可能不在末位）。
-      // v4（library 回归可选 Tab）：library 的**默认隐藏**靠下方「补充
-      // 新增 tab」的追加逻辑自动完成——不在持久化 order 中的非默认 tab
-      // 会被加入 _hiddenTabs（library 本就被 v2 迁移写入隐藏集合），无需
-      // 为此升迁移版本；但追加逻辑会把 library 排到持久化 order 末尾，
-      // 即「我的」之后，破坏了 v3 建立的「我的收尾」不变量，因此「我的
-      // 收尾」的**恢复**需要 v4 迁移（见 v3 段之后的 v4 块）。
+      // v3/v4/v6：历史版本曾为「我的」（user）维护「收尾」不变量（user
+      // 统一排在 order 末位）；v7 起 user 整体下线，这些迁移块已随之
+      // 删除（fromVersion < 3/4/6 的用户不再执行任何 user 移位，与原
+      // 块的 no-op 分支行为等价）。
       // v5（library 回归默认 Tab）：音乐库（本地音乐）重新进入默认导航，
       // 老用户此前由 v2/v4 迁移写入持久化隐藏集合的 library 由 v5 块统一
-      // 移除恢复显示（见 v4 段之后的 v5 块）。
-      // v6（音乐库子页面注册可选 Tab）：歌单/专辑/歌手/最近播放/文件夹/
-      // 扫描状态/本地收藏进入 kOptionalTabs；老用户持久化 order 中不含
-      // 这些 id，「补充新增 tab」的追加逻辑会把它们排到持久化 order 末尾
-      // ——即「我的」之后，破坏 v3/v4 建立的「我的收尾」不变量，因此
-      // 「我的收尾」的恢复需要 v6 块（见 v5 段之后的 v6 块）。
+      // 移除恢复显示（见下方 v5 块）。
+      // v7（默认 Tab 重构）：默认 Tab 收敛为 首页/音乐库/FM/搜索；收藏
+      // 降级为可选（默认隐藏）；FM/搜索升级为默认（老用户立即可见）；
+      // user 与歌单/专辑/歌手/文件夹/本地收藏下线，持久化中的残留 id
+      // 由 v7 块剔除并回写（见下方 v7 块）。
       final fromVersion = await _repo.getTabConfigMigrationVersion();
-      const tabConfigMigrationVersion = 6;
+      const tabConfigMigrationVersion = 7;
       if (fromVersion < 2) {
         if (fromVersion < 1) {
           _hiddenTabs..remove('favorites')..remove('library');
@@ -183,31 +169,6 @@ class TabConfigProvider extends ChangeNotifier {
         }
       }
 
-      // v3：「我的」默认收尾。在 order 重排与新增 tab 追加完成之后执行，
-      // 此时 _allTabs 已是最终顺序；仅当 user 确实不在末位时移位并回写，
-      // 用户此后的手动拖动不受影响（迁移只跑一次）。
-      if (fromVersion < 3) {
-        final userIndex = _allTabs.indexWhere((t) => t.id == 'user');
-        if (userIndex != -1 && userIndex != _allTabs.length - 1) {
-          final userTab = _allTabs.removeAt(userIndex);
-          _allTabs.add(userTab);
-          await _repo.setTabOrder([for (final t in _allTabs) t.id]);
-        }
-      }
-      // v4：library 恢复可选 Tab 后，「补充新增 tab」的追加逻辑把它排在
-      // 持久化 order 末尾——即「我的」之后，破坏了「我的收尾」。与 v3
-      // 同法，在追加逻辑完成后把 user 一次性移回末位并回写（用户此后的
-      // 手动拖动不受影响）。与 v3 块同构但作用域不同：fromVersion=3 的
-      // 用户不再进 v3 块，由本块负责恢复收尾；两块各只跑一次、条件幂等
-      // （user 已在末位时不做任何事）。
-      if (fromVersion < 4) {
-        final userIndex = _allTabs.indexWhere((t) => t.id == 'user');
-        if (userIndex != -1 && userIndex != _allTabs.length - 1) {
-          final userTab = _allTabs.removeAt(userIndex);
-          _allTabs.add(userTab);
-          await _repo.setTabOrder([for (final t in _allTabs) t.id]);
-        }
-      }
       // v5：library 回归默认 Tab。老用户隐藏集合中的 library 由 v2/v4
       // 迁移写入（非用户主动隐藏），统一恢复显示；用户若确不需要，可在
       // 主页管理再次手动隐藏（本块只跑一次，之后的手动开关不受影响）。
@@ -215,19 +176,18 @@ class TabConfigProvider extends ChangeNotifier {
       if (fromVersion < 5) {
         _hiddenTabs.remove('library');
       }
-      // v6：音乐库子页面注册可选 Tab 后，「补充新增 tab」的追加逻辑会把
-      // 7 个新 tab 排到持久化 order 末尾——即「我的」之后，破坏「我的
-      // 收尾」。与 v3/v4 同法，在追加逻辑完成后把 user 一次性移回末位并
-      // 回写（用户此后的手动拖动不受影响）。与 v3/v4 块同构：fromVersion
-      // =4/5 的用户不再进 v3/v4 块，由本块负责恢复收尾；三块各只跑一次、
-      // 条件幂等（user 已在末位时不做任何事）。
-      if (fromVersion < 6) {
-        final userIndex = _allTabs.indexWhere((t) => t.id == 'user');
-        if (userIndex != -1 && userIndex != _allTabs.length - 1) {
-          final userTab = _allTabs.removeAt(userIndex);
-          _allTabs.add(userTab);
-          await _repo.setTabOrder([for (final t in _allTabs) t.id]);
-        }
+      // v7：默认 Tab 重构（首页/音乐库/FM/搜索）。FM/搜索升级为默认——
+      // 老用户隐藏集合中的这两个 id 移除，升级后立即可见；收藏降级为
+      // 可选——无论此前显示与否，一律加入隐藏集合（老用户可在主页管理
+      // 重新开启）。已下线 id（user 与歌单/专辑/歌手/文件夹/本地收藏）
+      // 从完整顺序中剔除并回写，同时清理隐藏集合残留。本块只跑一次，
+      // 之后的用户操作不受影响；幂等：fm/search 不在隐藏集合、favorites
+      // 已隐藏、无已下线 id 时无副作用。
+      if (fromVersion < 7) {
+        _hiddenTabs..removeAll({'fm', 'search'})..add('favorites');
+        _allTabs.removeWhere((t) => kRetiredTabIds.contains(t.id));
+        _hiddenTabs.removeAll(kRetiredTabIds);
+        await _repo.setTabOrder([for (final t in _allTabs) t.id]);
       }
       if (fromVersion < tabConfigMigrationVersion) {
         await _repo.setTabConfigMigrationVersion(tabConfigMigrationVersion);

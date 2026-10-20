@@ -27,7 +27,6 @@ import 'main.dart'
         shortcutTabRequest;
 import 'modules/discover/discover_page.dart';
 import 'utils/landscape_immersive.dart';
-import 'modules/user/user_center_page.dart';
 import 'modules/user/favorites_page.dart';
 import 'modules/user/play_history_page.dart';
 
@@ -388,8 +387,6 @@ class _AppViewState extends State<_AppView> {
         '/search': (_) => const SearchPage(),
         '/library': (_) => const LibraryPage(),
         '/settings': (_) => const SettingsPage(),
-        // 发现页问候胶囊头像点击跳转入口（push 独立路由，与底部 tab 中的实例并存无冲突）
-        '/user': (_) => const UserCenterPage(),
         '/player': (_) => const FullPlayer(),
         '/personal_fm': (_) => const PersonalFmPage(),
       },
@@ -695,9 +692,6 @@ class _MainLayoutState extends State<_MainLayout>
       case 'settings':
         page = const SettingsPage();
         break;
-      case 'user':
-        page = const UserCenterPage();
-        break;
       default:
         page = const SizedBox.shrink();
     }
@@ -779,15 +773,6 @@ class _MainLayoutState extends State<_MainLayout>
             selected: isSelected,
             outlinedIcon: Icons.settings_outlined,
             filledIcon: Icons.settings,
-          ),
-          label: tab.label,
-        );
-      case 'user':
-        return NavigationDestination(
-          icon: _AnimatedTabIcon(
-            selected: isSelected,
-            outlinedIcon: Icons.person_outlined,
-            filledIcon: Icons.person,
           ),
           label: tab.label,
         );

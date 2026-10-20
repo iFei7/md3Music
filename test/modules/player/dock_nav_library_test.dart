@@ -1,6 +1,6 @@
 /// Dock 导航「本地音乐」（音乐库）一级项测试：
 ///
-/// 默认 Tab 配置（v5：主页/收藏/本地音乐/我的）下，玻璃 Dock 展开态
+/// 默认 Tab 配置（v7：首页/音乐库/FM/搜索）下，玻璃 Dock 展开态
 /// 应渲染 library 导航项（library_music 图标 + 「本地音乐」语义标签），
 /// 点击触发 onSelectTab('library')；选中态呈现 filled 图标
 /// （与其他 Dock 项同一选中样式，见 _DockNavItem）。
@@ -125,6 +125,11 @@ void main() {
     // 主页管理开启后 Dock 实时渲染
     await tabConfig.toggleTabVisibility('recent');
     await tester.pump();
+    // AnimatedSize morph（导航项 4→5，220ms）必须 settle：未 morph 完时
+    // 动画裁剪盒仍按旧宽度裁，尾项（recent）被裁在命中区外，tap 落在
+    // 导航区右缘死区 → 不触发回调（批次18 回归：recent 在老默认集里排
+    /// 第 4 位（user 收尾），新默认集里排第 5 位，单次 pump() 必踩）。
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.byIcon(Icons.history_outlined), findsOneWidget,
         reason: '开启后 Dock 应渲染「最近播放」导航项');

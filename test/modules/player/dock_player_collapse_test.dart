@@ -114,7 +114,7 @@ void main() {
         expect(find.byKey(_trackTitleKey), findsOneWidget,
             reason: '应处于「导航球 + 播放器胶囊」展开态');
         expect(navExpanded.value, isFalse, reason: '播放器展开时导航应坍缩');
-        expect(find.byIcon(Icons.favorite_outline), findsNothing,
+        expect(find.byIcon(Icons.library_music_outlined), findsNothing,
             reason: '导航坍缩态不应渲染导航胶囊项');
 
         // 胶囊矩形左缘 + 3px：落在左 padding（6dp）内，未命中封面（39dp）/
@@ -127,7 +127,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(_trackTitleKey), findsOneWidget,
             reason: '点胶囊背景不应坍缩播放器（误触回归）');
-        expect(find.byIcon(Icons.favorite_outline), findsNothing,
+        expect(find.byIcon(Icons.library_music_outlined), findsNothing,
             reason: '导航应保持坍缩（单展开不变量）');
         expect(navExpanded.value, isFalse);
       } finally {
@@ -155,7 +155,7 @@ void main() {
 
         expect(find.byKey(_trackTitleKey), findsNothing,
             reason: '点导航圆后播放器工具应坍缩');
-        expect(find.byIcon(Icons.favorite_outline), findsOneWidget,
+        expect(find.byIcon(Icons.library_music_outlined), findsOneWidget,
             reason: '点导航圆后导航应展开为胶囊');
         expect(navExpanded.value, isTrue);
 
@@ -163,7 +163,7 @@ void main() {
         await _expandPlayerCapsule(tester);
         expect(find.byKey(_trackTitleKey), findsOneWidget,
             reason: '坍缩后应能再次展开播放器胶囊');
-        expect(find.byIcon(Icons.favorite_outline), findsNothing,
+        expect(find.byIcon(Icons.library_music_outlined), findsNothing,
             reason: '再次展开后导航应重新坍缩（单展开不变量）');
       } finally {
         player.dispose();

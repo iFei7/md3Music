@@ -1,12 +1,14 @@
 /// 音乐库一级页（LibraryHubPage）测试（IA 改版 v2）。
 ///
-/// 覆盖：骨架渲染（SonifyTitleScaffold + 常驻搜索玻璃圆钮、无分段控件 /
-/// 无 PageView）、2×2 入口卡片文案与副标题计数、收藏卡（「我喜欢」）
-/// 「直接播放」钮（存在性 + 未登录守卫）、最近播放 Top 3 截断与标题行
-/// 跳转播放历史、歌单调区 CoverRail/CoverRailCard 渲染与导航、四卡导航
-/// 契约（「我喜欢」→ PlaylistPage 默认收藏详情 / LibraryPage /
-/// PurchasedPage / CloudMusicPage）、隐藏歌单管理全流程（管理态多选 →
-/// 隐藏所选 → 已隐藏提示 → 底部弹层恢复）。
+/// 覆盖：骨架渲染（SonifyTitleScaffold + 常驻搜索玻璃圆钮/用户头像、
+/// 无分段控件 / 无 PageView）、2×2 入口卡片文案（批次18：收藏卡改名
+/// 「收藏」并去副标题）、收藏卡「直接播放」钮（存在性 + 未登录守卫）、
+/// 最近播放 Top 3 截断与标题行跳转播放历史、歌单调区 CoverRail/
+/// CoverRailCard 渲染与导航、四卡导航契约（收藏 → PlaylistPage 默认
+/// 收藏详情 / LibraryPage / PurchasedPage / CloudMusicPage）、隐藏
+/// 歌单管理全流程（管理态多选 → 隐藏所选 → 已隐藏提示 → 底部弹层
+/// 恢复）、批次18 登录态首开空缓存自动同步云端歌单、本地注册表补位
+/// （0 首歌单合并 + 与云端条目去重）。
 library;
 
 import 'dart:convert';
@@ -21,6 +23,7 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:md3music/data/models/song.dart';
+import 'package:md3music/data/repositories/created_playlists_cache.dart';
 import 'package:md3music/data/repositories/favorite_lists_cache.dart';
 import 'package:md3music/data/repositories/hidden_playlists_cache.dart';
 import 'package:md3music/data/repositories/history_repository.dart';
@@ -32,6 +35,7 @@ import 'package:md3music/modules/playlist/playlist_page.dart';
 import 'package:md3music/modules/user/cloud_music_page.dart';
 import 'package:md3music/modules/user/favorites_page.dart';
 import 'package:md3music/providers/favorites_provider.dart';
+import 'package:md3music/providers/kugou_provider.dart';
 import 'package:md3music/modules/user/play_history_page.dart';
 import 'package:md3music/modules/user/purchased_page.dart';
 import 'package:md3music/providers/library_provider.dart';
@@ -43,6 +47,7 @@ import 'package:md3music/services/kugou_api/kugou_api_client.dart';
 import 'package:md3music/services/kugou_api/kugou_models.dart';
 import 'package:md3music/widgets/common/sonify_segmented_control.dart';
 import 'package:md3music/widgets/common/sonify_title_scaffold.dart';
+import 'package:md3music/widgets/common/user_avatar_button.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -149,6 +154,52 @@ class _StubAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+class _PlaylistSyncStubAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    // 批次18：登录态首开自动同步用例专用——/user/playlist 返回云端
+    // 歌单数据（type=0/source=0 创建 + type=1 收藏），其余路径同
+    // _StubAdapter 空响应。
+    final body = options.path.contains('/user/playlist')
+        ? jsonEncode({
+            'data': {
+              'info': [
+                {
+                  'specialid': 'cloud_created_1',
+                  'specialname': '云端新建歌单',
+                  'songcount': 3,
+                  'type': 0,
+                  'source': 0,
+                  'list_create_userid': 'test-uid',
+                },
+                {
+                  'specialid': 'cloud_collected_1',
+                  'specialname': '云端收藏歌单',
+                  'songcount': 6,
+                  'type': 1,
+                  'source': 0,
+                },
+              ],
+            },
+          })
+        : '{}';
+    return ResponseBody.fromString(
+      body,
+      200,
+      headers: const {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
 Future<void> _pumpHub(WidgetTester tester) async {
   await tester.pumpWidget(
     MultiProvider(
@@ -160,6 +211,10 @@ Future<void> _pumpHub(WidgetTester tester) async {
         ChangeNotifierProvider(create: (_) => PlaylistCollectionNotifier()),
         // 播放历史页 SongListItem 读取收藏态（FavoritesProvider）
         ChangeNotifierProvider(create: (_) => FavoritesProvider()),
+        // 批次18：顶栏用户头像钮（UserAvatarButton）的 Selector 源
+        ChangeNotifierProvider(
+          create: (_) => KugouProvider(registerDeviceOnStart: false),
+        ),
         // 「我喜欢」卡点击直达的 PlaylistPage 读取主题态（背景图开关）
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
       ],
@@ -265,6 +320,8 @@ void main() {
     expect(find.text('音乐库'), findsWidgets);
     // 右上角常驻玻璃搜索圆钮（trailing，不随滚动淡入）
     expect(find.byIcon(Icons.search), findsOneWidget);
+    // 批次18：用户头像钮与搜索钮并列常驻
+    expect(find.byType(UserAvatarButton), findsOneWidget);
     // 扫描钮保留（原 FAB 职责）
     expect(find.byIcon(Icons.add), findsOneWidget);
     // 旧四段结构整体移除：无分段控件、无 PageView
@@ -272,7 +329,7 @@ void main() {
     expect(find.byType(PageView), findsNothing);
     // 四段文案收敛为 2×2 入口卡片（每张各出现一次；若分段控件仍在
     // 会与卡片文案重复 → findsOneWidget 即双重断言）
-    for (final label in const ['我喜欢', '本地', '已购', '云盘']) {
+    for (final label in const ['收藏', '本地', '已购', '云盘']) {
       expect(
         find.text(label),
         findsOneWidget,
@@ -312,8 +369,8 @@ void main() {
     await _seedHistory();
     await _pumpHub(tester);
 
-    // 收藏卡副标题 = 歌单缓存总数（3 个，含「我喜欢」）；本地卡副标题 = 本地歌曲数（2 首）
-    expect(find.text('3 个歌单'), findsOneWidget);
+    // 批次18：收藏卡已去副标题（不再显示「N 个歌单」计数）；
+    // 本地卡副标题 = 本地歌曲数（2 首）
     expect(find.text('2 首歌曲'), findsOneWidget);
     // 空态文案全部消失
     expect(find.text('暂无播放记录'), findsNothing);
@@ -430,11 +487,12 @@ void main() {
     await _seedPlaylists();
     await _pumpHub(tester);
 
-    // 点入口卡内「我喜欢」文案（歌单调区也有同名卡，须限定在入口卡内）
+    // 点入口卡内「收藏」文案（批次18：卡名由「我喜欢」改为「收藏」，
+    // 歌单调区也有同名卡，须限定在入口卡内）
     await tester.tap(
       find.descendant(
         of: find.byKey(const ValueKey('hub-entry-favorites')),
-        matching: find.text('我喜欢'),
+        matching: find.text('收藏'),
       ),
     );
     await tester.pump();
@@ -563,5 +621,81 @@ void main() {
     expect(find.text('我的私藏歌单'), findsOneWidget);
     expect(find.text('完成'), findsNothing);
     expect(await HiddenPlaylistsCache.readHidden(), isEmpty);
+  });
+
+  testWidgets('批次18 登录态首开：空缓存自动同步云端歌单并渲染', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    _mockFlutterToast(tester);
+    // 登录态：hub._loadPlaylists 在缓存为空时自动 _syncPlaylistsIfLoggedIn
+    installFakeSecureStorage();
+    await KugouApiClient().setLoginCookies('test-token', 'test-uid');
+    // /user/playlist 命中云端歌单数据
+    KugouApiClient().dio.httpClientAdapter = _PlaylistSyncStubAdapter();
+
+    await _pumpHub(tester);
+    // initState postFrame 链：读缓存 → setState → 登录态同步（dio
+    // stub）→ 写缓存 → 重读 → setState
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    // 同步结果已写回 FavoriteListsCache
+    expect(await FavoriteListsCache.readPlaylists(), isNotEmpty);
+    // 云端歌单渲染进对应分区（创建 / 收藏）
+    await tester.dragUntilVisible(
+      find.text('云端新建歌单'),
+      find.byType(CustomScrollView),
+      const Offset(0, -80),
+    );
+    expect(find.text('云端新建歌单'), findsOneWidget);
+    // 收藏分区在列表更下方，继续下滚入视口
+    await tester.dragUntilVisible(
+      find.text('云端收藏歌单'),
+      find.byType(CustomScrollView),
+      const Offset(0, -80),
+    );
+    expect(find.text('云端收藏歌单'), findsOneWidget);
+    // 空态文案消失（首开不再停留在空态）
+    expect(find.text('暂无创建的歌单'), findsNothing);
+    expect(find.text('暂无收藏的歌单'), findsNothing);
+
+    // 清理登录态，避免污染同文件后续用例
+    await KugouApiClient().clearCookies();
+    uninstallFakeSecureStorage();
+  });
+
+  testWidgets('批次18 注册表补位：0 首歌单合并进创建分区且与云端去重', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await _seedPlaylists();
+    // 注册表：一个新歌单 + 一个与云端缓存条目（created_1）同 id 的重复项
+    await CreatedPlaylistsCache.put('reg_new_1', '注册表新歌单');
+    await CreatedPlaylistsCache.put('created_1', '注册表重复项');
+
+    await _pumpHub(tester);
+    await tester.pump();
+    await tester.pump();
+
+    // 注册表新歌单（0 首）进入「我创建的歌单」分区
+    await tester.dragUntilVisible(
+      find.text('注册表新歌单'),
+      find.byType(CustomScrollView),
+      const Offset(0, -80),
+    );
+    expect(find.text('注册表新歌单'), findsOneWidget);
+    expect(find.text('0 首'), findsOneWidget);
+    // 云端已有 created_1：注册表重复项不渲染（playlistKey 口径去重）
+    expect(find.text('注册表重复项'), findsNothing);
+    expect(find.text('我的私藏歌单'), findsOneWidget);
+    // 收藏分区不受影响
+    await tester.dragUntilVisible(
+      find.text('他人分享歌单'),
+      find.byType(CustomScrollView),
+      const Offset(0, -80),
+    );
+    expect(find.text('他人分享歌单'), findsOneWidget);
   });
 }

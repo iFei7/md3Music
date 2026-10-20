@@ -13,6 +13,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/theme/squircle.dart';
 import '../../core/utils/app_toast.dart';
 import '../../data/models/song.dart';
+import '../../data/repositories/created_playlists_cache.dart';
 import '../../data/repositories/favorite_lists_cache.dart';
 import '../../data/repositories/hidden_playlists_cache.dart';
 import '../../data/repositories/history_repository.dart';
@@ -25,6 +26,7 @@ import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/common/cover_rail.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import '../../widgets/m3e_pull_to_refresh_fixed.dart';
 import '../../widgets/smart_artwork_image.dart';
 import '../playlist/playlist_page.dart';
@@ -43,7 +45,7 @@ import 'library_page.dart' show LibraryPage, showLibraryScanMenu;
 ///   **常驻**玻璃搜索圆钮（走 [SonifyTitleScaffold.trailing]，不随滚动
 ///   淡入淡出——用户要求常驻可见）；扫描钮（原 FAB 职责）走 actions
 ///   （仅栏体浮现后淡入，扫描中转圈禁用防重复触发）；
-/// - 入口区：2×2 squircle 卡片（我喜欢 / 本地 / 已购 / 云盘）。我喜欢卡
+/// - 入口区：2×2 squircle 卡片（收藏 / 本地 / 已购 / 云盘）。收藏卡
 ///   额外带「直接播放」圆钮：不点开卡片即播放「我喜欢」（缓存优先、
 ///   倒序从最新收藏始，链路同收藏页封面一键播放）；点开卡片则直达
 ///   「我喜欢」歌单详情（[PlaylistPage]，isDefaultFavorite，与收藏页
@@ -104,6 +106,11 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   // FavoritesPage 承载）。
   List<KugouPlaylistBrief> _playlists = [];
 
+  // App 内新建歌单的本地注册表（playlistId → name，
+  // CreatedPlaylistsCache）。云端不返回 0 首歌单，与 _playlists 合并
+  // 补位后供 [_createdPlaylists] 渲染，见该 getter 说明。
+  Map<String, String> _createdRegistry = {};
+
   // 最近播放（Top 3 数据源）
   List<Song> _history = [];
 
@@ -149,22 +156,36 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   }
 
   Future<void> _loadPlaylists() async {
-    // 三块本地读并行（歌单 / 隐藏集合 / 首曲封面缓存），避免串行
-    // await 把首帧空态拖长（PlaylistCoverCache 此前单独占一段）。
+    // 四块本地读并行（歌单 / 隐藏集合 / 首曲封面缓存 / 新建歌单注册表），
+    // 避免串行 await 把首帧空态拖长（PlaylistCoverCache 此前单独占一段）。
     final results = await Future.wait([
       FavoriteListsCache.readPlaylists(),
       HiddenPlaylistsCache.readHidden(),
       PlaylistCoverCache.readAll(),
+      // 批次18：App 内新建歌单注册表（云端不返回 0 首歌单，合并补位
+      // 见 [_createdPlaylists]）。
+      CreatedPlaylistsCache.readAll(),
     ]);
     if (!mounted) return;
     final playlists = results[0] as List<KugouPlaylistBrief>;
     final hidden = results[1] as Set<String>;
     final covers = results[2] as Map<String, String>;
+    final createdRegistry = results[3] as Map<String, String>;
     setState(() {
       _playlists = playlists;
       _hiddenKeys = hidden;
       _covers = covers;
+      _createdRegistry = createdRegistry;
     });
+    // 批次18：登录后首开若缓存为空（冷启动未同步过歌单），立即拉一次
+    // 云端歌单并重读缓存渲染；未登录 / 离线时静默保持缓存态，实时同步
+    // 仍由下拉刷新（[_refresh] → _syncPlaylistsIfLoggedIn）承载。
+    if (_playlists.isEmpty && KugouApiClient().isLoggedIn) {
+      await _syncPlaylistsIfLoggedIn();
+      final refreshed = await FavoriteListsCache.readPlaylists();
+      if (!mounted) return;
+      setState(() => _playlists = refreshed);
+    }
     // 无封面歌单旁路解析：不阻塞列表首屏（串行限流见 _resolveMissingCovers）
     unawaited(_resolveMissingCovers());
   }
@@ -285,9 +306,34 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   bool _isHidden(KugouPlaylistBrief p) =>
       _hiddenKeys.contains(HiddenPlaylistsCache.playlistKey(p));
 
-  List<KugouPlaylistBrief> get _createdPlaylists => _playlists
-      .where((p) => _isCreatedPlaylist(p) && !_isHidden(p))
-      .toList();
+  List<KugouPlaylistBrief> get _createdPlaylists {
+    final list = _playlists
+        .where((p) => _isCreatedPlaylist(p) && !_isHidden(p))
+        .toList();
+    // 批次18：本地注册表补位。上游 /v7/get_all_list 不返回 0 首歌单，
+    // App 内新建（favorites_provider.createPlaylist 记录到
+    // CreatedPlaylistsCache）的空歌单在 _playlists 里不存在，这里把
+    // 注册表中有、而 _playlists 里没有的 id 合成 KugouPlaylistBrief
+    // 追加。一旦云端返回真实条目（id 即 playlistKey 口径命中），
+    // 该条目自动被去重跳过。
+    final existingKeys = <String>{
+      for (final p in list) HiddenPlaylistsCache.playlistKey(p),
+    };
+    final uid = KugouApiClient().userid;
+    for (final entry in _createdRegistry.entries) {
+      if (existingKeys.contains(entry.key)) continue;
+      existingKeys.add(entry.key);
+      final synthetic = KugouPlaylistBrief(
+        id: entry.key,
+        name: entry.value,
+        listCreateUserid: uid,
+        songCount: 0,
+      );
+      if (_isHidden(synthetic)) continue;
+      list.add(synthetic);
+    }
+    return list;
+  }
 
   List<KugouPlaylistBrief> get _collectedPlaylists => _playlists
       .where((p) => !_isCreatedPlaylist(p) && !_isHidden(p))
@@ -539,9 +585,17 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     return SonifyTitleScaffold(
       title: '音乐库',
       itemCount: 1,
-      // 顶栏右侧：搜索玻璃圆钮**常驻**（trailing 不随滚动淡入淡出）；
-      // 扫描钮走 actions（栏体浮现后淡入）。
-      trailing: _buildSearchButton(),
+      // 顶栏右侧：用户头像（常驻，进入设置/账号管理）+ 搜索玻璃圆钮
+      // **常驻**（trailing 不随滚动淡入淡出）；扫描钮走 actions
+      // （栏体浮现后淡入）。
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const UserAvatarButton(),
+          const SizedBox(width: 8),
+          _buildSearchButton(),
+        ],
+      ),
       actions: [
         IconButton(
           tooltip: '扫描音乐',
@@ -572,7 +626,6 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
               ),
               children: [
                 _buildEntryCards(
-                  playlistCount: _playlists.length,
                   songCount: library.songs.length,
                 ),
                 _Section(
@@ -648,7 +701,7 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
 
   // ==================== 入口卡片区（2×2） ====================
 
-  Widget _buildEntryCards({required int playlistCount, required int songCount}) {
+  Widget _buildEntryCards({required int songCount}) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         SonifySpacing.titleMargin,
@@ -663,9 +716,9 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
               _EntryCard(
                 key: const ValueKey('hub-entry-favorites'),
                 icon: Icons.favorite,
-                title: '我喜欢',
-                // 未登录 / 无缓存歌单时不显示副标题
-                subtitle: playlistCount > 0 ? '$playlistCount 个歌单' : null,
+                // 批次18：卡名「我喜欢」→「收藏」（直达「我喜欢」歌单
+                // 详情的语义未变，见 _openMyFavorite/_playMyFavorite）。
+                title: '收藏',
                 // 点开卡片直达「我喜欢」歌单详情（收藏页点击歌单行同款
                 // 导航；未登录 / 找不到时分别提示登录 / 兜底收藏页）
                 onTap: _openMyFavorite,

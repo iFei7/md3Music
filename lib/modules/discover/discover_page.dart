@@ -11,6 +11,7 @@ import '../../core/theme/app_theme.dart';
 import '../../widgets/common/cover_rail.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import '../../widgets/md3_pull_to_refresh.dart';
 
 import '../../providers/kugou_provider.dart';
@@ -236,8 +237,9 @@ class _DiscoverPageState extends State<DiscoverPage> {
           ? Scaffold(body: _buildError(colorScheme))
           : SonifyTitleScaffold(
               title: '首页',
-              // 顶栏右侧固定用户头像（常驻，不随滚动）
-              trailing: _buildUserAvatar(),
+              // 顶栏右侧固定用户头像（常驻，不随滚动；统一组件，点击进
+              // 设置页 /settings，与 FM/搜索/音乐库三页同款）
+              trailing: const UserAvatarButton(),
               // 滚动后在头像左侧浮现搜索/识曲圆钮
               actions: _buildBarActions(),
               itemCount: _kSectionCount,
@@ -381,31 +383,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  /// 顶栏固定用户头像（36dp）：常驻不参与折叠，点击进设置页
-  /// （app.dart 已注册 '/settings' 路由，与 user_center_page 的
-  /// MaterialPageRoute push 同指 SettingsPage；pushNamed 独立入栈，
-  /// 与底部 tab 中的实例并存无冲突）。
-  Widget _buildUserAvatar() {
-    final cs = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onTap: () => Navigator.of(context).pushNamed('/settings'),
-      behavior: HitTestBehavior.opaque,
-      child: Selector<KugouProvider, String?>(
-        selector: (_, kugou) => kugou.userInfo?.avatar,
-        builder: (context, avatar, _) => CircleAvatar(
-          radius: 18,
-          backgroundColor: cs.surfaceContainerHighest,
-          backgroundImage: (avatar != null && avatar.isNotEmpty)
-              ? CachedNetworkImageProvider(avatar)
-              : null,
-          child: (avatar == null || avatar.isEmpty)
-              ? Icon(Icons.person, size: 20, color: cs.onSurfaceVariant)
-              : null,
         ),
       ),
     );

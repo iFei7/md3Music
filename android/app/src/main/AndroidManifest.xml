@@ -76,14 +76,16 @@
                 <data android:mimeType="application/opus" />
             </intent-filter>
         </activity>
-        <!-- 桌面入口 launcher alias：与 MainActivity 共用组件，始终启用这一个。 -->
+        <!-- 桌面入口 launcher alias：与 MainActivity 共用组件，始终启用这一个。
+             批次18：撤回 alias 上的 roundIcon（批次17 误加，与原版 Sonify 不符——
+             原版 application 声明 icon+roundIcon，activity/alias 不声明），
+             图标解析回落 application 段，行为与 e8f5447 之前一致。 -->
         <activity-alias
             android:name=".LauncherModernIcon"
             android:targetActivity=".MainActivity"
             android:enabled="true"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:roundIcon="@mipmap/ic_launcher_round"
             android:label="Grace">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

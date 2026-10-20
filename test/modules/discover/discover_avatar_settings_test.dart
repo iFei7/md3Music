@@ -14,6 +14,7 @@ import 'package:md3music/providers/kugou_provider.dart';
 import 'package:md3music/providers/local_favorites_provider.dart';
 import 'package:md3music/providers/player_provider.dart';
 import 'package:md3music/services/kugou_api/kugou_api_client.dart';
+import 'package:md3music/widgets/common/user_avatar_button.dart';
 
 import '../../test_helpers/fake_secure_storage.dart';
 
@@ -131,6 +132,9 @@ void main() {
 
       // 首页大标题（首 item）+ 折叠态小标题（顶栏）两处文案均为「首页」
       expect(find.text('首页'), findsWidgets);
+      // 批次 18 UI 统一：头像改为统一组件 UserAvatarButton（内部仍是
+      // 36dp CircleAvatar + Selector<KugouProvider, String?> 按 avatar 最小重建）
+      expect(find.byType(UserAvatarButton), findsOneWidget);
       expect(find.byType(CircleAvatar), findsOneWidget);
 
       // 点右上角头像 → 进设置页路由

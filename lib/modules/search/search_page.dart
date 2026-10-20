@@ -22,6 +22,7 @@ import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/song_list_item.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
 import '../playlist/playlist_page.dart';
@@ -205,75 +206,114 @@ class _SearchPageState extends State<SearchPage>
             SliverAppBar(
               floating: true,
               pinned: true,
+              // 批次 18 UI 统一：展开态 header = 工具栏（左上角标题「搜索」+
+              // 右上角常驻用户头像）+ 其下 52dp 搜索胶囊行；pinned 收起后
+              // 仅剩标题 + 头像，胶囊随 flexibleSpace 高度收缩被裁掉。
+              // expandedHeight 不含状态栏（maxExtent = 状态栏 + 56 + 52）。
+              expandedHeight: kToolbarHeight + 52,
+              // 左上角页面标题（主题 appBarTheme 默认 centerTitle: true，
+              // 此处显式左对齐）
+              centerTitle: false,
+              title: const Text('搜索'),
+              // 右上角常驻用户头像（统一组件，点击进设置页 /settings）
+              actions: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: UserAvatarButton(),
+                ),
+              ],
               // 有壁纸时顶栏全透明，flexibleSpace 独立加载同一张背景图
               // （topCenter 对齐与页面主体背景视觉连续）；列表滚到顶栏下时
               // 被这张背景图盖住（不透底下 UI）；无壁纸时不透明 surface
               backgroundColor: useBackgroundImage
                   ? Colors.transparent
                   : colorScheme.surface,
-                  flexibleSpace: useBackgroundImage
-                      ? ClipRect(
-                          child: Builder(builder: (context) {
-                            // 与页面主体共用同一背景图解码结果（同 cacheWidth →
-                            // ImageCache 同 key），避免各自解码
-                            final size = MediaQuery.sizeOf(context);
-                            final cacheWidth = (size.width *
-                                        MediaQuery.devicePixelRatioOf(context))
-                                    .round()
-                                    .clamp(540, 1440);
-                            final tp = context.watch<ThemeProvider>();
-                            // 顶栏区域用全屏尺寸 + 全屏 cover 渲染背景图，再
-                            // topCenter 裁剪显示顶部：缩放比例与主体背景完全一致，
-                            // 否则窄区域内单独 cover 会放大错位
-                            return OverflowBox(
-                              alignment: Alignment.topCenter,
-                              minWidth: size.width,
-                              maxWidth: size.width,
-                              minHeight: size.height,
-                              maxHeight: size.height,
-                              child: SizedBox(
-                                width: size.width,
-                                height: size.height,
-                                // 与 AppBackground 同层结构：surface 打底 +
-                                // 模糊（backgroundBlur）+ 透明度（backgroundOpacity），
-                                // 顶栏背景跟随主体模糊/透明度改动
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    ColoredBox(
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.surface,
-                                    ),
-                                    Opacity(
-                                      opacity: tp.backgroundOpacity,
-                                      child: ImageFiltered(
-                                        imageFilter: ui.ImageFilter.blur(
-                                          sigmaX: tp.backgroundBlur,
-                                          sigmaY: tp.backgroundBlur,
-                                        ),
-                                        child: Image(
-                                          image: backgroundImageProvider(
-                                            tp,
-                                            cacheWidth: cacheWidth,
-                                          ),
-                                          fit: BoxFit.cover,
-                                          gaplessPlayback: true,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+              flexibleSpace: Stack(
+                fit: StackFit.expand,
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  // 壁纸层（原 flexibleSpace 子树整体迁入 Stack 底层）：
+                  // 铺满整个 header（含工具栏区），与页面主体共用同一背景图
+                  // 解码结果（同 cacheWidth → ImageCache 同 key）
+                  if (useBackgroundImage)
+                    ClipRect(
+                      child: Builder(builder: (context) {
+                        // 与页面主体共用同一背景图解码结果（同 cacheWidth →
+                        // ImageCache 同 key），避免各自解码
+                        final size = MediaQuery.sizeOf(context);
+                        final cacheWidth = (size.width *
+                                    MediaQuery.devicePixelRatioOf(context))
+                                .round()
+                                .clamp(540, 1440);
+                        final tp = context.watch<ThemeProvider>();
+                        // 顶栏区域用全屏尺寸 + 全屏 cover 渲染背景图，再
+                        // topCenter 裁剪显示顶部：缩放比例与主体背景完全一致，
+                        // 否则窄区域内单独 cover 会放大错位
+                        return OverflowBox(
+                          alignment: Alignment.topCenter,
+                          minWidth: size.width,
+                          maxWidth: size.width,
+                          minHeight: size.height,
+                          maxHeight: size.height,
+                          child: SizedBox(
+                            width: size.width,
+                            height: size.height,
+                            // 与 AppBackground 同层结构：surface 打底 +
+                            // 模糊（backgroundBlur）+ 透明度（backgroundOpacity），
+                            // 顶栏背景跟随主体模糊/透明度改动
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                ColoredBox(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.surface,
                                 ),
-                              ),
-                            );
-                          }),
-                        )
-                      : null,
-                  surfaceTintColor: Colors.transparent,
-                  // 批次 9（真机反馈）：与主页/音乐库统一的玻璃胶囊搜索框
-                  // （LiquidGlassSurface pill、44dp、聚焦 1.5dp primary 描边）。
-                  title: _buildSearchField(colorScheme),
-                ),
+                                Opacity(
+                                  opacity: tp.backgroundOpacity,
+                                  child: ImageFiltered(
+                                    imageFilter: ui.ImageFilter.blur(
+                                      sigmaX: tp.backgroundBlur,
+                                      sigmaY: tp.backgroundBlur,
+                                    ),
+                                    child: Image(
+                                      image: backgroundImageProvider(
+                                        tp,
+                                        cacheWidth: cacheWidth,
+                                      ),
+                                      fit: BoxFit.cover,
+                                      gaplessPlayback: true,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                  // 搜索胶囊行（批次 9 玻璃胶囊从 title 槽迁至展开区）：
+                  // 贴 header 底部 = 工具栏（标题 + 头像）正下方；收起态随
+                  // flexibleSpace 高度收缩被 Stack 裁掉（pinned 后标题 +
+                  // 头像仍可见）。水平位置由 _buildSearchField 内部 padding
+                  // （SonifySpacing.cardMargin 16.5dp）承担，与迁移前 title
+                  // 槽位一致；不遮挡下方 TabBar（不同 sliver，无叠区）。
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: SizedBox(
+                        height: 44,
+                        child: _buildSearchField(colorScheme),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              surfaceTintColor: Colors.transparent,
+            ),
                 if (_hasSearched)
                   SliverPersistentHeader(
                     pinned: true,
@@ -329,7 +369,8 @@ class _SearchPageState extends State<SearchPage>
   /// 搜索框（批次 9 真机反馈：与主页/音乐库统一玻璃胶囊）：
   /// - LiquidGlassSurface + GlassShape.pill、高 44dp（对齐首页
   ///   _buildSearchFieldItem 与 library_page 批次 8 基准），水平边距
-  ///   16.5dp 由 SliverAppBar title 布局承担；
+  ///   16.5dp 由 flexibleSpace 展开区布局承担（批次 18 从 SliverAppBar
+  ///   title 槽迁入，收起态随展开区收缩裁掉）；
   /// - 聚焦时 1.5dp primary 描边：StadiumBorder foregroundDecoration
   ///   外覆玻璃面（等价原 ShapeDecoration.side 写法）；
   /// - 左放大镜 20dp、右清空钮 28dp 命中区（视觉 18dp 图标）。

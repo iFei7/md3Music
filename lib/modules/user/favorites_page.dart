@@ -12,6 +12,7 @@ import '../../core/layout/adaptive_content_grid.dart';
 import '../../core/layout/adaptive_navigator.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/utils/app_toast.dart';
+import '../../data/repositories/created_playlists_cache.dart';
 import '../../data/repositories/favorite_lists_cache.dart';
 import '../../data/repositories/hidden_playlists_cache.dart';
 import '../../data/repositories/playlist_cover_cache.dart';
@@ -65,6 +66,15 @@ class _FavoritesPageState extends State<FavoritesPage>
   bool _hasMorePlaylists = true;
   bool _isLoadingMorePlaylists = false;
   static const int _playlistPageSize = 30;
+
+  // 批次18：App 内新建歌单的本地注册表（playlistId → name，
+  // CreatedPlaylistsCache）。云端不返回 0 首歌单，与 _playlists 合并
+  // 补位后供 [_createdPlaylists] 渲染，见该 getter 说明。
+  Map<String, String> _createdRegistry = {};
+
+  // 已隐藏歌单 key 集合（HiddenPlaylistsCache）：_playlists 入库时已
+  // 过滤，注册表合成条目在 getter 内按同一集合过滤，保持两侧一致。
+  Set<String> _hiddenKeys = {};
 
   // 专辑
   List<KugouPlaylistBrief> _albums = [];
@@ -225,6 +235,11 @@ class _FavoritesPageState extends State<FavoritesPage>
       final cachedArtists = await FavoriteListsCache.readArtists();
       final lastSync = await FavoriteListsCache.readLastSyncTime();
       final hidden = await HiddenPlaylistsCache.readHidden();
+      // 批次18：新建歌单注册表 + 隐藏集合镜像（注册表合成条目的隐藏
+      // 过滤口径，见 [_createdPlaylists]）
+      final createdRegistry = await CreatedPlaylistsCache.readAll();
+      _hiddenKeys = hidden;
+      _createdRegistry = createdRegistry;
       // 普通歌单首曲封面持久化缓存（与 hub 共用同一仓库）
       final covers = await PlaylistCoverCache.readAll();
       // 「我喜欢」缓存封面：离线启动即可显示最近解析出的专辑封面
@@ -543,6 +558,28 @@ class _FavoritesPageState extends State<FavoritesPage>
 
   List<KugouPlaylistBrief> get _createdPlaylists {
     final list = _playlists.where(_isCreated).toList();
+    // 批次18：本地注册表补位（口径同 library_hub_page._createdPlaylists）。
+    // 上游不返回 0 首歌单，App 内新建（favorites_provider.createPlaylist
+    // 记录到 CreatedPlaylistsCache）的空歌单在 _playlists 里缺失，这里
+    // 把注册表中有、而 _playlists 里没有的 id 合成 KugouPlaylistBrief
+    // 追加；云端一旦返回真实条目（id 即 playlistKey 口径命中）自动去重。
+    final existingKeys = <String>{
+      for (final p in list) HiddenPlaylistsCache.playlistKey(p),
+    };
+    final uid = _currentUserId;
+    for (final entry in _createdRegistry.entries) {
+      if (existingKeys.contains(entry.key)) continue;
+      if (_hiddenKeys.contains(entry.key)) continue;
+      existingKeys.add(entry.key);
+      list.add(
+        KugouPlaylistBrief(
+          id: entry.key,
+          name: entry.value,
+          listCreateUserid: uid,
+          songCount: 0,
+        ),
+      );
+    }
     _applySort(list, _createdManualOrder);
     return list;
   }
@@ -639,11 +676,16 @@ class _FavoritesPageState extends State<FavoritesPage>
             .toList();
         // 隐藏歌单过滤：「我创建的歌单」「我收藏的歌单」两组都过滤
         final hidden = await HiddenPlaylistsCache.readHidden();
+        // 批次18：同步刷新注册表（创建歌单后 _loadPlaylists 紧接执行，
+        // 这里重读即可让「我创建的歌单」立即合并展示新歌单）
+        final createdRegistry = await CreatedPlaylistsCache.readAll();
         final now = DateTime.now();
         // 判断是否还有更多：返回条数等于请求页大小则可能还有下一页
         _hasMorePlaylists = list.length >= _playlistPageSize;
         setState(() {
           _playlists = _filterHidden(filtered, hidden);
+          _hiddenKeys = hidden;
+          _createdRegistry = createdRegistry;
           _isLoadingPlaylists = false;
           _lastSyncTime = now;
         });
@@ -656,8 +698,12 @@ class _FavoritesPageState extends State<FavoritesPage>
       }
       // API 返回 200 但 data 列表为空（合法空状态，非网络问题）
       _hasMorePlaylists = false;
+      // 批次18：空列表同样重读注册表——刚创建的 0 首歌单不在云端
+      // 返回里，合并展示依赖这里的刷新。
+      final createdRegistry = await CreatedPlaylistsCache.readAll();
       setState(() {
         _isLoadingPlaylists = false;
+        _createdRegistry = createdRegistry;
       });
     } catch (e) {
       if (mounted) {
@@ -909,9 +955,12 @@ class _FavoritesPageState extends State<FavoritesPage>
       ),
     );
 
-    if (result != null && result.isNotEmpty) {
-      final api = KugouApiClient();
-      await api.createPlaylist(result);
+    if (result != null && result.isNotEmpty && mounted) {
+      // 批次18：经 FavoritesProvider.createPlaylist 创建（云端
+      // /playlist/add 成功后把新歌单 id/name 写入本地注册表
+      // CreatedPlaylistsCache，「我创建的歌单」合并展示 0 首歌单；
+      // 此前此处直调 KugouApiClient，注册表无记录可写）。
+      await context.read<FavoritesProvider>().createPlaylist(result);
       _loadPlaylists(forceNoCache: true);
     }
   }

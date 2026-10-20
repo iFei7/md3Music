@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../data/models/song.dart';
+import '../data/repositories/created_playlists_cache.dart';
 import '../data/repositories/favorites_repository.dart';
 import '../services/kugou_api/kugou_api_client.dart';
 import '../services/kugou_api/kugou_models.dart';
@@ -220,10 +221,37 @@ class FavoritesProvider extends ChangeNotifier {
     final api = KugouApiClient();
     final userid = api.userid;
     if (userid == null) return null;
-    return await api.createPlaylist(
+    final result = await api.createPlaylist(
       name,
       listCreateUserid: userid,
     );
+    // 批次18：云端 /user/playlist 不返回 0 首歌单，新建的空歌单在
+    // 「我创建的歌单」里缺失。创建成功时把 id/name 记入本地注册表，
+    // 由音乐库 / 收藏页合并展示（云端返回真实条目后自动去重）。
+    final newId = _parseNewPlaylistId(result);
+    if (newId != null) {
+      await CreatedPlaylistsCache.put(newId, name);
+    }
+    return result;
+  }
+
+  /// 从 playlist/add 响应解析新建歌单 id（口径同
+  /// playlist_page._parseListId：data.listid/list_id/ListId/id 优先，
+  /// 回退顶层同名字段）。解析不到返回 null（跳过注册表记录）。
+  static String? _parseNewPlaylistId(Map<String, dynamic>? result) {
+    if (result == null) return null;
+    final data = result['data'];
+    if (data is Map) {
+      for (final key in const ['listid', 'list_id', 'ListId', 'id']) {
+        final v = data[key];
+        if (v != null && v.toString().isNotEmpty) return v.toString();
+      }
+    }
+    for (final key in const ['listid', 'list_id', 'id']) {
+      final v = result[key];
+      if (v != null && v.toString().isNotEmpty) return v.toString();
+    }
+    return null;
   }
 
   Future<Map<String, dynamic>?> addTrackToPlaylist(

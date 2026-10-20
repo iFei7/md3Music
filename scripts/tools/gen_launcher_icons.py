@@ -9,15 +9,17 @@ API 24/25 走固定密度 PNG，解决「不同设备桌面图标大小不一样
 
 产出（全部写入 android/app/src/main/res/）：
   1. drawable-nodpi/ic_launcher_adaptive_fg.png   432x432 RGBA 透明底，黑音符
-  2. drawable-nodpi/ic_launcher_adaptive_back.png 432x432 RGB  纯色品牌红满幅
+  2. drawable-nodpi/ic_launcher_adaptive_back.png 432x432 RGB  纯色白底满幅
   3. mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png       48/72/96/144/192
-     满幅方形、红底黑音符、四角不透明、不烘焙圆角
+     满幅方形、白底黑音符、四角不透明、不烘焙圆角
   4. mipmap-{dpi}/ic_launcher_round.png           同设计 + 烘焙满内切圆（圆外 alpha=0）
   5. mipmap-nodpi/ic_launcher.webp 保留不动（兜底）
 
-设计口径：
-  - 品牌红 #F54047，与 lib/core/theme/app_theme.dart 的 defaultSeedColor 一致；
-    背景禁用渐变，保证任意 launcher mask 下无接缝。
+设计口径（批次18 视觉回归）：
+  - 背景 = 纯白 #FFFFFF。原版（mipmap-nodpi/ic_launcher.webp）= 黑音符 + 全透明底，
+    由启动器自行决定底色；纯白底是各启动器渲染下最接近原版观感的单一确定值
+    （批次17 曾用品牌红 #F54047，与用户认知的原版「白底黑音符」不符，本批回退）。
+    背景仍禁用渐变，保证任意 launcher mask 下无接缝。
   - 音符 ink 外接圆直径：
       * adaptive fg = 264px（半径 132px，即安全区 66dp @432px/108dp，贴边不越界）
       * legacy     = 画布边长 62%（视觉重量与 adaptive 接近）
@@ -36,8 +38,10 @@ from PIL import Image, ImageChops, ImageDraw
 
 # ---------------------------------------------------------------- 常量配置
 
-#: 品牌主色（sonify 红），与 app_theme.dart defaultSeedColor 保持一致
-BRAND_RED = (0xF5, 0x40, 0x47)
+#: 图标底色（批次18 视觉回归：品牌红 #F54047 → 纯白 #FFFFFF）。
+#: 命名保留历史名称 BRAND_RED，值已改为白底：原版 = 黑图案 + 透明底，
+#: 白底是各启动器渲染下最接近原版观感的单一确定底色。
+BRAND_RED = (0xFF, 0xFF, 0xFF)
 
 #: adaptive-icon 画布尺寸：108dp x 4（xxxhdpi 基准）
 ADAPTIVE_SIZE = 432
@@ -145,16 +149,16 @@ def build_adaptive_fg(crop, r_max):
 
 
 def build_adaptive_back():
-    """432x432 RGB 不透明：品牌红满幅（纯色无渐变，任意 mask 无接缝）。"""
+    """432x432 RGB 不透明：白底满幅（纯色无渐变，任意 mask 无接缝）。"""
     return Image.new("RGB", (ADAPTIVE_SIZE, ADAPTIVE_SIZE), BRAND_RED)
 
 
 def build_legacy_square(crop, r_max, size):
-    """满幅方形 legacy 图标：红底 + 黑音符（ink 直径 = 画布 62%），不烘焙圆角。"""
+    """满幅方形 legacy 图标：白底 + 黑音符（ink 直径 = 画布 62%），不烘焙圆角。"""
     note = scale_note_to_diameter(crop, r_max, size * LEGACY_INK_RATIO)
     canvas = Image.new("RGBA", (size, size), BRAND_RED + (255,))
     paste_center(canvas, note)
-    # 音符之外全部不透明（四角必为红底），转 RGB 丢弃 alpha 通道
+    # 音符之外全部不透明（四角必为白底），转 RGB 丢弃 alpha 通道
     return canvas.convert("RGB")
 
 
