@@ -10,7 +10,7 @@ import 'package:md3music/providers/kugou_provider.dart';
 
 import 'fake_kugou_provider.dart';
 
-/// 设置页签到迷你日历卡（SignInMiniCard）测试：
+/// 设置页签到迷你卡（SignInMiniCard）测试：
 /// - 未登录态显示「登录后签到」按钮（可点，进登录页）；
 /// - 登录未签 → 「签到」调 manualSignIn 并 SnackBar 反馈；
 /// - 登录已签 → 「今日已签到」可点，进签到日历页；
@@ -70,10 +70,11 @@ void main() {
     final kugou = FakeKugouProvider();
     await pumpCard(tester, kugou);
 
-    expect(find.text('签到日历'), findsOneWidget);
+    expect(find.text('签到'), findsOneWidget);
     expect(find.text('本月已签 0 天'), findsOneWidget);
     expect(find.text('登录后签到'), findsOneWidget);
-    expect(find.text('签到'), findsNothing);
+    // 标题文案即「签到」，未登录态按钮为「登录后签到」：断言按钮面上无裸「签到」
+    expect(find.widgetWithText(FilledButton, '签到'), findsNothing);
     expect(find.text('今日已签到'), findsNothing);
 
     final button = tester.widget<FilledButton>(
@@ -89,7 +90,7 @@ void main() {
     );
     await pumpCard(tester, kugou);
 
-    await tester.tap(find.text('签到'));
+    await tester.tap(find.widgetWithText(FilledButton, '签到'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -106,7 +107,7 @@ void main() {
     );
     await pumpCard(tester, kugou);
 
-    await tester.tap(find.text('签到'));
+    await tester.tap(find.widgetWithText(FilledButton, '签到'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -147,7 +148,7 @@ void main() {
     await pumpCard(tester, kugou);
 
     // 点标题区域（卡体内、按钮外）→ 整卡进入签到日历页
-    await tester.tap(find.text('签到日历'));
+    await tester.tap(find.text('签到'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 

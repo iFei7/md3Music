@@ -43,11 +43,12 @@ import 'library_page.dart' show LibraryPage, showLibraryScanMenu;
 ///   **常驻**玻璃搜索圆钮（走 [SonifyTitleScaffold.trailing]，不随滚动
 ///   淡入淡出——用户要求常驻可见）；扫描钮（原 FAB 职责）走 actions
 ///   （仅栏体浮现后淡入，扫描中转圈禁用防重复触发）；
-/// - 入口区：2×2 squircle 卡片（收藏 / 本地 / 已购 / 云盘）。收藏卡
+/// - 入口区：2×2 squircle 卡片（我喜欢 / 本地 / 已购 / 云盘）。我喜欢卡
 ///   额外带「直接播放」圆钮：不点开卡片即播放「我喜欢」（缓存优先、
 ///   倒序从最新收藏始，链路同收藏页封面一键播放）；点开卡片则直达
-///   [FavoritesPage(initialTab: 0, focusMyFavorite: true)] 自动打开
-///   「我喜欢」歌单；
+///   「我喜欢」歌单详情（[PlaylistPage]，isDefaultFavorite，与收藏页
+///   点击歌单行同款导航）；未登录先提示登录，找不到「我喜欢」
+///   （无缓存 / 被隐藏）时兜底进收藏页歌单 tab；
 /// - 列表分区：最近播放 Top 3（点标题行看全部播放历史）+ 我创建的歌单
 ///   + 我收藏的歌单，后两者用主页热门歌单同款 [CoverRail]/
 ///   [CoverRailCard] 样式（创建/收藏区分规则同 [FavoritesPage]，见
@@ -105,7 +106,6 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
 
   // 最近播放（Top 3 数据源）
   List<Song> _history = [];
-  Map<String, int> _playCounts = {};
 
   // 已隐藏歌单 key 集合（HiddenPlaylistsCache，与收藏页共用同一仓库）
   Set<String> _hiddenKeys = {};
@@ -132,22 +132,34 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 首帧提速：三组加载互不依赖，并行发起（各组内部的
+      // SharedPreferences 读亦已并行化，见 _loadPlaylists）。
       // 「本地」入口卡副标题计数：先恢复缓存歌曲（与 LibraryMusicPanel
-      // 同口径，不自动触发扫描）。
-      context.read<LibraryProvider>().loadSavedSongs();
-      // 歌单分区直读 FavoriteListsCache，最近播放直读 HistoryRepository；
-      // 实时网络同步仍由收藏页承载。
-      _loadPlaylists();
-      _loadHistory();
+      // 同口径，不自动触发扫描）；歌单分区直读 FavoriteListsCache，
+      // 最近播放直读 HistoryRepository；实时网络同步由下拉刷新承载
+      // （_syncPlaylistsIfLoggedIn）。
+      unawaited(
+        Future.wait([
+          context.read<LibraryProvider>().loadSavedSongs(),
+          _loadPlaylists(),
+          _loadHistory(),
+        ]),
+      );
     });
   }
 
   Future<void> _loadPlaylists() async {
-    final playlists = await FavoriteListsCache.readPlaylists();
-    final hidden = await HiddenPlaylistsCache.readHidden();
-    // 已解析过的首曲封面（与歌单列表同批落地，避免先占位再跳图闪烁）
-    final covers = await PlaylistCoverCache.readAll();
+    // 三块本地读并行（歌单 / 隐藏集合 / 首曲封面缓存），避免串行
+    // await 把首帧空态拖长（PlaylistCoverCache 此前单独占一段）。
+    final results = await Future.wait([
+      FavoriteListsCache.readPlaylists(),
+      HiddenPlaylistsCache.readHidden(),
+      PlaylistCoverCache.readAll(),
+    ]);
     if (!mounted) return;
+    final playlists = results[0] as List<KugouPlaylistBrief>;
+    final hidden = results[1] as Set<String>;
+    final covers = results[2] as Map<String, String>;
     setState(() {
       _playlists = playlists;
       _hiddenKeys = hidden;
@@ -188,20 +200,69 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
 
   Future<void> _loadHistory() async {
     final history = await HistoryRepository().getHistory();
-    final counts = await HistoryRepository().getPlayCounts();
     if (!mounted) return;
     setState(() {
       _history = history;
-      _playCounts = counts;
     });
   }
 
-  /// 下拉刷新：本地歌曲缓存（入口卡计数）+ 歌单缓存链路 + 隐藏集合 +
-  /// 最近播放重读。
+  /// 下拉刷新：本地歌曲缓存（入口卡计数）+ 云端歌单同步（登录态）+
+  /// 歌单缓存链路 + 隐藏集合 + 最近播放重读。
+  ///
+  /// 「刷新不出来」根因修复：此前只重读本地缓存，数据零变化。现按
+  /// 收藏页口径（favorites_page._loadPlaylists forceNoCache）在登录态
+  /// 强制拉全量歌单并写缓存，再重读缓存刷新 UI；未登录 / 网络失败时
+  /// 静默保持缓存态，转圈不卡死。
   Future<void> _refresh() async {
     await context.read<LibraryProvider>().loadSavedSongs();
+    // 先同步再重读：_syncPlaylistsIfLoggedIn 只写仓库，不碰 UI 状态，
+    // 不会触发 _loadPlaylists 递归刷新。
+    await _syncPlaylistsIfLoggedIn();
     await _loadPlaylists();
     await _loadHistory();
+  }
+
+  /// 登录态歌单强制同步：复刻收藏页 _loadPlaylists(forceNoCache: true)
+  /// 口径——getUserPlaylist(page:1, pagesize:30, noCache:true) → 过滤
+  /// （type==1 && source==2 的收藏专辑/歌手项）→ FavoriteListsCache
+  /// .savePlaylists（保留**未过滤 hidden** 的列表，隐藏状态单独持久化
+  /// 于 HiddenPlaylistsCache）。
+  ///
+  /// 失败静默：KugouApiClient._get 网络/服务异常时返回 null（不抛），
+  /// 其余异常也吞掉——刷新失败保持本地缓存态即可。
+  Future<void> _syncPlaylistsIfLoggedIn() async {
+    if (!KugouApiClient().isLoggedIn) return;
+    try {
+      final result = await KugouApiClient().getUserPlaylist(
+        page: 1,
+        pagesize: 30,
+        noCache: true,
+      );
+      // null = 离线信号（_get 吞错返回 null），保持缓存态
+      if (result == null) return;
+      final data = result['data'];
+      List<dynamic>? list;
+      if (data is List) {
+        list = data;
+      } else if (data is Map<String, dynamic>) {
+        list = data['info'] as List<dynamic>?;
+        list ??= data['list'] as List<dynamic>?;
+      }
+      if (list == null || list.isEmpty) return;
+      final filtered = list
+          .where((e) {
+            final json = e as Map<String, dynamic>;
+            final type = json['type'] as int? ?? 0;
+            final source = json['source'] as int? ?? 0;
+            if (type == 1 && source == 2) return false;
+            return true;
+          })
+          .map((e) => KugouPlaylistBrief.fromJson(e as Map<String, dynamic>))
+          .toList();
+      await FavoriteListsCache.savePlaylists(filtered);
+    } catch (_) {
+      // 静默：同步失败保持缓存态
+    }
   }
 
   // ==================== 歌单「创建 vs 收藏」区分 ====================
@@ -303,6 +364,47 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     } finally {
       if (mounted) setState(() => _playingMyFavorite = false);
     }
+  }
+
+  /// 收藏卡（「我喜欢」）点击：直达「我喜欢」歌单详情，导航口径与
+  /// 收藏页点击歌单行完全一致（favorites_page._openPlaylistDetail：
+  /// AdaptiveNav.openDetail → PlaylistPage，isDefaultFavorite 按名称
+  /// 判定；hub 无访问排序状态，不记录 _recordPlaylistAccess）。
+  ///
+  /// 未登录先拦截提示（与 [_playMyFavorite] 同款 guard）；找不到
+  /// 「我喜欢」（无缓存 / 被隐藏）时兜底进收藏页歌单 tab，由用户
+  /// 自行查看，不报错。
+  Future<void> _openMyFavorite() async {
+    if (!KugouApiClient().isLoggedIn) {
+      showToast('请先登录');
+      return;
+    }
+    final fav = _findMyFavorite();
+    if (fav == null) {
+      _push(context, const FavoritesPage(initialTab: 0));
+      return;
+    }
+    AdaptiveNav.openDetail(
+      context,
+      (_) => PlaylistPage(
+        playlist: fav.toPlaylist(),
+        isInMyFavorites: true,
+        isUserCreated: _isCreatedPlaylist(fav),
+        isDefaultFavorite: true,
+      ),
+    );
+  }
+
+  /// 「我喜欢」定位：与收藏页 _myFavoritePlaylist 同口径（name ==
+  /// '我喜欢'），并跳过被用户隐藏的歌单（hub 各分区不展示 hidden，
+  /// 命中 hiddenKeys 时对用户等同「不存在」，走兜底更诚实）。
+  KugouPlaylistBrief? _findMyFavorite() {
+    for (final p in _playlists) {
+      if (p.name != '我喜欢') continue;
+      if (_isHidden(p)) continue;
+      return p;
+    }
+    return null;
   }
 
   // ==================== 隐藏歌单（管理态） ====================
@@ -483,7 +585,6 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
                       : _RecentPlayList(
                           // 只显示最近 3 条，全部历史进播放历史页
                           songs: _history.take(3).toList(),
-                          playCounts: _playCounts,
                         ),
                 ),
                 _Section(
@@ -562,14 +663,12 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
               _EntryCard(
                 key: const ValueKey('hub-entry-favorites'),
                 icon: Icons.favorite,
-                title: '收藏',
+                title: '我喜欢',
                 // 未登录 / 无缓存歌单时不显示副标题
                 subtitle: playlistCount > 0 ? '$playlistCount 个歌单' : null,
-                // 点开卡片直达「我喜欢」歌单（收藏页歌单 tab 自动打开）
-                onTap: () => _push(
-                  context,
-                  const FavoritesPage(initialTab: 0, focusMyFavorite: true),
-                ),
+                // 点开卡片直达「我喜欢」歌单详情（收藏页点击歌单行同款
+                // 导航；未登录 / 找不到时分别提示登录 / 兜底收藏页）
+                onTap: _openMyFavorite,
                 // 卡右侧播放钮：不点开直接播放「我喜欢」
                 onPlay: _playMyFavorite,
                 playing: _playingMyFavorite,
@@ -1095,10 +1194,9 @@ class _NetworkCover extends StatelessWidget {
 
 /// 最近播放 Top 3 列表（行高 56dp：封面 44×44 圆角 8 + 标题/副行）。
 class _RecentPlayList extends StatelessWidget {
-  const _RecentPlayList({required this.songs, required this.playCounts});
+  const _RecentPlayList({required this.songs});
 
   final List<Song> songs;
-  final Map<String, int> playCounts;
 
   @override
   Widget build(BuildContext context) {
@@ -1148,13 +1246,6 @@ class _RecentPlayList extends StatelessWidget {
                         ],
                       ),
                     ),
-                    if ((playCounts[song.id] ?? 0) > 0)
-                      Text(
-                        '${playCounts[song.id]} 次',
-                        style: SonifyTextStyles.listItem.copyWith(
-                          color: sonify.textSecondary,
-                        ),
-                      ),
                   ],
                 ),
               ),

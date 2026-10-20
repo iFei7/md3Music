@@ -15,15 +15,13 @@ import '../../core/theme/app_theme.dart';
 ///   水平 20dp，滚动过程中**不位移、不缩放、不溶解**（用户反馈①：
 ///   "上滑时标题位置会变，不想要"）。列表首项只保留同尺寸占位
 ///  （[_TitlePlaceholderItem]，含高度实测），业务内容从标题下方滚过；
-/// - 顶栏悬浮叠加在列表之上：背景为**切片式渐变模糊带**（材质对齐
-///   `LiquidGlassSurface` dock 配方）：带内竖向切成 3 片，每片自带
-///   [ClipRect] + [BackdropFilter]（`srcOver`，sigma 依次 18/9/3），
-///   模糊强度自顶向下阶梯递减至底缘近 0，与内容自然融合；3 片由
-///   [BackdropGroup] 共享**一次** backdrop 采样（[BackdropFilter.grouped]），
-///   避免全宽回采 3 次、也避免片间复合。叠色层为 cs.surface 系
-///   [kSonifyBarTopAlpha] 同锚点渐变，是与切片层同 Stack 的兄弟层）
-///   随滚动 120ms 淡入出（Title.kt:952-953），保证滚过内容时固定标题
-///   仍清晰可读；
+/// - 顶栏悬浮叠加在列表之上：背景为**单片均匀模糊 + tint 渐变带**
+///   （材质对齐 `LiquidGlassSurface` dock 配方）：带内 [ClipRect] 包
+///   **单个** [BackdropFilter]（`srcOver`，sigma [kSonifyBarBlurSigma]，
+///   child `const SizedBox.expand()`），全带同一模糊强度；层次感由
+///   tint 叠色层（cs.surface 系 [kSonifyBarTopAlpha] 同锚点渐变，
+///   与模糊层同 Stack 的兄弟层）提供，随滚动 120ms 淡入出
+///   （Title.kt:952-953），保证滚过内容时固定标题仍清晰可读；
 /// - 顶栏右侧内容（如固定用户头像）**常驻渲染**；[actions] 动作钮随
 ///   栏体 120ms 淡入（滚动即出现，展开态隐藏不挡内容）。
 ///
@@ -291,54 +289,54 @@ class _PinnedLargeTitle extends StatelessWidget {
 
 /// 顶栏：状态栏区域 + 54dp 栏体（Title.kt:989）。
 ///
-/// - 背景：**切片式渐变模糊带**（磨砂带 + 加深带双带合并于前批；批次 14
-///   用户反馈"模糊在底缘硬切"：改为模糊强度本身自上而下衰减），
-///   Positioned.fill → ClipRect → Stack 两层覆盖「状态栏 + 栏体」全带
-///   （y=0 起），随滚动 120ms 淡入出；内容在带下可滚动（悬浮语义）：
-///   ① 切片模糊层：带内竖向切成 3 片（[_BarBlurSlice]，每片
-///      `ClipRect → BackdropFilter`，`srcOver`），sigma 自上而下
-///      18 / 9 / 3——状态栏段最强、栏体段递减、底缘近 0，不再依赖叠色
-///      层硬切；三分片同处一个 [BackdropGroup]，用
-///      [BackdropFilter.grouped] 共享一次 backdrop 采样（3 次全宽回采
-///      在真机上掉帧，且共享采样可避免片间复合）；
-///   ② tint 叠色层：与切片层 **同 Stack 的兄弟层**
+/// - 背景：**单片均匀模糊 + tint 渐变带**（批次 17 由 3 切片退化为单片：
+///   用户反馈三段分界线明显、非线性），Positioned.fill → ClipRect →
+///   Stack 两层覆盖「状态栏 + 栏体」全带（y=0 起），随滚动 120ms
+///   淡入出；内容在带下可滚动（悬浮语义）：
+///   ① 单片模糊层：带内**单个** `srcOver` [BackdropFilter]
+///      （filter = blur(sigma: [kSonifyBarBlurSigma])，child 必须非
+///      null——`const SizedBox.expand()`，child 缺失时框架不生成滤镜
+///      层，真机表现为完全无模糊），全带均匀同一强度；
+///   ② tint 叠色层：与模糊层 **同 Stack 的兄弟层**
 ///      （Positioned.fill + DecoratedBox，普通 srcOver），cs.surface 系
 ///      竖向 LinearGradient **状态栏锚定**——stops [0, sb/(sb+54), 1]，
 ///      状态栏区域全强度 [kSonifyBarTopAlpha]，自状态栏下缘起对栏体
 ///      线性淡出，至带底缘严格 α0；sb<=0 时退化为 stops [0, 1]、
-///      colors [满, 0]。叠色层**不能**放进切片内部：切片只为模糊塑形，
-///      叠色进去会被裁成三段、接缝处出现色阶。
+///      colors [满, 0]。层次感（顶部浓→底部渐隐）由本渐变提供，
+///      不再靠切片 sigma 递减。
 ///   覆盖状态栏是既有修正项：曾只覆盖 54dp 栏体，上滑时页面内容从状态栏透出。
 /// - 栏体内容：右侧动作区（[actions] 滚动后淡入 + [trailing] 常驻）；
 ///   大标题已固定悬浮，栏内不再放标题（避免双标题）。
 ///
-/// **图层纪律（批次 9 修复，勿回退；批次 14/16 复核仍成立）**：
+/// **图层纪律（批次 9 修复，勿回退；批次 14/16/17 复核仍成立）**：
 /// [BackdropFilter] 位于 Positioned.fill → ClipRect 之内，**不得**包进
 /// ShaderMask / Opacity / ColorFiltered 等图层边界 widget——它们创建
 /// saveLayer，内嵌 BackdropFilter 模糊完全失效（flutter/flutter#164079、
 /// #175537；批次 8 的 ShaderMask(dstIn) 包 BackdropFilter 结构即因此真机
-/// 全无模糊，禁止回退）。模糊渐变**只能靠切片高度的 sigma 递减**表达：
-/// [BackdropFilter] 的 `blendMode` 仅 `srcOver` 全平台可靠（SDK
-/// basic.dart 内文档明确），批次 14 的 `dstIn` 塑形在 Skia（本项目默认
-/// 后端）与 Impeller 下真机均只剩 tint、无模糊，已废弃；切片每片自带
-/// ClipRect、只包 BackdropFilter；tint 为兄弟层不得进切片。动画透明度
-/// 由外层 AnimatedOpacity 全显（opacity=1）免 saveLayer 的特性保证。
+/// 全无模糊，禁止回退）。模糊强度**只有**在 [BackdropFilter] 不传
+/// `blendMode`（即 `srcOver`）时全平台可靠（SDK basic.dart 内文档明确），
+/// 故本组件直接用 BackdropFilter 构造、不传 blendMode；批次 14 的
+/// `dstIn` 塑形在 Skia（本项目默认后端）与 Impeller 下真机均只剩 tint、
+/// 无模糊，已废弃；批次 16 的切片 sigma 递减（18/9/3）亦因用户反馈
+/// 分界线明显、非线性而退化为单片（批次 17）。动画透明度由外层
+/// AnimatedOpacity 全显（opacity=1）免 saveLayer 的特性保证。
 /// 带叠色走 cs.surface 系：亮色主题浅色带、暗色主题深色带，跟随
 /// 主题；深浅层级由叠色 alpha 承担，不用黑白蒙层（scrim 语义
 /// 是次级文字色，亮=黑/暗=白，用在顶栏会导致主题色翻转——构建号 104
 /// 真机反馈的回归根源）。
 ///
-/// **材质来源（对齐 dock 配方）**：顶片 blur sigma 18
-/// （[kSonifyBarBlurSigma]）、叠色统一 cs.surface 系，均取自
-/// `LiquidGlassSurface`（lib/widgets/common/liquid_glass_surface.dart，
-/// 默认参数 = 悬浮 Dock 玻璃配方：blurSigma 18 + surface α0.12 叠色）。
-/// 批次 11/12：叠色 alpha 逐步下调（0.7 → 0.40 → 0.32）、实心平台压短，
-/// 均因用户反馈"偏实/遮罩感"；双带合并后收敛为状态栏区域单值
-/// α0.42（[kSonifyBarTopAlpha]）+ 自状态栏下缘起线性淡出。批次 14 曾用
-/// [BackdropFilter] dstIn 遮罩塑形（真机无模糊，见图层纪律）；批次 16
-/// 改为切片式（18/9/3），顶片 sigma 仍取 18 不变。仍高于 dock 的
-/// 0.12：顶栏是全宽可读性带、固定大标题直接叠在其上，需保证文字对比度
-/// ——结构（顶部浓→底部渐隐）与色系与 dock 一致，仅浓度按可读性上调。
+/// **材质来源（对齐 dock 配方）**：blur sigma [kSonifyBarBlurSigma]、
+/// 叠色统一 cs.surface 系，均取自 `LiquidGlassSurface`
+/// （lib/widgets/common/liquid_glass_surface.dart，默认参数 = 悬浮 Dock
+/// 玻璃配方：blurSigma 18 + surface α0.12 叠色）。批次 17 起：用户反馈
+/// 3 切片（18/9/3）分界线明显、非线性，退化为**单片第三档强度** sigma 3
+/// ——第三档本就是切片配方里的最弱档，单片化后观感最接近原底部两档的
+/// 柔和段；层次感交给 tint 渐变（顶部浓 → 底缘渐隐）。需要加强模糊只改
+/// [kSonifyBarBlurSigma] 一个常量。叠色 alpha 历程：批次 11/12 逐步
+/// 下调（0.7 → 0.40 → 0.32）均因用户反馈"偏实/遮罩感"；双带合并后
+/// 收敛为状态栏区域单值 α0.42（[kSonifyBarTopAlpha]）+ 自状态栏下缘起
+/// 线性淡出。仍高于 dock 的 0.12：顶栏是全宽可读性带、固定大标题直接
+/// 叠在其上，需保证文字对比度。
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.showBarBackground,
@@ -355,15 +353,15 @@ class _TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    // 带高：状态栏 + 54dp 栏体（切片高度按此值分配，三段和必须等于它）
+    // 带高：状态栏 + 54dp 栏体（单片模糊 + tint 覆盖全带）
     final bandHeight = statusBarHeight + SonifySpacing.topBar;
     return SizedBox(
       height: bandHeight,
       child: Stack(
         children: [
           // 渐变模糊带：Positioned.fill 覆盖「状态栏 + 栏体」全带（y=0 起），
-          // 滚动即整体淡入（120ms）；切片式渐变模糊（18/9/3，双带合并，
-          // 反馈③/批次 16）。
+          // 滚动即整体淡入（120ms）；单片均匀模糊（批次 17：3 切片 18/9/3
+          // 分界线明显/非线性，退化为单片第三档 sigma 3）。
           // 注意：AnimatedOpacity 全显（opacity=1）时不产生 saveLayer，
           // BackdropFilter 模糊不受影响（见类文档图层纪律）。
           Positioned.fill(
@@ -379,21 +377,26 @@ class _TopBar extends StatelessWidget {
                   ),
                 );
               },
-              // 切片式渐变模糊带：带内竖向切片（sigma 18/9/3），每片
-              // 自带 ClipRect + BackdropFilter（srcOver）——模糊强度靠
-              // 切片阶梯递减表达（dstIn 塑形在 Skia/Impeller 真机均只剩
-              // tint、无模糊，已废弃，见类文档图层纪律）。切片共用
-              // 一个 BackdropGroup：grouped 构造让各片共享一次 backdrop
-              // 采样（避免多次全宽回采，也避免片间复合）。
-              // tint 叠色为同 Stack 兄弟层，不得进切片（会被裁成多段、
-              // 接缝出现色阶）。
+              // 单片均匀模糊带：带内单个 BackdropFilter（srcOver，不传
+              // blendMode——仅 srcOver 全平台可靠，见类文档图层纪律），
+              // child 必须非 null（const SizedBox.expand()，缺失时框架不
+              // 生成滤镜层、真机无模糊）。
+              // tint 叠色为同 Stack 兄弟层，提供顶部浓→底部渐隐的层次。
               child: ClipRect(
                 child: Stack(
                   children: [
-                    // ① 切片模糊层（BackdropGroup 共享采样）
-                    Positioned.fill(child: _blurSlices(bandHeight)),
-                    // ② tint 叠色层（切片兄弟层，普通 srcOver，不受切片
-                    //   裁剪影响）：surface 系，状态栏区域全强度
+                    // ① 单片模糊层（全带同一 sigma，铺满整带）
+                    Positioned.fill(
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(
+                          sigmaX: kSonifyBarBlurSigma,
+                          sigmaY: kSonifyBarBlurSigma,
+                        ),
+                        child: const SizedBox.expand(),
+                      ),
+                    ),
+                    // ② tint 叠色层（模糊兄弟层，普通 srcOver，不受模糊
+                    //   层裁剪影响）：surface 系，状态栏区域全强度
                     //   （[kSonifyBarTopAlpha]），自状态栏下缘线性淡出到
                     //   底缘 α0；亮=浅带/暗=深带，跟随主题（禁改回 scrim
                     //   黑白蒙层——会主题色翻转，见类文档）
@@ -489,118 +492,16 @@ class _TopBar extends StatelessWidget {
       ),
     );
   }
-
-  /// 切片式模糊层：竖向切片 + sigma 阶梯递减（[BackdropGroup] 共享采样）。
-  ///
-  /// 参数口径（[height] = 带高 = 状态栏 + [SonifySpacing.topBar]）：
-  /// - `sb <= 0`（横屏/测试无系统 inset）：2 片——h1 = 0.65H（σ18）、
-  ///   h2 = H - h1（σ6）；先判 sb 再判 H，避免 54dp 带被 `H < 60`
-  ///   规则吞成单片（该分支语义是"横屏退化"）。
-  /// - `H < 60`（极窄状态栏，切片无意义）：单片 σ18 铺满。
-  /// - 其余：3 片——h1 = 0.52H（σ18）、h2 = 0.30H（σ9）、
-  ///   h3 = H - h1 - h2（σ3；减法兜底，三段之和恒等于 H，
-  ///   不会因浮点乘算累积出 1px 缝隙）。
-  Widget _blurSlices(double height) {
-    final List<Widget> slices;
-    if (height <= 0) {
-      slices = const <Widget>[];
-    } else if (statusBarHeight <= 0) {
-      // 横屏/测试：无状态栏段可强化，退化为 2 片（18 → 6）
-      final h1 = height * 0.65;
-      slices = <Widget>[
-        SizedBox(
-          height: h1,
-          child: const _BarBlurSlice(
-            sigma: kSonifyBarBlurSigma,
-            grouped: true,
-          ),
-        ),
-        SizedBox(
-          height: height - h1,
-          child: const _BarBlurSlice(sigma: 6, grouped: true),
-        ),
-      ];
-    } else if (height < 60) {
-      // 带太矮：切片边界会落在标题行内，反而显接缝，单片铺满
-      slices = <Widget>[
-        SizedBox(
-          height: height,
-          child: const _BarBlurSlice(
-            sigma: kSonifyBarBlurSigma,
-            grouped: true,
-          ),
-        ),
-      ];
-    } else {
-      final h1 = height * 0.52;
-      final h2 = height * 0.30;
-      final h3 = height - h1 - h2;
-      slices = <Widget>[
-        SizedBox(
-          height: h1,
-          child: const _BarBlurSlice(
-            sigma: kSonifyBarBlurSigma,
-            grouped: true,
-          ),
-        ),
-        SizedBox(
-          height: h2,
-          child: const _BarBlurSlice(sigma: 9, grouped: true),
-        ),
-        SizedBox(
-          height: h3,
-          child: const _BarBlurSlice(sigma: 3, grouped: true),
-        ),
-      ];
-    }
-    // BackdropGroup：让 grouped 切片共享一次 backdrop 采样
-    return BackdropGroup(child: Column(children: slices));
-  }
 }
 
-/// 单片模糊切片：自带 [ClipRect]，内部只包一个 `srcOver` 的
-/// [BackdropFilter]（child 必须存在——`child == null` 时框架不生成
-/// 滤镜层，真机表现为完全无模糊）。
+/// 顶栏渐变模糊带的模糊 sigma：**单片第三档强度**（用户批次 17）。
 ///
-/// 只做模糊塑形，**不含任何叠色/遮罩**：叠色由 [_TopBar] 的 tint 兄弟层
-/// 统一承担；切片内加 DecoratedBox 会被本层 ClipRect 裁成阶梯色块。
-/// sigma 递减（18/9/3）即"模糊强度自上而下衰减"的实现方式——
-/// [BackdropFilter] 的 `blendMode` 只有 `srcOver` 全平台可靠，
-/// `dstIn` 在 Skia/Impeller 真机均不可用（见 [_TopBar] 类文档图层纪律）。
-class _BarBlurSlice extends StatelessWidget {
-  const _BarBlurSlice({required this.sigma, this.grouped = false});
-
-  /// 模糊强度（dp）。`<= 0` 时退化为纯占位（不生成滤镜层）。
-  final double sigma;
-
-  /// 是否用 [BackdropFilter.grouped] 加入最近的 [BackdropGroup]
-  /// （共享 backdrop 采样，避免多次全宽回采）。
-  final bool grouped;
-
-  @override
-  Widget build(BuildContext context) {
-    if (sigma <= 0) return const SizedBox.expand();
-    final filter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma);
-    return ClipRect(
-      child: grouped
-          ? BackdropFilter.grouped(
-              filter: filter,
-              child: const SizedBox.expand(),
-            )
-          : BackdropFilter(
-              filter: filter,
-              child: const SizedBox.expand(),
-            ),
-    );
-  }
-}
-
-/// 顶栏渐变模糊带的**顶片**模糊 sigma：对齐 `LiquidGlassSurface`
-/// dock 配方（默认 blurSigma 18）——原磨砂 14 / 加深 22 的双强度早已取消。
-/// 批次 16 起模糊强度靠切片阶梯递减表达（18 / 9 / 3，见 [_TopBar._blurSlices]
-/// 与 [_BarBlurSlice]），本常量即顶片 sigma。
+/// 口径：3 切片（18/9/3）真机三段分界线明显、非线性，退化为单片；
+/// 取切片配方里的第三档（最弱档）——单片化后观感最接近原底部两档的
+/// 柔和段，层次由 tint 渐变（状态栏全强度 → 底缘渐隐）提供。需要
+/// 加强模糊只改此一个常量（如 9 = 原中档、18 = 原顶档/dock 配方值）。
 /// 非私有：供 widget 测试断言（见 test/widgets/sonify_title_scaffold_test.dart）。
-const double kSonifyBarBlurSigma = 18;
+const double kSonifyBarBlurSigma = 3;
 
 /// 顶栏渐变模糊带在状态栏区域的叠色 alpha：状态栏条全强度覆盖，
 /// 自状态栏下缘起对栏体线性淡出，至带底缘严格 alpha 0（渐变语义见

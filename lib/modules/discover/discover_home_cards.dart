@@ -68,12 +68,37 @@ const int _kStackDepth = 3;
 class DiscoverFmStackCard extends StatefulWidget {
   const DiscoverFmStackCard({super.key});
 
+  /// 下拉刷新 FM 卡：发现页 [_loadAllData] 末尾调用。实际逻辑挂在
+  /// State 上（需要摸当前实例的档位/加载态），此处仅作公开转发；
+  /// 无挂载实例时 no-op。
+  static Future<void> reloadCurrentStation() =>
+      _DiscoverFmStackCardState.reloadCurrentStation();
+
   @override
   State<DiscoverFmStackCard> createState() => _DiscoverFmStackCardState();
 }
 
 class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     with SingleTickerProviderStateMixin {
+  /// 当前挂载实例（下拉刷新重拉入口用）：堆叠卡在发现页全局唯一，
+  /// initState 登记、dispose 摘除；未挂载时 reloadCurrentStation no-op。
+  static _DiscoverFmStackCardState? _activeInstance;
+
+  /// 下拉刷新 FM 卡：发现页 _loadAllData 末尾调用。复用当前实例的
+  /// 档位参数强制重拉（getPersonalFm forceRefresh，绕过 TTL）；卡片
+  /// 加载中跳过（防与用户切档/首刷并发）；未登录时由卡片自身的
+  /// getPersonalFm 链静默回落空态。
+  static Future<void> reloadCurrentStation() async {
+    final instance = _activeInstance;
+    if (instance == null) return;
+    await instance._reloadStation();
+  }
+
+  Future<void> _reloadStation() async {
+    if (_isLoading) return; // 防并发：首刷/切档进行中不叠加请求
+    await _loadStation(forceRefresh: true);
+  }
+
   bool _isLoading = false;
   int _stationIndex = 0;
 
@@ -95,6 +120,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   @override
   void initState() {
     super.initState();
+    _activeInstance = this;
     _flyCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
@@ -107,6 +133,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
 
   @override
   void dispose() {
+    if (_activeInstance == this) _activeInstance = null;
     _flyCtrl.dispose();
     super.dispose();
   }
@@ -142,13 +169,14 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     await _loadStation();
   }
 
-  Future<void> _loadStation() async {
+  Future<void> _loadStation({bool forceRefresh = false}) async {
     if (_isLoading) return;
     setState(() => _isLoading = true);
     try {
       await context.read<KugouProvider>().getPersonalFm(
             mode: _station.mode,
             songPoolId: _station.songPoolId,
+            forceRefresh: forceRefresh,
           );
     } catch (_) {
       // 失败静默：卡片回落「暂无推荐」占位，下拉刷新/再次点击可重试
@@ -693,7 +721,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
                   child: M3ELoadingIndicator(color: cs.primary),
                 )
               : Text(
-                  '暂无推荐，点按加载',
+                  '暂无推荐，点按或下拉刷新重试',
                   style: SonifyTextStyles.listItem.copyWith(
                     color: sonify.textSecondary,
                   ),

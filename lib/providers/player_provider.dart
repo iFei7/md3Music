@@ -4189,23 +4189,35 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       const steps = 10;
       const stepMs = 50; // 10步 x 50ms = 500ms
       var superseded = false;
-      for (int i = 1; i <= steps; i++) {
-        await Future.delayed(const Duration(milliseconds: stepMs));
-        // 被更新的 fade / 暂停抢占：停止淡入（音量恢复语义保持不变）。
-        if (token != _fadeToken ||
-            !_isPlaybackRequestCurrent(playbackRequest) ||
-            _isDisposed) {
-          superseded = true;
-          break;
+      try {
+        for (int i = 1; i <= steps; i++) {
+          await Future.delayed(const Duration(milliseconds: stepMs));
+          // 被更新的 fade / 暂停抢占：停止淡入（音量恢复语义保持不变）。
+          if (token != _fadeToken ||
+              !_isPlaybackRequestCurrent(playbackRequest) ||
+              _isDisposed) {
+            superseded = true;
+            break;
+          }
+          target.setVolume(targetVolume * i / steps);
         }
-        target.setVolume(targetVolume * i / steps);
+      } finally {
+        // 批次17（P0）：淡入收尾必须无条件恢复音量，不能再有条件门。
+        // 历史缺陷：抢占（superseded/token 失效）时直接 break、没有任何
+        // 音量收尾，开播前写入的 setVolume(0.01) 被永久留下。若抢占方是
+        // 「暂停淡出关闭」状态下的 pause()/拖动停播（只自增 _fadeToken、
+        // 不写音量），播放器音量卡在 0.01：进度条照走、没有任何声音——
+        // 正是续播「进度走但无音乐」的直接机制。
+        // 恢复值沿用本文件既有口径：淡入前捕获的目标音量 targetVolume
+        // （即当前 _volume；音量均衡衰减由 AudioService 层在 setVolume
+        // 通路施加，本循环直写播放器，不引入新的 VN 语义）。
+        // 取证：暂停淡入收尾同样会把音量一次性拉到 targetVolume。
+        debugPrint('[VolAudit] 暂停淡入收尾 superseded=$superseded '
+            'tokenOk=${token == _fadeToken} '
+            '目标=${targetVolume.toStringAsFixed(3)} '
+            '播放器当前=${target.volume.toStringAsFixed(3)}');
+        target.setVolume(targetVolume);
       }
-      // 取证：暂停淡入收尾同样会把音量一次性拉到 targetVolume。
-      debugPrint('[VolAudit] 暂停淡入收尾 superseded=$superseded '
-          'tokenOk=${token == _fadeToken} '
-          '目标=${targetVolume.toStringAsFixed(3)} '
-          '播放器当前=${target.volume.toStringAsFixed(3)}');
-      if (!superseded && token == _fadeToken) target.setVolume(targetVolume);
     } else {
       await _audioService?.playCommand();
       _completionReadyRequest = playbackRequest;

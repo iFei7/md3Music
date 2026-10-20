@@ -64,8 +64,8 @@ void _expectStops(List<double>? stops, List<double> expected) {
   }
 }
 
-/// 带内 tint 叠色渐变：切片层（[_BarBlurSlice] → ClipRect →
-/// BackdropFilter → SizedBox）不含 DecoratedBox，故整条带内唯一的
+/// 带内 tint 叠色渐变：模糊层（ClipRect → BackdropFilter →
+/// SizedBox.expand）不含 DecoratedBox，故整条带内唯一的
 /// DecoratedBox 即 tint 兄弟层（本函数自带断言，结构一旦回退会立刻失败）。
 LinearGradient _tintGradient(WidgetTester tester) {
   final backdrops = find.byType(BackdropFilter);
@@ -74,27 +74,9 @@ LinearGradient _tintGradient(WidgetTester tester) {
       .last;
   final tint = find.descendant(of: band, matching: find.byType(DecoratedBox));
   expect(tint, findsOneWidget,
-      reason: '带内仅 tint 一层 DecoratedBox（切片只包 BackdropFilter）');
+      reason: '带内仅 tint 一层 DecoratedBox（模糊层只包 BackdropFilter）');
   return (tester.widget<DecoratedBox>(tint).decoration as BoxDecoration)
       .gradient! as LinearGradient;
-}
-
-/// 切片几何 + 滤镜（按屏幕 y 自上而下）：返回 [(高度, filter)]。
-/// sigma 通过 [ui.ImageFilter] 的值相等比对（ImageFilter.blur 重写了 ==）。
-List<(double, ui.ImageFilter)> _barSlices(WidgetTester tester) {
-  final backdrops = find.byType(BackdropFilter);
-  final order = List<int>.generate(backdrops.evaluate().length, (i) => i)
-    ..sort((a, b) => tester
-        .getRect(backdrops.at(a))
-        .top
-        .compareTo(tester.getRect(backdrops.at(b)).top));
-  return [
-    for (final i in order)
-      (
-        tester.getSize(backdrops.at(i)).height,
-        tester.widget<BackdropFilter>(backdrops.at(i)).filter!,
-      ),
-  ];
 }
 
 /// 大标题 item 总高度（状态栏占位 0 + 顶距 8 + 文本行高 + 底距 8）。
@@ -258,12 +240,15 @@ void main() {
       controller.jumpTo(h * 0.1);
       await tester.pump();
 
-      // 带体高度 = 状态栏 24 + 栏体 54 = 78（切片带覆盖）：
+      // 带体高度 = 状态栏 24 + 栏体 54 = 78（单片模糊带覆盖）：
       // 曾只覆盖 54dp 栏体，状态栏区域透明导致内容从状态栏透出。
       const bandHeight = 24 + SonifySpacing.topBar;
       final backdrops = find.byType(BackdropFilter);
-      expect(backdrops, findsNWidgets(3),
-          reason: '切片式渐变模糊：H=78 分 3 片（18/9/3）');
+      expect(
+        backdrops,
+        findsOneWidget,
+        reason: '单片均匀模糊：全带仅 1 个 BackdropFilter（批次 17 退化为单片）',
+      );
       // 图层纪律：BackdropFilter 不被 ShaderMask 包裹（saveLayer 内嵌
       // 模糊失效，flutter/flutter#164079、#175537）
       expect(
@@ -273,45 +258,33 @@ void main() {
         ),
         findsNothing,
       );
-      // 切片共用一次 backdrop 采样（避免 3 次全宽回采）
-      expect(find.byType(BackdropGroup), findsOneWidget);
       // 外层带裁剪壳：覆盖「状态栏 + 栏体」全带
       final bandClip = find
           .ancestor(of: backdrops.first, matching: find.byType(ClipRect))
           .last;
       expect(tester.getSize(bandClip).height, bandHeight);
-      // 每片自带 ClipRect（裁剪壳在内、BackdropFilter 只包自身切片），
-      // 且横向铺满整带（BackdropFilter 的 child 为 SizedBox.expand，
-      // child 缺失时框架不生成滤镜层——真机表现为无模糊）
-      for (var i = 0; i < 3; i++) {
-        final clip = find
-            .ancestor(
-              of: backdrops.at(i),
-              matching: find.byType(ClipRect),
-            )
-            .first;
-        final sliceSize = tester.getSize(backdrops.at(i));
-        expect(tester.getSize(clip), sliceSize,
-            reason: '第 $i 片自带 ClipRect，与切片同尺寸');
-        expect(sliceSize.width, tester.getSize(bandClip).width,
-            reason: '第 $i 片横向铺满整带');
-      }
+      // 单片模糊铺满整带：BackdropFilter 与裁剪壳同尺寸（横向铺满、
+      // 竖向覆盖「状态栏 + 栏体」）；child 必须非 null——
+      // const SizedBox.expand()，child 缺失时框架不生成滤镜层，
+      // 真机表现为无模糊
+      final blurSize = tester.getSize(backdrops.first);
+      expect(blurSize.height, bandHeight,
+          reason: '单片模糊竖向铺满「状态栏 + 栏体」全带');
+      expect(blurSize.width, tester.getSize(bandClip).width,
+          reason: '单片模糊横向铺满整带');
+      expect(
+        tester.widget<BackdropFilter>(backdrops.first).child,
+        isA<SizedBox>(),
+        reason: 'BackdropFilter child 非 null（SizedBox.expand）',
+      );
+      // sigma = kSonifyBarBlurSigma（单片第三档 3；ImageFilter.blur 重写 ==）
+      expect(
+        tester.widget<BackdropFilter>(backdrops.first).filter,
+        ui.ImageFilter.blur(
+            sigmaX: kSonifyBarBlurSigma, sigmaY: kSonifyBarBlurSigma),
+      );
 
-      // 切片形态：自上而下 sigma 18/9/3、高度 0.52H/0.30H/剩余
-      final slices = _barSlices(tester);
-      expect(slices.length, 3);
-      expect(slices[0].$2, ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          reason: '顶片 sigma 18（对齐 dock 配方）');
-      expect(slices[1].$2, ui.ImageFilter.blur(sigmaX: 9, sigmaY: 9));
-      expect(slices[2].$2, ui.ImageFilter.blur(sigmaX: 3, sigmaY: 3));
-      expect(slices[0].$1, closeTo(bandHeight * 0.52, 1e-6));
-      expect(slices[1].$1, closeTo(bandHeight * 0.30, 1e-6));
-      // 三段高度之和必须精确等于带高（减法兜底，不留 1px 缝隙）
-      final total = slices.fold<double>(0, (sum, s) => sum + s.$1);
-      expect(total, closeTo(bandHeight, 1e-6),
-          reason: '切片高度之和 == 状态栏 + 栏体（无接缝/无越界）');
-
-      // tint 叠色层（切片兄弟层，普通 srcOver）：状态栏锚定，
+      // tint 叠色层（模糊兄弟层，普通 srcOver）：状态栏锚定，
       // 本用例 sb=24 → stops [0, 24/78, 1]，
       // surface@0.42 → surface@0.42 → surface@0
       final tintGradient = _tintGradient(tester);
@@ -332,7 +305,7 @@ void main() {
       expect(tintGradient.colors.last, surface.withValues(alpha: 0));
     });
 
-    testWidgets('渐变模糊带 blur sigma 18（对齐 dock 材质）且叠色为 surface 系',
+    testWidgets('渐变模糊带 blur sigma 3（单片第三档）且叠色为 surface 系',
         (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
@@ -342,23 +315,24 @@ void main() {
       await tester.pump();
 
       // 材质来源：LiquidGlassSurface dock 配方（blurSigma 18 + cs.surface
-      // 叠色）——双带合并后顶片 sigma 18 不变（原 14/22 双强度早已取消；
-      // 批次 16 起模糊强度衰减改由切片 sigma 阶梯 18/9/3 承担）
-      expect(kSonifyBarBlurSigma, 18);
+      // 叠色）；批次 17 用户反馈 3 切片（18/9/3）分界线明显、非线性，
+      // 退化为单片并取第三档（最弱档）sigma 3——需要加强只改此常量
+      expect(kSonifyBarBlurSigma, 3);
       // 单带收敛后的状态栏区域叠色单值（双带合并，反馈③）
       expect(kSonifyBarTopAlpha, 0.42);
 
-      // 本宿主无系统 inset（sb=0，H=54）→ 退化为 2 片（18 → 6）
+      // 本宿主无系统 inset（sb=0，H=54）：单片均匀模糊，同样仅 1 个
       final backdrops = find.byType(BackdropFilter);
-      expect(backdrops, findsNWidgets(2));
-      final slices = _barSlices(tester);
-      expect(slices[0].$2, ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18));
-      expect(slices[1].$2, ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6));
-      expect(slices[0].$1, closeTo(54 * 0.65, 1e-6));
       expect(
-        slices.fold<double>(0, (sum, s) => sum + s.$1),
-        closeTo(54, 1e-6),
-        reason: '横屏/无 inset 退化分支：两片高度和 == 带高 54',
+        backdrops,
+        findsOneWidget,
+        reason: '单片模糊：sb=0 无退化分支，全带仅 1 个 BackdropFilter',
+      );
+      expect(
+        tester.widget<BackdropFilter>(backdrops.first).filter,
+        ui.ImageFilter.blur(
+            sigmaX: kSonifyBarBlurSigma, sigmaY: kSonifyBarBlurSigma),
+        reason: '运行时滤镜 sigma == kSonifyBarBlurSigma',
       );
 
       // 带叠色为 cs.surface 系（dock 同色系）：状态栏区域全强度
@@ -443,7 +417,7 @@ void main() {
       expect(tester.getSize(find.text('发现').last).height, 36);
     });
 
-    testWidgets('上滑后顶栏渐变模糊带出现（切片 18/9/3 承载模糊衰减、tint 兄弟层，BackdropFilter 无图层包裹）',
+    testWidgets('上滑后顶栏渐变模糊带出现（单片均匀模糊 + tint 兄弟层，BackdropFilter 无图层包裹）',
         (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
@@ -457,9 +431,9 @@ void main() {
       controller.jumpTo(h * 0.1);
       await tester.pump();
 
-      // 渐变带 = 2 片（本宿主 sb=0，H=54 → 横屏退化分支 18/6）
+      // 渐变带 = 单片（sb=0 同为 1 个 BackdropFilter，均匀模糊）
       final backdrops = find.byType(BackdropFilter);
-      expect(backdrops, findsNWidgets(2));
+      expect(backdrops, findsOneWidget);
       expect(_barOpacity(tester), 1);
 
       // 图层纪律：BackdropFilter 不得被 ShaderMask / 裸 Opacity 包裹
@@ -474,7 +448,7 @@ void main() {
         findsNothing,
       );
 
-      // tint（切片兄弟层，本宿主无系统 inset → 退化 stops [0, 1]）：
+      // tint（模糊兄弟层，本宿主无系统 inset → 退化 stops [0, 1]）：
       // surface@0.42 → surface@0。状态栏锚定三 stops [0, 24/78, 1]
       // 由上面注入 sb=24 的用例覆盖。
       final tintGradient = _tintGradient(tester);

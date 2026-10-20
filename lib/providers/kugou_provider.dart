@@ -183,6 +183,8 @@ class KugouProvider extends ChangeNotifier {
   KugouCommentList? _comments;
   KugouPlaylistSongs? _playlistSongs;
   List<KugouSongDetail> _personalFmSongs = [];
+  /// 批次17：FM 列表已渲染、albumName 后台补全待跑的标志（移出关键路径提速）。
+  bool _pendingAlbumNameFill = false;
   KugouPlaylistCategory? _playlistCategory;
   List<KugouPlaylistBrief> _playlistList = [];
   bool _isLoading = false;
@@ -1165,9 +1167,10 @@ class KugouProvider extends ChangeNotifier {
       );
       if (result != null) {
         _personalFmSongs = result;
-        // 补全 albumName：红心 radio 接口不返回 album_name，但返回了 album_id，
-        // 用 album_id 调 getAlbumDetail 批量补全
-        await _fillPersonalFmAlbumNames();
+        // 批次17（P0）：albumName 补全移出关键路径——红心 radio 的 N 个
+        // getAlbumDetail 请求曾占着本 await 链，FM 卡一直转圈（真机：加载
+        // 延迟）。列表先落地渲染，补全在 _endLoading 后后台跑完再通知。
+        _pendingAlbumNameFill = true;
         if (!isInteractive) {
           _dataTimestamps['personalFm'] = DateTime.now();
         }
@@ -1178,6 +1181,11 @@ class KugouProvider extends ChangeNotifier {
       _error = e.toString();
     }
     _endLoading();
+    // 批次17（P0）：见上——FM 列表先渲染，albumName 后台补全后单独通知。
+    if (_pendingAlbumNameFill) {
+      _pendingAlbumNameFill = false;
+      unawaited(_fillPersonalFmAlbumNames());
+    }
   }
 
   /// 补全 PersonalFm 歌曲缺失的 albumName。
@@ -1220,6 +1228,8 @@ class KugouProvider extends ChangeNotifier {
       }
       return song;
     }).toList();
+    // 批次17：后台补全完成，通知 FM 卡片刷新（列表已先渲染，此为增量子）。
+    notifyListeners();
   }
 
   void moveToFirst(KugouSongDetail song) {
@@ -1478,6 +1488,13 @@ class KugouProvider extends ChangeNotifier {
       final userInfo = await _apiClient.getUserDetail();
       if (userInfo != null) {
         _userInfo = userInfo;
+        // 批次17（P0）：同步登录镜像。微信登录链路只调 refreshUserInfo，此前
+        // _isLoggedIn 保持 false 直到冷启动 _autoConnect 才纠正——设置页账号卡
+        // 的 Selector 选择值恒为 (false, null) 不重建，表现为"登录后不刷新"
+        // （扫码/手机登录链路本就置位，仅此路径漏）。
+        if (!_isLoggedIn && _apiClient.isLoggedIn) {
+          _isLoggedIn = true;
+        }
         // 回填账号列表中的昵称/头像（多账号展示）
         await _apiClient.updateAccountProfile(
           userInfo.userid ?? _apiClient.userid ?? '',

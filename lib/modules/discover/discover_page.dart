@@ -207,6 +207,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
       if (!mounted) return;
       _error = e.toString();
     }
+    // 私人 FM 卡自管数据（KugouProvider._personalFmSongs 单例），不在
+    // 上方分区请求里；下拉刷新末尾按当前档位强制重拉（复用挂载实例，
+    // 无实例时 no-op），修「下拉刷不动 FM 卡」。
+    await DiscoverFmStackCard.reloadCurrentStation();
     if (mounted) {
       setState(() {
         _isLoading = false;

@@ -1,12 +1,12 @@
 /// 音乐库一级页（LibraryHubPage）测试（IA 改版 v2）。
 ///
 /// 覆盖：骨架渲染（SonifyTitleScaffold + 常驻搜索玻璃圆钮、无分段控件 /
-/// 无 PageView）、2×2 入口卡片文案与副标题计数、收藏卡「直接播放」钮
-/// （存在性 + 未登录守卫）、最近播放 Top 3 截断与标题行跳转播放历史、
-/// 歌单调区 CoverRail/CoverRailCard 渲染与导航、四卡导航契约
-/// （FavoritesPage / LibraryPage / PurchasedPage / CloudMusicPage）、
-/// 隐藏歌单管理全流程（管理态多选 → 隐藏所选 → 已隐藏提示 → 底部弹层
-/// 恢复）。
+/// 无 PageView）、2×2 入口卡片文案与副标题计数、收藏卡（「我喜欢」）
+/// 「直接播放」钮（存在性 + 未登录守卫）、最近播放 Top 3 截断与标题行
+/// 跳转播放历史、歌单调区 CoverRail/CoverRailCard 渲染与导航、四卡导航
+/// 契约（「我喜欢」→ PlaylistPage 默认收藏详情 / LibraryPage /
+/// PurchasedPage / CloudMusicPage）、隐藏歌单管理全流程（管理态多选 →
+/// 隐藏所选 → 已隐藏提示 → 底部弹层恢复）。
 library;
 
 import 'dart:convert';
@@ -28,6 +28,7 @@ import 'package:md3music/data/repositories/local_music_repository.dart';
 import 'package:md3music/data/repositories/playlist_cover_cache.dart';
 import 'package:md3music/modules/library/library_hub_page.dart';
 import 'package:md3music/modules/library/library_page.dart';
+import 'package:md3music/modules/playlist/playlist_page.dart';
 import 'package:md3music/modules/user/cloud_music_page.dart';
 import 'package:md3music/modules/user/favorites_page.dart';
 import 'package:md3music/providers/favorites_provider.dart';
@@ -37,12 +38,15 @@ import 'package:md3music/providers/library_provider.dart';
 import 'package:md3music/providers/local_favorites_provider.dart';
 import 'package:md3music/providers/player_provider.dart';
 import 'package:md3music/providers/playlist_collection_notifier.dart';
+import 'package:md3music/providers/theme_provider.dart';
 import 'package:md3music/services/kugou_api/kugou_api_client.dart';
 import 'package:md3music/services/kugou_api/kugou_models.dart';
 import 'package:md3music/widgets/common/sonify_segmented_control.dart';
 import 'package:md3music/widgets/common/sonify_title_scaffold.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../test_helpers/fake_secure_storage.dart';
 
 /// 本地缓存歌曲种子（经 LocalMusicRepository._cachedSongsKey 注入，
 /// artworkUri 置 null 避免测试发起网络图片加载）。
@@ -73,7 +77,8 @@ Song _seedSong(String id, String title, String artist) => Song(
 );
 
 /// 歌单缓存种子：type=0/source=0 → 「创建」；type=1 → 「收藏」
-/// （_isCreatedPlaylist 未登录兜底规则）。
+/// （_isCreatedPlaylist 未登录兜底规则）。含 name='我喜欢' 默认收藏
+/// 项（收藏卡点击导航 PlaylistPage 的数据源）。
 Future<void> _seedPlaylists() async {
   await FavoriteListsCache.savePlaylists(const [
     KugouPlaylistBrief(
@@ -90,10 +95,18 @@ Future<void> _seedPlaylists() async {
       type: 1,
       source: 0,
     ),
+    KugouPlaylistBrief(
+      id: 'fav_1',
+      name: '我喜欢',
+      songCount: 5,
+      type: 0,
+      source: 0,
+    ),
   ]);
 }
 
-/// 播放历史种子：h1 播放 2 次（计数断言用）、h2 播放 1 次。
+/// 播放历史种子：h1 播放 2 次、h2 播放 1 次（播放次数已不在 hub
+/// 渲染，种子保留仅为历史数据真实性）。
 Future<void> _seedHistory() async {
   final repo = HistoryRepository();
   await repo.addHistory(_seedSong('h1', '历史歌曲一', '歌手甲'));
@@ -147,6 +160,8 @@ Future<void> _pumpHub(WidgetTester tester) async {
         ChangeNotifierProvider(create: (_) => PlaylistCollectionNotifier()),
         // 播放历史页 SongListItem 读取收藏态（FavoritesProvider）
         ChangeNotifierProvider(create: (_) => FavoritesProvider()),
+        // 「我喜欢」卡点击直达的 PlaylistPage 读取主题态（背景图开关）
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
       ],
       child: const MaterialApp(home: LibraryHubPage()),
     ),
@@ -257,7 +272,7 @@ void main() {
     expect(find.byType(PageView), findsNothing);
     // 四段文案收敛为 2×2 入口卡片（每张各出现一次；若分段控件仍在
     // 会与卡片文案重复 → findsOneWidget 即双重断言）
-    for (final label in const ['收藏', '本地', '已购', '云盘']) {
+    for (final label in const ['我喜欢', '本地', '已购', '云盘']) {
       expect(
         find.text(label),
         findsOneWidget,
@@ -297,17 +312,17 @@ void main() {
     await _seedHistory();
     await _pumpHub(tester);
 
-    // 收藏卡副标题 = 歌单缓存总数（2 个）；本地卡副标题 = 本地歌曲数（2 首）
-    expect(find.text('2 个歌单'), findsOneWidget);
+    // 收藏卡副标题 = 歌单缓存总数（3 个，含「我喜欢」）；本地卡副标题 = 本地歌曲数（2 首）
+    expect(find.text('3 个歌单'), findsOneWidget);
     expect(find.text('2 首歌曲'), findsOneWidget);
     // 空态文案全部消失
     expect(find.text('暂无播放记录'), findsNothing);
     expect(find.text('暂无创建的歌单'), findsNothing);
     expect(find.text('暂无收藏的歌单'), findsNothing);
-    // 最近播放：历史歌曲标题 + 播放次数（h1 计 2 次）
+    // 最近播放：历史歌曲标题渲染（播放次数已不在 hub 展示）
     expect(find.text('历史歌曲一'), findsOneWidget);
     expect(find.text('历史歌曲二'), findsOneWidget);
-    expect(find.text('2 次'), findsOneWidget);
+    expect(find.text('2 次'), findsNothing);
     // 我创建的歌单分区：CoverRailCard 标题 + 副标题（歌曲数）
     await tester.dragUntilVisible(
       find.text('我的私藏歌单'),
@@ -379,12 +394,13 @@ void main() {
       findsOneWidget,
     );
     // 未登录（_StubAdapter 空响应无 token）点击：仅 toast 守卫，
-    // 不跳 FavoritesPage / 不退出 hub
+    // 不跳歌单详情 / 不退出 hub
     await tester.tap(find.byIcon(Icons.play_arrow_rounded));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byType(LibraryHubPage), findsOneWidget);
     expect(find.byType(FavoritesPage), findsNothing);
+    expect(find.byType(PlaylistPage), findsNothing);
     // fluttertoast 插件内部有 1s 定时器；pump 足够时间让其结束后再收尾，
     // 否则测试退出时 pending timer 断言失败。
     await tester.pump(const Duration(seconds: 2));
@@ -403,17 +419,34 @@ void main() {
     await _popBackToHub(tester);
   });
 
-  testWidgets('入口卡导航：收藏 → FavoritesPage(initialTab: 0)', (
+  testWidgets('入口卡导航：我喜欢 → PlaylistPage（默认收藏详情）', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
+    // 登录态：_openMyFavorite 对未登录先 toast 拦截，这里写假凭证过守卫
+    // （假 secure storage 供 setLoginCookies 落盘）。
+    installFakeSecureStorage();
+    await KugouApiClient().setLoginCookies('test-token', 'test-uid');
+    await _seedPlaylists();
     await _pumpHub(tester);
 
-    await _tapEntryCard(tester, '收藏');
-    expect(find.byType(FavoritesPage), findsOneWidget);
-    // FavoritesPage 大标题「我的收藏」出现即说明跳转命中兼容路由契约
-    expect(find.text('我的收藏'), findsWidgets);
+    // 点入口卡内「我喜欢」文案（歌单调区也有同名卡，须限定在入口卡内）
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('hub-entry-favorites')),
+        matching: find.text('我喜欢'),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byType(PlaylistPage), findsOneWidget);
+    // 「我喜欢」歌单标题（PlaylistPage 顶栏/封面区显示歌单名）
+    expect(find.text('我喜欢'), findsWidgets);
     await _popBackToHub(tester);
+
+    // 清理登录态，避免污染同文件后续用例（未登录守卫断言）
+    await KugouApiClient().clearCookies();
+    uninstallFakeSecureStorage();
   });
 
   testWidgets('入口卡导航：本地 → LibraryPage(initialTab: 0)', (
@@ -474,12 +507,13 @@ void main() {
     await tester.pump();
     expect(find.text('隐藏所选(1)'), findsOneWidget);
 
-    // 隐藏所选：该歌单从分区消失 + 空态 + 已隐藏提示行
+    // 隐藏所选：该歌单从创建分区消失 + 已隐藏提示行（「我喜欢」
+    // 默认收藏同属创建分区且种子含该项，故分区不再显示空态文案）
     await _tapInList(tester, find.text('隐藏所选(1)'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('我的私藏歌单'), findsNothing);
-    expect(find.text('暂无创建的歌单'), findsOneWidget);
+    expect(find.text('暂无创建的歌单'), findsNothing);
     final hintFinder = find.text('已隐藏 1 个歌单，点击管理');
     expect(hintFinder, findsOneWidget);
 

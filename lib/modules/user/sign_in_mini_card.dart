@@ -10,12 +10,11 @@ import '../../providers/kugou_provider.dart';
 import '../login/login_page.dart';
 import 'sign_in_calendar_page.dart';
 
-/// 设置页签到迷你日历卡：账号卡下方的紧凑签到入口。
+/// 设置页签到迷你卡：账号卡下方的紧凑签到入口。
 ///
-/// 白卡 squircle 9dp（风格同账号卡）：标题行（签到日历 + 本月已签 N 天）
-/// + 迷你月历点阵（周一起始，已签 primary 圆点 / 今天描边 / 未来置灰）
-/// + 主按钮「签到」。整卡点击进入 [SignInCalendarPage]（完整签到 /
-/// 听歌领取 / 广告领取 / 验证码流程都在那一页）。
+/// 白卡 squircle 9dp（风格同账号卡）：标题行（签到 + 本月已签 N 天）
+/// + 主按钮「签到」。整卡点击进入 [SignInCalendarPage]（完整月历 /
+/// 签到 / 听歌领取 / 广告领取 / 验证码流程都在那一页）。
 ///
 /// 数据面（Selector 最小重建，选择面 `(本月已签天数, 今日是否已签,
 /// 签到中, 是否登录)`）：
@@ -159,18 +158,10 @@ class _SignInMiniCardState extends State<SignInMiniCard> {
                 ),
                 builder: (context, state, _) {
                   final (signedCount, todaySigned, running, loggedIn) = state;
-                  final signedDays = _currentMonthSignedDays(
-                    context.read<KugouProvider>(),
-                  );
-                  final now = DateTime.now();
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _buildHeader(sonify, colorScheme, signedCount),
-                      const Gap(AppSpacing.sm),
-                      _buildWeekdayHeader(colorScheme),
-                      const Gap(2),
-                      _buildDotGrid(colorScheme, signedDays, now),
                       const Gap(AppSpacing.sm),
                       _buildSignInButton(
                         colorScheme,
@@ -189,7 +180,7 @@ class _SignInMiniCardState extends State<SignInMiniCard> {
     );
   }
 
-  /// 标题行：图标 + 「签到日历」+ 右侧「本月已签 N 天」。
+  /// 标题行：图标 + 「签到」+ 右侧「本月已签 N 天」。
   Widget _buildHeader(
     SonifyColors sonify,
     ColorScheme colorScheme,
@@ -200,7 +191,7 @@ class _SignInMiniCardState extends State<SignInMiniCard> {
         Icon(Icons.event_available, size: 18, color: colorScheme.primary),
         const Gap(AppSpacing.sm),
         Text(
-          '签到日历',
+          '签到',
           style: SonifyTextStyles.cardTitle.copyWith(
             color: colorScheme.onSurface,
           ),
@@ -213,88 +204,6 @@ class _SignInMiniCardState extends State<SignInMiniCard> {
           ),
         ),
       ],
-    );
-  }
-
-  /// 周起始终止行（与月历点阵同构的 7 列）。
-  Widget _buildWeekdayHeader(ColorScheme colorScheme) {
-    const labels = ['一', '二', '三', '四', '五', '六', '日'];
-    return Row(
-      children: [
-        for (final l in labels)
-          Expanded(
-            child: Center(
-              child: Text(
-                l,
-                style: SonifyTextStyles.listItem.copyWith(
-                  fontSize: 10,
-                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  /// 迷你月历点阵：周一开头；已签 = primary 实心圆点，
-  /// 今天 = primary 描边，未来 = 置灰细边，过去未签 = 淡边。
-  Widget _buildDotGrid(
-    ColorScheme colorScheme,
-    Set<int> signedDays,
-    DateTime now,
-  ) {
-    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
-    // weekday: Mon=1..Sun=7 → 周一开头，前导 (weekday-1) 个空位
-    final leading = DateTime(now.year, now.month, 1).weekday - 1;
-
-    final cells = <Widget>[
-      for (var i = 0; i < leading; i++) const Expanded(child: SizedBox()),
-      for (var day = 1; day <= daysInMonth; day++)
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2.5),
-            child: Center(
-              child: Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: signedDays.contains(day)
-                      ? colorScheme.primary
-                      : Colors.transparent,
-                  border: signedDays.contains(day)
-                      ? null
-                      : Border.all(
-                          color: day == now.day
-                              ? colorScheme.primary
-                              : (day > now.day
-                                    ? colorScheme.onSurfaceVariant.withValues(
-                                        alpha: 0.25,
-                                      )
-                                    : colorScheme.outlineVariant.withValues(
-                                        alpha: 0.6,
-                                      )),
-                          width: day == now.day ? 1.5 : 1,
-                        ),
-                ),
-              ),
-            ),
-          ),
-        ),
-    ];
-    // 补齐整行（月历点阵按 7 列切行）
-    while (cells.length % 7 != 0) {
-      cells.add(const Expanded(child: SizedBox()));
-    }
-
-    final rows = <Widget>[];
-    for (var i = 0; i < cells.length; i += 7) {
-      rows.add(Row(children: cells.sublist(i, i + 7)));
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: rows,
     );
   }
 
