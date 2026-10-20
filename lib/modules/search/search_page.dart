@@ -26,6 +26,7 @@ import '../../widgets/common/user_avatar_button.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
 import '../playlist/playlist_page.dart';
+import '../recognition/song_recognition_page.dart';
 import 'explore_sections.dart';
 
 class SearchPage extends StatefulWidget {
@@ -44,6 +45,23 @@ class _SearchPageState extends State<SearchPage>
 
   /// 搜索框聚焦态跟踪（sonify 规格：聚焦时 1.5dp primary 描边）。
   final FocusNode _searchFocusNode = FocusNode();
+
+  /// 顶部外层滚动控制器（挂 [NestedScrollView.controller]）：坍缩交互
+  /// 的唯一滚动信号源——outer offset 越过 [_kCollapseThreshold] 即搜索
+  /// 胶囊完全收起，顶栏头像左侧浮出搜索图标。
+  final ScrollController _outerController = ScrollController();
+
+  /// 坍缩态通知器：true = 胶囊已收起（顶栏搜索图标在场）。
+  /// 用 ValueNotifier + ValueListenableBuilder 局部重建 actions 单个
+  /// 图标的显隐，不走整页 setState（避免波及 TabBarView / 结果列表）。
+  final ValueNotifier<bool> _collapsed = ValueNotifier<bool>(false);
+
+  /// 回顶动画展开同拍补一次焦点请求（见 [_onCollapsedSearchTap]）。
+  bool _focusOnExpand = false;
+
+  /// 坍缩阈值：header 展开高 108 = 工具栏 56 + 胶囊行 52；outer offset
+  /// ≥ 52 即胶囊行被滚完（刻度 = expandedHeight − kToolbarHeight）。
+  static const double _kCollapseThreshold = 52;
 
   late TabController _tabController;
   List<String> _searchHistory = [];
@@ -67,6 +85,7 @@ class _SearchPageState extends State<SearchPage>
     _tabController = TabController(length: 6, vsync: this);
     _tabController.addListener(_onTabChanged);
     _searchFocusNode.addListener(_onFocusChanged);
+    _outerController.addListener(_onOuterScroll);
     _loadSearchHistory();
     // 恢复「热门搜索」（UI 重设计批次 1，方案 §2.1）：接口 /search/hot 一直在
     // （KugouApiClient.getHotSearch → KugouProvider.getHotSearch，结果缓存于
@@ -92,12 +111,48 @@ class _SearchPageState extends State<SearchPage>
     if (mounted) setState(() {});
   }
 
+  /// 外层滚动 → 坍缩态：等值比较防抖（避免同一阈值上反复赋值触发
+  /// ValueListenableBuilder 无意义重建）。
+  void _onOuterScroll() {
+    if (!_outerController.hasClients) return;
+    final collapsed = _outerController.offset >= _kCollapseThreshold;
+    if (_collapsed.value != collapsed) {
+      _collapsed.value = collapsed;
+      // 展开同拍补一次焦点请求：坍缩期 TextField 不在树，
+      // tap 当帧的 postFrame 请求会落空。postFrame 保证请求落在
+      // 本帧 build（胶囊已重建）之后。
+      if (!collapsed && _focusOnExpand) {
+        _focusOnExpand = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _searchFocusNode.requestFocus();
+        });
+      }
+    }
+  }
+
+  /// 坍缩态顶栏搜索图标：回顶展开搜索胶囊（动画结束后视觉上胶囊
+  /// 完整复位），下一帧给输入框取焦点。
+  void _onCollapsedSearchTap() {
+    _focusOnExpand = true;
+    _outerController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
   @override
   void dispose() {
     _tabController.removeListener(_onTabChanged);
     _searchFocusNode.removeListener(_onFocusChanged);
     _searchFocusNode.dispose();
     _searchController.dispose();
+    _outerController.removeListener(_onOuterScroll);
+    _outerController.dispose();
+    _collapsed.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -201,6 +256,7 @@ class _SearchPageState extends State<SearchPage>
     return Scaffold(
       resizeToAvoidBottomInset: !hostedInDockScaffold,
       body: NestedScrollView(
+        controller: _outerController,
         headerSliverBuilder: (context, innerBoxIsScrolled) {
           return [
             SliverAppBar(
@@ -212,11 +268,34 @@ class _SearchPageState extends State<SearchPage>
               // expandedHeight 不含状态栏（maxExtent = 状态栏 + 56 + 52）。
               expandedHeight: kToolbarHeight + 52,
               // 左上角页面标题（主题 appBarTheme 默认 centerTitle: true，
-              // 此处显式左对齐）
+              // 此处显式左对齐）。批次 19：与四页大标题一致的加粗
+              // 规格——显式 w800 + wght=800 字轴（保持 22sp 标题字号；
+              // 可变字体渲染中 wght 轴优先级高于 fontWeight，不写轴会被
+              // M3E emphasized 注入的 wght=500 覆盖成 Medium）。
               centerTitle: false,
-              title: const Text('搜索'),
-              // 右上角常驻用户头像（统一组件，点击进设置页 /settings）
+              title: Text(
+                '搜索',
+                style: Theme.of(context).appBarTheme.titleTextStyle?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  fontVariations: const [FontVariation('wght', 800)],
+                ),
+              ),
+              // 右上角动作区：坍缩态头像左侧浮出「回顶展开」搜索图标，
+              // 展开态不渲染；头像常驻（统一组件，点击进设置页 /settings）。
+              // ValueListenableBuilder 只局部重建本 action 的显隐。
               actions: [
+                ValueListenableBuilder<bool>(
+                  valueListenable: _collapsed,
+                  builder: (context, collapsed, _) {
+                    if (!collapsed) return const SizedBox.shrink();
+                    return IconButton(
+                      key: const ValueKey('search-collapsed-icon'),
+                      tooltip: '搜索',
+                      icon: const Icon(Icons.search),
+                      onPressed: _onCollapsedSearchTap,
+                    );
+                  },
+                ),
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: UserAvatarButton(),
@@ -293,21 +372,31 @@ class _SearchPageState extends State<SearchPage>
                       }),
                     ),
                   // 搜索胶囊行（批次 9 玻璃胶囊从 title 槽迁至展开区）：
-                  // 贴 header 底部 = 工具栏（标题 + 头像）正下方；收起态随
-                  // flexibleSpace 高度收缩被 Stack 裁掉（pinned 后标题 +
-                  // 头像仍可见）。水平位置由 _buildSearchField 内部 padding
-                  // （SonifySpacing.cardMargin 16.5dp）承担，与迁移前 title
-                  // 槽位一致；不遮挡下方 TabBar（不同 sliver，无叠区）。
+                  // 贴 header 底部 = 工具栏（标题 + 头像）正下方；坍缩态
+                  // （outer offset ≥ 52，胶囊行已滚完）整行退场，pinned
+                  // 后仅剩标题 + 头像 + 头像左侧的搜索图标。水平位置由
+                  // _buildSearchField 内部 padding（SonifySpacing
+                  // .cardMargin 16.5dp）承担；不遮挡下方 TabBar（不同
+                  // sliver，无叠区）。
                   Positioned(
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: SizedBox(
-                        height: 44,
-                        child: _buildSearchField(colorScheme),
-                      ),
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: _collapsed,
+                      builder: (context, collapsed, _) {
+                        // 坍缩即退场：否则收缩后的 flexibleSpace 仍会把
+                        // 胶囊带到 pinned 工具栏带内（壁纸透明顶栏下与
+                        // 标题/头像视觉重叠）。局部重建，不波及 body。
+                        if (collapsed) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: SizedBox(
+                            height: 44,
+                            child: _buildSearchField(colorScheme),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ],
@@ -373,7 +462,10 @@ class _SearchPageState extends State<SearchPage>
   ///   title 槽迁入，收起态随展开区收缩裁掉）；
   /// - 聚焦时 1.5dp primary 描边：StadiumBorder foregroundDecoration
   ///   外覆玻璃面（等价原 ShapeDecoration.side 写法）；
-  /// - 左放大镜 20dp、右清空钮 28dp 命中区（视觉 18dp 图标）。
+  /// - 左放大镜 20dp、右识曲钮 20dp（命中区 28dp）+ 有文字时清空钮
+  ///   28dp 命中区（视觉 18dp 图标）；TextField 由 Expanded 包住，
+  ///   不被右侧固定宽图标挤占（**与主页搜索框一致**，识曲钮单独响应，
+  ///   内层 GestureDetector 在手势竞技场中优先胜出）。
   /// 行为不变：textInputAction=search、onSubmitted 搜索、onChanged 实时联想。
   Widget _buildSearchField(ColorScheme colorScheme) {
     final sonify = SonifyColors.of(context);
@@ -428,6 +520,23 @@ class _SearchPageState extends State<SearchPage>
                     },
                   ),
                 ),
+                // 听歌识曲钮（与首页 _buildSearchFieldItem 一致）：内层
+                // GestureDetector 单独响应，不与整体胶囊的点击冲突
+                // （搜索页胶囊无整体 onTap，识曲钮是当前唯一识曲入口）。
+                GestureDetector(
+                  onTap: _openRecognition,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12,
+                    ),
+                    child: Icon(
+                      Icons.mic_none,
+                      size: 20,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                ),
                 if (hasText)
                   IconButton(
                     // 28dp 命中区（视觉 18dp 图标），顶满 44dp 行高便于点按
@@ -452,6 +561,14 @@ class _SearchPageState extends State<SearchPage>
           ),
         ),
       ),
+    );
+  }
+
+  /// 识曲入口：[SongRecognitionPage] 为独立路由页（非 tab 项），
+  /// 与首页搜索框识曲钮同款 MaterialPageRoute 跳转方式。
+  void _openRecognition() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SongRecognitionPage()),
     );
   }
 

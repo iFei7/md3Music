@@ -174,7 +174,7 @@ void main() {
       try {
         // 旧快捷行是两枚 56dp 色块（文案「私人 FM」/「识曲」）。删除后：
         // 未登录宿主里 FM 卡片显示登录引导（无这些文案），识曲入口只
-        // 剩搜索框右侧/顶栏的图标按钮。
+        // 剩内容区搜索框右侧的识曲钮（批次 19 移除顶栏圆钮）。
         expect(find.text('私人 FM'), findsNothing);
         expect(find.text('识曲'), findsNothing);
       } finally {
@@ -184,7 +184,7 @@ void main() {
   });
 
   group('首页大标题加粗', () {
-    testWidgets('大标题样式携带 wght=700 字轴（不被 M3E emphasized 的 wght 轴覆盖）',
+    testWidgets('大标题样式携带 wght=800 字轴（不被 M3E emphasized 的 wght 轴覆盖）',
         (tester) async {
       final (kugou, player, favorites, localFavorites) =
           await _pumpDiscover(tester);
@@ -193,18 +193,18 @@ void main() {
         // 不可见占位，不参与渲染）
         final titleFinder = find.text('首页').last;
         final style = tester.widget<Text>(titleFinder).style!;
-        expect(style.fontWeight, FontWeight.w700);
-        // 关键：显式 wght 字轴必须存在且为 700，否则 DefaultTextStyle 合并会把
+        expect(style.fontWeight, FontWeight.w800);
+        // 关键：显式 wght 字轴必须存在且为 800，否则 DefaultTextStyle 合并会把
         // M3E emphasized 注入 bodyMedium 的 wght=500 轴带进来，可变字体渲染时
         // 轴优先级高于 fontWeight，标题实际渲染为 Medium（不加粗）。
         final wght = style.fontVariations
             ?.where((v) => v.axis == 'wght')
             .firstOrNull;
         expect(wght, isNotNull);
-        expect(wght!.value, 700.0);
+        expect(wght!.value, 800.0);
 
         // 模拟 Text 的 DefaultTextStyle 合并路径：合并后的生效样式 wght 轴
-        // 仍为 700（不被主题 bodyMedium 的 wght=500 覆盖）。
+        // 仍为 800（不被主题 bodyMedium 的 wght=500 覆盖）。
         final dts = DefaultTextStyle.of(
           tester.element(titleFinder),
         );
@@ -212,7 +212,7 @@ void main() {
         final mergedWght =
             merged.fontVariations?.where((v) => v.axis == 'wght').firstOrNull;
         expect(mergedWght, isNotNull);
-        expect(mergedWght!.value, 700.0);
+        expect(mergedWght!.value, 800.0);
       } finally {
         _teardown(kugou, player, favorites, localFavorites);
       }

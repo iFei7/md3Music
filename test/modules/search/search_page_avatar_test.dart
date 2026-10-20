@@ -140,4 +140,80 @@ void main() {
 
     await tester.pump(const Duration(seconds: 10));
   });
+
+  group('坍缩交互（批次 19）', () {
+    /// NestedScrollView 的外层 Scrollable（含 SliverAppBar 最近的滚动
+    /// 祖先即 outer；inner 结果列表在其内部）。
+    ScrollableState outerScrollable(WidgetTester tester) {
+      return tester.state<ScrollableState>(
+        find
+            .descendant(
+              of: find.byType(NestedScrollView),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+    }
+
+    testWidgets('outer 滚过 52dp 坍缩阈值：头像左侧浮出搜索图标、胶囊收起',
+        (tester) async {
+      await pumpHost(tester, const SearchPage());
+
+      // 展开态：坍缩图标不在场，胶囊在场
+      const collapsedIcon = ValueKey('search-collapsed-icon');
+      expect(find.byKey(collapsedIcon), findsNothing);
+      expect(find.byType(TextField), findsOneWidget);
+
+      // 外层滚动定位到 60（> 坍缩阈值 52 = expandedHeight 108 − 56）：
+      // 胶囊行被滚完 → 坍缩态通知器翻转
+      outerScrollable(tester).position.jumpTo(60);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(
+        find.byKey(collapsedIcon),
+        findsOneWidget,
+        reason: '坍缩态顶栏头像左侧应浮出搜索图标',
+      );
+      // 位置契约：搜索图标在头像左侧（同一 actions Row，图标为首个）
+      final iconRect = tester.getRect(find.byKey(collapsedIcon));
+      final avatarRect = tester.getRect(find.byType(UserAvatarButton));
+      expect(
+        iconRect.right,
+        lessThanOrEqualTo(avatarRect.left),
+        reason: '坍缩搜索图标应位于头像左侧',
+      );
+      // 搜索胶囊坍缩退场（outer offset ≥ 52 后不在场）
+      expect(find.byType(TextField), findsNothing);
+      // 头像常驻：坍缩不消失（四页顶栏统一）
+      expect(find.byType(UserAvatarButton), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 10));
+    });
+
+    testWidgets('点坍缩搜索图标：回顶展开并聚焦输入框', (tester) async {
+      await pumpHost(tester, const SearchPage());
+      const collapsedIcon = ValueKey('search-collapsed-icon');
+
+      final outer = outerScrollable(tester);
+      outer.position.jumpTo(60);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(find.byKey(collapsedIcon), findsOneWidget);
+
+      await tester.tap(find.byKey(collapsedIcon));
+      await tester.pump(); // animateTo 启动 + postFrame 请求焦点
+      await tester.pump(const Duration(milliseconds: 300)); // 250ms 动画结束
+
+      // 回顶：outer offset 归 0，坍缩图标退场
+      expect(outer.position.pixels, 0);
+      expect(find.byKey(collapsedIcon), findsNothing);
+
+      // 胶囊重新展开且输入框获得焦点（点击图标应唤起键盘）
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.focusNode?.hasFocus, isTrue);
+
+      await tester.pump(const Duration(seconds: 10));
+    });
+  });
 }

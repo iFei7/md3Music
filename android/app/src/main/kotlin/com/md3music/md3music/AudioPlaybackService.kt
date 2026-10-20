@@ -618,20 +618,12 @@ class AudioPlaybackService : Service() {
             // 进程失去 FGS 载体，恢复本服务保活前台（批次12：保活前台唯一的自动
             // 恢复路径；重挂后不再排定撤除，保持到 media3 重新就绪并由下一次
             // 通知更新走确定性撤除流程收敛稳态）。
-            // 批次17（P0）：复位绑定标志。此前 media3ServiceBound 置位后永不
-            // 复位，media3 意外死亡后 showNotification 的有界重绑条件
-            // （!media3ServiceBound && !media3ServiceConnected）永假 → 不再重绑
-            // → 会话 unhosted → 媒体3 通知链永久停摆（进度走、无通知）。
-            media3ServiceBound = false
             media3ServiceConnected = false
             Log.w(TAG, "media3 service disconnected, restore keepalive foreground")
             restoreKeepaliveForeground("onServiceDisconnected")
         }
 
         override fun onBindingDied(name: ComponentName?) {
-            // 批次17（P0）：同 onServiceDisconnected——绑定死亡后必须允许重绑，
-            // 否则通知链不会自行恢复（根因同上）。
-            media3ServiceBound = false
             media3ServiceConnected = false
             Log.w(TAG, "media3 service binding died, restore keepalive foreground")
             restoreKeepaliveForeground("onBindingDied")
@@ -1851,26 +1843,7 @@ class AudioPlaybackService : Service() {
 
         // 批次14：条件式挂载分支。isPlaying 取本方法参数（onStartCommand 解析
         // intent EXTRA_IS_PLAYING 后的播放态，与 WakeLock 逻辑同源）。
-        // 批次17（P0）：与平台真值结合。Dart 说在播、而平台播放器明确没在播
-        // （会话丢失/播放器已停）时按非播放处理——否则会给一个并不在响的
-        // 会话挂隐形保活，媒体3 通知链也不会回来。查询异常/无会话时回退
-        // Dart 的 isPlaying（宁可多保活，不可零 FGS）。
-        val platformIsPlaying: Boolean? = try {
-            AudioPlayer.getActiveMediaSession()?.player?.isPlaying
-        } catch (_: Throwable) {
-            null
-        }
-        val effectiveIsPlaying: Boolean = if (platformIsPlaying == false && isPlaying) {
-            Log.w(
-                TAG,
-                "showNotification: Dart says playing but platform player is not, " +
-                    "treat as paused"
-            )
-            false
-        } else {
-            isPlaying
-        }
-        if (effectiveIsPlaying) {
+        if (isPlaying) {
             if (isMedia3Foreground()) {
                 // media3 已接管前台：撤掉本服务保活，收敛为单条可见通知
                 removeKeepaliveIfMounted()
@@ -1885,7 +1858,7 @@ class AudioPlaybackService : Service() {
             // 暂停/停止：无 FGS 载体需求，撤除保活（幂等，已撤则 no-op）
             removeKeepaliveIfMounted()
         }
-        if (effectiveIsPlaying) {
+        if (isPlaying) {
             // 批次15（P0）：播放中启动/续期常驻看护（幂等：先移除旧回调再排程），
             // 保证 media3 掉前台后能立即重挂，而不是等下一次通知更新。
             scheduleKeepaliveWatchdog(KEEPALIVE_RECHECK_DELAY_MS)
@@ -2088,54 +2061,34 @@ class AudioPlaybackService : Service() {
             generation == metadataGeneration
 
     /**
-     * 批次18（回退）：任务被移除（最近任务卡片划掉）→ 停播并结束服务。
-     *
-     * 批次17 曾在 stopSelf 后追加「独立 Handler 800ms 后 Process.killProcess」
-     * 兜底杀进程；实测该兜底在卸载重装 / 快速划卡重开时序下与 Flutter 引擎
-     * 启动竞态，导致应用「屡次异常停止」。经用户同意部分回退：
-     * killProcess 投递整段删除，进程回收交还系统处理。
-     * 划卡语义不变：仍停播 + 撤前台通知 + 释放 WakeLock + stopSelf。
-     *
-     * 顺序：取消看护 → 经原生直停播放器（保留进度，可续播）→ 撤前台通知 →
-     * 释放 WakeLock → stopSelf。
+     * 批次14：任务被移除（最近任务卡片划掉）。manifest 已声明
+     * stopWithTask=false，本服务不随任务销毁。
+     * 批次15（P0）：不再以 keepaliveForegroundHidden 为前提——该标志只表示
+     * 「保活曾让位给 media3」，而 Android 12 后台 media3 掉前台后无法自行恢复，
+     * 划卡瞬间必须无条件补挂本服务保活 FGS。失败只记日志，不影响 super 回调。
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.i(TAG, "onTaskRemoved: stop playback and exit")
-        // ① 取消看护与撤除复查：退出路径上不允许它们再把保活挂回来
-        keepaliveForegroundHandler.removeCallbacksAndMessages(null)
-        // ② 经原生直停播放器：playWhenReady=false + pause()（保留进度可续播）。
-        //    必须在 releaseWakeLock 之前——后者内部按 playWhenReady 判定是否
-        //    跳过释放，不停播放器会导致 WakeLock 被留下。
-        try {
-            AudioPlayer.getActiveMediaSession()?.player?.let { p ->
-                p.playWhenReady = false
-                p.pause()
+        Log.i(
+            TAG,
+            "onTaskRemoved playing=$lastIsPlaying media3Fg=${isMedia3Foreground()} " +
+                "keepaliveHidden=$keepaliveForegroundHidden"
+        )
+        if (lastIsPlaying) {
+            try {
+                startForeground(NOTIFICATION_ID, keepaliveNotificationBuilder().build())
+                foregroundStarted = true
+                keepaliveForegroundHidden = false
+                scheduleKeepaliveWatchdog(KEEPALIVE_RECHECK_DELAY_MS)
+                Log.i(TAG, "onTaskRemoved: keepalive re-mounted while playing")
+            } catch (e: Throwable) {
+                Log.w(
+                    TAG,
+                    "onTaskRemoved: keepalive re-mount failed: " +
+                        "${e.javaClass.simpleName}: ${e.message}"
+                )
             }
-        } catch (e: Throwable) {
-            Log.w(
-                TAG,
-                "onTaskRemoved: stop player failed: " +
-                    "${e.javaClass.simpleName}: ${e.message}"
-            )
         }
-        // ③ 撤除本服务前台保活通知
-        try {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } catch (e: Throwable) {
-            Log.w(
-                TAG,
-                "onTaskRemoved: stopForeground failed: " +
-                    "${e.javaClass.simpleName}: ${e.message}"
-            )
-        }
-        // ④ 释放 WakeLock/WifiLock（播放器已停，内部 playing 判定为 false，
-        //    会真正释放，不再走「playback ongoing」跳过分支）
-        releaseWakeLock()
-        // ⑤ 结束服务生命周期（触发 onDestroy：解绑 media3、注册监听等）
-        //    批次18 回退：原 ⑥「独立 Handler 800ms 后 killProcess 兜底」整段已删。
-        //    killProcess 与卸载重装/快速划卡重开时序竞态导致「屡次异常停止」，
-        //    进程回收交还系统；划卡仍保证停播 + 停服务 + 撤通知 + 放锁。
-        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

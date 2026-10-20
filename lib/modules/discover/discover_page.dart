@@ -28,11 +28,10 @@ import '../search/search_page.dart';
 
 /// 首页 / Discover（UI 重设计批次 1，方案 §1）。
 ///
-/// 结构（方案 §1.2 线框）：
+/// 结构（方案 §1.2 线框顺序）：
 /// - [SonifyTitleScaffold] 大标题「首页」**固定悬浮**（滚动中不位移/
 ///   不缩放/不溶解，批次 8 起去掉折叠为小标题的旧机制）；
 /// - 顶栏右上**固定用户头像**（常驻，点击进设置页 /settings）；
-/// - 滚动后头像左侧浮现搜索/识曲两枚玻璃圆钮（点击行为同搜索框）；
 /// - 列表：胶囊搜索框（内右侧识曲按钮）→ 私人 FM 堆叠大卡片（档位切换/
 ///   滑动切歌）→ 最近播放大卡片（标题 + 箭头进播放历史页）→ 每日推荐
 ///   → 编辑精选/主题歌单/热门歌单/新碟上架/排行榜 横滑 Rail（[CoverRail]）
@@ -238,10 +237,11 @@ class _DiscoverPageState extends State<DiscoverPage> {
           : SonifyTitleScaffold(
               title: '首页',
               // 顶栏右侧固定用户头像（常驻，不随滚动；统一组件，点击进
-              // 设置页 /settings，与 FM/搜索/音乐库三页同款）
+              // 设置页 /settings，与 FM/搜索/音乐库三页同款）。
+              // 批次 19：删除滚动后头像左侧浮现的搜索/识曲玻璃圆钮
+              // （actions）——全局搜索由底部导航常驻搜索 tab 承载，
+              // 识曲入口保留在内容区搜索框内右侧（_buildSearchFieldItem）。
               trailing: const UserAvatarButton(),
-              // 滚动后在头像左侧浮现搜索/识曲圆钮
-              actions: _buildBarActions(),
               itemCount: _kSectionCount,
               itemBuilder: _buildListItem,
             ),
@@ -386,35 +386,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
         ),
       ),
     );
-  }
-
-  /// 顶栏玻璃圆钮：42dp 圆形液态玻璃（sonify Title.kt:849-873 材质），
-  /// 图标 20dp。用于折叠后的顶栏搜索/识曲按钮。
-  Widget _buildGlassCircleButton(IconData icon, VoidCallback onTap) {
-    return LiquidGlassSurface(
-      shape: GlassShape.circle,
-      child: SizedBox(
-        width: 42,
-        height: 42,
-        child: IconButton(
-          // 顶满玻璃圆钮（默认 48dp 会溢出 42dp 容器）
-          constraints: const BoxConstraints.tightFor(width: 42, height: 42),
-          padding: EdgeInsets.zero,
-          icon: Icon(icon, size: 20),
-          onPressed: onTap,
-        ),
-      ),
-    );
-  }
-
-  /// 滚动后顶栏动作按钮：头像左侧的搜索圆钮 + 识曲圆钮，
-  /// 点击行为与列表搜索框一致。
-  List<Widget> _buildBarActions() {
-    return [
-      _buildGlassCircleButton(Icons.search, _openSearch),
-      const SizedBox(width: 10),
-      _buildGlassCircleButton(Icons.mic_none, _openRecognition),
-    ];
   }
 
   /// 分区标题行：18sp Bold 标题 + 可选「更多」（13sp 次级灰 + 24dp primary

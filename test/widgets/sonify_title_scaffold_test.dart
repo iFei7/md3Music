@@ -412,7 +412,7 @@ void main() {
       // 取可见的固定悬浮标题（树中最后一个）
       final largeText = tester.widget<Text>(find.text('发现').last);
       expect(largeText.style?.fontSize, 20);
-      expect(largeText.style?.fontWeight, FontWeight.w700);
+      expect(largeText.style?.fontWeight, FontWeight.w800);
       // 测试字体下行高 = fontSize × height = 20 × 1.8 = 36dp
       expect(tester.getSize(find.text('发现').last).height, 36);
     });

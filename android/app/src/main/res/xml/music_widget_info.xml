@@ -11,5 +11,5 @@
     android:widgetCategory="home_screen"
     android:label="@string/music_widget_label"
     android:previewLayout="@layout/widget_music_player"
-    android:previewImage="@mipmap/ic_launcher"
+    android:previewImage="@drawable/ic_launcher_widget_preview"
     android:description="@string/widget_description" />

@@ -109,13 +109,23 @@ void main() {
     expect(tester.getSize(find.byType(LiquidGlassSurface)).height, 44);
 
     // 交互语义不变：可输入 TextField + 占位文案 + 20dp 搜索图标在场
-    // （搜索图标按胶囊内范围断言，避免空态音乐探索区的同名图标干扰）
+    // （搜索图标按胶囊内范围断言，避免空态音乐探索区的同名图标干扰；
+    // 坍缩态工具栏也有 Icons.search，那是顶栏 action，不在本 capsule 内）
     expect(find.byType(TextField), findsOneWidget);
     expect(find.text('搜索歌曲、歌手、专辑'), findsOneWidget);
     expect(
       find.descendant(
         of: find.byType(LiquidGlassSurface),
         matching: find.byIcon(Icons.search),
+      ),
+      findsOneWidget,
+    );
+    // 批次 19：胶囊内补听歌识曲钮（与首页 _buildSearchFieldItem 一致），
+    // 静止态胶囊内 Icons.mic_none 仅此一处（同样按胶囊范围断言）
+    expect(
+      find.descendant(
+        of: find.byType(LiquidGlassSurface),
+        matching: find.byIcon(Icons.mic_none),
       ),
       findsOneWidget,
     );

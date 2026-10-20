@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.annotation.OptIn
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaNotification
@@ -99,40 +100,41 @@ class MD3MusicMediaSessionService : MediaSessionService() {
     }
 
     /**
-     * 批次17（P0）：任务被移除（最近任务卡片划掉）→ 停播并结束本服务。
-     *
-     * 用户明确要求「划掉即停、进程退出」。批次15/16 的「播放中不 stopSelf、
-     * 补挂通知保活」语义整体反转删除。
+     * 批次15（P0）：任务被移除（最近任务卡片划掉）。
      *
      * 有意**不调用 super**：fork 默认实现为
      * `if (!isPlaybackOngoing()) stopSelf()`，而 isPlaybackOngoing() 取自
      * startedInForeground（是否已 startForeground）。Android 12 后台掉前台后该值
      * 恒为 false，划卡会被误判为「未播放」进而 stopSelf 并删除通知（即使服务因
      * 绑定仍在，也会掉 FGS）。fork 的 MediaSessionService#onTaskRemoved 未标注
-     * @CallSuper，允许子类完全接管；本实现显式停播，不依赖 super 的默认语义。
+     * @CallSuper，允许子类完全接管。
      *
-     * 停播保留播放进度：playWhenReady=false + pause()（不用 stop()，避免
-     * 清掉进度），用户下次打开 App 可从原进度续播。
-     * fork 的 pauseAllPlayersAndStopSelf() 只置 playWhenReady=false，这里
-     * 显式补 pause()，确保播放器立即进入暂停态。
+     * 以真实播放意愿判定：playWhenReady 且非 STATE_IDLE（排除切歌/跨 fade 的
+     * IDLE 过渡态）。播放中若 media3 不在前台，补一次通知更新以重新
+     * startForeground（onUpdateNotification(session, true)）。
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.i(TAG, "onTaskRemoved: stop playback and exit")
-        try {
-            getSessions().forEach { session ->
-                session.player.let { p ->
-                    p.playWhenReady = false
-                    p.pause()
-                }
+        val playing = try {
+            getSessions().any { s ->
+                val p = s.player
+                p.playWhenReady && p.playbackState != Player.STATE_IDLE
             }
-        } catch (e: Throwable) {
-            // 会话查询/操作失败不阻断退出：停播是尽力而为，stopSelf 必须执行
-            Log.w(
-                TAG,
-                "onTaskRemoved: pause sessions failed: " +
-                    "${e.javaClass.simpleName}: ${e.message}"
-            )
+        } catch (_: Throwable) {
+            // 会话查询失败时退回前台标志，宁可保持服务存活
+            isNotificationStartedInForeground()
         }
-        stopSelf()
+        Log.i(
+            TAG,
+            "onTaskRemoved playing=$playing media3Fg=${isNotificationStartedInForeground()}"
+        )
+        if (!playing) {
+            stopSelf()
+            return
+        }
+        if (!isNotificationStartedInForeground()) {
+            try {
+                getSessions().firstOrNull()?.let { onUpdateNotification(it, true) }
+            } catch (_: Throwable) {}
+        }
     }
 }
