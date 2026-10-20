@@ -5,7 +5,8 @@ import 'package:provider/provider.dart';
 
 import '../../providers/kugou_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
-import '../../widgets/scroll_aware_app_bar.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import '../../widgets/smart_artwork_image.dart';
 import 'audiobook_album_detail_page.dart';
 import 'audiobook_free_library_page.dart';
@@ -20,15 +21,7 @@ class AudiobookPage extends StatefulWidget {
 }
 
 class _AudiobookPageState extends State<AudiobookPage> {
-  /// 顶栏渐变 ScrollController：与 ScrollAwareAppBar 共享
-  final ScrollController _scrollController = ScrollController();
   bool _isLoading = true;
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
 
   @override
   void initState() {
@@ -67,7 +60,6 @@ class _AudiobookPageState extends State<AudiobookPage> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final kugou = context.watch<KugouProvider>();
 
     final dailyAlbums = _parseDailyAlbums();
@@ -78,76 +70,73 @@ class _AudiobookPageState extends State<AudiobookPage> {
       _AlbumSection(title: 'VIP 推荐 仅显示不要听书会员的章节', albums: kugou.longAudioVipAlbums),
     ];
     final hasAnyData = sections.any((s) => s.albums.isNotEmpty);
-    return Scaffold(
-      appBar: ScrollAwareAppBar(
-        title: '听书',
-        // 有壁纸时顶栏完全透明（与发现页一致），无壁纸时恒不透明 surface
-        opaque: true,
-        scrollController: _scrollController,
-        actions: [
-          IconButton(
-            tooltip: '搜索听书',
-            icon: const Icon(Icons.search),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const AudiobookSearchPage(),
+    // 批次 22：顶栏改与首页/音乐库/FM/搜索/收藏等页完全同构的
+    // SonifyTitleScaffold（固定悬浮大标题 + 右上常驻头像 + 单片模糊带），
+    // 不再用 ScrollAwareAppBar（那套是「AppBar 标题滚动淡入」的另一套形态，
+    // 与其余导航页不一致）。搜索听书钮放 actions 槽：随栏体滚动浮现，
+    // 展开态不占内容区（与首页搜索/识曲圆钮同拍）。
+    final items = <Widget>[
+      const _FreeLibraryEntryCard(),
+      ...sections,
+      if (!hasAnyData) _buildEmptyState(context),
+      // Dock 避让：消费注入的底部 padding，末项停在悬浮 Dock 上方
+      SizedBox(height: MediaQuery.paddingOf(context).bottom + 16),
+    ];
+    return Md3PullToRefresh(
+      onRefresh: _loadAll,
+      child: _isLoading
+          ? const Scaffold(body: Center(child: M3ELoadingIndicator()))
+          : SonifyTitleScaffold(
+              title: '听书',
+              trailing: const UserAvatarButton(),
+              actions: [
+                IconButton(
+                  tooltip: '搜索听书',
+                  icon: const Icon(Icons.search),
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const AudiobookSearchPage(),
+                      ),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: M3ELoadingIndicator())
-          : Md3PullToRefresh(
-              onRefresh: _loadAll,
-              child: hasAnyData
-                  ? ListView(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.only(bottom: 16),
-                      children: [
-                        const _FreeLibraryEntryCard(),
-                        ...sections,
-                      ],
-                    )
-                  : ListView(
-                      controller: _scrollController,
-                      children: [
-                        const _FreeLibraryEntryCard(),
-                        SizedBox(
-                          height: MediaQuery.sizeOf(context).height * 0.5,
-                          child: Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.menu_book_outlined,
-                                  size: 48,
-                                  color: cs.onSurfaceVariant.withValues(
-                                    alpha: 0.5,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  '暂无听书数据',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleMedium
-                                      ?.copyWith(color: cs.onSurfaceVariant),
-                                ),
-                                const SizedBox(height: 16),
-                                FilledButton.tonal(
-                                  onPressed: _loadAll,
-                                  child: const Text('重试'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+              ],
+              itemCount: items.length,
+              itemBuilder: (context, index) => items[index],
             ),
+    );
+  }
+
+  /// 无数据空态（保留原「暂无听书数据 + 重试」形态）。
+  Widget _buildEmptyState(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.5,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.menu_book_outlined,
+              size: 48,
+              color: cs.onSurfaceVariant.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '暂无听书数据',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: _loadAll,
+              child: const Text('重试'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

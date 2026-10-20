@@ -23,6 +23,21 @@ class HiddenPlaylistsCache {
   static String playlistKey(KugouPlaylistBrief p) =>
       p.globalCollectionId ?? p.id;
 
+  /// 空歌单是否应从「我创建的歌单」分区隐藏（音乐库 hub / 我的收藏共用）。
+  ///
+  /// 口径来源：sonify `OnlinePlaylists.kt:156`
+  /// `rawList.filterNot { it.isDef == 1 && it.songCount == 0 }`——上游
+  /// `/user/playlist` 会把账号级空壳歌单（如系统自动创建的「默认收藏」）
+  /// 一并返回，0 首的空条目出现在「我创建的歌单」里只会造成困惑。
+  ///
+  /// 与 sonify 的差异：sonify 只按 `is_def == 1` 判定空壳（它的列表接口
+  /// 不返回用户新建的空歌单）；本项目上游还会返回历史遗留的 0 首条目，
+  /// 故统一按 `songCount <= 0` 隐藏——一旦歌单里有了歌（songCount > 0）
+  /// 立即照常显示，属纯视图过滤：不写 HiddenPlaylistsCache、不进「已隐藏」
+  /// 弹层，用户不可感知（用户明确要求）。
+  static bool isEmptyCreatedPlaylist(KugouPlaylistBrief p) =>
+      p.songCount <= 0;
+
   /// 读取已隐藏的歌单 key 集合。无数据 / 解析失败返回空集合。
   static Future<Set<String>> readHidden() async {
     try {

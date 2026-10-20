@@ -506,6 +506,57 @@ void main() {
     uninstallFakeSecureStorage();
   });
 
+  testWidgets('「我创建的歌单」里点「我喜欢」→ PlaylistPage 带 isDefaultFavorite', (
+    tester,
+  ) async {
+    // 批次 22 回归：此前横滑轨卡片走 _openPlaylist 只传 isInMyFavorites，
+    // 漏传 isDefaultFavorite/isUserCreated，导致同一「我喜欢」歌单
+    // 「收藏页点开有封面（动态最新收藏封面）、我创建的歌单点开无封面」。
+    SharedPreferences.setMockInitialValues({});
+    await _seedPlaylists();
+    await _pumpHub(tester);
+
+    // 「我喜欢」文案只出现在歌单调区的卡片上（入口卡卡名是「收藏」）
+    await _tapInList(tester, find.text('我喜欢'));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byType(PlaylistPage), findsOneWidget);
+    final page = tester.widget<PlaylistPage>(find.byType(PlaylistPage));
+    expect(page.isDefaultFavorite, isTrue,
+        reason: '「我喜欢」必须带默认收藏标记，头部封面才套用动态来源');
+    expect(page.isUserCreated, isTrue, reason: '自己创建的歌单标记');
+    await _popBackToHub(tester);
+  });
+
+  testWidgets('0 首歌单不进「我创建的歌单」（对齐 sonify 空歌单过滤）', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await FavoriteListsCache.savePlaylists(const [
+      KugouPlaylistBrief(
+        id: 'created_empty',
+        name: '空空歌单',
+        songCount: 0,
+        type: 0,
+        source: 0,
+      ),
+      KugouPlaylistBrief(
+        id: 'created_ok',
+        name: '有歌的歌单',
+        songCount: 3,
+        type: 0,
+        source: 0,
+      ),
+    ]);
+    await _pumpHub(tester);
+
+    // 0 首条目默认隐藏（HiddenPlaylistsCache.isEmptyCreatedPlaylist 口径）
+    expect(find.text('空空歌单'), findsNothing,
+        reason: '0 首歌单不应出现在我创建的歌单分区');
+    expect(find.text('有歌的歌单'), findsOneWidget);
+    // 有歌的歌单正常显示，空态文案不应因过滤而出错渲染
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('入口卡导航：本地 → LibraryPage(initialTab: 0)', (
     tester,
   ) async {

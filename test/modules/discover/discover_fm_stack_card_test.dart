@@ -495,13 +495,19 @@ void main() {
       player.setTestPlaybackState(currentSong: song, isPlaying: isPlaying);
       final localFavorites = LocalFavoritesProvider();
       await tester.pumpWidget(
-        MaterialApp(
-          theme: _testTheme,
-          home: MultiProvider(
-            providers: [
-              ChangeNotifierProvider<PlayerProvider>.value(value: player),
-            ],
-            child: const Scaffold(
+        // Provider 必须挂在 MaterialApp 之外：本组用例会 push 播放历史页
+        // （新路由不在 home 子树里，挂在 home 内会让目标页读不到 Provider）
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<PlayerProvider>.value(value: player),
+            // 跳转目标 PlayHistoryPage 的顶栏常驻头像读取 KugouProvider
+            ChangeNotifierProvider<KugouProvider>(
+              create: (_) => KugouProvider(registerDeviceOnStart: false),
+            ),
+          ],
+          child: MaterialApp(
+            theme: _testTheme,
+            home: const Scaffold(
               body: SingleChildScrollView(
                 child: Column(
                   children: [DiscoverNowPlayingCard()],

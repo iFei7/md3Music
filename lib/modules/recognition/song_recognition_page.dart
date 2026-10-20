@@ -12,6 +12,8 @@ import 'package:record/record.dart';
 
 import '../../core/utils/app_toast.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import 'floating_recognition_service.dart';
 import 'recognition_utils.dart';
 
@@ -319,13 +321,22 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('听歌识曲'),
+    // 批次 22：顶栏改为与其余导航页完全同构的 SonifyTitleScaffold
+    //（固定悬浮大标题「听歌识曲」+ 右上常驻头像 + 单片模糊带），
+    // 不再用 AppBar 小标题（那是与首页/音乐库/FM/搜索不一致的形态）。
+    // 业务区（悬浮窗入口 + 居中脉冲区）作为单个固定高 item：
+    // 高度 = 视口 − 状态栏 − 标题区（8 + 36 + 8 = 52），与其它页同口径。
+    final media = MediaQuery.of(context);
+    final bodyHeight =
+        media.size.height - media.padding.top - 52 - media.viewInsets.bottom;
+    return SonifyTitleScaffold(
+      title: '听歌识曲',
+      trailing: const UserAvatarButton(),
+      itemCount: 1,
+      itemBuilder: (context, index) => SizedBox(
+        height: bodyHeight,
+        child: _buildRecognitionBody(colorScheme, textTheme),
       ),
-      // 悬浮播放器宿主统一承载：二级形态渲染悬浮条，一级 Tab 形态自动退化
-      // 交由主脚手架底部常驻 MiniPlayer（复用 isSecondaryRoutePage 路由栈判据）
-      body: _buildRecognitionBody(colorScheme, textTheme),
     );
   }
 

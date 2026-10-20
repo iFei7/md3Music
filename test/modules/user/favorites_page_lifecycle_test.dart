@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:md3music/modules/user/favorites_page.dart';
+import 'package:md3music/providers/kugou_provider.dart';
 import 'package:md3music/providers/playlist_collection_notifier.dart';
 import 'package:md3music/providers/tab_config_provider.dart';
 import 'package:md3music/services/kugou_api/kugou_api_client.dart';
@@ -110,6 +111,10 @@ Widget _favoritesApp(
   providers: [
     ChangeNotifierProvider<PlaylistCollectionNotifier>.value(value: notifier),
     ChangeNotifierProvider<TabConfigProvider>.value(value: tabConfigProvider),
+    // 顶栏右上角常驻用户头像（批次 22 九页统一）读取 KugouProvider
+    ChangeNotifierProvider<KugouProvider>(
+      create: (_) => KugouProvider(registerDeviceOnStart: false),
+    ),
   ],
   child: MaterialApp(home: const _FavoritesRouteHost()),
 );

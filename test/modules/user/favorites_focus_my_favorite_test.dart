@@ -30,6 +30,7 @@ import 'package:md3music/data/repositories/hidden_playlists_cache.dart';
 import 'package:md3music/modules/playlist/playlist_page.dart';
 import 'package:md3music/modules/user/favorites_page.dart';
 import 'package:md3music/providers/favorites_provider.dart';
+import 'package:md3music/providers/kugou_provider.dart';
 import 'package:md3music/providers/library_provider.dart';
 import 'package:md3music/providers/local_favorites_provider.dart';
 import 'package:md3music/providers/player_provider.dart';
@@ -101,6 +102,11 @@ Future<void> _pumpFavoritesPage(
         ChangeNotifierProvider(create: (_) => LibraryProvider()),
         // FavoritesPage initState postFrame 读取该通知器
         ChangeNotifierProvider(create: (_) => PlaylistCollectionNotifier()),
+        // 顶栏右上角常驻用户头像（批次 22 九页统一）经 Selector 读取
+        // KugouProvider.userInfo.avatar
+        ChangeNotifierProvider(
+          create: (_) => KugouProvider(registerDeviceOnStart: false),
+        ),
       ],
       child: MaterialApp(
         home: FavoritesPage(focusMyFavorite: focusMyFavorite),

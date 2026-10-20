@@ -290,7 +290,14 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
       _hiddenKeys.contains(HiddenPlaylistsCache.playlistKey(p));
 
   List<KugouPlaylistBrief> get _createdPlaylists => _playlists
-      .where((p) => _isCreatedPlaylist(p) && !_isHidden(p))
+      .where(
+        (p) =>
+            _isCreatedPlaylist(p) &&
+            // 0 首歌单默认不出现（口径见
+            // HiddenPlaylistsCache.isEmptyCreatedPlaylist，对齐 sonify）
+            !HiddenPlaylistsCache.isEmptyCreatedPlaylist(p) &&
+            !_isHidden(p),
+      )
       .toList();
 
   List<KugouPlaylistBrief> get _collectedPlaylists => _playlists
@@ -311,12 +318,24 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     Navigator.push(context, MaterialPageRoute(builder: (_) => page));
   }
 
+  /// 打开歌单详情（「我创建的歌单」/「我收藏的歌单」横滑轨卡片点击）。
+  ///
+  /// 批次 22：补齐与收藏页 [_openMyFavorite]/favorites_page._openPlaylistDetail
+  /// 同款的两个语义标记——
+  /// - `isUserCreated`：自己创建的歌单（可批量删歌）；
+  /// - `isDefaultFavorite`：名字为「我喜欢」的默认收藏歌单。**必须传**：
+  ///   [PlaylistPage] 头部封面只在 `isDefaultFavorite` 时套用「最新收藏
+  ///   歌曲的专辑封面」动态来源（歌单接口对这种系统歌单不返回封面），
+  ///   漏传就会出现「从收藏点开有封面、从我创建的歌单点开无封面」的
+  ///   同一歌单两种表现（用户反馈）。
   void _openPlaylist(KugouPlaylistBrief playlist) {
     AdaptiveNav.openDetail(
       context,
       (_) => PlaylistPage(
         playlist: playlist.toPlaylist(),
         isInMyFavorites: true,
+        isUserCreated: _isCreatedPlaylist(playlist),
+        isDefaultFavorite: playlist.name == '我喜欢',
       ),
     );
   }

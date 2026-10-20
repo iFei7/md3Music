@@ -23,6 +23,7 @@ import '../../providers/playlist_collection_notifier.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import '../artist/artist_detail_page.dart';
 import '../library/library_page.dart' show LibraryMusicPanel;
 import '../playlist/playlist_page.dart';
@@ -542,7 +543,15 @@ class _FavoritesPageState extends State<FavoritesPage>
   }
 
   List<KugouPlaylistBrief> get _createdPlaylists {
-    final list = _playlists.where(_isCreated).toList();
+    // 0 首歌单默认不出现（与音乐库 hub 同口径，见
+    // HiddenPlaylistsCache.isEmptyCreatedPlaylist，对齐 sonify 的空歌单过滤）
+    final list = _playlists
+        .where(
+          (p) =>
+              _isCreated(p) &&
+              !HiddenPlaylistsCache.isEmptyCreatedPlaylist(p),
+        )
+        .toList();
     _applySort(list, _createdManualOrder);
     return list;
   }
@@ -1087,19 +1096,25 @@ class _FavoritesPageState extends State<FavoritesPage>
       },
       // 头部与主页统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
       // 4 tab 的 TabBar/TabBarView 整体作为单个业务 item 固定在标题下方；
-      // 批量管理删除钮放 trailing 槽（常驻渲染）——actions 槽滚动后才浮现，
-      // 不满足管理模式的常驻可见需求。
+      // 右上角头像常驻（批次 22 九页统一口径）；批量管理删除钮放同一
+      // trailing 槽（常驻渲染）——actions 槽滚动后才浮现，不满足管理模式的
+      // 常驻可见需求，故与头像并排。
       child: SonifyTitleScaffold(
         title: '我的收藏',
-        trailing: _isManaging
-            ? IconButton(
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_isManaging)
+              IconButton(
                 icon: const Icon(Icons.delete),
                 tooltip: '删除选中',
                 onPressed: _managingTab == 1
                     ? _deleteSelectedAlbums
                     : _deleteSelectedPlaylists,
-              )
-            : null,
+              ),
+            const UserAvatarButton(),
+          ],
+        ),
         itemCount: 1,
         itemBuilder: (context, index) => _buildTabbedBody(),
       ),

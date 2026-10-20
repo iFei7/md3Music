@@ -115,6 +115,17 @@ class _PlaylistPageState extends State<PlaylistPage> {
   /// 删除歌曲用的 listid（仅自己创建的歌单有效）
   String? get _deleteListid => widget.playlist.listCreateListid;
 
+  /// 本页是否「我喜欢」默认收藏歌单。
+  ///
+  /// 显式标记 [PlaylistPage.isDefaultFavorite] 优先；另按「来自我的收藏 +
+  /// 名称」兜底——各入口（收藏页 / 音乐库 hub 收藏卡 / hub 歌单横滑轨）
+  /// 逐一透传标记极易漏传，而漏传的直接后果是：头部封面拿不到动态来源
+  /// （歌单接口对系统歌单不返回封面）、红心初值也不喂给 FavoritesProvider。
+  /// 同一个歌单从不同入口点开表现不一致（用户反馈），故在此统一兜底。
+  bool get _isDefaultFavoritePlaylist =>
+      widget.isDefaultFavorite ||
+      (widget.isInMyFavorites && widget.playlist.name == '我喜欢');
+
   /// 顶栏渐变 ScrollController：监听 CustomScrollView 滚动 offset，
   /// 用于 SliverAppBar pinned 后 fade-in 显示歌单名称
   final ScrollController _scrollController = ScrollController();
@@ -826,7 +837,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
       });
       // 「我喜欢的」歌单：本歌单里的歌都算已收藏，直接把 hash 喂给
       // FavoritesProvider，红心无需等待启动同步即可显示为红色。
-      if (widget.isDefaultFavorite && _songs.isNotEmpty) {
+      if (_isDefaultFavoritePlaylist && _songs.isNotEmpty) {
         context.read<FavoritesProvider>().addFavoriteIds(
           _songs.map((s) => s.id).toList(),
         );
@@ -873,7 +884,7 @@ class _PlaylistPageState extends State<PlaylistPage> {
     // 始终优先「最新收藏」，不再因云端返回了非空默认封面而跳过动态解析
     // （见改版计划补充二）。
     String? effectiveArtwork = widget.playlist.artworkUri;
-    if (widget.isDefaultFavorite) {
+    if (_isDefaultFavoritePlaylist) {
       final favs = context.watch<FavoritesProvider>().favorites;
       if (favs.isNotEmpty &&
           favs.first.artworkUri != null &&

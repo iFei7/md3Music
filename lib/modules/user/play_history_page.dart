@@ -6,6 +6,7 @@ import '../../data/models/song.dart';
 import '../../data/repositories/history_repository.dart';
 import '../../providers/player_provider.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import '../../widgets/song_list_item.dart';
 
 class PlayHistoryPage extends StatefulWidget {
@@ -164,9 +165,12 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
           );
         }
         // 正常态与主页头部统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
+        // 顶栏右侧常驻用户头像（批次 22 九页统一口径，与本页是否为 tab 无关：
+        // 本页既可从「最近播放」tab 进入，也可由首页卡片 push）。
         // 注入的额外操作钮（默认无）放 actions 槽（滚动后随栏体浮现）。
         return SonifyTitleScaffold(
           title: '播放历史',
+          trailing: const UserAvatarButton(),
           actions: PlayHistoryPage.extraAppBarActionsBuilder?.call(context),
           itemCount: 1,
           itemBuilder: (context, index) => _buildContent(displaySongs),
