@@ -8,6 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:md3music/core/theme/app_theme.dart';
 import 'package:md3music/modules/discover/discover_page.dart';
+import 'package:md3music/modules/recognition/song_recognition_page.dart';
+import 'package:md3music/modules/search/search_page.dart';
 import 'package:md3music/providers/favorites_provider.dart';
 import 'package:md3music/providers/kugou_provider.dart';
 import 'package:md3music/providers/local_favorites_provider.dart';
@@ -70,9 +72,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   /// 搭建首页宿主：注入全部 provider + 假网络/假音频，等数据到位后
-  /// 渲染出 SonifyTitleScaffold。
+  /// 渲染出 SonifyTitleScaffold。[observer] 可选传入以记录 push 的路由
+  /// （顶栏圆钮跳转断言用）。
   Future<(KugouProvider, PlayerProvider, FavoritesProvider,
-      LocalFavoritesProvider)> _pumpDiscover(WidgetTester tester) async {
+      LocalFavoritesProvider)> _pumpDiscover(
+    WidgetTester tester, {
+    NavigatorObserver? observer,
+  }) async {
     SharedPreferences.setMockInitialValues({});
     installFakeSecureStorage();
     final client = KugouApiClient();
@@ -86,6 +92,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: _testTheme,
+        navigatorObservers: [?observer],
         home: MultiProvider(
           providers: [
             ChangeNotifierProvider<KugouProvider>.value(value: kugou),
@@ -173,10 +180,106 @@ void main() {
           await _pumpDiscover(tester);
       try {
         // 旧快捷行是两枚 56dp 色块（文案「私人 FM」/「识曲」）。删除后：
-        // 未登录宿主里 FM 卡片显示登录引导（无这些文案），识曲入口只
-        // 剩内容区搜索框右侧的识曲钮（批次 19 移除顶栏圆钮）。
+        // 未登录宿主里 FM 卡片显示登录引导（无这些文案），识曲入口剩
+        // 内容区搜索框内右侧 + 滚动后顶栏浮现的识曲圆钮（见「顶栏圆钮」
+        // group），均不占用这两条文案。
         expect(find.text('私人 FM'), findsNothing);
         expect(find.text('识曲'), findsNothing);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+  });
+
+  /// 顶栏圆钮定位：IconButton 的 icon。内容区搜索框内的搜索/识曲图标是
+  /// 裸 Icon（不在 IconButton 里），故此 finder 只命中顶栏 actions 圆钮。
+  Finder _topBarIconButton(IconData icon) => find.byWidgetPredicate(
+        (w) =>
+            w is IconButton &&
+            w.icon is Icon &&
+            (w.icon as Icon).icon == icon,
+      );
+
+  group('顶栏搜索/识曲圆钮（滚动浮现）', () {
+    testWidgets('上滑后顶栏浮现搜索/识曲圆钮，回顶后隐藏', (tester) async {
+      final (kugou, player, favorites, localFavorites) =
+          await _pumpDiscover(tester);
+      try {
+        final listFinder = find.byType(CustomScrollView).first;
+        final topSearch = _topBarIconButton(Icons.search);
+        final topMic = _topBarIconButton(Icons.mic_none);
+
+        // 回顶态：actions 由 SonifyTitleScaffold 按 offset>0 管制——圆钮
+        // 虽在树中但被 AnimatedOpacity(0) + IgnorePointer 遮蔽，
+        // finder.hitTestable() 走 view 层命中测试，IgnorePointer 会断开
+        // 链路：不可命中即用户视角「不在场」（点击不应触发导航）。
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(topSearch.hitTestable(), findsNothing);
+        expect(topMic.hitTestable(), findsNothing);
+
+        // 上滑 300px：列表搜索框（首 item）开始滚出，顶栏圆钮随栏体
+        // 120ms 淡入补位——「上滑搜索框看不到时显示搜索和听歌识曲圆形按钮」
+        await tester.drag(listFinder, const Offset(0, -300));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(topSearch.hitTestable(), findsOneWidget);
+        expect(topMic.hitTestable(), findsOneWidget);
+
+        // 回顶后圆钮再次隐藏
+        await tester.drag(listFinder, const Offset(0, 300));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(topSearch.hitTestable(), findsNothing);
+        expect(topMic.hitTestable(), findsNothing);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('顶栏搜索圆钮点击跳搜索页、识曲圆钮点击跳识曲页', (tester) async {
+      final observer = _RouteRecorder();
+      final (kugou, player, favorites, localFavorites) =
+          await _pumpDiscover(tester, observer: observer);
+      // MaterialApp 首次挂载会对 home route 触发一次 didPush，先清零
+      // baseline，只保留被测链路产生的 push。
+      observer.pushed.clear();
+      try {
+        final listFinder = find.byType(CustomScrollView).first;
+        // 上滑让圆钮浮现（点击链路本身不依赖浮现，这里模拟真实路径）
+        await tester.drag(listFinder, const Offset(0, -300));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        // 不走 tap 引擎的后续帧：直接调圆钮 onPressed（与 tap 同一回调，
+        // IconButton.onPressed = _openSearch/_openRecognition），push 后
+        // 不 pump——目标页不会被真实构建（SearchPage 依赖 ThemeProvider、
+        // SongRecognitionPage 持录音器），只从 push 出来的
+        // MaterialPageRoute.builder 产物判定跳转目标类型。
+        final pageContext = tester.element(find.byType(DiscoverPage));
+
+        final searchBtn = tester.widget<IconButton>(
+          _topBarIconButton(Icons.search),
+        );
+        searchBtn.onPressed!();
+        expect(observer.pushed, hasLength(1));
+        final searchRoute = observer.pushed.single as MaterialPageRoute;
+        expect(searchRoute.builder(pageContext), isA<SearchPage>());
+
+        final micBtn = tester.widget<IconButton>(
+          _topBarIconButton(Icons.mic_none),
+        );
+        micBtn.onPressed!();
+        expect(observer.pushed, hasLength(2));
+        final micRoute = observer.pushed.last as MaterialPageRoute;
+        expect(micRoute.builder(pageContext), isA<SongRecognitionPage>());
+
+        // 收起 push 的两条路由，别悬在栈上
+        final nav = tester.state<NavigatorState>(
+          find.byType(Navigator).first,
+        );
+        nav.pop();
+        nav.pop();
+        expect(tester.takeException(), isNull);
       } finally {
         _teardown(kugou, player, favorites, localFavorites);
       }
@@ -218,6 +321,17 @@ void main() {
       }
     });
   });
+}
+
+/// push 路由记录器：只记 didPush，供顶栏圆钮跳转目标断言
+/// （目标页不真实构建，取 route.builder 产物判类型）。
+class _RouteRecorder extends NavigatorObserver {
+  final List<Route<dynamic>> pushed = [];
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pushed.add(route);
+  }
 }
 
 void _markLocalServerReady() {

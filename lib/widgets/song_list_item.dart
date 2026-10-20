@@ -7,6 +7,7 @@ import '../core/theme/app_theme.dart';
 import '../core/theme/squircle.dart';
 import '../core/utils/app_toast.dart';
 import '../data/models/song.dart';
+import '../modules/library/local_song_edit_sheet.dart';
 import '../modules/player/comments_view.dart';
 import '../providers/favorites_provider.dart';
 import '../providers/local_favorites_provider.dart';
@@ -71,6 +72,20 @@ class SongListItem extends StatelessWidget {
     this.onSelectToggle,
   });
 
+  /// more 钮点击路由：宿主传入 [onMoreTap] 回调（自定义菜单，如云盘
+  /// 单曲删除）时调回调；未传时打开内置更多菜单 [_showMoreMenu]。
+  ///
+  /// 修复 onMoreTap 自引入起从未接线的死线——此前 more 钮恒开内置
+  /// 菜单，宿主回调（含删除等关键入口）被静默遮蔽。
+  void _handleMoreTap(BuildContext context) {
+    final onMoreTap = this.onMoreTap;
+    if (onMoreTap != null) {
+      onMoreTap();
+    } else {
+      _showMoreMenu(context);
+    }
+  }
+
   void _showMoreMenu(BuildContext context) {
     showM3EModalBottomSheet(
       context: context,
@@ -103,11 +118,26 @@ class SongListItem extends StatelessWidget {
                 );
               },
             ),
-            // 本地音乐（有本地文件路径）：提供 Lyrico 外部编辑入口（公开功能）
-            if (!song.isOnline && song.localPath != null)
+            // 本地音乐（有本地文件路径）：两个编辑入口，分工不同——
+            // ①「编辑歌曲信息」：应用内编辑器（local_song_edit_sheet），
+            //    只改本机曲库记录（LibraryProvider 内存态 + SharedPreferences
+            //    缓存），不写音频文件；重新扫描会被文件标签覆盖；
+            // ②「用 Lyrico 编辑标签」：把文件交给外部 Lyrico 写音频文件
+            //    内嵌标签（未安装则提示，下次扫描才反映到曲库）。
+            if (!song.isOnline && song.localPath != null) ...[
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
                 title: const Text('编辑歌曲信息'),
+                subtitle: const Text('修改本机曲库中显示的歌名/歌手/专辑'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  showLocalSongEditSheet(context, song);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.sell_outlined),
+                title: const Text('用 Lyrico 编辑标签'),
+                subtitle: const Text('写入音频文件内的标签'),
                 onTap: () async {
                   Navigator.pop(ctx);
                   final r = await LyricoEditor.launchLyricoEdit(song.localPath!);
@@ -118,6 +148,7 @@ class SongListItem extends StatelessWidget {
                   }
                 },
               ),
+            ],
             // 可选扩展：私有构建注入的额外菜单条目（默认无）
             ...?SongListItem.extraMenuTilesBuilder?.call(ctx, song),
             ListTile(
@@ -298,7 +329,7 @@ class SongListItem extends StatelessWidget {
           _iconAction(
             colorScheme,
             Icons.more_vert,
-            () => _showMoreMenu(context),
+            () => _handleMoreTap(context),
           ),
         ];
       case SongTrailingActions.full:
@@ -314,7 +345,11 @@ class SongListItem extends StatelessWidget {
             favoritesProvider,
             localFavoritesProvider,
           ),
-          _iconAction(colorScheme, Icons.more_vert, () => _showMoreMenu(context)),
+          _iconAction(
+            colorScheme,
+            Icons.more_vert,
+            () => _handleMoreTap(context),
+          ),
         ];
     }
   }

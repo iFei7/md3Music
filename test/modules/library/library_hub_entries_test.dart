@@ -1,9 +1,11 @@
 /// 本地音乐页结构测试（去快捷宫格改版后）。
 ///
 /// 改版契约：原「音乐库入口区」两行三列快捷宫格（我的收藏/歌单/专辑/
-/// 歌手/最近播放/扫描状态）整类移除；扫描入口收敛为顶栏扫描钮（进扫描
-/// 状态页）+ 面板空态「扫描音乐」按钮；搜索入口为顶栏常驻玻璃圆钮
-/// （聚焦面板搜索框，聚焦行为见 library_search_capsule_test.dart）。
+/// 歌手/最近播放/扫描状态）整类移除；扫描入口收敛为顶栏扫描钮（trailing
+/// 常驻，进扫描状态页）+ 面板空态「扫描音乐」按钮；搜索入口为顶栏
+/// 搜索玻璃圆钮（actions 区，随内层歌曲列表滚动浮现，聚焦行为见
+/// library_search_capsule_test.dart，滚动浮现见
+/// library_page_topbar_scroll_test.dart）。
 /// 5 tab 面板 / 空态 / initialTab 契约保持不变。
 library;
 
@@ -27,8 +29,9 @@ import 'package:md3music/widgets/common/sonify_title_scaffold.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 顶栏常驻搜索钮 / 扫描钮的定位 key（library_page.dart 内注入，样式
-/// 借用 library_hub_page 顶栏玻璃圆钮规格）。
+/// 顶栏搜索钮 / 扫描钮的定位 key（library_page.dart 内注入，样式
+/// 借用 library_hub_page 顶栏玻璃圆钮规格；搜索钮在 actions 区随
+/// 内层列表滚动浮现，扫描钮在 trailing 常驻）。
 const _kSearchButtonKey = ValueKey('library-local-search');
 const _kScanButtonKey = ValueKey('library-scan');
 
@@ -76,14 +79,6 @@ Future<void> _settleMusicRestore(WidgetTester tester) async {
   }
 }
 
-/// 让顶栏 actions 区（扫描钮，随栏体 120ms 淡入且未滚动时 IgnorePointer）
-/// 可点击：拖动列表使 showBarBackground 置真。
-Future<void> _revealTopBarActions(WidgetTester tester) async {
-  await tester.drag(find.byType(CustomScrollView), const Offset(0, -120));
-  await tester.pump();
-  await tester.pump(const Duration(milliseconds: 200));
-}
-
 void main() {
   testWidgets('本地音乐页移除上方快捷宫格，顶栏常驻搜索钮 + 扫描钮，空态保留',
       (tester) async {
@@ -101,11 +96,11 @@ void main() {
     // SonifyTitleScaffold 骨架与固定大标题「本地音乐」保留
     expect(find.byType(SonifyTitleScaffold), findsOneWidget);
     expect(find.text('本地音乐'), findsWidgets);
-    // 顶栏常驻搜索玻璃圆钮（trailing；空库下面板无搜索栏，
-    // Icons.search 仅此一处）
+    // 顶栏搜索玻璃圆钮（actions 区；空库无列表可滚故不浮现，但控件
+    // 在场——Icons.search 仅此一处）
     expect(find.byKey(_kSearchButtonKey), findsOneWidget);
     expect(find.byIcon(Icons.search), findsOneWidget);
-    // 扫描钮（顶栏 actions；页面级 FAB 与面板尾部钮已删，
+    // 扫描钮（trailing 常驻；页面级 FAB 与面板尾部钮已删，
     // 全页 Icons.add 仅此一处）
     expect(find.byIcon(Icons.add), findsOneWidget);
     // 空态与空态「扫描音乐」按钮保留
@@ -113,13 +108,13 @@ void main() {
     expect(find.text('扫描音乐'), findsOneWidget);
   });
 
-  testWidgets('扫描钮点击进入扫描状态页（替代原 FAB 扫描菜单直调）',
+  testWidgets('扫描钮点击进入扫描状态页（trailing 常驻，无需滚动即可点）',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
     await _pumpLibraryPage(tester);
 
-    // actions 随栏体淡入，先滚动露出（解除 IgnorePointer）再点
-    await _revealTopBarActions(tester);
+    // 扫描钮常驻 trailing（不随滚动淡入、无 IgnorePointer 门控）：
+    // 不做任何滚动直接点
     await tester.tap(find.byKey(_kScanButtonKey));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));

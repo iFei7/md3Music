@@ -105,6 +105,26 @@ class LocalMusicRepository {
     await prefs.remove(_cachedAtKey);
   }
 
+  /// 更新单首歌曲信息（应用内「编辑歌曲信息」保存用）。
+  ///
+  /// 读当前缓存列表 → 按 id 替换 → 整体回写（与 [saveSongs] 同格式，
+  /// 下次启动恢复 / 重扫前生效的都是编辑后的值）。歌曲不在缓存中
+  /// （如库被清空后重扫前）或写盘异常时返回 false，不抛异常，由
+  /// 调用方 Toast 提示。
+  Future<bool> updateSong(Song updated) async {
+    try {
+      final songs = await getSavedSongs();
+      final index = songs.indexWhere((s) => s.id == updated.id);
+      if (index < 0) return false;
+      songs[index] = updated;
+      await saveSongs(songs);
+      return true;
+    } catch (e) {
+      debugPrint('[LocalMusicRepository] 更新歌曲失败: $e');
+      return false;
+    }
+  }
+
   /// 获取用户排除的文件夹列表。
   Future<List<String>> getExcludedFolders() async {
     final prefs = await SharedPreferences.getInstance();

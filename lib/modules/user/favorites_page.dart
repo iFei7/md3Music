@@ -317,11 +317,11 @@ class _FavoritesPageState extends State<FavoritesPage>
     ]);
     // 歌单就位后解析「我喜欢」动态封面（不阻塞主加载）
     unawaited(_resolveMyFavoriteCover());
-    // 普通歌单无封面时旁路解析首曲封面（串行限流，失败静默）
+    // 普通歌单无封面时旁路解析末曲封面（串行限流，失败静默）
     unawaited(_resolveMissingCovers());
   }
 
-  /// 为 `coverUrl` 为空的普通歌单解析首曲封面，限流口径同 hub：
+  /// 为 `coverUrl` 为空的普通歌单解析末曲封面，限流口径同 hub：
   /// 每轮最多 8 个、串行 for（并发 1）、同 key 只尝试一次、失败静默。
   /// 「我喜欢」由 [_resolveMyFavoriteCover] 独立处理，不在此列。
   Future<void> _resolveMissingCovers() async {
@@ -336,7 +336,7 @@ class _FavoritesPageState extends State<FavoritesPage>
         final key = HiddenPlaylistsCache.playlistKey(playlist);
         if (_covers.containsKey(key)) continue;
         if (!_coverAttempted.add(key)) continue;
-        final url = await resolveFirstSongCover(playlist, cached: _covers);
+        final url = await resolveLastSongCover(playlist, cached: _covers);
         if (!mounted) return;
         if (url != null && url.isNotEmpty) {
           setState(() => _covers[key] = url);

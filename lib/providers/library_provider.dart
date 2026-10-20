@@ -168,6 +168,44 @@ class LibraryProvider extends ChangeNotifier {
     }
   }
 
+  /// 更新本地歌曲信息（应用内「编辑歌曲信息」保存用）。
+  ///
+  /// 以 copyWith 式**新实例**替换 [_songs] 中对应歌曲（其余字段不动），
+  /// 再用 `_repository.buildAlbums/Artists/Folders` 重建派生列表（与
+  /// [loadSavedSongs] 同口径），持久化成功后 [notifyListeners]。
+  ///
+  /// **Selector 铁律**：[_songs] 与派生列表均整体换新实例（绝不在原
+  /// list 上原地 mutate），Consumer/Selector 才能感知集合级变化。
+  ///
+  /// 注意：重新扫描（[loadLocalMusic]）会以音频文件标签覆盖本次编辑
+  /// ——本编辑只改本机曲库记录，不写音频文件（写文件标签见更多菜单
+  /// 「用 Lyrico 编辑标签」）。
+  Future<bool> updateSongInfo(
+    String songId, {
+    String? title,
+    String? artist,
+    String? album,
+  }) async {
+    final index = _songs.indexWhere((s) => s.id == songId);
+    if (index < 0) return false;
+    final current = _songs[index];
+    final updated = current.copyWith(
+      title: title ?? current.title,
+      artist: artist ?? current.artist,
+      album: album ?? current.album,
+    );
+
+    // 整体换新实例（Selector 铁律）：拷贝后替换目标位
+    _songs = List<Song>.from(_songs)..[index] = updated;
+    _albums = _repository.buildAlbums(_songs);
+    _artists = _repository.buildArtists(_songs);
+    _folders = _repository.buildFolders(_songs);
+
+    final persisted = await _repository.updateSong(updated);
+    notifyListeners();
+    return persisted;
+  }
+
   /// 通过文件夹选择器添加扫描目录。
   Future<bool> addScanFolder() async {
     final path = await FolderPickerService.pickFolder();

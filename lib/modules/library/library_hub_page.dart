@@ -173,7 +173,7 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     unawaited(_resolveMissingCovers());
   }
 
-  /// 为 `coverUrl` 为空的歌单解析首曲封面（缓存 → 本地歌曲 → 单次轻请求）。
+  /// 为 `coverUrl` 为空的歌单解析末曲封面（缓存 → 本地歌曲 → 末页轻请求）。
   ///
   /// 限流：每轮最多 8 个歌单；串行 for（并发 1）；同一歌单在本页生命周期
   /// 内最多尝试一次（[_coverAttempted]）；整体失败静默，只回退占位图。
@@ -189,7 +189,7 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
         final key = HiddenPlaylistsCache.playlistKey(playlist);
         if (_covers.containsKey(key)) continue;
         if (!_coverAttempted.add(key)) continue;
-        final url = await resolveFirstSongCover(playlist, cached: _covers);
+        final url = await resolveLastSongCover(playlist, cached: _covers);
         if (!mounted) return;
         if (url != null && url.isNotEmpty) {
           setState(() => _covers[key] = url);

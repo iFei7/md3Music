@@ -58,18 +58,18 @@ const List<TabItem> kDefaultTabs = [
 
 /// 可选 Tab（默认隐藏，需在设置页手动开启）。
 ///
-/// v7 起收藏由默认降级加入本列表；最近播放/扫描状态为原音乐库子页面中
-/// 保留的两个可独立导航项（歌单/专辑/歌手/文件夹/本地收藏已下线）。
+/// v7 起收藏由默认降级加入本列表；最近播放为原音乐库子页面中保留的可
+/// 独立导航项（歌单/专辑/歌手/文件夹/本地收藏已下线）。v8 起「扫描状态」
+/// 下线：本地音乐页顶栏扫描钮仍进扫描页，只是不再作为底部 tab 项。
 const List<TabItem> kOptionalTabs = [
   TabItem(id: 'favorites', label: '收藏'),
   TabItem(id: 'recognition', label: '听歌识曲'),
   TabItem(id: 'audiobook', label: '听书'),
   TabItem(id: 'settings', label: '设置'),
   TabItem(id: 'recent', label: '最近播放'),
-  TabItem(id: 'scan', label: '扫描状态'),
 ];
 
-/// 所有可用 Tab（默认显示 + 可选，共 10 项）。
+/// 所有可用 Tab（默认显示 + 可选，共 9 项；v8 起移除扫描状态）。
 const List<TabItem> kAllAvailableTabs = [
   TabItem(id: 'discover', label: '首页'),
   TabItem(id: 'library', label: '音乐库'),
@@ -80,7 +80,6 @@ const List<TabItem> kAllAvailableTabs = [
   TabItem(id: 'audiobook', label: '听书'),
   TabItem(id: 'settings', label: '设置'),
   TabItem(id: 'recent', label: '最近播放'),
-  TabItem(id: 'scan', label: '扫描状态'),
 ];
 
 /// 管理主页底部导航 Tab 的显示/隐藏和排序。
@@ -130,8 +129,12 @@ class TabConfigProvider extends ChangeNotifier {
       // 降级为可选（默认隐藏）；FM/搜索升级为默认（老用户立即可见）；
       // user 与歌单/专辑/歌手/文件夹/本地收藏下线，持久化中的残留 id
       // 由 v7 块剔除并回写（见下方 v7 块）。
+      // v8（移除「扫描状态」Tab）：scan 不再是底部 tab 项（本地音乐页
+      // 顶栏扫描钮仍进扫描页），持久化顺序与隐藏集合中的 scan 残留由
+      // v8 块剔除并回写（见下方 v8 块）；resetToDefault/_load 默认路径
+      // 随 kAllAvailableTabs/kOptionalTabs 不再含 scan。
       final fromVersion = await _repo.getTabConfigMigrationVersion();
-      const tabConfigMigrationVersion = 7;
+      const tabConfigMigrationVersion = 8;
       if (fromVersion < 2) {
         if (fromVersion < 1) {
           _hiddenTabs..remove('favorites')..remove('library');
@@ -187,6 +190,15 @@ class TabConfigProvider extends ChangeNotifier {
         _hiddenTabs..removeAll({'fm', 'search'})..add('favorites');
         _allTabs.removeWhere((t) => kRetiredTabIds.contains(t.id));
         _hiddenTabs.removeAll(kRetiredTabIds);
+        await _repo.setTabOrder([for (final t in _allTabs) t.id]);
+      }
+      // v8：移除「扫描状态」可选 Tab——本地音乐页顶栏扫描钮仍进扫描页，
+      // 只是不再作为底部 tab 项。scan 从完整顺序中剔除、从隐藏集合移除
+      // 并回写持久化 order。本块只跑一次，之后的用户操作不受影响；幂等：
+      // 无 scan 残留时无副作用。
+      if (fromVersion < 8) {
+        _allTabs.removeWhere((t) => t.id == 'scan');
+        _hiddenTabs.remove('scan');
         await _repo.setTabOrder([for (final t in _allTabs) t.id]);
       }
       if (fromVersion < tabConfigMigrationVersion) {

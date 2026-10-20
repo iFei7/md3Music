@@ -222,7 +222,6 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
               index,
             );
           },
-          onMoreTap: () {},
         );
       },
     );

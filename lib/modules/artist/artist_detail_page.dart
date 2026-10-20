@@ -1082,7 +1082,6 @@ class _ArtistDetailPageState extends State<ArtistDetailPage> {
                             song: song,
                             isSelectMode: _multiSelect.isSelectMode,
                             isSelected: _multiSelect.isSelected(song.id),
-                            onMoreTap: () {},
                           ),
                         );
                       },

@@ -3,17 +3,22 @@ import 'package:md3music/data/repositories/settings_repository.dart';
 import 'package:md3music/providers/tab_config_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 主页 Tab 默认配置测试（v7：默认 Tab = 首页/音乐库/FM/搜索）。
+/// 主页 Tab 默认配置测试（v7：默认 Tab = 首页/音乐库/FM/搜索；
+/// v8：移除「扫描状态」可选 Tab——本地音乐页顶栏扫描钮仍进扫描页，
+/// 只是不再作为底部 tab 项）。
 ///
 /// v7 起收藏由默认降级为可选 Tab（默认隐藏）；「我的」（user）与音乐库
 /// 子页面（歌单/专辑/歌手/文件夹/本地收藏）整体下线；老用户经 v7 迁移：
 /// fm/search 出隐藏集合（立即可见新默认）、favorites 入隐藏集合
 /// （收藏降级）、已下线 id 从持久化顺序/隐藏集合剔除并回写。
+/// v8：scan 从 kOptionalTabs/kAllAvailableTabs 下线，老用户经 v8 迁移
+/// 从持久化顺序与隐藏集合剔除 scan 并回写（resetToDefault/_load 默认
+/// 路径随之不再含 scan）。
 void main() {
-  /// v7 起下线的 tab id（user + 音乐库子页面，不含保留的 recent/scan）。
-  const kRetiredTabIds = {'user', 'playlists', 'albums', 'artists', 'folders', 'local_favorites'};
+  /// v7 起下线的 tab id（user + 音乐库子页面；v8 起 scan 亦下线）。
+  const kRetiredTabIds = {'user', 'playlists', 'albums', 'artists', 'folders', 'local_favorites', 'scan'};
 
-  /// v7 全部可用 Tab（10 项，按 kAllAvailableTabs 顺序）。
+  /// v8 全部可用 Tab（9 项，按 kAllAvailableTabs 顺序）。
   const kAllTabIds = [
     'discover',
     'library',
@@ -24,20 +29,18 @@ void main() {
     'audiobook',
     'settings',
     'recent',
-    'scan',
   ];
 
   /// v7 默认可见 Tab（4 项）。
   const kDefaultVisibleIds = ['discover', 'library', 'fm', 'search'];
 
-  /// v7 默认隐藏的可选 Tab（6 项）。
+  /// v8 默认隐藏的可选 Tab（5 项，v8 起移除 scan）。
   const kOptionalHiddenIds = [
     'favorites',
     'recognition',
     'audiobook',
     'settings',
     'recent',
-    'scan',
   ];
 
   testWidgets('全新安装：默认 Tab 为 首页/音乐库/FM/搜索，其余可选 Tab 默认隐藏', (tester) async {
@@ -52,7 +55,7 @@ void main() {
       kDefaultVisibleIds,
       reason: 'v7 起默认 Tab 应为 首页/音乐库/FM/搜索',
     );
-    // 收藏/识曲/听书/设置/最近播放/扫描状态默认隐藏
+    // 收藏/识曲/听书/设置/最近播放默认隐藏（v8 起无扫描状态）
     expect(
       provider.hiddenTabs,
       containsAll(kOptionalHiddenIds),
@@ -75,11 +78,11 @@ void main() {
       isNot(contains('favorites')),
       reason: '收藏已降级为可选 Tab，默认隐藏',
     );
-    // 全部可用 Tab 恰为 10 项，且不含任何已下线 id
+    // 全部可用 Tab 恰为 9 项（v8 移除 scan），且不含任何已下线 id
     expect(
       provider.allTabs.map((t) => t.id).toList(),
       kAllTabIds,
-      reason: 'v7 全部可用 Tab 应为 10 项且按 kAllAvailableTabs 排序',
+      reason: 'v8 全部可用 Tab 应为 9 项且按 kAllAvailableTabs 排序',
     );
     for (final id in kRetiredTabIds) {
       expect(
@@ -124,7 +127,7 @@ void main() {
     expect(
       provider.allTabs.map((t) => t.id).toList(),
       kAllTabIds,
-      reason: '重置后完整列表应为 10 项',
+      reason: '重置后完整列表应为 9 项（v8 移除 scan）',
     );
   });
 
@@ -168,24 +171,24 @@ void main() {
         reason: '已下线 tab（$id）不应从持久化顺序中恢复',
       );
     }
-    // 补充新增 tab：v7 新增的 recognition/audiobook/settings/recent/scan
+    // 补充新增 tab：v7 新增的 recognition/audiobook/settings/recent
     // 不在持久化 order 中，一律默认隐藏
     expect(
       provider.hiddenTabs,
-      containsAll(['recognition', 'audiobook', 'settings', 'recent', 'scan']),
+      containsAll(['recognition', 'audiobook', 'settings', 'recent']),
       reason: '追加的新 tab 一律默认隐藏',
     );
-    // 迁移版本已推进到 7（持久化）
+    // 迁移版本已推进到 8（持久化；v8 移除 scan）
     expect(
       await SettingsRepository().getTabConfigMigrationVersion(),
-      7,
-      reason: 'v7 迁移后版本号应写入 7',
+      8,
+      reason: 'v8 迁移后版本号应写入 8',
     );
   });
 
-  testWidgets('v6 → v7 升级：fm/search 出隐藏、favorites 入隐藏、已下线 id prune 并回写', (tester) async {
+  testWidgets('v6 → v8 升级：fm/search 出隐藏、favorites 入隐藏、已下线 id（含 scan）prune 并回写', (tester) async {
     // 模拟已完成 v6 迁移的老用户持久化状态：order 为 v6 的 16 项
-    // （含 user 与音乐库子页面）、隐藏集合为 v6 的 12 个可选 Tab。
+    // （含 user 与音乐库子页面、scan）、隐藏集合为 v6 的 12 个可选 Tab。
     SharedPreferences.setMockInitialValues({
       'settings_tab_config_migration_version': 6,
       'settings_tab_order': [
@@ -225,11 +228,11 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    // 迁移版本推进到 7
+    // 迁移版本推进到 8（v7 + v8 两块依次执行）
     expect(
       await SettingsRepository().getTabConfigMigrationVersion(),
-      7,
-      reason: 'v6 → v7 升级后版本号应写入 7',
+      8,
+      reason: 'v6 → v8 升级后版本号应写入 8',
     );
     // fm/search 出隐藏集合（升级为默认 Tab，老用户立即可见）
     expect(
@@ -248,11 +251,11 @@ void main() {
       isTrue,
       reason: 'v7 迁移应把 favorites 加入隐藏集合',
     );
-    // 已下线 id 从隐藏集合中剔除（保留 recent/scan）
+    // 已下线 id 从隐藏集合中剔除（v8 起 scan 亦下线）
     expect(
       provider.hiddenTabs,
-      {'favorites', 'recognition', 'audiobook', 'settings', 'recent', 'scan'},
-      reason: 'v7 迁移后隐藏集合应为 6 个可选 Tab（已下线 id 被剔除）',
+      {'favorites', 'recognition', 'audiobook', 'settings', 'recent'},
+      reason: 'v8 迁移后隐藏集合应为 5 个可选 Tab（已下线 id 含 scan 被剔除）',
     );
     // 已下线 id 从完整顺序中剔除并回写
     expect(
@@ -267,17 +270,16 @@ void main() {
         'audiobook',
         'settings',
         'recent',
-        'scan',
       ],
-      reason: 'v7 迁移后完整顺序应为 10 项（user/歌单/专辑/歌手/文件夹/本地收藏被剔除）',
+      reason: 'v8 迁移后完整顺序应为 9 项（user/歌单/专辑/歌手/文件夹/本地收藏/scan 被剔除）',
     );
     // 老用户可见集合：默认四项（收藏降级后隐藏）
     expect(
       provider.visibleTabs.map((t) => t.id).toList(),
       kDefaultVisibleIds,
-      reason: 'v7 迁移后可见 tab 应为默认四项',
+      reason: 'v8 迁移后可见 tab 应为默认四项',
     );
-    // 回写验证：持久化 order 已不含已下线 id
+    // 回写验证：持久化 order 已不含已下线 id（含 scan）
     final persistedOrder = await SettingsRepository().getTabOrder();
     expect(persistedOrder, isNotNull);
     for (final id in kRetiredTabIds) {
@@ -289,7 +291,7 @@ void main() {
     }
   });
 
-  testWidgets('v6 → v7 升级：老用户已开启的收藏/识曲保持原有显隐语义（favorites 强制降级）', (tester) async {
+  testWidgets('v6 → v8 升级：老用户已开启的收藏/识曲保持原有显隐语义（favorites 强制降级）', (tester) async {
     // 模拟 v6 老用户：收藏与识曲已手动开启（不在隐藏集合），
     // 且主动开启过已下线的「歌手」tab（order 含 artists）。
     SharedPreferences.setMockInitialValues({
@@ -329,6 +331,17 @@ void main() {
       isNot(contains('artists')),
       reason: '已下线 tab（artists）应从完整列表剔除',
     );
+    // v8：scan 从完整列表与隐藏集合中剔除
+    expect(
+      provider.allTabs.map((t) => t.id),
+      isNot(contains('scan')),
+      reason: 'v8 起 scan 不再是 tab 项，应从完整列表剔除',
+    );
+    expect(
+      provider.hiddenTabs,
+      isNot(contains('scan')),
+      reason: 'v8 迁移应把 scan 移出隐藏集合',
+    );
     // 可见集合：默认四项 + 识曲
     expect(
       provider.visibleTabs.map((t) => t.id).toList(),
@@ -337,9 +350,76 @@ void main() {
     );
   });
 
-  testWidgets('v7 幂等：重复加载不改变迁移结果', (tester) async {
+  testWidgets('v7 → v8 升级：scan 从持久化顺序/隐藏集合剔除并回写', (tester) async {
+    // 模拟已完成 v7 迁移、且用户手动开启过「扫描状态」的老用户：
+    // order 含 scan 且 hidden 不含 scan（scan 曾可见）。
     SharedPreferences.setMockInitialValues({
       'settings_tab_config_migration_version': 7,
+      'settings_tab_order': [
+        'discover',
+        'library',
+        'fm',
+        'search',
+        'favorites',
+        'recognition',
+        'audiobook',
+        'settings',
+        'recent',
+        'scan',
+      ],
+      'settings_hidden_tabs': [
+        'favorites',
+        'recognition',
+        'audiobook',
+        'settings',
+        'recent',
+      ],
+    });
+    final provider = TabConfigProvider();
+    await tester.pump();
+    await tester.pump();
+
+    // scan 从完整顺序剔除（本地音乐页顶栏扫描钮仍进扫描页，只是不再是 tab 项）
+    expect(
+      provider.allTabs.map((t) => t.id),
+      isNot(contains('scan')),
+      reason: 'v8 迁移应把 scan 从完整顺序剔除',
+    );
+    expect(
+      provider.allTabs.map((t) => t.id).toList(),
+      kAllTabIds,
+      reason: 'v8 迁移后完整顺序应为 9 项',
+    );
+    // scan 从隐藏集合移除（原本就不在，幂等无副作用）
+    expect(
+      provider.hiddenTabs,
+      isNot(contains('scan')),
+      reason: 'v8 迁移后隐藏集合不应含 scan',
+    );
+    // 可见集合：默认四项（scan 原可见，v8 下线后从可见集合自然消失）
+    expect(
+      provider.visibleTabs.map((t) => t.id).toList(),
+      kDefaultVisibleIds,
+      reason: 'v8 迁移后可见 tab 为默认四项（scan 下线后不再可见）',
+    );
+    // 回写验证：持久化 order 已不含 scan
+    final persistedOrder = await SettingsRepository().getTabOrder();
+    expect(
+      persistedOrder,
+      isNot(contains('scan')),
+      reason: '持久化 order 中的 scan 应被剔除并回写',
+    );
+    // 迁移版本推进到 8
+    expect(
+      await SettingsRepository().getTabConfigMigrationVersion(),
+      8,
+      reason: 'v7 → v8 升级后版本号应写入 8',
+    );
+  });
+
+  testWidgets('v8 幂等：重复加载不改变迁移结果', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'settings_tab_config_migration_version': 8,
       'settings_tab_order': kAllTabIds,
       'settings_hidden_tabs': kOptionalHiddenIds,
     });
@@ -350,17 +430,23 @@ void main() {
     expect(
       provider.visibleTabs.map((t) => t.id).toList(),
       kDefaultVisibleIds,
-      reason: 'v7 持久化状态下可见 tab 应为默认四项',
+      reason: 'v8 持久化状态下可见 tab 应为默认四项',
     );
     expect(
       provider.hiddenTabs,
       containsAll(kOptionalHiddenIds),
-      reason: 'v7 持久化状态下可选 Tab 保持隐藏',
+      reason: 'v8 持久化状态下可选 Tab 保持隐藏',
     );
     expect(
       provider.allTabs.map((t) => t.id).toList(),
       kAllTabIds,
-      reason: 'v7 持久化状态下完整列表保持 10 项',
+      reason: 'v8 持久化状态下完整列表保持 9 项',
+    );
+    // 迁移版本维持 8（不重复回写语义）
+    expect(
+      await SettingsRepository().getTabConfigMigrationVersion(),
+      8,
+      reason: 'v8 持久化状态下版本号维持 8',
     );
   });
 

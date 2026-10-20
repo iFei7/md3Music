@@ -1,5 +1,5 @@
-/// [resolveFirstSongCover] 单测：缓存短路、有封面不解析、本地歌曲缓存、
-/// 单次轻请求、https 升级、失败静默。
+/// [resolveLastSongCover] 单测：缓存短路、有封面不解析、本地歌曲缓存末曲语义、
+/// 末页轻请求、就近兜底、https 升级、失败静默。
 ///
 /// 注：KugouApiClient 单例构造即读 SharedPreferences，故每个用例都在
 /// `setMockInitialValues` 之后才触碰单例（项目已知坑：mock 未就位会让
@@ -24,14 +24,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../test_helpers/fake_secure_storage.dart';
 
 /// 无封面歌单（globalCollectionId 存在 → playlistKey 走它）。
-KugouPlaylistBrief _brief({String? coverUrl}) => KugouPlaylistBrief(
-  id: 'pl-1',
-  name: '测试歌单',
-  coverUrl: coverUrl,
-  songCount: 3,
-  globalCollectionId: 'gc-1',
-  listId: 'lid-1',
-);
+KugouPlaylistBrief _brief({String? coverUrl, int songCount = 3}) =>
+    KugouPlaylistBrief(
+      id: 'pl-1',
+      name: '测试歌单',
+      coverUrl: coverUrl,
+      songCount: songCount,
+      globalCollectionId: 'gc-1',
+      listId: 'lid-1',
+    );
 
 Song _song(String id, {String? artworkUri}) => Song(
   id: id,
@@ -69,16 +70,34 @@ class _StubAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-/// 歌单歌曲接口响应：首条无封面、第二条带 http 封面（验证取第一个非空）。
+/// 末页歌曲接口响应：队首与末曲都带封面（验证取最后一个而非第一个）。
 String _songsBody() => jsonEncode({
   'data': {
     'info': [
-      {'hash': 'h0', 'songname': '无封面'},
+      {
+        'hash': 'h0',
+        'songname': '队首',
+        'sizable_cover': 'http://img.example/head.jpg',
+      },
       {
         'hash': 'h1',
-        'songname': '有封面',
-        'sizable_cover': 'http://img.example/a.jpg',
+        'songname': '末曲',
+        'sizable_cover': 'http://img.example/tail.jpg',
       },
+    ],
+  },
+});
+
+/// 末曲无封面、倒数第二首带封面（验证向队首就近兜底）。
+String _songsBodyTailNoCover() => jsonEncode({
+  'data': {
+    'info': [
+      {
+        'hash': 'h0',
+        'songname': '倒数第二',
+        'sizable_cover': 'http://img.example/second-last.jpg',
+      },
+      {'hash': 'h1', 'songname': '末曲无封面'},
     ],
   },
 });
@@ -112,7 +131,7 @@ void main() {
   });
 
   test('缓存命中：直接返回，不读本地缓存也不发请求', () async {
-    final cover = await resolveFirstSongCover(
+    final cover = await resolveLastSongCover(
       _brief(),
       cached: {'gc-1': 'https://img.example/cached.jpg'},
     );
@@ -122,7 +141,7 @@ void main() {
   });
 
   test('缓存命中优先于歌单自带封面', () async {
-    final cover = await resolveFirstSongCover(
+    final cover = await resolveLastSongCover(
       _brief(coverUrl: 'https://img.example/own.jpg'),
       cached: {'gc-1': 'https://img.example/cached.jpg'},
     );
@@ -132,7 +151,7 @@ void main() {
   });
 
   test('歌单自带封面非空：返回 null（不解析）', () async {
-    final cover = await resolveFirstSongCover(
+    final cover = await resolveLastSongCover(
       _brief(coverUrl: 'https://img.example/own.jpg'),
       cached: const {},
     );
@@ -141,7 +160,7 @@ void main() {
     expect(calls, isEmpty);
   });
 
-  test('本地歌曲缓存命中：正序取第一个非空封面并升级 https + 写缓存', () async {
+  test('本地歌曲缓存命中：倒序取最后一个非空封面并升级 https + 写缓存', () async {
     final brief = _brief();
     // 本地缓存 key 与详情页/收藏页同口径（PlaylistSongsLoader.cacheKey）
     final cacheKey = PlaylistSongsLoader.cacheKey(
@@ -151,47 +170,95 @@ void main() {
     await FavoriteListsCache.savePlaylistSongs(cacheKey!, [
       _song('s1'), // 无封面 → 跳过
       _song('s2', artworkUri: 'http://img.example/first.jpg'),
-      _song('s3', artworkUri: 'https://img.example/second.jpg'),
+      _song('s3', artworkUri: 'https://img.example/second.jpg'), // 末曲优先
     ]);
 
-    final cover = await resolveFirstSongCover(brief, cached: const {});
+    final cover = await resolveLastSongCover(brief, cached: const {});
 
-    expect(cover, 'https://img.example/first.jpg');
+    expect(cover, 'https://img.example/second.jpg');
     // 命中本地缓存无需网络
     expect(calls, isEmpty);
     // 已持久化（同为 https）
     expect(
       (await PlaylistCoverCache.readAll())['gc-1'],
-      'https://img.example/first.jpg',
+      'https://img.example/second.jpg',
     );
   });
 
+  test('本地缓存末曲无封面：向队首就近兜底（取最后一支带封面的歌）', () async {
+    final brief = _brief();
+    final cacheKey = PlaylistSongsLoader.cacheKey(
+      brief.toPlaylist(),
+      isInMyFavorites: true,
+    );
+    await FavoriteListsCache.savePlaylistSongs(cacheKey!, [
+      _song('s1', artworkUri: 'http://img.example/only.jpg'),
+      _song('s2'), // 末曲无封面 → 向前就近兜底到 s1
+    ]);
+
+    final cover = await resolveLastSongCover(brief, cached: const {});
+
+    expect(cover, 'https://img.example/only.jpg');
+    expect(calls, isEmpty);
+  });
+
   test('未登录且本地无缓存：静默返回 null，不发请求', () async {
-    final cover = await resolveFirstSongCover(_brief(), cached: const {});
+    final cover = await resolveLastSongCover(_brief(), cached: const {});
 
     expect(cover, isNull);
     expect(calls, isEmpty);
   });
 
-  test('已登录：本地无缓存时走单次轻请求，取首曲封面并写缓存', () async {
+  test('已登录：本地无缓存时按 songCount 算末页轻请求，取末曲封面并写缓存', () async {
     await KugouApiClient().setLoginCookies('token-x', 'uid-x');
 
-    final cover = await resolveFirstSongCover(_brief(), cached: const {});
+    // 12 首 / 每页 5 → 末页 = ceil(12/5) = 3
+    final cover = await resolveLastSongCover(
+      _brief(songCount: 12),
+      cached: const {},
+    );
 
-    expect(cover, 'https://img.example/a.jpg');
+    expect(cover, 'https://img.example/tail.jpg');
     final playlistCalls = calls
         .where((o) => o.queryParameters['listid'] == 'lid-1')
         .toList();
     expect(playlistCalls, isNotEmpty);
-    // 轻请求口径：page=1 / pagesize=5 / noCache=true
+    // 轻请求口径：page=末页 / pagesize=5 / noCache=true
     final options = playlistCalls.first;
-    expect(options.queryParameters['page'], 1);
+    expect(options.queryParameters['page'], 3);
     expect(options.queryParameters['pagesize'], 5);
     expect(options.extra['noCache'], isTrue);
     expect(
       (await PlaylistCoverCache.readAll())['gc-1'],
-      'https://img.example/a.jpg',
+      'https://img.example/tail.jpg',
     );
+  });
+
+  test('末页计算整除边界：songCount=10/pagesize=5 → page=2', () async {
+    await KugouApiClient().setLoginCookies('token-x', 'uid-x');
+
+    final cover = await resolveLastSongCover(
+      _brief(songCount: 10),
+      cached: const {},
+    );
+
+    expect(cover, 'https://img.example/tail.jpg');
+    final options = calls.firstWhere(
+      (o) => o.queryParameters['listid'] == 'lid-1',
+    );
+    expect(options.queryParameters['page'], 2);
+  });
+
+  test('已登录：末曲无封面时向队首就近兜底（取倒数第二首）', () async {
+    await KugouApiClient().setLoginCookies('token-x', 'uid-x');
+    KugouApiClient().dio.httpClientAdapter = _StubAdapter(
+      body: _songsBodyTailNoCover(),
+      calls: calls,
+    );
+
+    final cover = await resolveLastSongCover(_brief(), cached: const {});
+
+    expect(cover, 'https://img.example/second-last.jpg');
   });
 
   test('接口失败（非 200/空响应）：返回 null 不抛异常', () async {
@@ -201,10 +268,22 @@ void main() {
       calls: calls,
     );
 
-    final cover = await resolveFirstSongCover(_brief(), cached: const {});
+    final cover = await resolveLastSongCover(_brief(), cached: const {});
 
     expect(cover, isNull);
     expect(await PlaylistCoverCache.readAll(), isEmpty);
+  });
+
+  test('songCount<=0：已登录也静默返回 null，不发请求', () async {
+    await KugouApiClient().setLoginCookies('token-x', 'uid-x');
+
+    final cover = await resolveLastSongCover(
+      _brief(songCount: 0),
+      cached: const {},
+    );
+
+    expect(cover, isNull);
+    expect(calls, isEmpty);
   });
 
   test('brief 无可用 listid：已登录也不发请求，返回 null', () async {
@@ -215,7 +294,7 @@ void main() {
       globalCollectionId: 'gc-2',
     );
 
-    final cover = await resolveFirstSongCover(brief, cached: const {});
+    final cover = await resolveLastSongCover(brief, cached: const {});
 
     expect(cover, isNull);
     expect(calls, isEmpty);

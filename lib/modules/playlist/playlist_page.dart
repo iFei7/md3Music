@@ -1213,7 +1213,6 @@ class _PlaylistPageState extends State<PlaylistPage> {
                                 song: song,
                                 isSelectMode: _multiSelect.isSelectMode,
                                 isSelected: isSelected,
-                                onMoreTap: () {},
                               ),
                             );
                           },

@@ -386,7 +386,6 @@ class _RankDetailPageState extends State<RankDetailPage> {
                           songs.map((e) => e.toSong()).toList(),
                           i,
                         ),
-                    onMoreTap: () {},
                   );
                 },
               );

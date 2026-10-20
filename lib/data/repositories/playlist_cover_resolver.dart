@@ -5,22 +5,27 @@ import '../models/song.dart';
 import 'hidden_playlists_cache.dart';
 import 'playlist_cover_cache.dart';
 
-/// 为「brief 无封面」的歌单解析首曲封面。
+/// 为「brief 无封面」的歌单解析末曲封面。
 ///
 /// 取数顺序（严格）：
 /// 1. [cached] 命中 → 直接返回（免网络、免本地读）；
 /// 2. brief 自带 [KugouPlaylistBrief.coverUrl] 非空 → 返回 null
 ///    （本身有封面，不需要兜底）；
 /// 3. 本地歌曲缓存（[PlaylistSongsLoader.readCached]，与收藏页/详情页
-///    同 key 口径）正序取第一首带 `artworkUri` 的歌；
+///    同 key 口径）倒序取第一首带 `artworkUri` 的歌（即最后一首；
+///    末曲恰无封面时向队首就近兜底）；
 /// 4. 本地缓存为空且已登录：用 `subscribedListId ?? listCreateListid`
-///    发一次轻请求（`pagesize: 5`），取首曲封面
+///    按 [KugouPlaylistBrief.songCount] 计算末页
+///    （`page = ((songCount + pagesize - 1) / pagesize).toInt()`，
+///    `pagesize: 5`，`noCache: true`）发一次轻请求，取返回列表
+///    倒序第一首带封面的歌（同样向队首就近兜底）；
+///    `songCount <= 0` 时放弃网络兜底，静默返回 null
 ///    （禁止走 PlaylistSongsLoader.fetch 的全量分页链路）；
 /// 5. 命中后 http→https 升级 + 写 [PlaylistCoverCache] + 返回。
 ///
 /// 任何失败（未登录、无 listid、接口空响应、解析异常）都静默返回 null，
 /// 由调用方回退占位图，不阻塞页面加载。
-Future<String?> resolveFirstSongCover(
+Future<String?> resolveLastSongCover(
   KugouPlaylistBrief brief, {
   required Map<String, String> cached,
 }) async {
@@ -38,22 +43,27 @@ Future<String?> resolveFirstSongCover(
       playlist,
       isInMyFavorites: true,
     );
-    final localCover = _firstArtwork(localSongs);
+    final localCover = _lastArtwork(localSongs);
     if (localCover != null) return await _persist(key, localCover);
 
-    // 4. 轻请求兜底：仅登录用户（接口需要订阅后的 listid 鉴权）
+    // 4. 轻请求兜底：仅登录用户（接口需要订阅后的 listid 鉴权）。
+    // 末曲语义必须定位末页；songCount 无效（<=0）时无末页可算，
+    // 直接放弃网络兜底（静默 null），避免用 page=1 拿到首曲冒充末曲。
+    const pagesize = 5;
+    if (brief.songCount <= 0) return null;
+    final page = ((brief.songCount + pagesize - 1) / pagesize).toInt();
     final api = KugouApiClient();
     if (!api.isLoggedIn) return null;
     final listid = _listidOf(brief);
     if (listid == null) return null;
     final result = await api.getPlaylistSongsByListid(
       listid: listid,
-      page: 1,
-      pagesize: 5,
+      page: page,
+      pagesize: pagesize,
       noCache: true,
     );
     final songs = result?.songs.map((s) => s.toSong()).toList() ?? const [];
-    final remoteCover = _firstArtwork(songs);
+    final remoteCover = _lastArtwork(songs);
     if (remoteCover == null) return null;
     return await _persist(key, remoteCover);
   } catch (_) {
@@ -62,9 +72,10 @@ Future<String?> resolveFirstSongCover(
   }
 }
 
-/// 正序取第一首带封面歌曲的 artworkUri（首曲即歌单封面语义）。
-String? _firstArtwork(List<Song> songs) {
-  for (final s in songs) {
+/// 倒序取第一首带封面歌曲的 artworkUri（末曲即歌单封面语义；
+/// 末曲无封面时向队首就近兜底，与首曲语义的顺延对称）。
+String? _lastArtwork(List<Song> songs) {
+  for (final s in songs.reversed) {
     final art = s.artworkUri;
     if (art != null && art.isNotEmpty) return art;
   }

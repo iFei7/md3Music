@@ -871,7 +871,6 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                                 song: song,
                                 isSelectMode: _multiSelect.isSelectMode,
                                 isSelected: _multiSelect.isSelected(song.id),
-                                onMoreTap: () {},
                               ),
                             );
                           },

@@ -306,7 +306,6 @@ class _PurchasedPanelState extends State<PurchasedPanel> {
                 return SongListItem(
                   song: _songs[index],
                   onTap: () => _playAt(index),
-                  onMoreTap: () {},
                 );
               },
             ),

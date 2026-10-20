@@ -155,7 +155,6 @@ class _AiRecommendSheetState extends State<_AiRecommendSheet> {
                                   .read<PlayerProvider>()
                                   .playOnlinePlaylist(songs, index);
                             },
-                            onMoreTap: () {},
                           );
                         },
                       ),

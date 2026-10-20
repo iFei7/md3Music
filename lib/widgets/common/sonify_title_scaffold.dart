@@ -29,6 +29,12 @@ import '../../core/theme/app_theme.dart';
 /// 变化）及 180ms 端点吸附——与"标题位置固定"的诉求直接冲突，且小标题
 /// 与固定大标题同时可见会造成双标题，故整条折叠链路移除；短内容页的
 /// minHeight 兜底保留（保证可滚动/下拉刷新，见 [_titleZone]）。
+///
+/// 顶栏与大标题的悬浮叠加部分抽为公开组件 [SonifyTitleOverlay]：搜索页
+/// （NestedScrollView + SliverAppBar 胶囊行结构）与其余三个 tab 页
+/// （discover / library hub / fm）共用同一组件，四页顶栏几何与模糊
+/// 由构造级保证一致（批次 20，见
+/// test/modules/search/search_page_topbar_unification_test.dart）。
 class SonifyTitleScaffold extends StatefulWidget {
   const SonifyTitleScaffold({
     super.key,
@@ -38,6 +44,7 @@ class SonifyTitleScaffold extends StatefulWidget {
     this.controller,
     this.trailing,
     this.actions,
+    this.actionsVisible,
     this.titleBottomPadding = 8,
   });
 
@@ -61,7 +68,21 @@ class SonifyTitleScaffold extends StatefulWidget {
 
   /// [trailing] 左侧的动作按钮组（如搜索/识曲圆钮）。
   /// 仅在滚动后（栏体浮现时）随栏体 120ms 淡入，展开态隐藏（不挡内容）。
+  ///
+  /// 显隐信号默认随本骨架的滚动（offset > 0 即 [_showBarBackground]）；
+  /// 外层骨架不可滚动、改由页面内层列表驱动显隐时，经
+  /// [actionsVisible] 注入外部通知器覆盖（不传时行为不变）。
   final List<Widget>? actions;
+
+  /// actions 显隐的外部信号（可选）：非空时 actions 的淡入改随该
+  /// 通知器（true = 浮现），与栏体背景（[_showBarBackground]）解耦。
+  ///
+  /// 用途：页面外层为单个固定高 item、骨架本身不滚动（actions 的既有
+  /// offset>0 条件永不满足），但面板内有可滚列表——由面板把内层列表
+  /// 的滚动信号上传到此通知器（见 LibraryPage/LibraryMusicPanel 的
+  /// listScrolled 链）。不传（null）时保持既有行为：actions 随骨架
+  /// 滚动淡入（既有测试契约不变）。
+  final ValueListenable<bool>? actionsVisible;
 
   /// 大标题 item 底部留白（内容区与大标题的间距）。
   final double titleBottomPadding;
@@ -165,22 +186,20 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
               },
             ),
           ),
-          // 顶栏：单层渐变模糊带 + 右侧动作区，悬浮叠加
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: _TopBar(
+          // 顶栏 + 固定悬浮大标题：共享 overlay 组件（批次 20 抽出，
+          // 搜索页 NestedScrollView 结构同款复用）。Positioned.fill 的
+          // 全屏约束下 overlay 内部 Stack 与旧结构（_TopBar 的
+          // Positioned(top/left/right) + _PinnedLargeTitle 的
+          // Positioned）逐像素等价。
+          Positioned.fill(
+            child: SonifyTitleOverlay(
+              title: widget.title,
               showBarBackground: _showBarBackground,
               statusBarHeight: media.padding.top,
               trailing: widget.trailing,
               actions: widget.actions,
+              actionsVisible: widget.actionsVisible,
             ),
-          ),
-          // 固定悬浮大标题：不随滚动位移/缩放/溶解（反馈①）
-          _PinnedLargeTitle(
-            title: widget.title,
-            statusBarHeight: media.padding.top,
           ),
         ],
       ),
@@ -191,6 +210,75 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
   /// 首帧实测值未回传时为 0，次帧起生效。
   double _titleZone(MediaQueryData media) =>
       (_titleItemHeight - media.padding.top).clamp(0.0, double.infinity);
+}
+
+/// 四页共用的顶栏悬浮 overlay：渐变模糊带（[_TopBar]）+ 固定悬浮大标题
+/// （[_PinnedLargeTitle]）。
+///
+/// 批次 20 UI 统一：discover / library hub / fm 经 [SonifyTitleScaffold]
+/// 使用，搜索页（NestedScrollView + SliverAppBar 胶囊行结构）直接以
+/// `Positioned.fill` 叠在滚动区之上——同一组件即「标题 & 用户头像的
+/// 位置和大小、模糊完全一致」的构造级保证（跨页几何回归见
+/// test/modules/search/search_page_topbar_unification_test.dart）。
+///
+/// 用法约定：置于页面级 Stack 中、以 [Positioned.fill]（或等价全屏约束）
+/// 包裹；`showBarBackground` 由宿主页的滚动信号驱动（offset > 0 即
+/// 浮现，回顶消失）。
+class SonifyTitleOverlay extends StatelessWidget {
+  const SonifyTitleOverlay({
+    super.key,
+    required this.title,
+    required this.showBarBackground,
+    required this.statusBarHeight,
+    this.trailing,
+    this.actions,
+    this.actionsVisible,
+  });
+
+  /// 页面大标题文本（固定悬浮，不折叠）。
+  final String title;
+
+  /// 顶栏渐变模糊带可见性通知器（滚动即 true，回顶 false）。
+  final ValueListenable<bool> showBarBackground;
+
+  /// 状态栏高度（MediaQuery.padding.top；测试环境为 0）。
+  final double statusBarHeight;
+
+  /// 顶栏右侧常驻内容（如固定用户头像），不随滚动淡入出。
+  final Widget? trailing;
+
+  /// [trailing] 左侧的动作按钮组，随栏体 120ms 淡入（展开态隐藏）。
+  final List<Widget>? actions;
+
+  /// actions 显隐信号（可选）：非空时 actions 淡入改随该通知器，
+  /// 与 [showBarBackground]（栏体背景）解耦；为空时沿用
+  /// [showBarBackground]（默认行为）。见 [SonifyTitleScaffold.actionsVisible]。
+  final ValueListenable<bool>? actionsVisible;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: _TopBar(
+            showBarBackground: showBarBackground,
+            statusBarHeight: statusBarHeight,
+            trailing: trailing,
+            actions: actions,
+            actionsVisible: actionsVisible,
+          ),
+        ),
+        // 固定悬浮大标题：不随滚动位移/缩放/溶解（反馈①）
+        _PinnedLargeTitle(
+          title: title,
+          statusBarHeight: statusBarHeight,
+        ),
+      ],
+    );
+  }
 }
 
 /// 大标题占位 item：状态栏占位 + 8dp 顶距 + 20sp Bold 标题（行高 36dp，
@@ -343,12 +431,18 @@ class _TopBar extends StatelessWidget {
     required this.statusBarHeight,
     required this.trailing,
     this.actions,
+    this.actionsVisible,
   });
 
   final ValueListenable<bool> showBarBackground;
   final double statusBarHeight;
   final Widget? trailing;
   final List<Widget>? actions;
+
+  /// actions 显隐信号：非空时与栏体背景（[showBarBackground]）解耦，
+  /// 随页面内层列表滚动浮现（本地音乐页）；为空时跟随栏体背景
+  /// （默认，其余页面不变）。
+  final ValueListenable<bool>? actionsVisible;
 
   @override
   Widget build(BuildContext context) {
@@ -457,10 +551,14 @@ class _TopBar extends StatelessWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // actions 与栏体同拍：滚动即浮现
+                            // actions 与栏体同拍：滚动即浮现。
+                            // 注入了 actionsVisible 时改随外部信号
+                            // （本地音乐页的内层列表滚动），与栏体
+                            // 背景不同拍。
                             if (actions != null && actions!.isNotEmpty)
                               ValueListenableBuilder<bool>(
-                                valueListenable: showBarBackground,
+                                valueListenable:
+                                    actionsVisible ?? showBarBackground,
                                 builder: (context, visible, child) {
                                   return IgnorePointer(
                                     ignoring: !visible,

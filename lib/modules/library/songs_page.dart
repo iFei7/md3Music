@@ -376,7 +376,6 @@ class _SongsPageState extends State<SongsPage> {
                       isSelected: _multiSelect.isSelected(song.id),
                       onLongPress: () => _onItemLongPress(songs, index),
                       onTap: () => _onItemTap(songs, index),
-                      onMoreTap: () {},
                     );
                   },
                 )

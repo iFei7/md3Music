@@ -1,6 +1,5 @@
 import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/widgets.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -22,6 +21,7 @@ import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/song_list_item.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/common/user_avatar_button.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
@@ -56,11 +56,17 @@ class _SearchPageState extends State<SearchPage>
   /// 图标的显隐，不走整页 setState（避免波及 TabBarView / 结果列表）。
   final ValueNotifier<bool> _collapsed = ValueNotifier<bool>(false);
 
+  /// 顶栏渐变模糊带可见性（批次 20）：outer offset > 0 即浮现、回顶
+  /// 消失——与 SonifyTitleScaffold / SonifyTitleOverlay 的栏背景同拍，
+  /// 四页模糊行为完全一致。
+  final ValueNotifier<bool> _showBarBackground = ValueNotifier<bool>(false);
+
   /// 回顶动画展开同拍补一次焦点请求（见 [_onCollapsedSearchTap]）。
   bool _focusOnExpand = false;
 
-  /// 坍缩阈值：header 展开高 108 = 工具栏 56 + 胶囊行 52；outer offset
-  /// ≥ 52 即胶囊行被滚完（刻度 = expandedHeight − kToolbarHeight）。
+  /// 坍缩阈值：header 展开高 104 = 标题区 52 + 胶囊行 52（批次 20 起
+  /// 标题/头像移到 overlay，AppBar 只留胶囊行）；outer offset ≥ 52 即
+  /// 胶囊行被滚完（刻度 = expandedHeight − toolbarHeight = 104 − 52）。
   static const double _kCollapseThreshold = 52;
 
   late TabController _tabController;
@@ -111,11 +117,16 @@ class _SearchPageState extends State<SearchPage>
     if (mounted) setState(() {});
   }
 
-  /// 外层滚动 → 坍缩态：等值比较防抖（避免同一阈值上反复赋值触发
-  /// ValueListenableBuilder 无意义重建）。
+  /// 外层滚动 → 坍缩态 + 栏背景：等值比较防抖（避免同一阈值上反复赋值
+  /// 触发 ValueListenableBuilder 无意义重建）。
   void _onOuterScroll() {
     if (!_outerController.hasClients) return;
-    final collapsed = _outerController.offset >= _kCollapseThreshold;
+    final offset = _outerController.offset;
+    // 栏背景与 SonifyTitleScaffold 同拍：任何滚动即浮现，回顶消失
+    if (_showBarBackground.value != (offset > 0)) {
+      _showBarBackground.value = offset > 0;
+    }
+    final collapsed = offset >= _kCollapseThreshold;
     if (_collapsed.value != collapsed) {
       _collapsed.value = collapsed;
       // 展开同拍补一次焦点请求：坍缩期 TextField 不在树，
@@ -153,6 +164,7 @@ class _SearchPageState extends State<SearchPage>
     _outerController.removeListener(_onOuterScroll);
     _outerController.dispose();
     _collapsed.dispose();
+    _showBarBackground.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -255,58 +267,40 @@ class _SearchPageState extends State<SearchPage>
     final bool hostedInDockScaffold = Scaffold.maybeOf(context) != null;
     return Scaffold(
       resizeToAvoidBottomInset: !hostedInDockScaffold,
-      body: NestedScrollView(
-        controller: _outerController,
-        headerSliverBuilder: (context, innerBoxIsScrolled) {
-          return [
-            SliverAppBar(
-              floating: true,
-              pinned: true,
-              // 批次 18 UI 统一：展开态 header = 工具栏（左上角标题「搜索」+
-              // 右上角常驻用户头像）+ 其下 52dp 搜索胶囊行；pinned 收起后
-              // 仅剩标题 + 头像，胶囊随 flexibleSpace 高度收缩被裁掉。
-              // expandedHeight 不含状态栏（maxExtent = 状态栏 + 56 + 52）。
-              expandedHeight: kToolbarHeight + 52,
-              // 左上角页面标题（主题 appBarTheme 默认 centerTitle: true，
-              // 此处显式左对齐）。批次 19：与四页大标题一致的加粗
-              // 规格——显式 w800 + wght=800 字轴（保持 22sp 标题字号；
-              // 可变字体渲染中 wght 轴优先级高于 fontWeight，不写轴会被
-              // M3E emphasized 注入的 wght=500 覆盖成 Medium）。
-              centerTitle: false,
-              title: Text(
-                '搜索',
-                style: Theme.of(context).appBarTheme.titleTextStyle?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  fontVariations: const [FontVariation('wght', 800)],
-                ),
-              ),
-              // 右上角动作区：坍缩态头像左侧浮出「回顶展开」搜索图标，
-              // 展开态不渲染；头像常驻（统一组件，点击进设置页 /settings）。
-              // ValueListenableBuilder 只局部重建本 action 的显隐。
-              actions: [
-                ValueListenableBuilder<bool>(
-                  valueListenable: _collapsed,
-                  builder: (context, collapsed, _) {
-                    if (!collapsed) return const SizedBox.shrink();
-                    return IconButton(
-                      key: const ValueKey('search-collapsed-icon'),
-                      tooltip: '搜索',
-                      icon: const Icon(Icons.search),
-                      onPressed: _onCollapsedSearchTap,
-                    );
-                  },
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: UserAvatarButton(),
-                ),
-              ],
-              // 有壁纸时顶栏全透明，flexibleSpace 独立加载同一张背景图
-              // （topCenter 对齐与页面主体背景视觉连续）；列表滚到顶栏下时
-              // 被这张背景图盖住（不透底下 UI）；无壁纸时不透明 surface
-              backgroundColor: useBackgroundImage
-                  ? Colors.transparent
-                  : colorScheme.surface,
+      // 批次 20 UI 统一：滚动区（NestedScrollView，含胶囊行 header 与
+      // TabBarView 结果区）+ 共享顶栏 overlay 叠在页面级 Stack 中——
+      // overlay 与 discover / library hub / fm 三页同组件
+      // （SonifyTitleOverlay），标题/头像几何与模糊带构造级一致。
+      body: Stack(
+        children: [
+          NestedScrollView(
+            controller: _outerController,
+            headerSliverBuilder: (context, innerBoxIsScrolled) {
+              return [
+                SliverAppBar(
+                  floating: true,
+                  pinned: true,
+                  // 批次 20：页面标题「搜索」/ 右上角用户头像 / 坍缩搜索
+                  // 图标全部移到共享顶栏 overlay（SonifyTitleOverlay，见
+                  // 本 Stack 第二项）——与其余三个 tab 页同组件，几何与
+                  // 模糊完全一致。本 AppBar 只承载搜索胶囊行：展开区 =
+                  // 标题区 52（与大标题带对齐：状态栏 + 8 + 36 + 8）+
+                  // 胶囊行 52；坍缩阈值 _kCollapseThreshold=52 即胶囊行
+                  // 被滚完（刻度 = expandedHeight − toolbarHeight）。
+                  // expandedHeight 不含状态栏（maxExtent = 状态栏 + 104）。
+                  automaticallyImplyLeading: false,
+                  toolbarHeight: 52,
+                  expandedHeight: 52 + 52,
+                  // 批次 21：顶栏背景**恒透明**——顶栏的「玻璃」由共享
+                  // overlay 的模糊带承担（与 discover/library/fm 三页同
+                  // 组件同参数）。AppBar 自身若画不透明 surface，滚动后
+                  // 模糊带只会模糊到这一层纯色，真机表现为「搜索页没有
+                  // 模糊」，与三页不一致；恒透明后内容从带下滚过，模糊
+                  // 带模糊的才是真实内容（壁纸场景由下方 flexibleSpace
+                  // 的壁纸层铺底，无壁纸场景由页面主体背景兜底）。
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  scrolledUnderElevation: 0,
               flexibleSpace: Stack(
                 fit: StackFit.expand,
                 clipBehavior: Clip.hardEdge,
@@ -372,12 +366,12 @@ class _SearchPageState extends State<SearchPage>
                       }),
                     ),
                   // 搜索胶囊行（批次 9 玻璃胶囊从 title 槽迁至展开区）：
-                  // 贴 header 底部 = 工具栏（标题 + 头像）正下方；坍缩态
-                  // （outer offset ≥ 52，胶囊行已滚完）整行退场，pinned
-                  // 后仅剩标题 + 头像 + 头像左侧的搜索图标。水平位置由
-                  // _buildSearchField 内部 padding（SonifySpacing
-                  // .cardMargin 16.5dp）承担；不遮挡下方 TabBar（不同
-                  // sliver，无叠区）。
+                  // 贴 header 底部 = 标题区（状态栏 + 8 + 36 + 8）正下方；
+                  // 坍缩态（outer offset ≥ 52，胶囊行已滚完）整行退场，
+                  // 其后仅剩 overlay 的标题 + 头像 + 头像左侧的搜索图标。
+                  // 水平位置由 _buildSearchField 内部 padding
+                  // （SonifySpacing.cardMargin 16.5dp）承担；不遮挡下方
+                  // TabBar（不同 sliver，无叠区）。
                   Positioned(
                     left: 0,
                     right: 0,
@@ -386,8 +380,8 @@ class _SearchPageState extends State<SearchPage>
                       valueListenable: _collapsed,
                       builder: (context, collapsed, _) {
                         // 坍缩即退场：否则收缩后的 flexibleSpace 仍会把
-                        // 胶囊带到 pinned 工具栏带内（壁纸透明顶栏下与
-                        // 标题/头像视觉重叠）。局部重建，不波及 body。
+                        // 胶囊带到 pinned 带内（壁纸透明顶栏下与 overlay
+                        // 带内的标题/头像视觉重叠）。局部重建，不波及 body。
                         if (collapsed) return const SizedBox.shrink();
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 8),
@@ -452,6 +446,42 @@ class _SearchPageState extends State<SearchPage>
                 ? _buildSuggestions()
                 : _buildEmptyState(),
           ),
+          // 共享顶栏 overlay（批次 20，SonifyTitleOverlay）：
+          // - 大标题「搜索」固定悬浮：SonifyTextStyles.largeTitle
+          //   （20sp w800、行高 36）、位置 = 状态栏 + 8dp、左 20dp
+          //   （SonifySpacing.titleMargin），滚动中不位移不折叠；
+          // - 右上角常驻用户头像 UserAvatarButton（36dp）：右 20dp、
+          //   竖向居中于栏体，不随滚动淡入；
+          // - 渐变模糊带：单片 BackdropFilter（sigma
+          //   kSonifyBarBlurSigma）+ tint 兄弟层（状态栏锚定渐变），
+          //   _showBarBackground 驱动 120ms 淡入/回顶消失；
+          // - actions 坍缩搜索图标：胶囊滚完（_collapsed，阈值 52）后
+          //   在头像左侧浮出，点击 animateTo(0) + 聚焦（批次 19 交互
+          //   不变）；与头像间距 SizedBox(width: 8) 由 _TopBar 承担。
+          Positioned.fill(
+            child: SonifyTitleOverlay(
+              title: '搜索',
+              showBarBackground: _showBarBackground,
+              statusBarHeight: MediaQuery.of(context).padding.top,
+              trailing: const UserAvatarButton(),
+              actions: [
+                ValueListenableBuilder<bool>(
+                  valueListenable: _collapsed,
+                  builder: (context, collapsed, _) {
+                    if (!collapsed) return const SizedBox.shrink();
+                    return IconButton(
+                      key: const ValueKey('search-collapsed-icon'),
+                      tooltip: '搜索',
+                      icon: const Icon(Icons.search),
+                      onPressed: _onCollapsedSearchTap,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -815,7 +845,6 @@ class _SearchPageState extends State<SearchPage>
                       index,
                     );
                   },
-                  onMoreTap: () {},
                 );
               },
             ),
@@ -901,7 +930,6 @@ class _SearchPageState extends State<SearchPage>
                       index,
                     );
                   },
-                  onMoreTap: () {},
                 );
               },
             ),
@@ -1293,7 +1321,6 @@ class _SearchPageState extends State<SearchPage>
             // 必须用 playCloudPlaylist 走 /user/cloud/url 解析
             context.read<PlayerProvider>().playCloudPlaylist(results, index);
           },
-          onMoreTap: () {},
         );
       },
     );

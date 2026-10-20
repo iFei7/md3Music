@@ -238,10 +238,13 @@ class _DiscoverPageState extends State<DiscoverPage> {
               title: '首页',
               // 顶栏右侧固定用户头像（常驻，不随滚动；统一组件，点击进
               // 设置页 /settings，与 FM/搜索/音乐库三页同款）。
-              // 批次 19：删除滚动后头像左侧浮现的搜索/识曲玻璃圆钮
-              // （actions）——全局搜索由底部导航常驻搜索 tab 承载，
-              // 识曲入口保留在内容区搜索框内右侧（_buildSearchFieldItem）。
+              // 滚动后在头像左侧浮现搜索/识曲圆钮：列表搜索框是首 item
+              // （随内容滚动），上滑后搜索框开始消失时两钮随栏体同拍
+              // 淡入（SonifyTitleScaffold 既有 offset>0 机制）——用户
+              // 要求「上滑搜索框看不到时显示搜索和听歌识曲圆形按钮」，
+              // 回顶即隐藏不挡内容。
               trailing: const UserAvatarButton(),
+              actions: _buildBarActions(),
               itemCount: _kSectionCount,
               itemBuilder: _buildListItem,
             ),
@@ -334,6 +337,35 @@ class _DiscoverPageState extends State<DiscoverPage> {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const SongRecognitionPage()),
     );
+  }
+
+  /// 顶栏玻璃圆钮：42dp 圆形液态玻璃（sonify Title.kt:849-873 材质），
+  /// 图标 20dp。用于折叠后的顶栏搜索/识曲按钮。
+  Widget _buildGlassCircleButton(IconData icon, VoidCallback onTap) {
+    return LiquidGlassSurface(
+      shape: GlassShape.circle,
+      child: SizedBox(
+        width: 42,
+        height: 42,
+        child: IconButton(
+          // 顶满玻璃圆钮（默认 48dp 会溢出 42dp 容器）
+          constraints: const BoxConstraints.tightFor(width: 42, height: 42),
+          padding: EdgeInsets.zero,
+          icon: Icon(icon, size: 20),
+          onPressed: onTap,
+        ),
+      ),
+    );
+  }
+
+  /// 滚动后顶栏动作按钮：头像左侧的搜索圆钮 + 识曲圆钮，
+  /// 点击行为与列表搜索框一致。
+  List<Widget> _buildBarActions() {
+    return [
+      _buildGlassCircleButton(Icons.search, _openSearch),
+      const SizedBox(width: 10),
+      _buildGlassCircleButton(Icons.mic_none, _openRecognition),
+    ];
   }
 
   /// 胶囊搜索框（列表首 item，随内容自然滚动，不吸顶）：
@@ -844,7 +876,6 @@ class _DailyRecommendDetailPageState extends State<_DailyRecommendDetailPage> {
                               index,
                             );
                           },
-                          onMoreTap: () {},
                         );
                       },
                     ),
@@ -1087,7 +1118,6 @@ class _HomeDiscoverDetailPageState extends State<_HomeDiscoverDetailPage> {
                           // 与卡片一致：右侧仅收藏按钮。
                           trailingActions: SongTrailingActions.favoriteOnly,
                           onTap: () => _play(index),
-                          onMoreTap: () {},
                         );
                       },
                     ),

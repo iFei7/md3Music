@@ -182,7 +182,6 @@ class _ListenRankingPageState extends State<ListenRankingPage> {
                   final songs = _rankedSongs.map((r) => r.song).toList();
                   context.read<PlayerProvider>().playOnlinePlaylist(songs, index);
                 },
-                onMoreTap: () {},
               ),
             ),
             // 播放次数
