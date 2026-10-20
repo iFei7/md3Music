@@ -27,16 +27,10 @@ class Md3LyricPreferences extends ChangeNotifier {
 
   /// MD3 歌词自定义字体注册到 Flutter 的 family 名（固定前缀）。
   ///
-  /// 与 [CustomFontLoader.customFontFamily] 不同，避免家族名冲突。
+  /// 使用固定的独立前缀，避免与其他自定义字体家族名冲突。
   static const String md3LyricCustomFontFamily = 'Md3LyricUserCustomFont';
 
   // ============== 范围与默认值 ==============
-
-  /// 字号最小值（px）
-  static const double minFontSize = 12;
-
-  /// 字号最大值（px）
-  static const double maxFontSize = 50;
 
   /// 字号默认值（px）— 未持久化时新用户使用的字号。
   static const double defaultUserFontSize = 22;
@@ -87,19 +81,14 @@ class Md3LyricPreferences extends ChangeNotifier {
   double get fontSize => _fontSize;
   double get lineSpacing => _lineSpacing;
 
-  /// 当前行字重（FontWeight.value 数值，范围 [minFontWeight]~[maxFontWeight]）。
-  int get fontWeightValue => _fontWeight;
-
   /// 当前行字重对应 [FontWeight]（供 TextStyle 使用）。
   FontWeight get fontWeight => FontWeight(_fontWeight);
 
   /// 非当前行字重：当前行字重细两档（下限 [minFontWeight]），保留主次对比。
   FontWeight get otherFontWeight =>
       FontWeight((_fontWeight - 200).clamp(minFontWeight, maxFontWeight));
-  Md3LyricFontSource get fontSource => _fontSource;
   bool get showAuxiliary => _showAuxiliary;
   Md3LyricDisplayMode get displayMode => _displayMode;
-  String? get customFontPath => _customFontPath;
 
   /// 当前生效的 fontFamily（传给 TextPainter 的 TextStyle）：
   /// - [Md3LyricFontSource.system]：返回 null（让 Flutter 走系统字体链）
@@ -115,11 +104,6 @@ class Md3LyricPreferences extends ChangeNotifier {
         return _loadedCustomFontFamily;
     }
   }
-
-  /// 实际行高系数，供 LyricsView 计算 line height。
-  /// 与 Apple Music 的公式一致：fontSize 直接作为行高像素基准，
-  /// lineSpacing 作为倍数。
-  double get lineHeightMultiplier => _lineSpacing;
 
   /// 从 SharedPreferences 加载。App 启动时调用一次。
   Future<void> load() async {
@@ -142,16 +126,6 @@ class Md3LyricPreferences extends ChangeNotifier {
     }
   }
 
-  /// 设置字号并持久化。
-  Future<void> setFontSize(double size) async {
-    final clamped = size.clamp(minFontSize, maxFontSize);
-    if (clamped == _fontSize) return;
-    _fontSize = clamped;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keyFontSize, _fontSize);
-  }
-
   /// 设置行间距系数并持久化。
   Future<void> setLineSpacing(double spacing) async {
     final clamped = spacing.clamp(minLineSpacing, maxLineSpacing);
@@ -160,25 +134,6 @@ class Md3LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_keyLineSpacing, _lineSpacing);
-  }
-
-  /// 设置字重并持久化。会触发 [notifyListeners]。
-  Future<void> setFontWeight(int value) async {
-    final clamped = value.clamp(minFontWeight, maxFontWeight);
-    if (clamped == _fontWeight) return;
-    _fontWeight = clamped;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_keyFontWeight, _fontWeight);
-  }
-
-  /// 设置字体来源并持久化。
-  Future<void> setFontSource(Md3LyricFontSource source) async {
-    if (_fontSource == source) return;
-    _fontSource = source;
-    notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyFontSource, source.name);
   }
 
   /// 设置副歌词显示开关并持久化。
@@ -197,21 +152,6 @@ class Md3LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyDisplayMode, mode.name);
-  }
-
-  /// 设置自定义字体文件路径并立即尝试加载注册。
-  Future<void> setCustomFontPath(String? path) async {
-    if (_customFontPath == path) return;
-    _customFontPath = path;
-    final prefs = await SharedPreferences.getInstance();
-    if (path != null) {
-      await prefs.setString(_keyCustomFontPath, path);
-      await _tryLoadCustomFont();
-    } else {
-      await prefs.remove(_keyCustomFontPath);
-      _loadedCustomFontFamily = null;
-      notifyListeners();
-    }
   }
 
   /// 重置为默认值（不影响 Apple Music 风格的设置）。

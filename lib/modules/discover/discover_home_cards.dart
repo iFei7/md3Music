@@ -16,6 +16,7 @@ import '../../data/models/song.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../login/login_page.dart';
 import '../personal_fm/personal_fm_core.dart';
+import '../user/play_history_page.dart';
 
 /// 首页卡片区的档位预设（任务口径：红心 / 小众 / 速览）。
 ///
@@ -67,12 +68,37 @@ const int _kStackDepth = 3;
 class DiscoverFmStackCard extends StatefulWidget {
   const DiscoverFmStackCard({super.key});
 
+  /// 下拉刷新 FM 卡：发现页 [_loadAllData] 末尾调用。实际逻辑挂在
+  /// State 上（需要摸当前实例的档位/加载态），此处仅作公开转发；
+  /// 无挂载实例时 no-op。
+  static Future<void> reloadCurrentStation() =>
+      _DiscoverFmStackCardState.reloadCurrentStation();
+
   @override
   State<DiscoverFmStackCard> createState() => _DiscoverFmStackCardState();
 }
 
 class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     with SingleTickerProviderStateMixin {
+  /// 当前挂载实例（下拉刷新重拉入口用）：堆叠卡在发现页全局唯一，
+  /// initState 登记、dispose 摘除；未挂载时 reloadCurrentStation no-op。
+  static _DiscoverFmStackCardState? _activeInstance;
+
+  /// 下拉刷新 FM 卡：发现页 _loadAllData 末尾调用。复用当前实例的
+  /// 档位参数强制重拉（getPersonalFm forceRefresh，绕过 TTL）；卡片
+  /// 加载中跳过（防与用户切档/首刷并发）；未登录时由卡片自身的
+  /// getPersonalFm 链静默回落空态。
+  static Future<void> reloadCurrentStation() async {
+    final instance = _activeInstance;
+    if (instance == null) return;
+    await instance._reloadStation();
+  }
+
+  Future<void> _reloadStation() async {
+    if (_isLoading) return; // 防并发：首刷/切档进行中不叠加请求
+    await _loadStation(forceRefresh: true);
+  }
+
   bool _isLoading = false;
   int _stationIndex = 0;
 
@@ -94,6 +120,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   @override
   void initState() {
     super.initState();
+    _activeInstance = this;
     _flyCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
@@ -106,6 +133,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
 
   @override
   void dispose() {
+    if (_activeInstance == this) _activeInstance = null;
     _flyCtrl.dispose();
     super.dispose();
   }
@@ -141,13 +169,14 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     await _loadStation();
   }
 
-  Future<void> _loadStation() async {
+  Future<void> _loadStation({bool forceRefresh = false}) async {
     if (_isLoading) return;
     setState(() => _isLoading = true);
     try {
       await context.read<KugouProvider>().getPersonalFm(
             mode: _station.mode,
             songPoolId: _station.songPoolId,
+            forceRefresh: forceRefresh,
           );
     } catch (_) {
       // 失败静默：卡片回落「暂无推荐」占位，下拉刷新/再次点击可重试
@@ -159,26 +188,51 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   }
 
   /// 列表见底时按当前档位补一批（只进 provider 列表，不动播放队列）。
+  ///
+  /// 必须先带游标（上一批最后一首）请求，整批重复或返回空时退回不带游标
+  /// 再要一次——服务端对同游标可能原样回放已消费的批次，而 getPersonalFm
+  /// 从不抛异常（_get 吞错返回 null），靠 catch 兜是死代码。与 FmRefill 的
+  /// _append/_fetch 同一条兜底规则；没有这一步，最后一张滑走后堆叠区变
+  /// 空白（GestureDetector 随卡片一起消失，再没有滑动/重建能触发补货）。
   Future<void> _prefetchMore() async {
     if (_prefetching) return;
     _prefetching = true;
     try {
       final kugou = context.read<KugouProvider>();
       final songs = kugou.personalFmSongs;
+      final known = songs.map((s) => s.hash).toSet();
       final last = songs.isNotEmpty ? songs.last : null;
-      final fresh = await kugou.fetchMorePersonalFm(
+      var fresh = await kugou.fetchMorePersonalFm(
         mode: _station.mode,
         songPoolId: _station.songPoolId,
         hash: last?.hash,
         songId: last?.songId,
       );
-      if (fresh != null && fresh.isNotEmpty && mounted) {
-        kugou.appendFmSongs(fresh);
+      var usable = _freshOnly(fresh, known);
+      if (usable.isEmpty && mounted) {
+        final fallback = await kugou.fetchMorePersonalFm(
+          mode: _station.mode,
+          songPoolId: _station.songPoolId,
+        );
+        usable = _freshOnly(fallback, known);
+      }
+      if (usable.isNotEmpty && mounted) {
+        kugou.appendFmSongs(usable);
       }
     } catch (_) {
     } finally {
       _prefetching = false;
     }
+  }
+
+  /// 去掉列表里已有的歌（appendFmSongs 按 hash 去重，这里先算一遍才能
+  /// 判断「带游标那批是否真的有新歌」）。
+  List<KugouSongDetail> _freshOnly(
+    List<KugouSongDetail>? batch,
+    Set<String> known,
+  ) {
+    if (batch == null) return const [];
+    return batch.where((s) => !known.contains(s.hash)).toList();
   }
 
   // —— 播放控制（与 PersonalFmSection 同语义） ——
@@ -263,6 +317,8 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   }
 
   void _onDragEnd(DragEndDetails details) {
+    // 飞出中忽略新手势收尾：220ms 飞出窗口内再次抬手不应触发二次 dismiss
+    if (_flying) return;
     final dx = _dragDx;
     const threshold = 90.0;
     final velocity = details.velocity.pixelsPerSecond.dx;
@@ -292,8 +348,11 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   @override
   Widget build(BuildContext context) {
     return Padding(
+      // bottom 给 md：与下方「最近播放」标题行（top=sm + 标题行纵向 xs）
+      // 合计 24dp，拉开分区间隔（此前 bottom=0 时视觉上贴死）。
       padding: const EdgeInsets.fromLTRB(
-        SonifySpacing.titleMargin, AppSpacing.sm, SonifySpacing.titleMargin, 0,
+        SonifySpacing.titleMargin, AppSpacing.sm, SonifySpacing.titleMargin,
+        AppSpacing.md,
       ),
       child: Selector2<KugouProvider, PlayerProvider,
           (bool, List<KugouSongDetail>, String?, bool)>(
@@ -420,38 +479,14 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     required int playingIndex,
     required bool isPlaying,
   }) {
-    // 飞出中的前卡：沿 _flyDx 平移 + 渐隐
-    if (layer == 0 && _flying) {
-      final ft = flyProgress;
-      return Transform.translate(
-        offset: Offset(_flyDx * (1 - ft), 0),
-        child: Opacity(
-          opacity: 1 - ft,
-          child: _buildFrontCard(context, song, playingIndex, isPlaying),
-        ),
-      );
-    }
-    // 跟手拖拽（仅前卡）
-    if (layer == 0 && _dragDx != 0) {
-      return Transform.translate(
-        offset: Offset(_dragDx, 0),
-        child: Transform.rotate(
-          angle: _dragDx / 1200,
-          child: _buildFrontCard(context, song, playingIndex, isPlaying),
-        ),
-      );
-    }
+    // 前卡：手势识别器常驻（位移只施加在子树，见 _buildFrontCardGesture）。
     if (layer == 0) {
-      // 前卡静止态同样走 _buildFrontCard（isFront: true，带播放/暂停 +
-      // 收藏按钮）：此前只在拖拽/飞出分支用 _buildFrontCard，静止态
-      // 落到 isFront:false 的裸卡面，按钮凭空消失，与类文档语义不符。
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onHorizontalDragUpdate: (d) =>
-            setState(() => _dragDx += d.delta.dx),
-        onHorizontalDragEnd: _onDragEnd,
-        onHorizontalDragCancel: () => setState(() => _dragDx = 0),
-        child: _buildFrontCard(context, song, playingIndex, isPlaying),
+      return _buildFrontCardGesture(
+        context,
+        song,
+        playingIndex: playingIndex,
+        isPlaying: isPlaying,
+        flyProgress: flyProgress,
       );
     }
     // 下方层：缩小下沉 + 半透明（层级暗示）；飞出时随 t 前移一级
@@ -465,6 +500,65 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
           child: _buildCardFace(context, song),
         ),
       ),
+    );
+  }
+
+  /// 前卡容器：**GestureDetector 常驻**，跟手拖拽/飞出位移一律施加在其
+  /// 子树（Transform）上，绝不整体更换 widget 类型。
+  ///
+  /// 真机 bug 根因（批次 7 反馈「FM 卡片无法左右滑动切换」）：此前拖拽态
+  /// 把 GestureDetector 换成 `Transform.translate` 直包卡面，首帧重建即
+  /// 触发 `OneSequenceGestureRecognizer.dispose()`——它会把自己从
+  /// pointerRouter 摘除（recognizer.dart:485-493），后续 move/up 事件再也
+  /// 到不了，`onHorizontalDragEnd` 不触发，卡片停在几 px 位移处「滑不动」。
+  /// 既有 widget 测试 moveBy 与 up 之间不插帧、识别器没被换掉才侥幸绿，
+  /// 真机上 move 事件间必有帧落地，故 100% 复现。
+  ///
+  /// 与垂直滚动的竞争（arena）：HorizontalDragGestureRecognizer 在
+  /// |Σdx| > touchSlop 时即 resolve(accepted)，同事件内比 Scrollable 的
+  /// VerticalDragGestureRecognizer（更靠祖先、后入竞技场）先声夺势；纯水平
+  ///  swipe 垂直向累计量不越 slop，滚动器不会抢。仍保留水平语义：以竖向
+  /// 分量开头（|Σdy| 先越 slop）的手势交给页面滚动，属预期行为。
+  Widget _buildFrontCardGesture(
+    BuildContext context,
+    KugouSongDetail song, {
+    required int playingIndex,
+    required bool isPlaying,
+    required double flyProgress,
+  }) {
+    Widget card = _buildFrontCard(context, song, playingIndex, isPlaying);
+    // 飞出中的前卡：沿 _flyDx 平移 + 渐隐（_flying 优先于跟手位移）
+    if (_flying) {
+      card = Transform.translate(
+        offset: Offset(_flyDx * (1 - flyProgress), 0),
+        child: Opacity(
+          opacity: 1 - flyProgress,
+          child: card,
+        ),
+      );
+    } else if (_dragDx != 0) {
+      // 跟手拖拽（仅前卡）：位移/旋转施加在子树，识别器不重建
+      card = Transform.translate(
+        offset: Offset(_dragDx, 0),
+        child: Transform.rotate(
+          angle: _dragDx / 1200,
+          child: card,
+        ),
+      );
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragUpdate: (d) {
+        // 飞出中忽略新手势：防 220ms 窗口内二次 dismiss
+        if (_flying) return;
+        setState(() => _dragDx += d.delta.dx);
+      },
+      onHorizontalDragEnd: _onDragEnd,
+      onHorizontalDragCancel: () {
+        if (_flying) return;
+        setState(() => _dragDx = 0);
+      },
+      child: card,
     );
   }
 
@@ -627,7 +721,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
                   child: M3ELoadingIndicator(color: cs.primary),
                 )
               : Text(
-                  '暂无推荐，点按加载',
+                  '暂无推荐，点按或下拉刷新重试',
                   style: SonifyTextStyles.listItem.copyWith(
                     color: sonify.textSecondary,
                   ),
@@ -692,11 +786,15 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   }
 }
 
-/// 首页「正在播放」大卡片：封面 + 歌名 + 歌手。
+/// 首页「最近播放」大卡片：标题行（最近播放 + 右箭头）+ 封面 + 歌名 +
+/// 歌手 + 播放态图标。
 ///
-/// 点击语义（任务允许自定）：**播放/暂停切换**——暂停态点击恢复播放
-/// （任务要求的「点击继续播放」），播放态点击暂停（对齐卡片上播放键的
-/// 常规心智）。无播放内容时整块隐藏（SizedBox.shrink，不占列表位）。
+/// - 标题行整行可点 → [PlayHistoryPage]（照搬 library_page /
+///   user_center_page 的 MaterialPageRoute push 用法，不造新路由；
+///   history 模块只读参考）；
+/// - 卡片本体点击语义（任务允许自定）：**播放/暂停切换**——暂停态点击
+///   恢复播放，播放态点击暂停（对齐卡片上播放键的常规心智）；
+/// - 无播放内容时整块隐藏（SizedBox.shrink，不占列表位）。
 class DiscoverNowPlayingCard extends StatelessWidget {
   const DiscoverNowPlayingCard({super.key});
 
@@ -713,97 +811,148 @@ class DiscoverNowPlayingCard extends StatelessWidget {
         builder: (context, record, _) {
           final (song, isPlaying) = record;
           if (song == null) return const SizedBox.shrink();
-          final cs = Theme.of(context).colorScheme;
-          final sonify = SonifyColors.of(context);
-          return GestureDetector(
-            onTap: () {
-              final player = context.read<PlayerProvider>();
-              if (player.isPlaying) {
-                unawaited(player.pause());
-              } else {
-                unawaited(player.resume());
-              }
-            },
-            behavior: HitTestBehavior.opaque,
-            child: SmoothClipRRect(
-              borderRadius: BorderRadius.circular(SonifyRadius.card),
-              child: Container(
-                color: sonify.surfaceCard,
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                height: 100,
-                child: Row(
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildHeaderRow(context),
+              const Gap(AppSpacing.xs),
+              _buildNowPlayingCard(context, song, isPlaying),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// 标题行：「最近播放」+ 右侧箭头（整行点按进历史播放页）。
+  ///
+  /// 形态照 discover_page._sectionHeader 的「更多」行（18sp Bold 标题 +
+  /// 24dp primary 右箭头）。内层 GestureDetector 在手势竞技场中优先于
+  /// 卡片本体的播放/暂停手势（同搜索框内识曲按钮的层级套路）。
+  Widget _buildHeaderRow(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      // 上下补 4dp：箭头 24dp 外再扩出舒适点按区
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const PlayHistoryPage()),
+        ),
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '最近播放',
+                style: SonifyTextStyles.sectionTitle.copyWith(
+                  color: cs.onSurface,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const Gap(AppSpacing.xs),
+            Icon(Icons.chevron_right, size: 24, color: cs.primary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 卡片本体：封面 + 歌名/歌手 + 播放态图标；点击 = 播放/暂停切换。
+  Widget _buildNowPlayingCard(
+    BuildContext context,
+    Song song,
+    bool isPlaying,
+  ) {
+    final cs = Theme.of(context).colorScheme;
+    final sonify = SonifyColors.of(context);
+    return GestureDetector(
+      onTap: () {
+        final player = context.read<PlayerProvider>();
+        if (player.isPlaying) {
+          unawaited(player.pause());
+        } else {
+          unawaited(player.resume());
+        }
+      },
+      behavior: HitTestBehavior.opaque,
+      child: SmoothClipRRect(
+        borderRadius: BorderRadius.circular(SonifyRadius.card),
+        child: Container(
+          color: sonify.surfaceCard,
+          padding: const EdgeInsets.all(AppSpacing.sm),
+          height: 100,
+          child: Row(
+            children: [
+              SmoothClipRRect(
+                borderRadius: BorderRadius.circular(SonifyRadius.cover),
+                child: SizedBox(
+                  width: 72,
+                  height: 72,
+                  child: (song.artworkUri != null &&
+                          song.artworkUri!.isNotEmpty)
+                      ? CachedNetworkImage(
+                          imageUrl: song.artworkUri!,
+                          memCacheWidth: 216,
+                          memCacheHeight: 216,
+                          fit: BoxFit.cover,
+                          placeholder: (_, _) => Container(
+                            color: cs.surfaceContainerHighest,
+                          ),
+                          errorWidget: (_, _, _) => Container(
+                            color: cs.surfaceContainerHighest,
+                            child: Icon(
+                              Icons.music_note,
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        )
+                      : Container(
+                          color: cs.surfaceContainerHighest,
+                          child: Icon(
+                            Icons.music_note,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                ),
+              ),
+              const Gap(AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    SmoothClipRRect(
-                      borderRadius: BorderRadius.circular(SonifyRadius.cover),
-                      child: SizedBox(
-                        width: 72,
-                        height: 72,
-                        child: (song.artworkUri != null &&
-                                song.artworkUri!.isNotEmpty)
-                            ? CachedNetworkImage(
-                                imageUrl: song.artworkUri!,
-                                memCacheWidth: 216,
-                                memCacheHeight: 216,
-                                fit: BoxFit.cover,
-                                placeholder: (_, _) => Container(
-                                  color: cs.surfaceContainerHighest,
-                                ),
-                                errorWidget: (_, _, _) => Container(
-                                  color: cs.surfaceContainerHighest,
-                                  child: Icon(
-                                    Icons.music_note,
-                                    color: cs.onSurfaceVariant,
-                                  ),
-                                ),
-                              )
-                            : Container(
-                                color: cs.surfaceContainerHighest,
-                                child: Icon(
-                                  Icons.music_note,
-                                  color: cs.onSurfaceVariant,
-                                ),
-                              ),
+                    Text(
+                      song.displayName,
+                      style: SonifyTextStyles.cardTitle.copyWith(
+                        color: cs.onSurface,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    const Gap(AppSpacing.md),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            song.displayName,
-                            style: SonifyTextStyles.cardTitle.copyWith(
-                              color: cs.onSurface,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const Gap(2),
-                          Text(
-                            song.artist,
-                            style: SonifyTextStyles.listItem.copyWith(
-                              color: sonify.textSecondary,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
+                    const Gap(2),
+                    Text(
+                      song.artist,
+                      style: SonifyTextStyles.listItem.copyWith(
+                        color: sonify.textSecondary,
                       ),
-                    ),
-                    const Gap(AppSpacing.sm),
-                    Icon(
-                      isPlaying ? Icons.pause_circle : Icons.play_circle,
-                      size: 34,
-                      color: cs.primary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
               ),
-            ),
-          );
-        },
+              const Gap(AppSpacing.sm),
+              Icon(
+                isPlaying ? Icons.pause_circle : Icons.play_circle,
+                size: 34,
+                color: cs.primary,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

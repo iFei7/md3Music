@@ -754,20 +754,20 @@ class SonifyColors extends ThemeExtension<SonifyColors> {
 /// 字体族不指定：跟随全局 ThemeData.fontFamily（含用户自定义字体切换）。
 abstract final class SonifyTextStyles {
   /// 页面大标题（一级页列表首 item）：20sp Bold，行高 36dp。
-  /// 与右上角 36dp 用户头像等高（标题规格收敛：加粗 w700 + 36dp 行高，
+  /// 与右上角 36dp 用户头像等高（标题规格收敛：加粗 w800 + 36dp 行高，
   /// 替代原 sonify 35sp/lineHeight 40 规格，Title.kt:1135-1140 仅作参照）。
   ///
   /// **必须显式写 wght 字轴**：正文默认样式（bodyMedium）被 M3E emphasized
   /// 注入了 `FontVariation('wght', 500)` 轴，Text 与 DefaultTextStyle 合并时
   /// 子样式的 fontVariations 为 null 会继承父级的轴；可变字体渲染中 wght 轴
-  /// 优先级高于 fontWeight——不写轴的话 Bold（w700）会被渲染成 Medium（500），
+  /// 优先级高于 fontWeight——不写轴的话 Bold（w800）会被渲染成 Medium（500），
   /// 表现为"标题加粗不生效"。
   static const TextStyle largeTitle = TextStyle(
     fontSize: 20,
-    fontWeight: FontWeight.w700,
+    fontWeight: FontWeight.w800,
     height: 36 / 20,
     letterSpacing: 0,
-    fontVariations: [FontVariation('wght', 700)],
+    fontVariations: [FontVariation('wght', 800)],
   );
 
   /// 折叠后顶栏小标题：18.5sp Bold。
@@ -842,17 +842,9 @@ abstract final class SonifySpacing {
 
 /// sonify 动效 token（方案 §0.3 动效表）。
 abstract final class SonifyMotion {
-  /// 大标题折叠吸附：180ms EaseOutCubic。出处：Title.kt:745-753。
-  static const Duration collapseSnap = Duration(milliseconds: 180);
-  static const Curve collapseSnapCurve = Curves.easeOutCubic;
-
   /// 顶栏背景/小标题淡入出：120ms。出处：Title.kt:952-953, 1050-1060。
   static const Duration barFade = Duration(milliseconds: 120);
 
   /// 玻璃圆钮材质切换：150ms。出处：Title.kt:940-941。
   static const Duration glassAlpha = Duration(milliseconds: 150);
-
-  /// 折叠大标题透明度公式增益：`1 + offset/height × 1.8`，clamp 0~1。
-  /// 出处：Title.kt:588-589。
-  static const double collapseAlphaGain = 1.8;
 }

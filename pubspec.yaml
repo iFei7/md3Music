@@ -1,10 +1,18 @@
 name: md3music
 description: "Grace Music - Music player with Material Design 3"
 publish_to: 'none'
-version: 5.9.3+50
+version: 5.9.15+62
 
 environment:
   sdk: ^3.12.0
+
+# 依赖钉扎（构建号 109/111 事故）：shared_preferences_android 2.5.0
+# （2026-10-17 03:20Z 发布，内部实现迁移 Pigeon JNI）导致 release 包
+# 真机卡启动画面（首帧不渲染）；105 及之前的构建用 2.4.28 均正常。
+# pubspec.lock 已入库防复发；待上游修复后移除本 override。
+dependency_overrides:
+  shared_preferences_android: 2.4.28
+  shared_preferences_foundation: 2.5.7
 
 dependencies:
   flutter:
@@ -71,5 +79,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
-    - assets/icons/
     - assets/web/

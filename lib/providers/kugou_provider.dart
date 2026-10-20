@@ -97,11 +97,17 @@ class KugouProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// 日期键（'yyyy-MM-dd'）：本地已签持久化、跨天判定统一口径。
+  static String _dayKeyOf(DateTime time) {
+    final year = time.year.toString().padLeft(4, '0');
+    final month = time.month.toString().padLeft(2, '0');
+    final day = time.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
+  }
+
   /// 打卡成功后标记今天已签（本地兜底，保证日历立即打勾并持久化）
   Future<void> _markSignedToday() async {
-    final now = DateTime.now();
-    final key =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final key = _dayKeyOf(DateTime.now());
     if (_localSignedDays.add(key)) {
       notifyListeners();
       try {
@@ -177,6 +183,8 @@ class KugouProvider extends ChangeNotifier {
   KugouCommentList? _comments;
   KugouPlaylistSongs? _playlistSongs;
   List<KugouSongDetail> _personalFmSongs = [];
+  /// 批次17：FM 列表已渲染、albumName 后台补全待跑的标志（移出关键路径提速）。
+  bool _pendingAlbumNameFill = false;
   KugouPlaylistCategory? _playlistCategory;
   List<KugouPlaylistBrief> _playlistList = [];
   bool _isLoading = false;
@@ -1159,9 +1167,10 @@ class KugouProvider extends ChangeNotifier {
       );
       if (result != null) {
         _personalFmSongs = result;
-        // 补全 albumName：红心 radio 接口不返回 album_name，但返回了 album_id，
-        // 用 album_id 调 getAlbumDetail 批量补全
-        await _fillPersonalFmAlbumNames();
+        // 批次17（P0）：albumName 补全移出关键路径——红心 radio 的 N 个
+        // getAlbumDetail 请求曾占着本 await 链，FM 卡一直转圈（真机：加载
+        // 延迟）。列表先落地渲染，补全在 _endLoading 后后台跑完再通知。
+        _pendingAlbumNameFill = true;
         if (!isInteractive) {
           _dataTimestamps['personalFm'] = DateTime.now();
         }
@@ -1172,6 +1181,11 @@ class KugouProvider extends ChangeNotifier {
       _error = e.toString();
     }
     _endLoading();
+    // 批次17（P0）：见上——FM 列表先渲染，albumName 后台补全后单独通知。
+    if (_pendingAlbumNameFill) {
+      _pendingAlbumNameFill = false;
+      unawaited(_fillPersonalFmAlbumNames());
+    }
   }
 
   /// 补全 PersonalFm 歌曲缺失的 albumName。
@@ -1214,6 +1228,8 @@ class KugouProvider extends ChangeNotifier {
       }
       return song;
     }).toList();
+    // 批次17：后台补全完成，通知 FM 卡片刷新（列表已先渲染，此为增量子）。
+    notifyListeners();
   }
 
   void moveToFirst(KugouSongDetail song) {
@@ -1226,11 +1242,14 @@ class KugouProvider extends ChangeNotifier {
   }
 
   void appendFmSongs(List<KugouSongDetail> songs) {
-    for (final song in songs) {
-      if (!_personalFmSongs.any((s) => s.hash == song.hash)) {
-        _personalFmSongs.add(song);
-      }
-    }
+    final fresh = songs
+        .where((s) => !_personalFmSongs.any((e) => e.hash == s.hash))
+        .toList();
+    if (fresh.isEmpty) return;
+    // 必须整体替换出**新列表实例**，不能原地 add：订阅方（首页 FM 卡的
+    // Selector2）拿含本列表的 record 做相等判定，实例不变时即使 notify
+    // 也会被判「没变」而跳过重建——追加的新歌永远不上屏。
+    _personalFmSongs = [..._personalFmSongs, ...fresh];
     notifyListeners();
   }
 
@@ -1439,6 +1458,7 @@ class KugouProvider extends ChangeNotifier {
     _vipInfo = null;
     _gradeInfo = null;
     _vipMonthRecord = null;
+    _clearUserScopedSignInState();
     _qrKey = null;
     _qrData = null;
     await _fetchUserInfo();
@@ -1468,12 +1488,24 @@ class KugouProvider extends ChangeNotifier {
       final userInfo = await _apiClient.getUserDetail();
       if (userInfo != null) {
         _userInfo = userInfo;
+        // 批次17（P0）：同步登录镜像。微信登录链路只调 refreshUserInfo，此前
+        // _isLoggedIn 保持 false 直到冷启动 _autoConnect 才纠正——设置页账号卡
+        // 的 Selector 选择值恒为 (false, null) 不重建，表现为"登录后不刷新"
+        // （扫码/手机登录链路本就置位，仅此路径漏）。
+        if (!_isLoggedIn && _apiClient.isLoggedIn) {
+          _isLoggedIn = true;
+        }
         // 回填账号列表中的昵称/头像（多账号展示）
         await _apiClient.updateAccountProfile(
           userInfo.userid ?? _apiClient.userid ?? '',
           nickname: userInfo.nickname,
           avatar: userInfo.avatar,
         );
+        // 批次18：等级/听歌时长随用户信息一起拉取。此前仅冷启动
+        // _autoConnect / switchAccount 调 getGradeInfo，微信登录
+        // （login_page 直调 refreshUserInfo）等链路缺失，设置页用户栏
+        // 的等级与听歌时长停留在空态。
+        await getGradeInfo();
         notifyListeners();
       }
     } catch (_) {}
@@ -1502,6 +1534,7 @@ class KugouProvider extends ChangeNotifier {
     _vipInfo = null;
     _gradeInfo = null;
     _vipMonthRecord = null;
+    _clearUserScopedSignInState();
     _userHistoryData = null;
     _everydayHistory = null;
 
@@ -1552,6 +1585,7 @@ class KugouProvider extends ChangeNotifier {
       _vipInfo = null;
       _gradeInfo = null;
       _vipMonthRecord = null;
+      _clearUserScopedSignInState();
       _userHistoryData = null;
       _everydayHistory = null;
       _localSignedDays.clear();
@@ -1678,7 +1712,7 @@ class KugouProvider extends ChangeNotifier {
                 upgrade['error_code'] == 0 ||
                 upgrade['error_code'] == 20030 ||
                 upgrade['error_code'] == 131001)) {
-          _todayUpgradedToConcept = true;
+          _upgradedDayKey = receiveDay;
         }
       } catch (_) {}
 
@@ -1698,16 +1732,68 @@ class KugouProvider extends ChangeNotifier {
   bool get manualSignInRunning => _manualSignInRunning;
 
   /// 今天是否已成功签到并升级概念版（用于 UI 显示"概念版会员"徽章）。
-  /// 概念版双签到第二步（upgradeDayVip）成功后置 true，
-  /// 跨天/重启后由 `_localSignedDays` 重新判定（见 `isTodayYouthVip`）。
-  bool _todayUpgradedToConcept = false;
+  /// 记录的是日期键而不是布尔值：跨天自动失效，无需额外的定时复位。
+  /// 概念版双签到第二步（upgradeDayVip）成功后写入当日键，
+  /// 登出/切换账号时随用户级缓存一起清空（见 [_clearUserScopedSignInState]）。
+  String? _upgradedDayKey;
   bool get isTodayYouthVip {
-    if (_todayUpgradedToConcept) return true;
+    final key = _dayKeyOf(DateTime.now());
     // 跨重启兜底：只要今天在本地已签列表里，就认为概念版已激活
+    return _upgradedDayKey == key || _localSignedDays.contains(key);
+  }
+
+  /// 今日是否已签到（本地已签列表 ∪ 服务端 [vipMonthRecord] 今日 svip 条目）。
+  ///
+  /// 与 [isTodayYouthVip] 解耦：后者是「概念版徽章」语义，本 getter 只回答
+  /// 「今天还能不能签到」，供设置页签到卡决定按钮形态。
+  bool get hasSignedToday {
     final now = DateTime.now();
-    final key =
-        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-    return _localSignedDays.contains(key);
+    if (_localSignedDays.contains(_dayKeyOf(now))) return true;
+
+    final record = _vipMonthRecord;
+    if (record == null) return false;
+    final data = record['data'];
+    final list = (data is Map ? (data['list'] ?? data['record_list']) : null) ??
+        record['list'];
+    if (list is! List) return false;
+    for (final item in list) {
+      if (item is! Map) continue;
+      // 只认概念版(svip)签到记录，过滤畅听(tvip)
+      if (item['vip_type']?.toString() != 'svip') continue;
+      final day = _parseVipRecordDay(item['day']);
+      if (day != null &&
+          day.year == now.year &&
+          day.month == now.month &&
+          day.day == now.day) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// 解析服务端打卡条目的日期字段：'yyyy-MM-dd' 字符串或 epoch 秒/毫秒。
+  static DateTime? _parseVipRecordDay(dynamic raw) {
+    if (raw is String) {
+      final m = RegExp(r'^(\d{4})[-/](\d{1,2})[-/](\d{1,2})').firstMatch(raw);
+      if (m != null) {
+        return DateTime(
+          int.parse(m.group(1)!),
+          int.parse(m.group(2)!),
+          int.parse(m.group(3)!),
+        );
+      }
+    }
+    if (raw is int && raw > 1000000000) {
+      final ms = raw > 1e12 ? raw : raw * 1000;
+      return DateTime.fromMillisecondsSinceEpoch(ms);
+    }
+    return null;
+  }
+
+  /// 清理用户级签到状态：登出 / 切换 / 登录新账号时调用，
+  /// 避免上一账号的「今日已升级概念版」带到新账号。
+  void _clearUserScopedSignInState() {
+    _upgradedDayKey = null;
   }
 
   /// 手动签到/领取: 不依赖 autoReceive 开关，强制调 claim + upgrade
@@ -1872,7 +1958,7 @@ class KugouProvider extends ChangeNotifier {
     }
 
     await _markSignedToday();
-    _todayUpgradedToConcept = true;
+    _upgradedDayKey = receiveDay;
     return (true, '签到成功（概念版会员）', null);
   }
 

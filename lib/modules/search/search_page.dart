@@ -21,9 +21,12 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/song_list_item.dart';
+import '../../widgets/common/liquid_glass_surface.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import '../album/album_detail_page.dart';
 import '../artist/artist_detail_page.dart';
 import '../playlist/playlist_page.dart';
+import '../recognition/song_recognition_page.dart';
 import 'explore_sections.dart';
 
 class SearchPage extends StatefulWidget {
@@ -42,6 +45,23 @@ class _SearchPageState extends State<SearchPage>
 
   /// 搜索框聚焦态跟踪（sonify 规格：聚焦时 1.5dp primary 描边）。
   final FocusNode _searchFocusNode = FocusNode();
+
+  /// 顶部外层滚动控制器（挂 [NestedScrollView.controller]）：坍缩交互
+  /// 的唯一滚动信号源——outer offset 越过 [_kCollapseThreshold] 即搜索
+  /// 胶囊完全收起，顶栏头像左侧浮出搜索图标。
+  final ScrollController _outerController = ScrollController();
+
+  /// 坍缩态通知器：true = 胶囊已收起（顶栏搜索图标在场）。
+  /// 用 ValueNotifier + ValueListenableBuilder 局部重建 actions 单个
+  /// 图标的显隐，不走整页 setState（避免波及 TabBarView / 结果列表）。
+  final ValueNotifier<bool> _collapsed = ValueNotifier<bool>(false);
+
+  /// 回顶动画展开同拍补一次焦点请求（见 [_onCollapsedSearchTap]）。
+  bool _focusOnExpand = false;
+
+  /// 坍缩阈值：header 展开高 108 = 工具栏 56 + 胶囊行 52；outer offset
+  /// ≥ 52 即胶囊行被滚完（刻度 = expandedHeight − kToolbarHeight）。
+  static const double _kCollapseThreshold = 52;
 
   late TabController _tabController;
   List<String> _searchHistory = [];
@@ -65,6 +85,7 @@ class _SearchPageState extends State<SearchPage>
     _tabController = TabController(length: 6, vsync: this);
     _tabController.addListener(_onTabChanged);
     _searchFocusNode.addListener(_onFocusChanged);
+    _outerController.addListener(_onOuterScroll);
     _loadSearchHistory();
     // 恢复「热门搜索」（UI 重设计批次 1，方案 §2.1）：接口 /search/hot 一直在
     // （KugouApiClient.getHotSearch → KugouProvider.getHotSearch，结果缓存于
@@ -90,12 +111,48 @@ class _SearchPageState extends State<SearchPage>
     if (mounted) setState(() {});
   }
 
+  /// 外层滚动 → 坍缩态：等值比较防抖（避免同一阈值上反复赋值触发
+  /// ValueListenableBuilder 无意义重建）。
+  void _onOuterScroll() {
+    if (!_outerController.hasClients) return;
+    final collapsed = _outerController.offset >= _kCollapseThreshold;
+    if (_collapsed.value != collapsed) {
+      _collapsed.value = collapsed;
+      // 展开同拍补一次焦点请求：坍缩期 TextField 不在树，
+      // tap 当帧的 postFrame 请求会落空。postFrame 保证请求落在
+      // 本帧 build（胶囊已重建）之后。
+      if (!collapsed && _focusOnExpand) {
+        _focusOnExpand = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _searchFocusNode.requestFocus();
+        });
+      }
+    }
+  }
+
+  /// 坍缩态顶栏搜索图标：回顶展开搜索胶囊（动画结束后视觉上胶囊
+  /// 完整复位），下一帧给输入框取焦点。
+  void _onCollapsedSearchTap() {
+    _focusOnExpand = true;
+    _outerController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
   @override
   void dispose() {
     _tabController.removeListener(_onTabChanged);
     _searchFocusNode.removeListener(_onFocusChanged);
     _searchFocusNode.dispose();
     _searchController.dispose();
+    _outerController.removeListener(_onOuterScroll);
+    _outerController.dispose();
+    _collapsed.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -199,80 +256,153 @@ class _SearchPageState extends State<SearchPage>
     return Scaffold(
       resizeToAvoidBottomInset: !hostedInDockScaffold,
       body: NestedScrollView(
+        controller: _outerController,
         headerSliverBuilder: (context, innerBoxIsScrolled) {
           return [
             SliverAppBar(
               floating: true,
               pinned: true,
+              // 批次 18 UI 统一：展开态 header = 工具栏（左上角标题「搜索」+
+              // 右上角常驻用户头像）+ 其下 52dp 搜索胶囊行；pinned 收起后
+              // 仅剩标题 + 头像，胶囊随 flexibleSpace 高度收缩被裁掉。
+              // expandedHeight 不含状态栏（maxExtent = 状态栏 + 56 + 52）。
+              expandedHeight: kToolbarHeight + 52,
+              // 左上角页面标题（主题 appBarTheme 默认 centerTitle: true，
+              // 此处显式左对齐）。批次 19：与四页大标题一致的加粗
+              // 规格——显式 w800 + wght=800 字轴（保持 22sp 标题字号；
+              // 可变字体渲染中 wght 轴优先级高于 fontWeight，不写轴会被
+              // M3E emphasized 注入的 wght=500 覆盖成 Medium）。
+              centerTitle: false,
+              title: Text(
+                '搜索',
+                style: Theme.of(context).appBarTheme.titleTextStyle?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  fontVariations: const [FontVariation('wght', 800)],
+                ),
+              ),
+              // 右上角动作区：坍缩态头像左侧浮出「回顶展开」搜索图标，
+              // 展开态不渲染；头像常驻（统一组件，点击进设置页 /settings）。
+              // ValueListenableBuilder 只局部重建本 action 的显隐。
+              actions: [
+                ValueListenableBuilder<bool>(
+                  valueListenable: _collapsed,
+                  builder: (context, collapsed, _) {
+                    if (!collapsed) return const SizedBox.shrink();
+                    return IconButton(
+                      key: const ValueKey('search-collapsed-icon'),
+                      tooltip: '搜索',
+                      icon: const Icon(Icons.search),
+                      onPressed: _onCollapsedSearchTap,
+                    );
+                  },
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: UserAvatarButton(),
+                ),
+              ],
               // 有壁纸时顶栏全透明，flexibleSpace 独立加载同一张背景图
               // （topCenter 对齐与页面主体背景视觉连续）；列表滚到顶栏下时
               // 被这张背景图盖住（不透底下 UI）；无壁纸时不透明 surface
               backgroundColor: useBackgroundImage
                   ? Colors.transparent
                   : colorScheme.surface,
-                  flexibleSpace: useBackgroundImage
-                      ? ClipRect(
-                          child: Builder(builder: (context) {
-                            // 与页面主体共用同一背景图解码结果（同 cacheWidth →
-                            // ImageCache 同 key），避免各自解码
-                            final size = MediaQuery.sizeOf(context);
-                            final cacheWidth = (size.width *
-                                        MediaQuery.devicePixelRatioOf(context))
-                                    .round()
-                                    .clamp(540, 1440);
-                            final tp = context.watch<ThemeProvider>();
-                            // 顶栏区域用全屏尺寸 + 全屏 cover 渲染背景图，再
-                            // topCenter 裁剪显示顶部：缩放比例与主体背景完全一致，
-                            // 否则窄区域内单独 cover 会放大错位
-                            return OverflowBox(
-                              alignment: Alignment.topCenter,
-                              minWidth: size.width,
-                              maxWidth: size.width,
-                              minHeight: size.height,
-                              maxHeight: size.height,
-                              child: SizedBox(
-                                width: size.width,
-                                height: size.height,
-                                // 与 AppBackground 同层结构：surface 打底 +
-                                // 模糊（backgroundBlur）+ 透明度（backgroundOpacity），
-                                // 顶栏背景跟随主体模糊/透明度改动
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    ColoredBox(
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.surface,
-                                    ),
-                                    Opacity(
-                                      opacity: tp.backgroundOpacity,
-                                      child: ImageFiltered(
-                                        imageFilter: ui.ImageFilter.blur(
-                                          sigmaX: tp.backgroundBlur,
-                                          sigmaY: tp.backgroundBlur,
-                                        ),
-                                        child: Image(
-                                          image: backgroundImageProvider(
-                                            tp,
-                                            cacheWidth: cacheWidth,
-                                          ),
-                                          fit: BoxFit.cover,
-                                          gaplessPlayback: true,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+              flexibleSpace: Stack(
+                fit: StackFit.expand,
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  // 壁纸层（原 flexibleSpace 子树整体迁入 Stack 底层）：
+                  // 铺满整个 header（含工具栏区），与页面主体共用同一背景图
+                  // 解码结果（同 cacheWidth → ImageCache 同 key）
+                  if (useBackgroundImage)
+                    ClipRect(
+                      child: Builder(builder: (context) {
+                        // 与页面主体共用同一背景图解码结果（同 cacheWidth →
+                        // ImageCache 同 key），避免各自解码
+                        final size = MediaQuery.sizeOf(context);
+                        final cacheWidth = (size.width *
+                                    MediaQuery.devicePixelRatioOf(context))
+                                .round()
+                                .clamp(540, 1440);
+                        final tp = context.watch<ThemeProvider>();
+                        // 顶栏区域用全屏尺寸 + 全屏 cover 渲染背景图，再
+                        // topCenter 裁剪显示顶部：缩放比例与主体背景完全一致，
+                        // 否则窄区域内单独 cover 会放大错位
+                        return OverflowBox(
+                          alignment: Alignment.topCenter,
+                          minWidth: size.width,
+                          maxWidth: size.width,
+                          minHeight: size.height,
+                          maxHeight: size.height,
+                          child: SizedBox(
+                            width: size.width,
+                            height: size.height,
+                            // 与 AppBackground 同层结构：surface 打底 +
+                            // 模糊（backgroundBlur）+ 透明度（backgroundOpacity），
+                            // 顶栏背景跟随主体模糊/透明度改动
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                ColoredBox(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.surface,
                                 ),
-                              ),
-                            );
-                          }),
-                        )
-                      : null,
-                  surfaceTintColor: Colors.transparent,
-                  // sonify 规格（方案 §2.3）：squircle 9dp、卡底色、高 52dp、
-                  // 左放大镜 20dp、右清空钮 28dp 命中区、聚焦 1.5dp primary 描边。
-                  title: _buildSearchField(colorScheme),
-                ),
+                                Opacity(
+                                  opacity: tp.backgroundOpacity,
+                                  child: ImageFiltered(
+                                    imageFilter: ui.ImageFilter.blur(
+                                      sigmaX: tp.backgroundBlur,
+                                      sigmaY: tp.backgroundBlur,
+                                    ),
+                                    child: Image(
+                                      image: backgroundImageProvider(
+                                        tp,
+                                        cacheWidth: cacheWidth,
+                                      ),
+                                      fit: BoxFit.cover,
+                                      gaplessPlayback: true,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                  // 搜索胶囊行（批次 9 玻璃胶囊从 title 槽迁至展开区）：
+                  // 贴 header 底部 = 工具栏（标题 + 头像）正下方；坍缩态
+                  // （outer offset ≥ 52，胶囊行已滚完）整行退场，pinned
+                  // 后仅剩标题 + 头像 + 头像左侧的搜索图标。水平位置由
+                  // _buildSearchField 内部 padding（SonifySpacing
+                  // .cardMargin 16.5dp）承担；不遮挡下方 TabBar（不同
+                  // sliver，无叠区）。
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: _collapsed,
+                      builder: (context, collapsed, _) {
+                        // 坍缩即退场：否则收缩后的 flexibleSpace 仍会把
+                        // 胶囊带到 pinned 工具栏带内（壁纸透明顶栏下与
+                        // 标题/头像视觉重叠）。局部重建，不波及 body。
+                        if (collapsed) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: SizedBox(
+                            height: 44,
+                            child: _buildSearchField(colorScheme),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              surfaceTintColor: Colors.transparent,
+            ),
                 if (_hasSearched)
                   SliverPersistentHeader(
                     pinned: true,
@@ -325,11 +455,17 @@ class _SearchPageState extends State<SearchPage>
     );
   }
 
-  /// 搜索框（sonify 规格，方案 §2.3）：
-  /// - squircle 9dp、卡底色（surfaceCard），高 52dp，水平边距 16.5dp 由
-  ///   SliverAppBar title 布局承担；
-  /// - placeholder 16sp 次级灰；聚焦时 1.5dp primary 描边；
-  /// - 左放大镜 20dp、右清空钮 28dp 命中区。
+  /// 搜索框（批次 9 真机反馈：与主页/音乐库统一玻璃胶囊）：
+  /// - LiquidGlassSurface + GlassShape.pill、高 44dp（对齐首页
+  ///   _buildSearchFieldItem 与 library_page 批次 8 基准），水平边距
+  ///   16.5dp 由 flexibleSpace 展开区布局承担（批次 18 从 SliverAppBar
+  ///   title 槽迁入，收起态随展开区收缩裁掉）；
+  /// - 聚焦时 1.5dp primary 描边：StadiumBorder foregroundDecoration
+  ///   外覆玻璃面（等价原 ShapeDecoration.side 写法）；
+  /// - 左放大镜 20dp、右识曲钮 20dp（命中区 28dp）+ 有文字时清空钮
+  ///   28dp 命中区（视觉 18dp 图标）；TextField 由 Expanded 包住，
+  ///   不被右侧固定宽图标挤占（**与主页搜索框一致**，识曲钮单独响应，
+  ///   内层 GestureDetector 在手势竞技场中优先胜出）。
   /// 行为不变：textInputAction=search、onSubmitted 搜索、onChanged 实时联想。
   Widget _buildSearchField(ColorScheme colorScheme) {
     final sonify = SonifyColors.of(context);
@@ -338,70 +474,101 @@ class _SearchPageState extends State<SearchPage>
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: SonifySpacing.cardMargin),
       child: Container(
-        height: 52,
-        decoration: ShapeDecoration(
-          color: sonify.surfaceCard,
-          shape: SmoothRectangleBorder(
-            borderRadius: BorderRadius.circular(SonifyRadius.card),
+        foregroundDecoration: ShapeDecoration(
+          shape: StadiumBorder(
             side: isFocused
                 ? BorderSide(color: colorScheme.primary, width: 1.5)
                 : BorderSide.none,
           ),
         ),
-        child: Row(
-          children: [
-            const SizedBox(width: 16),
-            Icon(Icons.search, size: 20, color: sonify.textSecondary),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: _searchController,
-                focusNode: _searchFocusNode,
-                style: SonifyTextStyles.body.copyWith(
-                  color: colorScheme.onSurface,
-                ),
-                decoration: InputDecoration(
-                  hintText: '搜索歌曲、歌手、专辑',
-                  hintStyle: SonifyTextStyles.body.copyWith(
-                    color: sonify.textSecondary,
+        child: LiquidGlassSurface(
+          shape: GlassShape.pill,
+          child: SizedBox(
+            height: 44,
+            child: Row(
+              children: [
+                const SizedBox(width: 16),
+                Icon(Icons.search, size: 20, color: sonify.textSecondary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    focusNode: _searchFocusNode,
+                    style: SonifyTextStyles.body.copyWith(
+                      color: colorScheme.onSurface,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: '搜索歌曲、歌手、专辑',
+                      hintStyle: SonifyTextStyles.body.copyWith(
+                        color: sonify.textSecondary,
+                      ),
+                      border: InputBorder.none,
+                      isCollapsed: true,
+                    ),
+                    // InputDecorator 默认 textAlignVertical 为 top，固定
+                    // 44dp 高度下需显式居中（批次 8 library_page 教训）
+                    textAlignVertical: TextAlignVertical.center,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: _performSearch,
+                    onChanged: (value) {
+                      setState(() {});
+                      if (value.trim().isNotEmpty) {
+                        context.read<KugouProvider>().getSearchSuggest(
+                          value.trim(),
+                        );
+                      }
+                    },
                   ),
-                  border: InputBorder.none,
-                  isCollapsed: true,
                 ),
-                textInputAction: TextInputAction.search,
-                onSubmitted: _performSearch,
-                onChanged: (value) {
-                  setState(() {});
-                  if (value.trim().isNotEmpty) {
-                    context.read<KugouProvider>().getSearchSuggest(
-                      value.trim(),
-                    );
-                  }
-                },
-              ),
+                // 听歌识曲钮（与首页 _buildSearchFieldItem 一致）：内层
+                // GestureDetector 单独响应，不与整体胶囊的点击冲突
+                // （搜索页胶囊无整体 onTap，识曲钮是当前唯一识曲入口）。
+                GestureDetector(
+                  onTap: _openRecognition,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12,
+                    ),
+                    child: Icon(
+                      Icons.mic_none,
+                      size: 20,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+                if (hasText)
+                  IconButton(
+                    // 28dp 命中区（视觉 18dp 图标），顶满 44dp 行高便于点按
+                    constraints: const BoxConstraints.tightFor(width: 36, height: 44),
+                    padding: const EdgeInsets.only(right: 6),
+                    icon: Icon(
+                      Icons.clear,
+                      size: 18,
+                      color: sonify.textSecondary,
+                    ),
+                    onPressed: () {
+                      _searchController.clear();
+                      setState(() {
+                        _query = '';
+                        _hasSearched = false;
+                      });
+                    },
+                  ),
+                if (!hasText) const SizedBox(width: 10),
+              ],
             ),
-            if (hasText)
-              IconButton(
-                // 28dp 命中区（视觉 18dp 图标），顶满 52dp 行高便于点按
-                constraints: const BoxConstraints.tightFor(width: 36, height: 52),
-                padding: const EdgeInsets.only(right: 6),
-                icon: Icon(
-                  Icons.clear,
-                  size: 18,
-                  color: sonify.textSecondary,
-                ),
-                onPressed: () {
-                  _searchController.clear();
-                  setState(() {
-                    _query = '';
-                    _hasSearched = false;
-                  });
-                },
-              ),
-            if (!hasText) const SizedBox(width: 10),
-          ],
+          ),
         ),
       ),
+    );
+  }
+
+  /// 识曲入口：[SongRecognitionPage] 为独立路由页（非 tab 项），
+  /// 与首页搜索框识曲钮同款 MaterialPageRoute 跳转方式。
+  void _openRecognition() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SongRecognitionPage()),
     );
   }
 

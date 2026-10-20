@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
-import '../../core/theme/motion_constants.dart';
 import '../../utils/landscape_immersive.dart';
 import 'full_player.dart';
 
@@ -113,12 +112,19 @@ DraggablePlayerRoute<void> fullPlayerRoute(
   );
 }
 
-/// 播放器系统栏作用域。
+/// 播放器系统栏作用域（单一数据源）。
 ///
-/// 拖拽展开模式下，系统栏样式跟随展开进度切换：完全展开前保持主页面样式
-/// （[mainPageOverlayStyle]），完全展开后切换为播放器样式（[kPlayerOverlayStyle]），
-/// 避免拖拽过程中系统栏提前变成透明 + 浅色图标造成闪烁。
-/// 非拖拽模式（[dragRoute] 为 null）恒为播放器样式。
+/// 系统栏样式跟随路由 controller 进度切换：未完全展开（value < 1）保持
+/// 主页面样式（[mainPageOverlayStyle]），完全展开后切换为播放器样式
+/// （[expandedOverlayStyle] 或 [kPlayerOverlayStyle]），避免拖拽过程中
+/// 系统栏提前变成透明 + 浅色图标造成闪烁。
+///
+/// **稳定性不变量（真机反馈：Dock 上滑过程系统栏颜色不停跳变）**：
+/// 过渡样式与主页面的稳态样式取值完全一致（透明状态栏 + 主题亮度图标 +
+/// statusBarBrightness，不含导航栏属性——与 AppBar 注解的每帧合并结果相同），
+/// 因此拖拽 / settle 全程 RenderView._updateSystemChrome 合并出的样式恒定，
+/// 不产生任何平台调用；仅在展开完成 / 收起开始这两个关键时刻各切换一次。
+/// [dragRoute] 为 null（普通路由 / 无 controller 可跟随）时恒为播放器样式。
 /// [forceMainStyle]：拖拽覆盖层（非路由渲染的 FullPlayer）期间恒为主页面样式。
 class PlayerSystemUiScope extends StatelessWidget {
   const PlayerSystemUiScope({
@@ -376,10 +382,14 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
         }
 
         // —— tap 模式（点击打开）：淡入 + 抽屉上滑感 ——
-        // 展开动画播放期间（forward/reverse）应用过冲 curve，带轻微过冲感
+        // 展开动画播放期间（forward/reverse）套用原生非线性曲线 easeOutQuint
+        // （起步快、末段极缓收尾，全屏入场「干脆落入、柔和停稳」的手感）。
+        // 替代原硬编码自定义贝塞尔 Cubic(0.05, 0.7, 0.1, 1.0)
+        // （M3ExpressiveMotion.expressiveEasing，定义于 core/theme/
+        // motion_constants.dart，多页面共用，留待后续统一迭代）。
         // 拖拽期间 controller.value 被手动设置（isAnimating=false），保持跟手
         final progress = controller.isAnimating
-            ? M3ExpressiveMotion.expressiveEasing.transform(raw).clamp(0.0, 1.0)
+            ? Curves.easeOutQuint.transform(raw).clamp(0.0, 1.0)
             : raw;
         // 同步到全局 playerExpansion，让 MiniPlayer 同步淡入淡出（含过冲）。
         // 改为微任务调度：避开 build 阶段直接写 ValueNotifier 触发监听者

@@ -59,6 +59,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.7
           cache: true
 
       # 缓存 Gradle
@@ -258,16 +259,19 @@ jobs:
       - name: Report build diagnostics
         if: failure()
         run: |
+          # 批次15：诊断模式补 Kotlin 编译错误行（"e: file:///..."）与 Gradle
+          # "> Task ... FAILED" 行——此前 run122 失败因 grep 模式漏抓 e: 行，
+          # annotations 只剩外壳信息，无法定位真实编译错误。
           for f in "$RUNNER_TEMP"/build_standard.log "$RUNNER_TEMP"/build_depth3d.log "$RUNNER_TEMP"/build_apple.log; do
             if [[ -f "$f" ]]; then
               echo "### $(basename "$f") 关键错误行" >> "$GITHUB_STEP_SUMMARY"
               {
-                grep -nE "Error detected|FAILURE: Build failed|What went wrong|error:|Error:|failed|Exception" "$f" | head -30 || true
+                grep -nE "Error detected|FAILURE: Build failed|What went wrong|error:|Error:|^e: |e: file|Task .*FAILED|Caused by|Compilation error|unresolved reference|Type mismatch|no value passed" "$f" | head -40 || true
                 echo "---- tail ----"
                 tail -c 2000 "$f"
               } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
               # 注解（API 可读，每步上限 10 条）
-              grep -E "Error detected|FAILURE: Build failed|What went wrong|error:|Error:" "$f" | head -5 | while IFS= read -r line; do
+              grep -E "^e: |e: file|Task .*FAILED|Compilation error|unresolved reference|error:|Error:|What went wrong" "$f" | head -8 | while IFS= read -r line; do
                 echo "::error::${line:0:400}"
               done || true
               # 最后 4 行（含真实失败原因）也作为注解
@@ -578,6 +582,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.7
           cache: true
 
       - name: Flutter pub get

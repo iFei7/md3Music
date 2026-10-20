@@ -23,27 +23,14 @@ IconData homeTabIcon(String tabId) {
       return Icons.mic;
     case 'settings':
       return Icons.settings;
-    case 'user':
-      return Icons.person;
     case 'fm':
       return Icons.radio;
     case 'audiobook':
       return Icons.auto_stories;
-    // v6 起音乐库子页面可选 Tab（与 app.dart 各 tab 图标保持一致）
-    case 'playlists':
-      return Icons.queue_music;
-    case 'albums':
-      return Icons.album;
-    case 'artists':
-      return Icons.people;
     case 'recent':
       return Icons.history;
-    case 'folders':
-      return Icons.folder;
     case 'scan':
       return Icons.radar;
-    case 'local_favorites':
-      return Icons.favorite_border;
     default:
       return Icons.circle;
   }
@@ -54,7 +41,7 @@ IconData homeTabIcon(String tabId) {
 /// 设置页「主页管理」共用这套界面与配置逻辑，
 /// 直接读写 [TabConfigProvider.allTabs]（下标与列表 1:1，无过滤、无下标换算）。
 /// 因 watch 同一个 Provider，修改后其它入口立即刷新；
-/// 拖拽排序、显示开关、「必显示」规则与重置行为完全一致。
+/// 拖拽排序、显示开关与重置行为完全一致。
 class HomeTabManagerList extends StatelessWidget {
   /// 面板标题（设置页措辞）。
   final String title;
@@ -159,7 +146,7 @@ class HomeTabManagerList extends StatelessWidget {
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              '拖拽排序，开关控制是否显示在底部导航栏（“我的”不可隐藏）',
+              '拖拽排序，开关控制是否显示在底部导航栏',
               style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
           ),

@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../data/models/song.dart';
 import '../../data/repositories/history_repository.dart';
 import '../../providers/player_provider.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/song_list_item.dart';
 
 class PlayHistoryPage extends StatefulWidget {
@@ -126,18 +127,18 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
         final allSelected =
             displaySongs.isNotEmpty &&
             _selectedIds.length == displaySongs.length;
-        return Scaffold(
-      appBar: AppBar(
-        leading: _editMode
-            ? IconButton(
+        // 多选编辑态保留多选顶栏（✕ / 已选 N 首 / 全选 / 删除，与播放列表页、
+        // 歌单页同一套心智模型）：返回/退出/全选/删除都需要常驻可见，而
+        // SonifyTitleScaffold 的 actions 槽滚动后才浮现，不满足该需求。
+        if (_editMode) {
+          return Scaffold(
+            appBar: AppBar(
+              leading: IconButton(
                 icon: const Icon(Icons.close),
                 onPressed: _exitEditMode,
-              )
-            : null,
-        title: Text(_editMode ? '已选 ${_selectedIds.length} 首' : '播放历史'),
-        actions: _editMode
-            // 编辑模式顶栏：全选 / 删除（与播放列表页、歌单页多选顶栏一致）
-            ? [
+              ),
+              title: Text('已选 ${_selectedIds.length} 首'),
+              actions: [
                 TextButton(
                   onPressed: displaySongs.isEmpty
                       ? null
@@ -157,52 +158,71 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
                     ),
                   ),
                 ),
-              ]
-            : [
-                // 可选扩展：私有构建注入的额外操作按钮（默认无）
-                ...?PlayHistoryPage.extraAppBarActionsBuilder?.call(context),
-                // 批量删除入口：进入多选编辑模式（保留「全选→删除」即清空全部）
-                if (_songs.isNotEmpty)
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined),
-                    tooltip: '批量删除',
-                    onPressed: () => _enterEditMode(),
-                  ),
               ],
-      ),
-      body: _isLoading
-        ? const Center(child: M3ELoadingIndicator())
-        : _songs.isEmpty
-        ? _buildEmpty()
-        : Column(
-            children: [
-              _buildHeader(displaySongs),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: displaySongs.length,
-                  itemBuilder: (context, index) {
-                    final song = displaySongs[index];
-                    return SongListItem(
-                      song: song,
-                      isSelectMode: _editMode,
-                      isSelected: _selectedIds.contains(song.id),
-                      onSelectToggle: () => _toggleSelect(song.id),
-                      onLongPress: _editMode
-                          ? null
-                          : () => _enterEditMode(song.id),
-                      onTap: () {
-                        context.read<PlayerProvider>().playOnlinePlaylist(
-                          displaySongs,
-                          index,
-                        );
-                      },
-                      onMoreTap: () {},
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
+            ),
+            body: _buildSongList(displaySongs),
+          );
+        }
+        // 正常态与主页头部统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
+        // 注入的额外操作钮（默认无）放 actions 槽（滚动后随栏体浮现）。
+        return SonifyTitleScaffold(
+          title: '播放历史',
+          actions: PlayHistoryPage.extraAppBarActionsBuilder?.call(context),
+          itemCount: 1,
+          itemBuilder: (context, index) => _buildContent(displaySongs),
+        );
+      },
+    );
+  }
+
+  /// 业务区（单 item 固定高度）：加载/空态居中，列表态为「统计头 + 歌曲列表」。
+  ///
+  /// 固定高度 = 视口 − 状态栏 − 标题区（8dp 顶距 + 36dp 标题行高 + 8dp 底距，
+  /// 与 [SonifyTitleScaffold] 占位 item 同口径）；歌曲列表保留 ListView.builder
+  /// 惰性构建（长历史不整页急建）。
+  Widget _buildContent(List<Song> displaySongs) {
+    final media = MediaQuery.of(context);
+    final height = media.size.height -
+        media.padding.top -
+        52 -
+        media.viewInsets.bottom;
+    Widget child;
+    if (_isLoading) {
+      child = const Center(child: M3ELoadingIndicator());
+    } else if (_songs.isEmpty) {
+      child = _buildEmpty();
+    } else {
+      child = Column(
+        children: [
+          _buildHeader(displaySongs),
+          Expanded(child: _buildSongList(displaySongs)),
+        ],
+      );
+    }
+    return SizedBox(height: height, child: child);
+  }
+
+  /// 歌曲列表（编辑态顶栏 body 与正常态列表区共用）。
+  Widget _buildSongList(List<Song> displaySongs) {
+    return ListView.builder(
+      itemCount: displaySongs.length,
+      itemBuilder: (context, index) {
+        final song = displaySongs[index];
+        return SongListItem(
+          song: song,
+          isSelectMode: _editMode,
+          isSelected: _selectedIds.contains(song.id),
+          onSelectToggle: () => _toggleSelect(song.id),
+          onLongPress: _editMode
+              ? null
+              : () => _enterEditMode(song.id),
+          onTap: () {
+            context.read<PlayerProvider>().playOnlinePlaylist(
+              displaySongs,
+              index,
+            );
+          },
+          onMoreTap: () {},
         );
       },
     );
@@ -254,6 +274,14 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
               },
               icon: const Icon(Icons.play_arrow),
               label: const Text('播放全部'),
+            ),
+          // 批量删除入口（原顶栏编辑钮移到统计头行，保持常驻可达）：
+          // 进入多选编辑模式（保留「全选→删除」即清空全部）
+          if (_songs.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: '批量删除',
+              onPressed: () => _enterEditMode(),
             ),
         ],
       ),

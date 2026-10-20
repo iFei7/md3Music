@@ -10,16 +10,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/layout/adaptive_content_grid.dart';
 import '../../core/layout/adaptive_navigator.dart';
-import '../../core/layout/page_title_alignment.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/utils/app_toast.dart';
 import '../../data/repositories/favorite_lists_cache.dart';
+import '../../data/repositories/hidden_playlists_cache.dart';
+import '../../data/repositories/playlist_cover_cache.dart';
+import '../../data/repositories/playlist_cover_resolver.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../providers/favorites_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/playlist_collection_notifier.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
+import '../../widgets/common/sonify_title_scaffold.dart';
 import '../artist/artist_detail_page.dart';
 import '../library/library_page.dart' show LibraryMusicPanel;
 import '../playlist/playlist_page.dart';
@@ -33,7 +36,19 @@ class FavoritesPage extends StatefulWidget {
   /// 入口区复用本页时预选对应 tab，避免造重复页；主页「收藏」tab 用默认 0。
   final int initialTab;
 
-  const FavoritesPage({super.key, this.initialTab = 0});
+  /// true 时进入「歌单」tab，并在歌单数据就绪后自动打开「我喜欢」歌单
+  /// 详情（与点击歌单行完全相同的导航，仅一次）。
+  ///
+  /// 用途：音乐库 hub「收藏」入口等直达场景，省去用户再点一次「我喜欢」。
+  /// 未找到「我喜欢」（无缓存 / 已被隐藏 / 未登录）时停留歌单 tab，
+  /// 不报错、不重试（一次性守卫）。
+  final bool focusMyFavorite;
+
+  const FavoritesPage({
+    super.key,
+    this.initialTab = 0,
+    this.focusMyFavorite = false,
+  });
 
   @override
   State<FavoritesPage> createState() => _FavoritesPageState();
@@ -117,17 +132,34 @@ class _FavoritesPageState extends State<FavoritesPage>
   static const String _kMyFavoriteCoverKey = 'fav_my_favorite_cover_v1';
   bool _resolvingMyFavoriteCover = false;
 
+  /// 普通歌单「首曲封面」解析结果（playlistKey → https url）。
+  /// 「我喜欢」走上面的动态封面机制，两者互相独立。
+  Map<String, String> _covers = {};
+
+  /// 首曲封面解析中（防重入）。
+  bool _resolvingCovers = false;
+
+  /// 本页面已尝试解析过的歌单 key（重复加载不重复请求）。
+  final Set<String> _coverAttempted = {};
+
   /// 正在「点击封面一键播放」的歌单行下标：封面上显示进度并防重复点击。
   final Set<int> _coverPlayingIndices = {};
+
+  /// focusMyFavorite 一次性守卫：无论成功与否只尝试一次——自动导航
+  /// 未命中（无「我喜欢」）时不因后续下拉刷新 / notifier 触发的重复
+  /// 数据加载而再次尝试。
+  bool _focusMyFavoriteHandled = false;
 
   @override
   void initState() {
     super.initState();
     // 4 tab：歌单 / 本地 / 专辑 / 歌手（本地音乐面板嵌入，见 LibraryMusicPanel）
+    // focusMyFavorite 强制定位「歌单」tab（自动打开「我喜欢」的前置，
+    // 忽略传入的 initialTab）。
     _tabController = TabController(
       length: 4,
       vsync: this,
-      initialIndex: widget.initialTab.clamp(0, 3),
+      initialIndex: widget.focusMyFavorite ? 0 : widget.initialTab.clamp(0, 3),
     );
     _tabController.addListener(_onTabChanged);
     // 立即探测一次网络 + 每 30 秒兜底探测（dio 拦截器会同步更新
@@ -149,15 +181,16 @@ class _FavoritesPageState extends State<FavoritesPage>
           .getCollectedPlaylistOrder();
       if (!mounted) return;
       setState(() {});
-      _loadAllData();
       final notifier = context.read<PlaylistCollectionNotifier>();
       _playlistCollectionNotifier = notifier;
       notifier.addListener(_onCollectionChanged);
+      // 缓存 + 网络两路歌单数据都落地后，再触发 focusMyFavorite 自动导航
+      // （数据就绪 + postFrame 双重保障，测试可确定性触发）。
+      await _loadAllData();
+      if (!mounted) return;
+      _maybeAutoOpenMyFavorite();
     });
   }
-
-  /// 歌单在排序持久化中的稳定 key（与 _playlistAccessOrder 同口径）。
-  String _playlistKey(KugouPlaylistBrief p) => p.globalCollectionId ?? p.id;
 
   /// 轻量级网络探测：用 /server/now 接口。结果通过 dio 拦截器自动
   /// 反映到 KugouApiClient.networkReachable。
@@ -182,12 +215,18 @@ class _FavoritesPageState extends State<FavoritesPage>
 
   /// 从本地缓存读取上次同步的歌单/专辑/歌手与同步时间，立即渲染。
   /// 不抛异常；任何失败都视为无缓存。
+  ///
+  /// 隐藏歌单（[HiddenPlaylistsCache]）：缓存歌单同样按隐藏 key 集合
+  /// 过滤，「我创建的歌单」「我收藏的歌单」两组都过滤。
   Future<void> _loadCachedData() async {
     try {
       final cachedPlaylists = await FavoriteListsCache.readPlaylists();
       final cachedAlbums = await FavoriteListsCache.readAlbums();
       final cachedArtists = await FavoriteListsCache.readArtists();
       final lastSync = await FavoriteListsCache.readLastSyncTime();
+      final hidden = await HiddenPlaylistsCache.readHidden();
+      // 普通歌单首曲封面持久化缓存（与 hub 共用同一仓库）
+      final covers = await PlaylistCoverCache.readAll();
       // 「我喜欢」缓存封面：离线启动即可显示最近解析出的专辑封面
       String? cachedCover;
       try {
@@ -201,11 +240,12 @@ class _FavoritesPageState extends State<FavoritesPage>
           cachedArtists.isNotEmpty;
       if (hasAny) {
         setState(() {
-          _playlists = cachedPlaylists;
+          _playlists = _filterHidden(cachedPlaylists, hidden);
           _albums = cachedAlbums;
           _artists = cachedArtists;
           _lastSyncTime = lastSync;
           _myFavoriteCoverUrl = cachedCover;
+          _covers = covers;
           _isLoadingPlaylists = false;
           _isLoadingAlbums = false;
           _isLoadingArtists = false;
@@ -214,6 +254,7 @@ class _FavoritesPageState extends State<FavoritesPage>
         setState(() {
           _lastSyncTime = lastSync;
           _myFavoriteCoverUrl = cachedCover;
+          _covers = covers;
         });
       }
     } catch (_) {
@@ -249,9 +290,11 @@ class _FavoritesPageState extends State<FavoritesPage>
     } catch (_) {}
   }
 
-  /// 记录歌单访问时间戳并持久化
+  /// 记录歌单访问时间戳并持久化。
+  /// key 口径与隐藏歌单仓库（[HiddenPlaylistsCache.playlistKey]）一致，
+  /// 排序持久化 / 访问排序 / 隐藏过滤三方共用同一实现。
   Future<void> _recordPlaylistAccess(KugouPlaylistBrief playlist) async {
-    final key = playlist.globalCollectionId ?? playlist.id;
+    final key = HiddenPlaylistsCache.playlistKey(playlist);
     final now = DateTime.now().millisecondsSinceEpoch;
     _playlistAccessOrder[key] = now;
     setState(() {});
@@ -274,6 +317,52 @@ class _FavoritesPageState extends State<FavoritesPage>
     ]);
     // 歌单就位后解析「我喜欢」动态封面（不阻塞主加载）
     unawaited(_resolveMyFavoriteCover());
+    // 普通歌单无封面时旁路解析首曲封面（串行限流，失败静默）
+    unawaited(_resolveMissingCovers());
+  }
+
+  /// 为 `coverUrl` 为空的普通歌单解析首曲封面，限流口径同 hub：
+  /// 每轮最多 8 个、串行 for（并发 1）、同 key 只尝试一次、失败静默。
+  /// 「我喜欢」由 [_resolveMyFavoriteCover] 独立处理，不在此列。
+  Future<void> _resolveMissingCovers() async {
+    if (_resolvingCovers) return;
+    _resolvingCovers = true;
+    try {
+      final pending = _playlists
+          .where((p) => p.name != '我喜欢' && (p.coverUrl ?? '').isEmpty)
+          .take(8)
+          .toList();
+      for (final playlist in pending) {
+        final key = HiddenPlaylistsCache.playlistKey(playlist);
+        if (_covers.containsKey(key)) continue;
+        if (!_coverAttempted.add(key)) continue;
+        final url = await resolveFirstSongCover(playlist, cached: _covers);
+        if (!mounted) return;
+        if (url != null && url.isNotEmpty) {
+          setState(() => _covers[key] = url);
+        }
+      }
+    } catch (_) {
+      // 静默：封面解析失败保留占位图
+    } finally {
+      _resolvingCovers = false;
+    }
+  }
+
+  /// 按 [HiddenPlaylistsCache] 维护的隐藏 key 集合过滤歌单列表。
+  /// 「我创建的歌单」「我收藏的歌单」两组均从 [_playlists] 派生
+  /// （[_createdPlaylists]/[_collectedPlaylists]），在此统一过滤一次
+  /// 即全覆盖。
+  List<KugouPlaylistBrief> _filterHidden(
+    List<KugouPlaylistBrief> list,
+    Set<String> hidden,
+  ) {
+    if (hidden.isEmpty) return list;
+    return list
+        .where(
+          (p) => !hidden.contains(HiddenPlaylistsCache.playlistKey(p)),
+        )
+        .toList();
   }
 
   /// 找到收藏页里的「我喜欢」默认歌单（name == 我喜欢）。
@@ -282,6 +371,35 @@ class _FavoritesPageState extends State<FavoritesPage>
       if (p.name == '我喜欢') return p;
     }
     return null;
+  }
+
+  /// focusMyFavorite 自动打开「我喜欢」：歌单数据就绪（缓存 + 网络两路
+  /// 都落地）后执行与点击歌单行**完全相同**的导航（[_openPlaylistDetail]），
+  /// 仅一次（[_focusMyFavoriteHandled] 守卫）；未找到（无缓存 / 被隐藏 /
+  /// 未登录）时停留歌单 tab，不报错。
+  void _maybeAutoOpenMyFavorite() {
+    if (_focusMyFavoriteHandled || !widget.focusMyFavorite) return;
+    _focusMyFavoriteHandled = true;
+    final playlist = _myFavoritePlaylist;
+    if (playlist == null) return;
+    unawaited(_openPlaylistDetail(playlist));
+  }
+
+  /// 打开歌单详情：点击歌单行与 focusMyFavorite 自动导航共用同一路径
+  /// （[_recordPlaylistAccess] 记录访问排序 + [AdaptiveNav.openDetail]
+  /// → [PlaylistPage]，isDefaultFavorite 按「我喜欢」判定）。
+  Future<void> _openPlaylistDetail(KugouPlaylistBrief playlist) async {
+    await _recordPlaylistAccess(playlist);
+    if (!mounted) return;
+    AdaptiveNav.openDetail(
+      context,
+      (_) => PlaylistPage(
+        playlist: playlist.toPlaylist(),
+        isInMyFavorites: true,
+        isUserCreated: _isCreated(playlist),
+        isDefaultFavorite: playlist.name == '我喜欢',
+      ),
+    );
   }
 
   /// 解析「我喜欢」动态封面：取该歌单「最新收藏」的专辑封面（改版计划四）
@@ -392,24 +510,30 @@ class _FavoritesPageState extends State<FavoritesPage>
   }
 
   int _getAccessTime(KugouPlaylistBrief p) =>
-      _playlistAccessOrder[p.globalCollectionId ?? p.id] ?? 0;
+      _playlistAccessOrder[HiddenPlaylistsCache.playlistKey(p)] ?? 0;
 
   /// 对分组列表应用排序：手动拖拽顺序（manualOrder）优先，
   /// 未列入手动顺序的歌单排在最后且保持相对顺序；
   /// 无手动顺序时退回「最近点击」排序逻辑（_sortByLatestClick）。
+  /// key 口径统一走 [HiddenPlaylistsCache.playlistKey]。
   void _applySort(List<KugouPlaylistBrief> list, List<String> manualOrder) {
     if (manualOrder.isNotEmpty) {
       final rank = <String, int>{
         for (var i = 0; i < manualOrder.length; i++) manualOrder[i]: i,
       };
       final originalIndex = <String, int>{
-        for (var i = 0; i < list.length; i++) _playlistKey(list[i]): i,
+        for (var i = 0; i < list.length; i++)
+          HiddenPlaylistsCache.playlistKey(list[i]): i,
       };
       list.sort((a, b) {
-        final fallbackA = manualOrder.length + (originalIndex[_playlistKey(a)] ?? 0);
-        final fallbackB = manualOrder.length + (originalIndex[_playlistKey(b)] ?? 0);
-        return (rank[_playlistKey(a)] ?? fallbackA).compareTo(
-          rank[_playlistKey(b)] ?? fallbackB,
+        final fallbackA =
+            manualOrder.length +
+            (originalIndex[HiddenPlaylistsCache.playlistKey(a)] ?? 0);
+        final fallbackB =
+            manualOrder.length +
+            (originalIndex[HiddenPlaylistsCache.playlistKey(b)] ?? 0);
+        return (rank[HiddenPlaylistsCache.playlistKey(a)] ?? fallbackA).compareTo(
+          rank[HiddenPlaylistsCache.playlistKey(b)] ?? fallbackB,
         );
       });
     } else if (_sortByLatestClick) {
@@ -436,7 +560,7 @@ class _FavoritesPageState extends State<FavoritesPage>
     final list = group == 1 ? _createdPlaylists : _collectedPlaylists;
     final item = list.removeAt(oldIndex);
     list.insert(newIndex, item);
-    final order = list.map(_playlistKey).toList();
+    final order = list.map(HiddenPlaylistsCache.playlistKey).toList();
     setState(() {
       if (group == 1) {
         _createdManualOrder = order;
@@ -513,15 +637,19 @@ class _FavoritesPageState extends State<FavoritesPage>
             })
             .map((e) => KugouPlaylistBrief.fromJson(e as Map<String, dynamic>))
             .toList();
+        // 隐藏歌单过滤：「我创建的歌单」「我收藏的歌单」两组都过滤
+        final hidden = await HiddenPlaylistsCache.readHidden();
         final now = DateTime.now();
         // 判断是否还有更多：返回条数等于请求页大小则可能还有下一页
         _hasMorePlaylists = list.length >= _playlistPageSize;
         setState(() {
-          _playlists = filtered;
+          _playlists = _filterHidden(filtered, hidden);
           _isLoadingPlaylists = false;
           _lastSyncTime = now;
         });
-        // 写入本地缓存（异步，不阻塞 UI）
+        // 写入本地缓存（异步，不阻塞 UI）。缓存保留**未过滤**列表：
+        // 隐藏状态单独持久化于 [HiddenPlaylistsCache]，取消隐藏后无需
+        // 重拉网络即可从缓存恢复。
         FavoriteListsCache.savePlaylists(filtered);
         FavoriteListsCache.saveLastSyncTime(now);
         return;
@@ -581,10 +709,12 @@ class _FavoritesPageState extends State<FavoritesPage>
             })
             .map((e) => KugouPlaylistBrief.fromJson(e as Map<String, dynamic>))
             .toList();
+        // 隐藏歌单过滤：追加页同样按隐藏 key 集合过滤
+        final hidden = await HiddenPlaylistsCache.readHidden();
         _playlistPage = nextPage;
         _hasMorePlaylists = list.length >= _playlistPageSize;
         setState(() {
-          _playlists.addAll(filtered);
+          _playlists.addAll(_filterHidden(filtered, hidden));
           _isLoadingMorePlaylists = false;
         });
         // 更新本地缓存
@@ -948,7 +1078,6 @@ class _FavoritesPageState extends State<FavoritesPage>
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
     // 批量管理模式下拦截系统返回：退出管理模式而非退出 App
     return PopScope(
       canPop: !_isManaging,
@@ -956,28 +1085,58 @@ class _FavoritesPageState extends State<FavoritesPage>
         if (didPop) return;
         _exitManageMode();
       },
-      child: Scaffold(
-        appBar: AppBar(
-          // 统一对齐规则：作为底部导航栏一级页面时左对齐，被 push 成二级页面时居中
-          centerTitle: centerPageTitle(context, tabId: 'favorites'),
-          title: Text(
-            '我的收藏',
-            style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          actions: [
-            // 新建歌单入口已移到「我创建的歌单」分组标题右侧，
-            // 这里只在批量管理模式下保留删除按钮。
-            if (_isManaging)
-              IconButton(
+      // 头部与主页统一：SonifyTitleScaffold 固定悬浮大标题（批次 9）。
+      // 4 tab 的 TabBar/TabBarView 整体作为单个业务 item 固定在标题下方；
+      // 批量管理删除钮放 trailing 槽（常驻渲染）——actions 槽滚动后才浮现，
+      // 不满足管理模式的常驻可见需求。
+      child: SonifyTitleScaffold(
+        title: '我的收藏',
+        trailing: _isManaging
+            ? IconButton(
                 icon: const Icon(Icons.delete),
+                tooltip: '删除选中',
                 onPressed: _managingTab == 1
                     ? _deleteSelectedAlbums
                     : _deleteSelectedPlaylists,
-              ),
-          ],
-          bottom: TabBar(
+              )
+            : null,
+        itemCount: 1,
+        itemBuilder: (context, index) => _buildTabbedBody(),
+      ),
+    );
+  }
+
+  /// 业务区（单 item 固定高度）：离线 banner + 分类 TabBar + 四个 tab 内容。
+  ///
+  /// 固定高度 = 视口 − 状态栏 − 标题区（8dp 顶距 + 36dp 标题行高 + 8dp 底距，
+  /// 与 [SonifyTitleScaffold] 占位 item 同口径）；键盘弹出时再让出视口底部
+  /// （内层 Scaffold resizeToAvoidBottomInset 收缩视口，本高度同步收缩，
+  /// 不产生溢出）。
+  Widget _buildTabbedBody() {
+    final textTheme = Theme.of(context).textTheme;
+    final media = MediaQuery.of(context);
+    final height = media.size.height -
+        media.padding.top -
+        52 -
+        media.viewInsets.bottom;
+    return SizedBox(
+      height: height,
+      child: Column(
+        children: [
+          // 监听 dio 拦截器维护的全局网络状态：任意 dio 请求失败 → 显示 banner
+          ValueListenableBuilder<bool>(
+            valueListenable: KugouApiClient.networkReachable,
+            builder: (context, reachable, _) {
+              if (reachable) return const SizedBox.shrink();
+              return OfflineBanner(
+                lastSyncTime: _lastSyncTime,
+                onRetry: _retryFromBanner,
+              );
+            },
+          ),
+          // 分类 TabBar：图标与文字都比顶栏标题小一档；分组标题（_GroupSection）再小一档
+          TabBar(
             controller: _tabController,
-            // 图标与文字都比顶栏标题小一档；分组标题（_GroupSection）再小一档
             labelStyle: textTheme.labelMedium?.copyWith(
               fontWeight: FontWeight.w600,
             ),
@@ -998,33 +1157,18 @@ class _FavoritesPageState extends State<FavoritesPage>
               Tab(height: 52, icon: Icon(Icons.person, size: 18), text: '歌手'),
             ],
           ),
-        ),
-        body: Column(
-          children: [
-            // 监听 dio 拦截器维护的全局网络状态：任意 dio 请求失败 → 显示 banner
-            ValueListenableBuilder<bool>(
-              valueListenable: KugouApiClient.networkReachable,
-              builder: (context, reachable, _) {
-                if (reachable) return const SizedBox.shrink();
-                return OfflineBanner(
-                  lastSyncTime: _lastSyncTime,
-                  onRetry: _retryFromBanner,
-                );
-              },
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _buildPlaylistsTab(),
+                const LibraryMusicPanel(),
+                _buildAlbumsTab(),
+                _buildArtistsTab(),
+              ],
             ),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  _buildPlaylistsTab(),
-                  const LibraryMusicPanel(),
-                  _buildAlbumsTab(),
-                  _buildArtistsTab(),
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1117,7 +1261,7 @@ class _FavoritesPageState extends State<FavoritesPage>
               reordering: _reorderingGroup == 1,
               onReorder: (oldIndex, newIndex) =>
                   _reorderGroup(1, oldIndex, newIndex),
-              keyFor: _playlistKey,
+              keyFor: HiddenPlaylistsCache.playlistKey,
               onBuildTile: (playlist) =>
                   _buildPlaylistTile(playlist, _playlists.indexOf(playlist)),
               // 新建歌单：原顶栏右上角的 "+" 移到此处；排序按钮靠最右
@@ -1154,7 +1298,7 @@ class _FavoritesPageState extends State<FavoritesPage>
                 reordering: _reorderingGroup == 2,
                 onReorder: (oldIndex, newIndex) =>
                     _reorderGroup(2, oldIndex, newIndex),
-                keyFor: _playlistKey,
+                keyFor: HiddenPlaylistsCache.playlistKey,
                 onBuildTile: (playlist) =>
                     _buildPlaylistTile(playlist, _playlists.indexOf(playlist)),
                 trailing: _isManaging
@@ -1211,7 +1355,10 @@ class _FavoritesPageState extends State<FavoritesPage>
     );
     if (url == null || url.isEmpty) return placeholder;
     return CachedNetworkImage(
-      imageUrl: url,
+      // http:// 混合资源按 hub _NetworkCover 同款规则升级 https
+      imageUrl: url.startsWith('http://')
+          ? url.replaceFirst('http://', 'https://')
+          : url,
       memCacheWidth: 156,
       memCacheHeight: 156,
       fit: BoxFit.cover,
@@ -1248,7 +1395,11 @@ class _FavoritesPageState extends State<FavoritesPage>
               return _coverImage(url, cs);
             },
           )
-        : _coverImage(playlist.coverUrl, cs);
+        : _coverImage(
+            _covers[HiddenPlaylistsCache.playlistKey(playlist)] ??
+                playlist.coverUrl,
+            cs,
+          );
 
     final clipped = ClipRRect(
       borderRadius: AppRadius.smAll,
@@ -1327,19 +1478,8 @@ class _FavoritesPageState extends State<FavoritesPage>
                   }
                 });
               }
-            : () async {
-                await _recordPlaylistAccess(playlist);
-                if (!mounted) return;
-                AdaptiveNav.openDetail(
-                  context,
-                  (_) => PlaylistPage(
-                    playlist: playlist.toPlaylist(),
-                    isInMyFavorites: true,
-                    isUserCreated: _isCreated(playlist),
-                    isDefaultFavorite: playlist.name == '我喜欢',
-                  ),
-                );
-              },
+            // 与 focusMyFavorite 自动导航共用同一入口（见 [_openPlaylistDetail]）
+            : () => unawaited(_openPlaylistDetail(playlist)),
         onLongPress: reordering || _isManaging
             ? null
             : () {

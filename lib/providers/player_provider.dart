@@ -831,7 +831,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
        _isAndroidPlatform = isAndroidForTest ?? Platform.isAndroid {
     WidgetsBinding.instance.addObserver(this);
     _scheduleAudioServiceInit();
-    // 同步「是否正在播放在线歌曲」到听歌等级服务（累计本地听歌时长用）
+    // 同步「是否正在播放」到听歌等级服务（累计本地听歌时长用，不分音源）
     addListener(_syncListeningGradeOnline);
     // CSCC 真实播放事件上报（/user/listen/report）：切歌 → 补发前一首 end + 发新 start。
     // 与上面的差量链路并存，互不干扰；开关共用 settings_upload_listening_duration。
@@ -843,11 +843,39 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     );
   }
 
-  /// 推送当前「在线歌曲播放中」状态到听歌等级服务。
+  /// 听歌等级差量链路的累计门禁（即送入
+  /// [ListeningGradeService.setListeningOnline] 的实参）：
+  /// **正在播放即累计，不分音源**——本地文件听歌时长也计入等级时长上报
+  /// （用户批次14要求；服务端按 userid 记账，与音源无关）。
+  ///
+  /// 修复前语义为「在线歌曲且播放中」
+  /// （`(_currentSong?.isOnline ?? false) && _isPlaying`），本地文件播放的
+  /// 时长被完全丢弃，是「本地听歌时长未上传」的根因之一。
+  ///
+  /// [currentSong] 仅为调用点自文档与单测表达「本地/在线」场景而保留，
+  /// 音源已不参与判定。抽取为静态纯函数：单测可直钉真值表，无需驱动整个
+  /// PlayerProvider（听歌等级服务是 Android-only 单例，测试环境无累计
+  /// 可观察 seam）。
+  @visibleForTesting
+  static bool shouldAccumulateListeningDuration({
+    required Song? currentSong,
+    required bool isPlaying,
+  }) {
+    // 音源无关：本地/在线歌曲播放中均累计（用户批次14）
+    return isPlaying;
+  }
+
+  /// 推送当前「播放中」状态到听歌等级服务。
   /// notifyListeners 在播放/暂停/切歌时触发（高频位置更新走 positionNotifier，
   /// 不触发全量通知），此方法开销极小。
   void _syncListeningGradeOnline() {
-    final playingOnline = (_currentSong?.isOnline ?? false) && _isPlaying;
+    // 用户批次14：累计门禁放宽为「正在播放（不分音源）」——本地文件听歌时长
+    // 也计入等级时长上报。服务端按 userid 记账，与音源无关；修复前限定
+    // 「在线歌曲且播放中」，本地文件时长被完全丢弃（根因②）。
+    final playingOnline = shouldAccumulateListeningDuration(
+      currentSong: _currentSong,
+      isPlaying: _isPlaying,
+    );
     ListeningGradeService.instance.setListeningOnline(playingOnline);
     // 历史遗留：曾在「开始播放在线歌曲」时补发一次 /playhistory/upload，用于让
     // 按真实播放统计记账的账号累计时长。该补偿链路已由 CSCC 真实播放事件
@@ -4161,23 +4189,35 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       const steps = 10;
       const stepMs = 50; // 10步 x 50ms = 500ms
       var superseded = false;
-      for (int i = 1; i <= steps; i++) {
-        await Future.delayed(const Duration(milliseconds: stepMs));
-        // 被更新的 fade / 暂停抢占：停止淡入（音量恢复语义保持不变）。
-        if (token != _fadeToken ||
-            !_isPlaybackRequestCurrent(playbackRequest) ||
-            _isDisposed) {
-          superseded = true;
-          break;
+      try {
+        for (int i = 1; i <= steps; i++) {
+          await Future.delayed(const Duration(milliseconds: stepMs));
+          // 被更新的 fade / 暂停抢占：停止淡入（音量恢复语义保持不变）。
+          if (token != _fadeToken ||
+              !_isPlaybackRequestCurrent(playbackRequest) ||
+              _isDisposed) {
+            superseded = true;
+            break;
+          }
+          target.setVolume(targetVolume * i / steps);
         }
-        target.setVolume(targetVolume * i / steps);
+      } finally {
+        // 批次17（P0）：淡入收尾必须无条件恢复音量，不能再有条件门。
+        // 历史缺陷：抢占（superseded/token 失效）时直接 break、没有任何
+        // 音量收尾，开播前写入的 setVolume(0.01) 被永久留下。若抢占方是
+        // 「暂停淡出关闭」状态下的 pause()/拖动停播（只自增 _fadeToken、
+        // 不写音量），播放器音量卡在 0.01：进度条照走、没有任何声音——
+        // 正是续播「进度走但无音乐」的直接机制。
+        // 恢复值沿用本文件既有口径：淡入前捕获的目标音量 targetVolume
+        // （即当前 _volume；音量均衡衰减由 AudioService 层在 setVolume
+        // 通路施加，本循环直写播放器，不引入新的 VN 语义）。
+        // 取证：暂停淡入收尾同样会把音量一次性拉到 targetVolume。
+        debugPrint('[VolAudit] 暂停淡入收尾 superseded=$superseded '
+            'tokenOk=${token == _fadeToken} '
+            '目标=${targetVolume.toStringAsFixed(3)} '
+            '播放器当前=${target.volume.toStringAsFixed(3)}');
+        target.setVolume(targetVolume);
       }
-      // 取证：暂停淡入收尾同样会把音量一次性拉到 targetVolume。
-      debugPrint('[VolAudit] 暂停淡入收尾 superseded=$superseded '
-          'tokenOk=${token == _fadeToken} '
-          '目标=${targetVolume.toStringAsFixed(3)} '
-          '播放器当前=${target.volume.toStringAsFixed(3)}');
-      if (!superseded && token == _fadeToken) target.setVolume(targetVolume);
     } else {
       await _audioService?.playCommand();
       _completionReadyRequest = playbackRequest;

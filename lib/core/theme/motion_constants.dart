@@ -27,11 +27,16 @@ class M3ExpressiveMotion {
   /// 强调动画时长 600ms（对应 long duration，用于 FullPlayer 入场等）
   static const Duration emphasisDuration = Duration(milliseconds: 600);
 
-  /// Expressive easing：略带过冲的减速曲线
+  /// Expressive easing：起步极快、末段平直收尾的强减速曲线
+  /// （原生 Curves.easeOutQuint，替代原自定义 Cubic(0.05, 0.7, 0.1, 1.0)，
+  /// 同为"陡起步+长收尾"手感）
   /// 用于 tab 切换、卡片入场
-  static const Curve expressiveEasing = Cubic(0.05, 0.7, 0.1, 1.0);
+  static const Curve expressiveEasing = Curves.easeOutQuint;
 
   /// Emphasized easing：M3 标准 emphasized 缓动
+  /// （原生 Curves.fastOutSlowIn，替代原自定义 Cubic(0.2, 0, 0, 1.0)，
+  /// 同为前段快启、后段长减速的不对称曲线；中点值 0.77 vs 原 0.88，
+  /// 比对称的 easeInOutCubic（中点 0.5）形态更接近）
   /// 用于大型状态转换（FullPlayer 展开、对话框入场）
-  static const Curve emphasizedEasing = Cubic(0.2, 0.0, 0, 1.0);
+  static const Curve emphasizedEasing = Curves.fastOutSlowIn;
 }

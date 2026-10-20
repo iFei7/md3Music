@@ -121,7 +121,7 @@ void main() {
   }
 
   group('首页滚动链路', () {
-    testWidgets('上滑拖拽后滚动 offset 变化、大标题折叠', (tester) async {
+    testWidgets('上滑拖拽后滚动 offset 变化、标题位置固定', (tester) async {
       final (kugou, player, favorites, localFavorites) =
           await _pumpDiscover(tester);
       try {
@@ -135,6 +135,11 @@ void main() {
         );
         expect(scrollable.position.pixels, 0);
 
+        // 固定悬浮大标题（可见标题 = 树中最后一个『首页』文本；
+        // 列表首项是不可见占位）
+        final titleFinder = find.text('首页').last;
+        final titleRectBefore = tester.getRect(titleFinder);
+
         // 上滑 300px：滚动 offset 必须随之变化（否则滚动失效）。
         // 历史根因：内容不足一屏时 maxScrollExtent == 0，上滑零位移——
         // 骨架已加「视口 + 折叠区」minHeight 兜底，短内容态（本测试
@@ -147,18 +152,17 @@ void main() {
           reason: '上滑拖拽后主列表 offset 应 > 0（页面应跟随滚动）',
         );
 
-        // 拖拽超过标题 item 高度后：大标题溶解、小标题/栏背景浮现
+        // 拖拽超过标题 item 高度后：标题仍固定在原位（批次 8 起不再折叠
+        // 为小标题，用户反馈①：上滑时标题位置会变，不想要）
         await tester.pumpAndSettle();
         expect(scrollable.position.pixels, greaterThan(0));
-        final largeOpacity = tester.widget<Opacity>(
-          find
-              .ancestor(
-                of: find.text('首页').first,
-                matching: find.byType(Opacity),
-              )
-              .first,
+        expect(
+          tester.getRect(titleFinder),
+          titleRectBefore,
+          reason: '上滑过程中标题不位移、不缩放',
         );
-        expect(largeOpacity.opacity, lessThan(1));
+        // 标题始终完整可见（不溶解）
+        expect(titleFinder, findsOneWidget);
       } finally {
         _teardown(kugou, player, favorites, localFavorites);
       }
@@ -170,7 +174,7 @@ void main() {
       try {
         // 旧快捷行是两枚 56dp 色块（文案「私人 FM」/「识曲」）。删除后：
         // 未登录宿主里 FM 卡片显示登录引导（无这些文案），识曲入口只
-        // 剩搜索框右侧/顶栏的图标按钮。
+        // 剩内容区搜索框右侧的识曲钮（批次 19 移除顶栏圆钮）。
         expect(find.text('私人 FM'), findsNothing);
         expect(find.text('识曲'), findsNothing);
       } finally {
@@ -180,32 +184,35 @@ void main() {
   });
 
   group('首页大标题加粗', () {
-    testWidgets('大标题样式携带 wght=700 字轴（不被 M3E emphasized 的 wght 轴覆盖）',
+    testWidgets('大标题样式携带 wght=800 字轴（不被 M3E emphasized 的 wght 轴覆盖）',
         (tester) async {
       final (kugou, player, favorites, localFavorites) =
           await _pumpDiscover(tester);
       try {
-        final style = tester.widget<Text>(find.text('首页').first).style!;
-        expect(style.fontWeight, FontWeight.w700);
-        // 关键：显式 wght 字轴必须存在且为 700，否则 DefaultTextStyle 合并会把
+        // 取可见的固定悬浮标题（树中最后一个『首页』；列表首项是
+        // 不可见占位，不参与渲染）
+        final titleFinder = find.text('首页').last;
+        final style = tester.widget<Text>(titleFinder).style!;
+        expect(style.fontWeight, FontWeight.w800);
+        // 关键：显式 wght 字轴必须存在且为 800，否则 DefaultTextStyle 合并会把
         // M3E emphasized 注入 bodyMedium 的 wght=500 轴带进来，可变字体渲染时
         // 轴优先级高于 fontWeight，标题实际渲染为 Medium（不加粗）。
         final wght = style.fontVariations
             ?.where((v) => v.axis == 'wght')
             .firstOrNull;
         expect(wght, isNotNull);
-        expect(wght!.value, 700.0);
+        expect(wght!.value, 800.0);
 
         // 模拟 Text 的 DefaultTextStyle 合并路径：合并后的生效样式 wght 轴
-        // 仍为 700（不被主题 bodyMedium 的 wght=500 覆盖）。
+        // 仍为 800（不被主题 bodyMedium 的 wght=500 覆盖）。
         final dts = DefaultTextStyle.of(
-          tester.element(find.text('首页').first),
+          tester.element(titleFinder),
         );
         final merged = dts.style.merge(style);
         final mergedWght =
             merged.fontVariations?.where((v) => v.axis == 'wght').firstOrNull;
         expect(mergedWght, isNotNull);
-        expect(mergedWght!.value, 700.0);
+        expect(mergedWght!.value, 800.0);
       } finally {
         _teardown(kugou, player, favorites, localFavorites);
       }

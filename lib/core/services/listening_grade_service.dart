@@ -9,8 +9,9 @@ import '../../services/kugou_api/kugou_api_client.dart';
 
 /// 听歌等级：本地听歌时长累计 + 自动上报（/user/grade/info，v2/lite 协议）。
 ///
-/// - [PlayerProvider] 通过 [setListeningOnline] 推送「正在播放在线歌曲」状态
-/// - 每 30s 心跳：在线播放则累计秒数；累计达 60s 上报一次
+/// - [PlayerProvider] 通过 [setListeningOnline] 推送「正在播放」状态
+///   （不分音源：本地文件播放时长也累计——用户批次14）
+/// - 每 30s 心跳：播放中则累计秒数；累计达 60s 上报一次
 ///   （d_sec=本地累计总秒数，diff_sec=本次增量，服务器按 diff_sec 记账）
 /// - 按 userid 隔离持久化，切换账号自动重载；未登录不累计
 /// - 上报失败重试，连续 3 次失败则调查询重同步服务器值并丢弃 pending，防死循环
@@ -34,7 +35,7 @@ class ListeningGradeService {
   Timer? _timer;
   bool _started = false;
 
-  /// 当前是否正在播放在线歌曲（由 PlayerProvider 推送）
+  /// 当前是否正在播放（由 PlayerProvider 推送；不分音源，本地播放也累计）
   bool _onlinePlaying = false;
 
   /// 已同步到服务器的累计听歌秒数（本地基准）
@@ -81,7 +82,7 @@ class ListeningGradeService {
     _timer = Timer.periodic(_interval, (_) => _onTick());
   }
 
-  /// PlayerProvider 推送：当前是否正在播放在线歌曲。
+  /// PlayerProvider 推送：当前是否正在播放（不分音源）。
   void setListeningOnline(bool value) {
     _onlinePlaying = value;
   }
@@ -105,7 +106,7 @@ class ListeningGradeService {
   }
 
   Future<void> _onTickInner() async {
-    // 「上传听歌时长」开关（默认关闭）：关闭时跳过累计与上报，不产生任何网络请求。
+    // 「上传听歌时长」开关：关闭时跳过累计与上报，不产生任何网络请求。
     // 每次心跳重新读取，设置页切换即时生效，无需额外通知机制。
     if (!await _uploadEnabled()) return;
     final userid = KugouApiClient().userid;
@@ -216,10 +217,14 @@ class ListeningGradeService {
     await _save();
   }
 
-  /// 「上传听歌时长」开关是否开启（默认关闭）。
+  /// 「上传听歌时长」开关是否开启。
+  ///
+  /// 注意：本处与 SettingsRepository.getUploadListeningDuration 是两份独立
+  /// 读取、各自兜底。批次14 起两侧默认均为开启（prefs 未存值时兜底 true），
+  /// 保持口径一致；prefs 已存值（用户手动切换过）优先。
   Future<bool> _uploadEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_uploadEnabledPrefsKey) ?? false;
+    return prefs.getBool(_uploadEnabledPrefsKey) ?? true;
   }
 
   /// 从 grade 响应中安全提取服务器 d_sec（不存在/类型不符返回 0）。

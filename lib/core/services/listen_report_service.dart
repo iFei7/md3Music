@@ -182,9 +182,10 @@ class ListenReportService {
     }
   }
 
-  /// 开关是否开启（默认关闭）；每次上报前重读，设置页切换即时生效。
+  /// 开关是否开启（默认开启，批次14：修复「本地听歌时长未上传」）；
+  /// 每次上报前重读，设置页切换即时生效。prefs 已存值优先于默认值。
   Future<bool> _enabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_uploadEnabledPrefsKey) ?? false;
+    return prefs.getBool(_uploadEnabledPrefsKey) ?? true;
   }
 }

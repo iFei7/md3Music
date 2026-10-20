@@ -13,5 +13,5 @@
     android:widgetCategory="home_screen"
     android:label="@string/cover_widget_label"
     android:previewLayout="@layout/widget_cover_player"
-    android:previewImage="@mipmap/ic_launcher"
+    android:previewImage="@drawable/ic_launcher_widget_preview"
     android:description="@string/cover_widget_description" />

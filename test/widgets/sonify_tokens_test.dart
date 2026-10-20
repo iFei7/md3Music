@@ -113,8 +113,11 @@ void main() {
     test('textLargeTitle：20sp Bold lineHeight 36（与 36dp 头像等高）', () {
       const s = SonifyTextStyles.largeTitle;
       expect(s.fontSize, 20);
-      expect(s.fontWeight, FontWeight.w700);
+      expect(s.fontWeight, FontWeight.w800);
       expect(s.height, 36 / 20);
+      // 显式 wght=800 轴：可变字体渲染中轴优先级高于 fontWeight，缺失时
+      // 会被 M3E emphasized 注入 bodyMedium 的 wght=500 覆盖成 Medium
+      expect(s.fontVariations, contains(const FontVariation('wght', 800)));
     });
 
     test('textBarTitle：18.5sp Bold（Title.kt:1063-1067）', () {
@@ -167,11 +170,8 @@ void main() {
     });
 
     test('动效 token 取值', () {
-      expect(SonifyMotion.collapseSnap, const Duration(milliseconds: 180));
-      expect(SonifyMotion.collapseSnapCurve, Curves.easeOutCubic);
       expect(SonifyMotion.barFade, const Duration(milliseconds: 120));
       expect(SonifyMotion.glassAlpha, const Duration(milliseconds: 150));
-      expect(SonifyMotion.collapseAlphaGain, 1.8);
     });
   });
 }

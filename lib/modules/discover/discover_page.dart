@@ -11,6 +11,7 @@ import '../../core/theme/app_theme.dart';
 import '../../widgets/common/cover_rail.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
+import '../../widgets/common/user_avatar_button.dart';
 import '../../widgets/md3_pull_to_refresh.dart';
 
 import '../../providers/kugou_provider.dart';
@@ -27,13 +28,12 @@ import '../search/search_page.dart';
 
 /// 首页 / Discover（UI 重设计批次 1，方案 §1）。
 ///
-/// 结构（方案 §1.2 线框）：
-/// - [SonifyTitleScaffold] 大标题「首页」折叠顶栏（列表首 item，滚动溶解，
-///   没入后 18.5sp 小标题浮现，180ms EaseOutCubic 吸附）；
-/// - 顶栏右上**固定用户头像**（常驻不折叠，点击进设置页 /settings）；
-/// - 折叠后头像左侧浮现搜索/识曲两枚玻璃圆钮（点击行为同搜索框）；
+/// 结构（方案 §1.2 线框顺序）：
+/// - [SonifyTitleScaffold] 大标题「首页」**固定悬浮**（滚动中不位移/
+///   不缩放/不溶解，批次 8 起去掉折叠为小标题的旧机制）；
+/// - 顶栏右上**固定用户头像**（常驻，点击进设置页 /settings）；
 /// - 列表：胶囊搜索框（内右侧识曲按钮）→ 私人 FM 堆叠大卡片（档位切换/
-///   滑动切歌）→ 正在播放大卡片 → 每日推荐
+///   滑动切歌）→ 最近播放大卡片（标题 + 箭头进播放历史页）→ 每日推荐
 ///   → 编辑精选/主题歌单/热门歌单/新碟上架/排行榜 横滑 Rail（[CoverRail]）
 ///   → 刷歌推荐 → Dock 避让。
 ///
@@ -207,6 +207,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
       if (!mounted) return;
       _error = e.toString();
     }
+    // 私人 FM 卡自管数据（KugouProvider._personalFmSongs 单例），不在
+    // 上方分区请求里；下拉刷新末尾按当前档位强制重拉（复用挂载实例，
+    // 无实例时 no-op），修「下拉刷不动 FM 卡」。
+    await DiscoverFmStackCard.reloadCurrentStation();
     if (mounted) {
       setState(() {
         _isLoading = false;
@@ -232,10 +236,12 @@ class _DiscoverPageState extends State<DiscoverPage> {
           ? Scaffold(body: _buildError(colorScheme))
           : SonifyTitleScaffold(
               title: '首页',
-              // 顶栏右侧固定用户头像（常驻，不随折叠）
-              trailing: _buildUserAvatar(),
-              // 折叠后在头像左侧浮现搜索/识曲圆钮
-              actions: _buildCollapsedBarActions(),
+              // 顶栏右侧固定用户头像（常驻，不随滚动；统一组件，点击进
+              // 设置页 /settings，与 FM/搜索/音乐库三页同款）。
+              // 批次 19：删除滚动后头像左侧浮现的搜索/识曲玻璃圆钮
+              // （actions）——全局搜索由底部导航常驻搜索 tab 承载，
+              // 识曲入口保留在内容区搜索框内右侧（_buildSearchFieldItem）。
+              trailing: const UserAvatarButton(),
               itemCount: _kSectionCount,
               itemBuilder: _buildListItem,
             ),
@@ -253,7 +259,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
         // 私人 FM 堆叠大卡片（原 FM/识曲快捷行位置，快捷行已删）
         return const DiscoverFmStackCard();
       case 2:
-        // 正在播放大卡片（无播放内容时整块隐藏）
+        // 最近播放大卡片（标题 + 箭头进播放历史页；无播放内容时整块隐藏）
         return const DiscoverNowPlayingCard();
       case 3:
         return _buildDailySection();
@@ -380,60 +386,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
         ),
       ),
     );
-  }
-
-  /// 顶栏固定用户头像（36dp）：常驻不参与折叠，点击进设置页
-  /// （app.dart 已注册 '/settings' 路由，与 user_center_page 的
-  /// MaterialPageRoute push 同指 SettingsPage；pushNamed 独立入栈，
-  /// 与底部 tab 中的实例并存无冲突）。
-  Widget _buildUserAvatar() {
-    final cs = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onTap: () => Navigator.of(context).pushNamed('/settings'),
-      behavior: HitTestBehavior.opaque,
-      child: Selector<KugouProvider, String?>(
-        selector: (_, kugou) => kugou.userInfo?.avatar,
-        builder: (context, avatar, _) => CircleAvatar(
-          radius: 18,
-          backgroundColor: cs.surfaceContainerHighest,
-          backgroundImage: (avatar != null && avatar.isNotEmpty)
-              ? CachedNetworkImageProvider(avatar)
-              : null,
-          child: (avatar == null || avatar.isEmpty)
-              ? Icon(Icons.person, size: 20, color: cs.onSurfaceVariant)
-              : null,
-        ),
-      ),
-    );
-  }
-
-  /// 顶栏玻璃圆钮：42dp 圆形液态玻璃（sonify Title.kt:849-873 材质），
-  /// 图标 20dp。用于折叠后的顶栏搜索/识曲按钮。
-  Widget _buildGlassCircleButton(IconData icon, VoidCallback onTap) {
-    return LiquidGlassSurface(
-      shape: GlassShape.circle,
-      child: SizedBox(
-        width: 42,
-        height: 42,
-        child: IconButton(
-          // 顶满玻璃圆钮（默认 48dp 会溢出 42dp 容器）
-          constraints: const BoxConstraints.tightFor(width: 42, height: 42),
-          padding: EdgeInsets.zero,
-          icon: Icon(icon, size: 20),
-          onPressed: onTap,
-        ),
-      ),
-    );
-  }
-
-  /// 折叠后顶栏动作按钮：头像左侧的搜索圆钮 + 识曲圆钮，
-  /// 点击行为与列表搜索框一致。
-  List<Widget> _buildCollapsedBarActions() {
-    return [
-      _buildGlassCircleButton(Icons.search, _openSearch),
-      const SizedBox(width: 10),
-      _buildGlassCircleButton(Icons.mic_none, _openRecognition),
-    ];
   }
 
   /// 分区标题行：18sp Bold 标题 + 可选「更多」（13sp 次级灰 + 24dp primary
