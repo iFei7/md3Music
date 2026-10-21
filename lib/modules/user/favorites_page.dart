@@ -24,6 +24,7 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/common/user_avatar_button.dart';
+import '../../widgets/common/content_scroll_signal.dart';
 import '../artist/artist_detail_page.dart';
 import '../library/library_page.dart' show LibraryMusicPanel;
 import '../playlist/playlist_page.dart';
@@ -57,6 +58,12 @@ class FavoritesPage extends StatefulWidget {
 
 class _FavoritesPageState extends State<FavoritesPage>
     with SingleTickerProviderStateMixin {
+  // 内层滚动信号（true = 已离开顶部）：本页外层骨架是单固定高 item、
+  // 自身不滚动，内层滚动区（列表 / SingleChildScrollView）的滚动经
+  // [ContentScrollSignal] 上传到此，注入 SonifyTitleScaffold 的
+  // barBackgroundVisible 让顶栏渐变模糊带与首页同拍浮现
+  // （批次 24：主页管理 tab 页顶栏背景与首页一致）。
+  final ValueNotifier<bool> _contentScrolled = ValueNotifier<bool>(false);
   late TabController _tabController;
 
   // 歌单
@@ -123,7 +130,9 @@ class _FavoritesPageState extends State<FavoritesPage>
   /// `keepScrollOffset = true` 会让重建后的 ListView 恢复旧 offset，
   /// `extentBefore > 0` 致 M3E 下拉条件（extentBefore == 0）不满足、
   /// 歌单 tab 无法下拉刷新；专辑/歌手 tab 用临时 controller 不受影响。
-  final ScrollController _scrollController = ScrollController(keepScrollOffset: false);
+  final ScrollController _scrollController = ScrollController(
+    keepScrollOffset: false,
+  );
 
   /// 「我喜欢」歌单动态封面：解析出的（歌单接口第一首）专辑封面 URL，
   /// 持久化到 SharedPreferences，离线启动仍可显示（见改版计划四）。
@@ -205,6 +214,7 @@ class _FavoritesPageState extends State<FavoritesPage>
 
   @override
   void dispose() {
+    _contentScrolled.dispose();
     _networkProbeTimer?.cancel();
     _playlistCollectionNotifier?.removeListener(_onCollectionChanged);
     _playlistCollectionNotifier = null;
@@ -360,9 +370,7 @@ class _FavoritesPageState extends State<FavoritesPage>
   ) {
     if (hidden.isEmpty) return list;
     return list
-        .where(
-          (p) => !hidden.contains(HiddenPlaylistsCache.playlistKey(p)),
-        )
+        .where((p) => !hidden.contains(HiddenPlaylistsCache.playlistKey(p)))
         .toList();
   }
 
@@ -533,9 +541,8 @@ class _FavoritesPageState extends State<FavoritesPage>
         final fallbackB =
             manualOrder.length +
             (originalIndex[HiddenPlaylistsCache.playlistKey(b)] ?? 0);
-        return (rank[HiddenPlaylistsCache.playlistKey(a)] ?? fallbackA).compareTo(
-          rank[HiddenPlaylistsCache.playlistKey(b)] ?? fallbackB,
-        );
+        return (rank[HiddenPlaylistsCache.playlistKey(a)] ?? fallbackA)
+            .compareTo(rank[HiddenPlaylistsCache.playlistKey(b)] ?? fallbackB);
       });
     } else if (_sortByLatestClick) {
       list.sort((a, b) => _getAccessTime(b).compareTo(_getAccessTime(a)));
@@ -548,8 +555,7 @@ class _FavoritesPageState extends State<FavoritesPage>
     final list = _playlists
         .where(
           (p) =>
-              _isCreated(p) &&
-              !HiddenPlaylistsCache.isEmptyCreatedPlaylist(p),
+              _isCreated(p) && !HiddenPlaylistsCache.isEmptyCreatedPlaylist(p),
         )
         .toList();
     _applySort(list, _createdManualOrder);
@@ -586,9 +592,7 @@ class _FavoritesPageState extends State<FavoritesPage>
 
   /// 排序按钮：点击进入该分组的自由排序模式，再次点击（✓）退出。
   void _toggleReorderingGroup(int group) {
-    setState(
-      () => _reorderingGroup = _reorderingGroup == group ? 0 : group,
-    );
+    setState(() => _reorderingGroup = _reorderingGroup == group ? 0 : group);
   }
 
   // ==================== 数据加载 ====================
@@ -739,7 +743,10 @@ class _FavoritesPageState extends State<FavoritesPage>
     }
   }
 
-  Future<void> _loadAlbums({bool noCache = false, bool showLoading = true}) async {
+  Future<void> _loadAlbums({
+    bool noCache = false,
+    bool showLoading = true,
+  }) async {
     if (!mounted) return;
     if (showLoading) setState(() => _isLoadingAlbums = true);
 
@@ -824,7 +831,10 @@ class _FavoritesPageState extends State<FavoritesPage>
     }
   }
 
-  Future<void> _loadArtists({bool noCache = false, bool showLoading = true}) async {
+  Future<void> _loadArtists({
+    bool noCache = false,
+    bool showLoading = true,
+  }) async {
     if (!mounted) return;
     if (showLoading) setState(() => _isLoadingArtists = true);
 
@@ -993,9 +1003,7 @@ class _FavoritesPageState extends State<FavoritesPage>
       // 检查删除结果：status==1 或 error_code==0 视为成功，失败不再静默。
       final type = _isCreated(playlist) ? 1 : 0;
       final r = await api.deletePlaylist(listId, type: type);
-      debugPrint(
-        '[DeletePlaylist] listid=$listId type=$type result=$r',
-      );
+      debugPrint('[DeletePlaylist] listid=$listId type=$type result=$r');
       if (r?['status'] == 1 || r?['error_code'] == 0) {
         okCount++;
       } else {
@@ -1011,8 +1019,8 @@ class _FavoritesPageState extends State<FavoritesPage>
       final msg = failCount == 0
           ? '成功删除 $okCount 个歌单'
           : okCount > 0
-              ? '成功删除 $okCount 个，$failCount 个失败'
-              : '删除失败，请稍后重试';
+          ? '成功删除 $okCount 个，$failCount 个失败'
+          : '删除失败，请稍后重试';
       showToast(msg, long: true);
     }
   }
@@ -1059,9 +1067,7 @@ class _FavoritesPageState extends State<FavoritesPage>
       }
       // 专辑都是「收藏别人的」，取消收藏固定用 type=0（与专辑详情页一致）。
       final r = await api.deletePlaylist(listId, type: 0);
-      debugPrint(
-        '[DeleteAlbum] listid=$listId type=0 result=$r',
-      );
+      debugPrint('[DeleteAlbum] listid=$listId type=0 result=$r');
       if (r?['status'] == 1 || r?['error_code'] == 0) {
         okCount++;
       } else {
@@ -1077,8 +1083,8 @@ class _FavoritesPageState extends State<FavoritesPage>
       final msg = failCount == 0
           ? '成功删除 $okCount 个专辑'
           : okCount > 0
-              ? '成功删除 $okCount 个，$failCount 个失败'
-              : '删除失败，请稍后重试';
+          ? '成功删除 $okCount 个，$failCount 个失败'
+          : '删除失败，请稍后重试';
       showToast(msg, long: true);
     }
   }
@@ -1101,6 +1107,8 @@ class _FavoritesPageState extends State<FavoritesPage>
       // 常驻可见需求，故与头像并排。
       child: SonifyTitleScaffold(
         title: '我的收藏',
+        // 批次 24：内层滚动信号驱动栏体渐变带浮现（与首页一致）
+        barBackgroundVisible: _contentScrolled,
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1116,7 +1124,10 @@ class _FavoritesPageState extends State<FavoritesPage>
           ],
         ),
         itemCount: 1,
-        itemBuilder: (context, index) => _buildTabbedBody(),
+        itemBuilder: (context, index) => ContentScrollSignal(
+          signal: _contentScrolled,
+          child: _buildTabbedBody(),
+        ),
       ),
     );
   }
@@ -1130,10 +1141,8 @@ class _FavoritesPageState extends State<FavoritesPage>
   Widget _buildTabbedBody() {
     final textTheme = Theme.of(context).textTheme;
     final media = MediaQuery.of(context);
-    final height = media.size.height -
-        media.padding.top -
-        52 -
-        media.viewInsets.bottom;
+    final height =
+        media.size.height - media.padding.top - 52 - media.viewInsets.bottom;
     return SizedBox(
       height: height,
       child: Column(
@@ -1316,9 +1325,7 @@ class _FavoritesPageState extends State<FavoritesPage>
                 keyFor: HiddenPlaylistsCache.playlistKey,
                 onBuildTile: (playlist) =>
                     _buildPlaylistTile(playlist, _playlists.indexOf(playlist)),
-                trailing: _isManaging
-                    ? null
-                    : _buildPlaylistSortButton(2),
+                trailing: _isManaging ? null : _buildPlaylistSortButton(2),
               ),
             // 底部加载更多指示器
             if (_isLoadingMorePlaylists)
@@ -1481,79 +1488,82 @@ class _FavoritesPageState extends State<FavoritesPage>
         : _reorderingGroup == 2;
 
     return InkWell(
-        onTap: reordering
-            ? null
-            : _isManaging
-            ? () {
-                setState(() {
-                  if (isSelected) {
-                    _selectedIndices.remove(index);
-                  } else {
-                    _selectedIndices.add(index);
-                  }
-                });
-              }
-            // 与 focusMyFavorite 自动导航共用同一入口（见 [_openPlaylistDetail]）
-            : () => unawaited(_openPlaylistDetail(playlist)),
-        onLongPress: reordering || _isManaging
-            ? null
-            : () {
-                _enterManageMode(0);
-                setState(() => _selectedIndices.add(index));
-              },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
-          color: isSelected
-              ? colorScheme.primaryContainer.withValues(alpha: 0.3)
-              : null,
-          child: Row(
-            children: [
-              if (_isManaging)
-                Padding(
-                  padding: const EdgeInsets.only(right: AppSpacing.md),
-                  child: Icon(
-                    isSelected ? Icons.check_circle : Icons.circle_outlined,
-                    color: isSelected
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant,
-                    size: 22,
-                  ),
-                ),
-              _buildPlaylistCover(playlist, index, colorScheme),
-              const Gap(AppSpacing.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      playlist.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const Gap(AppSpacing.xxs),
-                    Text(
-                      '${playlist.songCount} 首',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+      onTap: reordering
+          ? null
+          : _isManaging
+          ? () {
+              setState(() {
+                if (isSelected) {
+                  _selectedIndices.remove(index);
+                } else {
+                  _selectedIndices.add(index);
+                }
+              });
+            }
+          // 与 focusMyFavorite 自动导航共用同一入口（见 [_openPlaylistDetail]）
+          : () => unawaited(_openPlaylistDetail(playlist)),
+      onLongPress: reordering || _isManaging
+          ? null
+          : () {
+              _enterManageMode(0);
+              setState(() => _selectedIndices.add(index));
+            },
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.sm,
+        ),
+        color: isSelected
+            ? colorScheme.primaryContainer.withValues(alpha: 0.3)
+            : null,
+        child: Row(
+          children: [
+            if (_isManaging)
+              Padding(
+                padding: const EdgeInsets.only(right: AppSpacing.md),
+                child: Icon(
+                  isSelected ? Icons.check_circle : Icons.circle_outlined,
+                  color: isSelected
+                      ? colorScheme.primary
+                      : colorScheme.onSurfaceVariant,
+                  size: 22,
                 ),
               ),
-              // 歌单行右侧不再显示箭头（改版计划四）；排序模式保留拖拽把手。
-              if (reordering)
-                Icon(
-                  Icons.drag_indicator,
-                  color: colorScheme.onSurfaceVariant,
-                  size: 20,
-                ),
-            ],
-          ),
+            _buildPlaylistCover(playlist, index, colorScheme),
+            const Gap(AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    playlist.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const Gap(AppSpacing.xxs),
+                  Text(
+                    '${playlist.songCount} 首',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 歌单行右侧不再显示箭头（改版计划四）；排序模式保留拖拽把手。
+            if (reordering)
+              Icon(
+                Icons.drag_indicator,
+                color: colorScheme.onSurfaceVariant,
+                size: 20,
+              ),
+          ],
         ),
-      );
+      ),
+    );
   }
 
   // ==================== 专辑Tab ====================
@@ -1651,7 +1661,10 @@ class _FavoritesPageState extends State<FavoritesPage>
               setState(() => _selectedIndices.add(index));
             },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.sm,
+        ),
         color: isSelected
             ? colorScheme.primaryContainer.withValues(alpha: 0.3)
             : null,
@@ -1834,7 +1847,10 @@ class _FavoritesPageState extends State<FavoritesPage>
         );
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.sm,
+        ),
         child: Row(
           children: [
             CircleAvatar(

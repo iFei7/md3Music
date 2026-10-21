@@ -7,6 +7,7 @@ import 'package:provider/single_child_widget.dart';
 import 'package:quick_actions/quick_actions.dart';
 
 import 'core/layout/responsive_layout.dart';
+import 'core/layout/secondary_dock_controller.dart';
 import 'core/layout/ui_density.dart';
 import 'core/services/external_media_intent_service.dart';
 import 'core/services/fm_widget_sync.dart';
@@ -176,6 +177,47 @@ class MyApp extends StatelessWidget {
   }
 }
 
+/// 二级路由态的悬浮播放器（仅播放器，无导航，恒展开）。
+///
+/// 渲染在 `MaterialApp.builder` 的 Stack（Navigator 之上），盖过整屏
+/// 不透明的二级路由；导航相关参数为占位值（`showNav: false` 下不参与
+/// 布局）。播放控制 / 进度环 / 左右滑切歌复用 [GlassDockPlayer] 实现。
+class _SecondaryFloatingPlayer extends StatelessWidget {
+  const _SecondaryFloatingPlayer();
+
+  @override
+  Widget build(BuildContext context) {
+    // 本 Dock 挂在 MaterialApp.builder 的 Stack（Navigator 之上），没有
+    // Overlay 祖先——播放器胶囊内的 Tooltip 需要 Overlay 才能建浮层，
+    // 自带一个铺满全屏的 Overlay 承载（Positioned.fill 提供有界约束，
+    // 避免直接 bottom 锚位的无界高度；Dock 自身 Align(bottomCenter) 钉
+    // 在屏底，Overlay 空白区不吸收命中测试，点击穿透到下方页面）。
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Overlay(
+        initialEntries: [
+          OverlayEntry(
+            builder: (_) => GlassDockPlayer(
+              key: const ValueKey('secondary_dock'),
+              selectedTabId: '',
+              onSelectTab: (_) {},
+              navExpanded: _kSecondaryNavExpandedNotifier,
+              onNavExpandedChanged: (_) {},
+              showNav: false,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 占位导航展开态（仅播放器形态不消费该值，恒展开由
+/// [GlassDockPlayer] 内部保证）。
+final ValueNotifier<bool> _kSecondaryNavExpandedNotifier = ValueNotifier<bool>(
+  true,
+);
+
 class _AppView extends StatefulWidget {
   final bool showOnboarding;
   final bool showUserAgreement;
@@ -200,6 +242,12 @@ class _AppViewState extends State<_AppView> {
   String? _lastBackgroundPath;
   // 桌面快捷方式配置：监听变更 → 重新注册 Android 长按图标快捷入口。
   ShortcutConfigProvider? _shortcutConfig;
+
+  // 二级路由态悬浮播放器控制器（批次 24）：push 出来的整屏路由会盖住
+  // 主布局（含完整 Dock），故二级态的「仅播放器 Dock」挂在 MaterialApp
+  // builder 的 Stack（Navigator 之上）。设置页 / 完整播放页 / DLNA 遥控
+  // 页不挂（见 SecondaryDockController 排除项）。
+  final SecondaryDockController _secondaryDock = SecondaryDockController();
 
   @override
   void initState() {
@@ -316,6 +364,7 @@ class _AppViewState extends State<_AppView> {
     _shortcutConfig?.removeListener(_applyDesktopShortcuts);
     _playerProvider?.removeListener(_onPlayerChanged);
     _backgroundThemeProvider?.removeListener(_onBackgroundChanged);
+    _secondaryDock.dispose();
     super.dispose();
   }
 
@@ -356,27 +405,58 @@ class _AppViewState extends State<_AppView> {
           scale: kDefaultDisplayScale,
           child: SafeInsetsGuard(
             child: _SystemUiUpdater(
-              child: Stack(
-                children: [
-                  // 全局背景层（主页/底层背景）：复用 AppBackground 组件。
-                  // 二级页面由路由过渡内嵌 AppBackground，随页面位移入场。
-                  Positioned.fill(child: AppBackground()),
-                  // material_ui 兼容桥：dynamic_color / cached_network_image 等第三方包
-                  // 仍导入 package:flutter/material.dart，其 Theme.of(context) 取不到本项目的
-                  // material_ui 主题。本桥把 ThemeData / MaterialLocalizations 提供给它们。
-                  // 官方定位为过渡工具，待依赖全部迁移到 material_ui 后移除。
-                  // ignore: deprecated_member_use
-                  MaterialUiCompatibilityBridge(child: child!),
-                  const DlnaCastingOverlay(),
-                  // 上滑拖拽跟手覆盖层（在 Navigator 之上，拖拽期间显示预览）
-                  const PlayerDragOverlay(),
-                ],
+              child: ListenableBuilder(
+                listenable: _secondaryDock,
+                builder: (context, _) {
+                  // 二级路由态：整屏不透明路由盖住主布局（含完整 Dock），
+                  // 在 Navigator 之上单独挂「仅播放器」Dock（恒展开、无导航）。
+                  // 设置页 / 完整播放页 / DLNA 遥控页被排除，不挂。
+                  final showSecondaryPlayer = _secondaryDock.visible;
+                  Widget navigator = child!;
+                  if (showSecondaryPlayer) {
+                    // 二级页 Dock 避让：与主布局同口径注入底部 padding，
+                    // 页面内读 MediaQuery.paddingOf(context).bottom 消费。
+                    // 主布局同时被盖住（其自身注入与本注入叠加不可见，无害）。
+                    final mq = MediaQuery.of(context);
+                    navigator = MediaQuery(
+                      data: mq.copyWith(
+                        padding: mq.padding.copyWith(
+                          bottom:
+                              mq.padding.bottom +
+                              _MainLayoutState._kDockReservedBottom,
+                        ),
+                      ),
+                      child: navigator,
+                    );
+                  }
+                  return Stack(
+                    children: [
+                      // 全局背景层（主页/底层背景）：复用 AppBackground 组件。
+                      // 二级页面由路由过渡内嵌 AppBackground，随页面位移入场。
+                      Positioned.fill(child: AppBackground()),
+                      // material_ui 兼容桥：dynamic_color / cached_network_image 等第三方包
+                      // 仍导入 package:flutter/material.dart，其 Theme.of(context) 取不到本项目的
+                      // material_ui 主题。本桥把 ThemeData / MaterialLocalizations 提供给它们。
+                      // 官方定位为过渡工具，待依赖全部迁移到 material_ui 后移除。
+                      // ignore: deprecated_member_use
+                      MaterialUiCompatibilityBridge(child: navigator),
+                      if (showSecondaryPlayer)
+                        const Positioned.fill(
+                          child: _SecondaryFloatingPlayer(),
+                        ),
+                      const DlnaCastingOverlay(),
+                      // 上滑拖拽跟手覆盖层（在 Navigator 之上，拖拽期间显示预览）
+                      const PlayerDragOverlay(),
+                    ],
+                  );
+                },
               ),
             ),
           ),
         );
       },
       navigatorKey: appNavigatorKey,
+      navigatorObservers: [SecondaryDockRouteObserver(_secondaryDock)],
       // 优先级：未同意协议 → 协议页；否则未完成新手引导 → 引导页；否则主页
       initialRoute: widget.showUserAgreement
           ? '/user_agreement'
@@ -488,13 +568,14 @@ class _AppViewState extends State<_AppView> {
     );
     return withTransparentSurfaces.copyWith(
       appBarTheme: withTransparentSurfaces.appBarTheme.copyWith(
-        titleTextStyle:
-            withTransparentSurfaces.appBarTheme.titleTextStyle?.copyWith(
-          shadows: shadows,
-        ),
+        titleTextStyle: withTransparentSurfaces.appBarTheme.titleTextStyle
+            ?.copyWith(shadows: shadows),
       ),
       textTheme: AppTheme.applyTextShadows(base.textTheme, shadows),
-      primaryTextTheme: AppTheme.applyTextShadows(base.primaryTextTheme, shadows),
+      primaryTextTheme: AppTheme.applyTextShadows(
+        base.primaryTextTheme,
+        shadows,
+      ),
       // 实色表面：把 Flutter 的 M3 默认值（都从 textTheme 兜底取）在这里钉死，
       // 取的是 base 里还没加阴影的那份文字层级。
       dialogTheme: base.dialogTheme.copyWith(
@@ -507,11 +588,13 @@ class _AppViewState extends State<_AppView> {
         textStyle: base.popupMenuTheme.textStyle ?? base.textTheme.labelLarge,
       ),
       snackBarTheme: base.snackBarTheme.copyWith(
-        contentTextStyle: base.snackBarTheme.contentTextStyle ??
+        contentTextStyle:
+            base.snackBarTheme.contentTextStyle ??
             base.textTheme.bodyMedium?.copyWith(color: cs.onInverseSurface),
       ),
       tooltipTheme: base.tooltipTheme.copyWith(
-        textStyle: base.tooltipTheme.textStyle ??
+        textStyle:
+            base.tooltipTheme.textStyle ??
             base.textTheme.bodySmall?.copyWith(color: cs.onInverseSurface),
       ),
     );
@@ -615,7 +698,6 @@ class _MainLayoutState extends State<_MainLayout>
   static const double _kDockReservedBottom = 72.0;
 
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
-
 
   /// 二次返回退出：首次返回后置位，3 秒内再次返回触发真正退出。
   bool _exitPressed = false;
@@ -863,13 +945,17 @@ class _MainLayoutState extends State<_MainLayout>
     _exitScale = Tween<double>(begin: 1.0, end: 0.1).animate(
       CurvedAnimation(parent: _exitController, curve: Curves.easeInOutCubic),
     );
-    _exitOpacity = Tween<double>(begin: 1.0, end: 0.0).animate(
-      CurvedAnimation(parent: _exitController, curve: Curves.easeIn),
-    );
+    _exitOpacity = Tween<double>(
+      begin: 1.0,
+      end: 0.0,
+    ).animate(CurvedAnimation(parent: _exitController, curve: Curves.easeIn));
     _exitOffset = Tween<Offset>(begin: Offset.zero, end: const Offset(0.7, 0.7))
         .animate(
-      CurvedAnimation(parent: _exitController, curve: Curves.easeInOutCubic),
-    );
+          CurvedAnimation(
+            parent: _exitController,
+            curve: Curves.easeInOutCubic,
+          ),
+        );
     // 未登录时尝试播放联网歌曲,弹出登录提示
     context.read<PlayerProvider>().onLoginRequired = _showLoginRequiredDialog;
     // 启动自动播放：默认关闭（见 SettingsRepository.getStartupAutoPlayEnabled），
@@ -1003,8 +1089,13 @@ class _MainLayoutState extends State<_MainLayout>
 
   /// 点击隐藏 tab 对应的桌面快捷方式：以二级页面路由打开对应功能页（不切换主 tab）。
   void _openTabAsPage(String tabId) {
+    // 命名路由（/<tabId>）：与命名路由表一致，让按名排除的悬浮栏规则
+    // （SecondaryDockController，如 /settings）同样作用于快捷方式入口。
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => _pageForTabAsRoute(tabId)),
+      MaterialPageRoute(
+        settings: RouteSettings(name: '/$tabId'),
+        builder: (_) => _pageForTabAsRoute(tabId),
+      ),
     );
   }
 
@@ -1125,45 +1216,39 @@ class _MainLayoutState extends State<_MainLayout>
               child: Transform.scale(
                 scale: _exitScale.value,
                 alignment: Alignment.topLeft,
-                child: Opacity(
-                  opacity: _exitOpacity.value,
-                  child: child,
-                ),
+                child: Opacity(opacity: _exitOpacity.value, child: child),
               ),
             );
           },
           child: ResponsiveScaffold(
-              destinations: destinations,
-              selectedIndex: _selectedIndex,
-              // 底部 NavigationBar 由悬浮玻璃 Dock 取代（hideNavigation 只隐藏
-              // 原生导航，Dock 在 _buildBody 的 Stack 里渲染，导航胶囊 + 播放器）。
-              hideNavigation: true,
-              onDestinationSelected: (index) {
-                // 守卫：FullPlayer 在栈顶时（展开进度 > 0.5），忽略 tab 切换，
-                // 避免与 FullPlayer 动画叠加导致状态混乱。
-                if (isFullPlayerOnTop) {
-                  return;
-                }
-                _expandNav();
-                setState(() {
-                  _previousSelectedIndex = _selectedIndex;
-                  _selectedIndex = index;
-                });
-              },
-              body: _buildBody(context, visibleTabs),
-              compactBody: _buildBody(context, visibleTabs),
-              mediumBody: _buildBody(context, visibleTabs),
-              expandedBody: _buildBody(context, visibleTabs),
-            ),
+            destinations: destinations,
+            selectedIndex: _selectedIndex,
+            // 底部 NavigationBar 由悬浮玻璃 Dock 取代（hideNavigation 只隐藏
+            // 原生导航，Dock 在 _buildBody 的 Stack 里渲染，导航胶囊 + 播放器）。
+            hideNavigation: true,
+            onDestinationSelected: (index) {
+              // 守卫：FullPlayer 在栈顶时（展开进度 > 0.5），忽略 tab 切换，
+              // 避免与 FullPlayer 动画叠加导致状态混乱。
+              if (isFullPlayerOnTop) {
+                return;
+              }
+              _expandNav();
+              setState(() {
+                _previousSelectedIndex = _selectedIndex;
+                _selectedIndex = index;
+              });
+            },
+            body: _buildBody(context, visibleTabs),
+            compactBody: _buildBody(context, visibleTabs),
+            mediumBody: _buildBody(context, visibleTabs),
+            expandedBody: _buildBody(context, visibleTabs),
           ),
         ),
+      ),
     );
   }
 
-  Widget _buildBody(
-    BuildContext context,
-    List<TabItem> visibleTabs,
-  ) {
+  Widget _buildBody(BuildContext context, List<TabItem> visibleTabs) {
     // 切换方向：横屏用上下淡入，竖屏用左右滑动
     final isLandscape =
         MediaQuery.orientationOf(context) == Orientation.landscape;
@@ -1313,13 +1398,10 @@ class _MainLayoutState extends State<_MainLayout>
     _exitPressed = true;
     _showDoubleBackToast();
     _exitResetTimer?.cancel();
-    _exitResetTimer = Timer(
-      const Duration(seconds: 3),
-      () {
-        _exitPressed = false;
-        _exitResetTimer = null;
-      },
-    );
+    _exitResetTimer = Timer(const Duration(seconds: 3), () {
+      _exitPressed = false;
+      _exitResetTimer = null;
+    });
   }
 
   /// 显示「再按一次返回桌面」提示（系统原生 Toast，非 SnackBar/弹窗）。
@@ -1336,15 +1418,15 @@ class _MainLayoutState extends State<_MainLayout>
     _isExiting = true;
     try {
       await context.read<PlayerProvider>().flushPersistence();
-      await const MethodChannel('com.md3music.md3music/task')
-          .invokeMethod<void>('moveToBack');
+      await const MethodChannel(
+        'com.md3music.md3music/task',
+      ).invokeMethod<void>('moveToBack');
     } catch (_) {
       await SystemNavigator.pop();
     } finally {
       _isExiting = false;
     }
   }
-
 }
 
 /// 底部 NavigationBar 的 tab 图标 + 自定义 M3E Expressive 胶囊 indicator。

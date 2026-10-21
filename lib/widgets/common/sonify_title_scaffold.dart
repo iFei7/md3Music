@@ -25,6 +25,16 @@ import '../../core/theme/app_theme.dart';
 /// - 顶栏右侧内容（如固定用户头像）**常驻渲染**；[actions] 动作钮随
 ///   栏体 120ms 淡入（滚动即出现，展开态隐藏不挡内容）。
 ///
+/// **顶栏背景的双信号驱动（批次 24）**：栏体模糊带默认随本骨架自身的
+/// 滚动（offset > 0）淡入；对外表现为「单固定高 item」的页面（音乐库
+/// hub / 本地音乐 / 我的收藏 / FM / 识曲 / 播放历史 / 设置总览——业务
+/// 区是固定高 item，滚动发生在**面板内层**列表），其外层骨架最大只
+/// 能橡皮筋滚动一个标题区高度，内层列表滚动时骨架 offset 恒为 0，
+/// 顶栏渐变带**永不浮现**——与首页「滚动即出带」不一致（用户反馈）。
+/// 此类页面经 [barBackgroundVisible] 把内层列表的滚动信号注入本骨架，
+/// 栏体背景改随「骨架滚动 **或** 外部信号」二者取或浮现，与
+/// [actionsVisible] 同一套外置信号机制。
+///
 /// **去掉的机制**（批次 8 起）：大标题随滚动折叠为小标题（位置/尺寸
 /// 变化）及 180ms 端点吸附——与"标题位置固定"的诉求直接冲突，且小标题
 /// 与固定大标题同时可见会造成双标题，故整条折叠链路移除；短内容页的
@@ -45,6 +55,7 @@ class SonifyTitleScaffold extends StatefulWidget {
     this.trailing,
     this.actions,
     this.actionsVisible,
+    this.barBackgroundVisible,
     this.titleBottomPadding = 8,
   });
 
@@ -84,6 +95,17 @@ class SonifyTitleScaffold extends StatefulWidget {
   /// 滚动淡入（既有测试契约不变）。
   final ValueListenable<bool>? actionsVisible;
 
+  /// 顶栏渐变模糊带可见性的外部信号（可选）：非空时栏体背景改随
+  /// 「骨架自身滚动（offset > 0）**或** 该通知器」取或浮现。
+  ///
+  /// 用途与 [actionsVisible] 同源：业务区为固定高 item、滚动发生在
+  /// 内层列表的页面（音乐库 hub / 本地音乐 / 我的收藏 / FM / 识曲 /
+  /// 播放历史 / 设置总览），内层列表滚起来后顶栏应与首页一样出渐变
+  /// 模糊带（用户反馈「tab 页顶栏背景不一致」）。通知器由页面持有
+  /// 生命周期，面板内层可滚列表的 ScrollNotification 负责写入。
+  /// 不传（null）时保持既有行为：仅随骨架滚动淡入。
+  final ValueListenable<bool>? barBackgroundVisible;
+
   /// 大标题 item 底部留白（内容区与大标题的间距）。
   final double titleBottomPadding;
 
@@ -106,17 +128,41 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
   bool _disposed = false;
 
   @override
+  void initState() {
+    super.initState();
+    // 外部滚动信号（内层列表）与骨架滚动共同驱动栏体背景，见
+    // [SonifyTitleScaffold.barBackgroundVisible]。
+    widget.barBackgroundVisible?.addListener(_updateFromScroll);
+  }
+
+  @override
   void dispose() {
     _disposed = true;
     _showBarBackground.dispose();
+    widget.barBackgroundVisible?.removeListener(_updateFromScroll);
     _internalController?.dispose();
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant SonifyTitleScaffold oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(
+      oldWidget.barBackgroundVisible,
+      widget.barBackgroundVisible,
+    )) {
+      oldWidget.barBackgroundVisible?.removeListener(_updateFromScroll);
+      widget.barBackgroundVisible?.addListener(_updateFromScroll);
+      _updateFromScroll();
+    }
+  }
+
   void _updateFromScroll() {
-    if (_disposed || !_controller.hasClients) return;
-    // 任何滚动（offset > 0）即出栏背景，回到顶部隐藏
-    final showBar = _controller.offset > 0;
+    if (_disposed) return;
+    // 双信号取或：骨架自身滚动（offset > 0）或外部注入的内层列表滚动
+    final showBar =
+        (_controller.hasClients && _controller.offset > 0) ||
+        (widget.barBackgroundVisible?.value ?? false);
     if (_showBarBackground.value != showBar) {
       _showBarBackground.value = showBar;
     }
@@ -154,8 +200,7 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
                         // （对齐 iOS 大标题在短内容页的可滚行为）。
                         // 内容超过该高度时 minHeight 不生效（无额外留白）。
                         constraints: BoxConstraints(
-                          minHeight:
-                              constraints.maxHeight + _titleZone(media),
+                          minHeight: constraints.maxHeight + _titleZone(media),
                         ),
                         // stretch 对齐 ListView 的整宽 item 语义（子项缺省
                         // 会收缩到内在宽度，导致搜索框/分区塌缩）。
@@ -272,10 +317,7 @@ class SonifyTitleOverlay extends StatelessWidget {
           ),
         ),
         // 固定悬浮大标题：不随滚动位移/缩放/溶解（反馈①）
-        _PinnedLargeTitle(
-          title: title,
-          statusBarHeight: statusBarHeight,
-        ),
+        _PinnedLargeTitle(title: title, statusBarHeight: statusBarHeight),
       ],
     );
   }
@@ -320,7 +362,11 @@ class _TitlePlaceholderItem extends StatelessWidget {
             Padding(
               // 距顶 8dp / 水平边距 20dp：Title.kt:1125, 1137
               padding: const EdgeInsets.fromLTRB(
-                  SonifySpacing.titleMargin, 8, SonifySpacing.titleMargin, 0),
+                SonifySpacing.titleMargin,
+                8,
+                SonifySpacing.titleMargin,
+                0,
+              ),
               child: Text(
                 title,
                 style: SonifyTextStyles.largeTitle.copyWith(
@@ -345,10 +391,7 @@ class _TitlePlaceholderItem extends StatelessWidget {
 /// 淡出都会让用户在滚动中"找不到标题"；可读性由顶栏渐变带（滚动即
 /// 浮现）保证，无需标题自身变化。
 class _PinnedLargeTitle extends StatelessWidget {
-  const _PinnedLargeTitle({
-    required this.title,
-    required this.statusBarHeight,
-  });
+  const _PinnedLargeTitle({required this.title, required this.statusBarHeight});
 
   final String title;
   final double statusBarHeight;
@@ -505,14 +548,17 @@ class _TopBar extends StatelessWidget {
                             colors: statusBarHeight > 0
                                 ? [
                                     cs.surface.withValues(
-                                        alpha: kSonifyBarTopAlpha),
+                                      alpha: kSonifyBarTopAlpha,
+                                    ),
                                     cs.surface.withValues(
-                                        alpha: kSonifyBarTopAlpha),
+                                      alpha: kSonifyBarTopAlpha,
+                                    ),
                                     cs.surface.withValues(alpha: 0),
                                   ]
                                 : [
                                     cs.surface.withValues(
-                                        alpha: kSonifyBarTopAlpha),
+                                      alpha: kSonifyBarTopAlpha,
+                                    ),
                                     cs.surface.withValues(alpha: 0),
                                   ],
                             stops: statusBarHeight > 0
@@ -612,10 +658,7 @@ const double kSonifyBarTopAlpha = 0.42;
 
 /// 子树尺寸实测（一帧延迟回传），用于大标题占位 item 高度自适应。
 class _MeasureSize extends StatefulWidget {
-  const _MeasureSize({
-    required this.child,
-    required this.onSizeChanged,
-  });
+  const _MeasureSize({required this.child, required this.onSizeChanged});
 
   final Widget child;
   final ValueChanged<Size> onSizeChanged;

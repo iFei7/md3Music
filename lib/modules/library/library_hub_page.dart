@@ -23,6 +23,7 @@ import '../../providers/player_provider.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/common/cover_rail.dart';
+import '../../widgets/common/content_scroll_signal.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/common/user_avatar_button.dart';
 import '../../widgets/m3e_pull_to_refresh_fixed.dart';
@@ -120,6 +121,11 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   int? _managingGroup;
   final Set<String> _selectedKeys = {};
 
+  // 内层列表滚动信号（true = 已离开顶部）：本页外层骨架是单固定高
+  // item、自身不滚动，内层 ListView 的滚动经 [ContentScrollSignal] 上传
+  // 到此，注入 SonifyTitleScaffold.barBackgroundVisible 让顶栏渐变
+  // 模糊带与首页同拍浮现（批次 24：tab 页顶栏背景一致）。
+  final ValueNotifier<bool> _contentScrolled = ValueNotifier<bool>(false);
   // 「我喜欢」封面一键播放中（防重复点击，局部进度环）
   bool _playingMyFavorite = false;
 
@@ -300,9 +306,8 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
       )
       .toList();
 
-  List<KugouPlaylistBrief> get _collectedPlaylists => _playlists
-      .where((p) => !_isCreatedPlaylist(p) && !_isHidden(p))
-      .toList();
+  List<KugouPlaylistBrief> get _collectedPlaylists =>
+      _playlists.where((p) => !_isCreatedPlaylist(p) && !_isHidden(p)).toList();
 
   /// 某分区下被隐藏的歌单（底部弹层数据源：从全量 _playlists 按 key 过滤）。
   List<KugouPlaylistBrief> _hiddenPlaylistsOf(int group) {
@@ -366,7 +371,10 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
     setState(() => _playingMyFavorite = true);
     try {
       final p = myFavorite.toPlaylist();
-      var songs = await PlaylistSongsLoader.readCached(p, isInMyFavorites: true);
+      var songs = await PlaylistSongsLoader.readCached(
+        p,
+        isInMyFavorites: true,
+      );
       if (songs.isEmpty) {
         final r = await PlaylistSongsLoader.fetch(context, p);
         songs = r.songs;
@@ -524,7 +532,8 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
                         height: 40,
                         child: _NetworkCover(
                           // 与横滑轨同口径：解析出的首曲封面优先
-                          url: _covers[HiddenPlaylistsCache.playlistKey(p)] ??
+                          url:
+                              _covers[HiddenPlaylistsCache.playlistKey(p)] ??
                               p.coverUrl,
                           placeholderIcon: Icons.queue_music,
                         ),
@@ -557,6 +566,12 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   }
 
   @override
+  void dispose() {
+    _contentScrolled.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final library = context.watch<LibraryProvider>();
     return SonifyTitleScaffold(
@@ -566,6 +581,9 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
       // 形态）；扫描钮走 actions（栏体浮现后淡入）。批次 19：移除
       // 常驻搜索圆钮，全局搜索由底部导航常驻搜索 tab 承载。
       trailing: const UserAvatarButton(),
+      // 批次 24：内层列表滚动信号驱动栏体渐变带浮现（本页外层骨架
+      // 不滚动，offset>0 条件永不满足，与首页不一致）。
+      barBackgroundVisible: _contentScrolled,
       actions: [
         IconButton(
           tooltip: '扫描音乐',
@@ -585,60 +603,61 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
         final media = MediaQuery.of(context);
         // 固定高度 = 视口 − 状态栏 − 标题区（8+36+8，与占位 item 同口径）
         final height = media.size.height - media.padding.top - 52;
-        return SizedBox(
-          height: height,
-          child: M3EPullToRefreshIndicator(
-            onRefresh: _refresh,
-            child: ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.paddingOf(context).bottom,
+        return ContentScrollSignal(
+          signal: _contentScrolled,
+          child: SizedBox(
+            height: height,
+            child: M3EPullToRefreshIndicator(
+              onRefresh: _refresh,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.paddingOf(context).bottom,
+                ),
+                children: [
+                  _buildEntryCards(songCount: library.songs.length),
+                  _Section(
+                    title: '最近播放',
+                    // 整个标题行可点（「显示全部」退化为视觉文案）
+                    onHeaderTap: () => _push(context, const PlayHistoryPage()),
+                    onShowAll: () => _push(context, const PlayHistoryPage()),
+                    child: _history.isEmpty
+                        ? const _SectionEmptyText('暂无播放记录')
+                        : _RecentPlayList(
+                            // 只显示最近 3 条，全部历史进播放历史页
+                            songs: _history.take(3).toList(),
+                          ),
+                  ),
+                  _Section(
+                    title: '我创建的歌单',
+                    trailing: _buildManageButton(_kGroupCreated),
+                    managing: _managingGroup == _kGroupCreated,
+                    onManageDone: _exitManage,
+                    onManageCancel: _exitManage,
+                    onHideSelected: _hideSelected,
+                    selectedCount: _selectedKeys.length,
+                    child: _buildPlaylistSectionBody(
+                      _createdPlaylists,
+                      emptyText: '暂无创建的歌单',
+                      group: _kGroupCreated,
+                    ),
+                  ),
+                  _Section(
+                    title: '我收藏的歌单',
+                    trailing: _buildManageButton(_kGroupCollected),
+                    managing: _managingGroup == _kGroupCollected,
+                    onManageDone: _exitManage,
+                    onManageCancel: _exitManage,
+                    onHideSelected: _hideSelected,
+                    selectedCount: _selectedKeys.length,
+                    child: _buildPlaylistSectionBody(
+                      _collectedPlaylists,
+                      emptyText: '暂无收藏的歌单',
+                      group: _kGroupCollected,
+                    ),
+                  ),
+                ],
               ),
-              children: [
-                _buildEntryCards(
-                  songCount: library.songs.length,
-                ),
-                _Section(
-                  title: '最近播放',
-                  // 整个标题行可点（「显示全部」退化为视觉文案）
-                  onHeaderTap: () => _push(context, const PlayHistoryPage()),
-                  onShowAll: () => _push(context, const PlayHistoryPage()),
-                  child: _history.isEmpty
-                      ? const _SectionEmptyText('暂无播放记录')
-                      : _RecentPlayList(
-                          // 只显示最近 3 条，全部历史进播放历史页
-                          songs: _history.take(3).toList(),
-                        ),
-                ),
-                _Section(
-                  title: '我创建的歌单',
-                  trailing: _buildManageButton(_kGroupCreated),
-                  managing: _managingGroup == _kGroupCreated,
-                  onManageDone: _exitManage,
-                  onManageCancel: _exitManage,
-                  onHideSelected: _hideSelected,
-                  selectedCount: _selectedKeys.length,
-                  child: _buildPlaylistSectionBody(
-                    _createdPlaylists,
-                    emptyText: '暂无创建的歌单',
-                    group: _kGroupCreated,
-                  ),
-                ),
-                _Section(
-                  title: '我收藏的歌单',
-                  trailing: _buildManageButton(_kGroupCollected),
-                  managing: _managingGroup == _kGroupCollected,
-                  onManageDone: _exitManage,
-                  onManageCancel: _exitManage,
-                  onHideSelected: _hideSelected,
-                  selectedCount: _selectedKeys.length,
-                  child: _buildPlaylistSectionBody(
-                    _collectedPlaylists,
-                    emptyText: '暂无收藏的歌单',
-                    group: _kGroupCollected,
-                  ),
-                ),
-              ],
             ),
           ),
         );
@@ -712,7 +731,9 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   /// 歌单分区标题行「管理」入口（小尺寸 IconButton，非管理态时可见）。
   Widget _buildManageButton(int group) {
     return IconButton(
-      key: ValueKey('hub-manage-${group == _kGroupCreated ? 'created' : 'collected'}'),
+      key: ValueKey(
+        'hub-manage-${group == _kGroupCreated ? 'created' : 'collected'}',
+      ),
       tooltip: '管理隐藏歌单',
       visualDensity: VisualDensity.compact,
       constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
@@ -746,7 +767,10 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
   /// CoverRail 横滑轨（样式同 discover_page 热门歌单）：150dp 封面 +
   /// squircle 10 + 静态阴影 + 1px 白 α0.10 内描边 + 13sp 标题/副标。
   /// 管理态下点卡切换选中（不跳详情），并叠加选中勾角标。
-  Widget _buildPlaylistRail(List<KugouPlaylistBrief> playlists, {required int group}) {
+  Widget _buildPlaylistRail(
+    List<KugouPlaylistBrief> playlists, {
+    required int group,
+  }) {
     final managing = _managingGroup == group;
     return CoverRail(
       itemCount: playlists.length,
@@ -755,7 +779,8 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
         final card = CoverRailCard(
           cover: _NetworkCover(
             // 无封面歌单：优先用解析出的首曲封面，回退歌单自带封面
-            url: _covers[HiddenPlaylistsCache.playlistKey(playlist)] ??
+            url:
+                _covers[HiddenPlaylistsCache.playlistKey(playlist)] ??
                 playlist.coverUrl,
             placeholderIcon: Icons.queue_music,
           ),
@@ -867,7 +892,9 @@ class _Section extends StatelessWidget {
             SonifySpacing.titleMargin,
             AppSpacing.md,
           ),
-          child: managing ? _buildManagingHeader(context) : _buildNormalHeader(context),
+          child: managing
+              ? _buildManagingHeader(context)
+              : _buildNormalHeader(context),
         ),
         // 横滑轨道首尾出血：左缘 18dp、右缘 18dp（CoverRail 网格边距）
         child,
@@ -929,7 +956,10 @@ class _Section extends StatelessWidget {
             minimumSize: Size.zero,
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          child: Text('取消', style: textStyle.copyWith(color: cs.onSurfaceVariant)),
+          child: Text(
+            '取消',
+            style: textStyle.copyWith(color: cs.onSurfaceVariant),
+          ),
         ),
         const Gap(AppSpacing.xs),
         FilledButton.tonal(
@@ -1026,11 +1056,7 @@ class _EntryCard extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Icon(
-                    icon,
-                    size: _HubDimens.entryCardIcon,
-                    color: cs.primary,
-                  ),
+                  Icon(icon, size: _HubDimens.entryCardIcon, color: cs.primary),
                   const Gap(AppSpacing.md),
                   Expanded(
                     child: _TileText(title: title, subtitle: subtitle),

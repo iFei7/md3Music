@@ -7,15 +7,18 @@ import '../../data/repositories/history_repository.dart';
 import '../../providers/player_provider.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/common/user_avatar_button.dart';
+import '../../widgets/common/content_scroll_signal.dart';
 import '../../widgets/song_list_item.dart';
 
 class PlayHistoryPage extends StatefulWidget {
   /// 可选扩展：对显示列表应用变换（默认关闭，由私有构建注入，用于筛选等）。
   /// [pageKey] 为页面标识（'history'），供私有状态按页隔离。
   static List<Song> Function(String pageKey, List<Song> songs)? songFilterHook;
+
   /// 可选扩展：筛选状态变更的监听信号（默认关闭，由私有构建注入，
   /// 用于筛选按钮切换后触发本页重建）。
   static Listenable? songFilterListenable;
+
   /// 可选扩展：顶栏额外操作按钮（默认关闭，由私有构建注入）。
   static List<Widget> Function(BuildContext context)? extraAppBarActionsBuilder;
 
@@ -26,6 +29,19 @@ class PlayHistoryPage extends StatefulWidget {
 }
 
 class _PlayHistoryPageState extends State<PlayHistoryPage> {
+  // 内层滚动信号（true = 已离开顶部）：本页外层骨架是单固定高 item、
+  // 自身不滚动，内层滚动区（列表 / SingleChildScrollView）的滚动经
+  // [ContentScrollSignal] 上传到此，注入 SonifyTitleScaffold 的
+  // barBackgroundVisible 让顶栏渐变模糊带与首页同拍浮现
+  // （批次 24：主页管理 tab 页顶栏背景与首页一致）。
+  final ValueNotifier<bool> _contentScrolled = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _contentScrolled.dispose();
+    super.dispose();
+  }
+
   List<Song> _songs = [];
   bool _isLoading = true;
 
@@ -120,7 +136,8 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
   Widget build(BuildContext context) {
     // 可选扩展：筛选/变换状态变更时重建本页（默认监听空信号，无额外开销）
     return ListenableBuilder(
-      listenable: PlayHistoryPage.songFilterListenable ??
+      listenable:
+          PlayHistoryPage.songFilterListenable ??
           const AlwaysStoppedAnimation<Object?>(null),
       builder: (context, _) {
         // 在 builder 内计算：筛选状态变化时重新过滤（build 外计算会被闭包捕获旧值）
@@ -170,10 +187,15 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
         // 注入的额外操作钮（默认无）放 actions 槽（滚动后随栏体浮现）。
         return SonifyTitleScaffold(
           title: '播放历史',
+          // 批次 24：内层滚动信号驱动栏体渐变带浮现（与首页一致）
+          barBackgroundVisible: _contentScrolled,
           trailing: const UserAvatarButton(),
           actions: PlayHistoryPage.extraAppBarActionsBuilder?.call(context),
           itemCount: 1,
-          itemBuilder: (context, index) => _buildContent(displaySongs),
+          itemBuilder: (context, index) => ContentScrollSignal(
+            signal: _contentScrolled,
+            child: _buildContent(displaySongs),
+          ),
         );
       },
     );
@@ -186,10 +208,8 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
   /// 惰性构建（长历史不整页急建）。
   Widget _buildContent(List<Song> displaySongs) {
     final media = MediaQuery.of(context);
-    final height = media.size.height -
-        media.padding.top -
-        52 -
-        media.viewInsets.bottom;
+    final height =
+        media.size.height - media.padding.top - 52 - media.viewInsets.bottom;
     Widget child;
     if (_isLoading) {
       child = const Center(child: M3ELoadingIndicator());
@@ -217,9 +237,7 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
           isSelectMode: _editMode,
           isSelected: _selectedIds.contains(song.id),
           onSelectToggle: () => _toggleSelect(song.id),
-          onLongPress: _editMode
-              ? null
-              : () => _enterEditMode(song.id),
+          onLongPress: _editMode ? null : () => _enterEditMode(song.id),
           onTap: () {
             context.read<PlayerProvider>().playOnlinePlaylist(
               displaySongs,

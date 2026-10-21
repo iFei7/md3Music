@@ -10,6 +10,7 @@ import '../../providers/player_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/common/user_avatar_button.dart';
+import '../../widgets/common/content_scroll_signal.dart';
 import 'personal_fm_page_preferences.dart';
 
 class PersonalFmPage extends StatefulWidget {
@@ -21,6 +22,12 @@ class PersonalFmPage extends StatefulWidget {
 
 class _PersonalFmPageState extends State<PersonalFmPage>
     with TickerProviderStateMixin {
+  // 内层滚动信号（true = 已离开顶部）：本页外层骨架是单固定高 item、
+  // 自身不滚动，内层滚动区（列表 / SingleChildScrollView）的滚动经
+  // [ContentScrollSignal] 上传到此，注入 SonifyTitleScaffold 的
+  // barBackgroundVisible 让顶栏渐变模糊带与首页同拍浮现
+  // （批次 24：主页管理 tab 页顶栏背景与首页一致）。
+  final ValueNotifier<bool> _contentScrolled = ValueNotifier<bool>(false);
   bool _isLoading = false;
   bool _isAppending = false;
   String _selectedMode = 'normal';
@@ -112,7 +119,8 @@ class _PersonalFmPageState extends State<PersonalFmPage>
     final player = Provider.of<PlayerProvider>(context, listen: false);
     final kugou = Provider.of<KugouProvider>(context, listen: false);
     final currentSong = player.currentSong;
-    final isPlayingFm = currentSong != null &&
+    final isPlayingFm =
+        currentSong != null &&
         kugou.personalFmAsSongs.any((s) => s.id == currentSong.id);
     unawaited(
       _loadPersonalFm(forceRefresh: currentSong == null || isPlayingFm),
@@ -194,6 +202,7 @@ class _PersonalFmPageState extends State<PersonalFmPage>
 
   @override
   void dispose() {
+    _contentScrolled.dispose();
     final player = _player;
     if (player != null) {
       player.removeListener(_onPlayerChanged);
@@ -348,10 +357,10 @@ class _PersonalFmPageState extends State<PersonalFmPage>
     if (_isLoading) return;
     setState(() => _isLoading = true);
     try {
-      await Provider.of<KugouProvider>(context, listen: false).getPersonalFm(
-        mode: _selectedMode,
-        songPoolId: _selectedSongPoolId,
-      );
+      await Provider.of<KugouProvider>(
+        context,
+        listen: false,
+      ).getPersonalFm(mode: _selectedMode, songPoolId: _selectedSongPoolId);
     } catch (e) {
     } finally {
       if (mounted) {
@@ -405,6 +414,8 @@ class _PersonalFmPageState extends State<PersonalFmPage>
     // Column 内的 scrollable 必须包该固定高 SizedBox）。
     return SonifyTitleScaffold(
       title: '私人FM',
+      // 批次 24：内层滚动信号驱动栏体渐变带浮现（与首页一致）
+      barBackgroundVisible: _contentScrolled,
       itemCount: 1,
       // 右上角常驻用户头像（统一组件 UserAvatarButton，点击进设置页）
       trailing: const UserAvatarButton(),
@@ -413,44 +424,47 @@ class _PersonalFmPageState extends State<PersonalFmPage>
       itemBuilder: (context, index) {
         final media = MediaQuery.of(context);
         final bodyHeight = media.size.height - media.padding.top - 52;
-        return SizedBox(
-          height: bodyHeight,
-          child: SingleChildScrollView(
-            // 底部叠加系统手势条（小横条）高度，避免末项被压住
-            padding: EdgeInsets.only(
-              left: AppSpacing.lg,
-              right: AppSpacing.lg,
-              top: AppSpacing.lg,
-              bottom: AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Gap(AppSpacing.sm),
-                Text(
-                  '实时推荐会根据你的反馈持续更新',
-                  style: textTheme.bodyMedium?.copyWith(
-                    color: cs.onSurfaceVariant.withValues(alpha: 0.58),
+        return ContentScrollSignal(
+          signal: _contentScrolled,
+          child: SizedBox(
+            height: bodyHeight,
+            child: SingleChildScrollView(
+              // 底部叠加系统手势条（小横条）高度，避免末项被压住
+              padding: EdgeInsets.only(
+                left: AppSpacing.lg,
+                right: AppSpacing.lg,
+                top: AppSpacing.lg,
+                bottom: AppSpacing.lg + MediaQuery.paddingOf(context).bottom,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Gap(AppSpacing.sm),
+                  Text(
+                    '实时推荐会根据你的反馈持续更新',
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: cs.onSurfaceVariant.withValues(alpha: 0.58),
+                    ),
                   ),
-                ),
-                const Gap(AppSpacing.lg),
-                if (isLoggedIn) _buildToolbar(cs, textTheme),
-                const SizedBox(height: 18),
-                isLoggedIn
-                    ? _buildRadioHero(
-                        cs,
-                        textTheme,
-                        currentTrack,
-                        isPlaying,
-                        sideTracks,
-                      )
-                    : _buildEmptyState(cs, textTheme),
-                if (isLoggedIn && currentTrack != null)
-                  const SizedBox(height: 28),
-                if (isLoggedIn)
-                  _buildNowPanel(cs, textTheme, currentTrack, isPlaying),
-                const SizedBox(height: 30),
-              ],
+                  const Gap(AppSpacing.lg),
+                  if (isLoggedIn) _buildToolbar(cs, textTheme),
+                  const SizedBox(height: 18),
+                  isLoggedIn
+                      ? _buildRadioHero(
+                          cs,
+                          textTheme,
+                          currentTrack,
+                          isPlaying,
+                          sideTracks,
+                        )
+                      : _buildEmptyState(cs, textTheme),
+                  if (isLoggedIn && currentTrack != null)
+                    const SizedBox(height: 28),
+                  if (isLoggedIn)
+                    _buildNowPanel(cs, textTheme, currentTrack, isPlaying),
+                  const SizedBox(height: 30),
+                ],
+              ),
             ),
           ),
         );

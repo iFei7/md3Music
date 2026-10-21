@@ -14,6 +14,7 @@ import '../../core/utils/app_toast.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/common/user_avatar_button.dart';
+import '../../widgets/common/content_scroll_signal.dart';
 import 'floating_recognition_service.dart';
 import 'recognition_utils.dart';
 
@@ -26,6 +27,12 @@ class SongRecognitionPage extends StatefulWidget {
 
 class _SongRecognitionPageState extends State<SongRecognitionPage>
     with SingleTickerProviderStateMixin {
+  // 内层滚动信号（true = 已离开顶部）：本页外层骨架是单固定高 item、
+  // 自身不滚动，内层滚动区（列表 / SingleChildScrollView）的滚动经
+  // [ContentScrollSignal] 上传到此，注入 SonifyTitleScaffold 的
+  // barBackgroundVisible 让顶栏渐变模糊带与首页同拍浮现
+  // （批次 24：主页管理 tab 页顶栏背景与首页一致）。
+  final ValueNotifier<bool> _contentScrolled = ValueNotifier<bool>(false);
   final AudioRecorder _recorder = AudioRecorder();
   bool _isRecording = false;
   bool _isRecognizing = false;
@@ -38,10 +45,13 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
 
   /// 录音采样率（44100Hz，安卓原生支持率）
   static const int _recordSampleRate = 44100;
+
   /// 目标采样率（酷狗指纹接口要求 8000Hz）
   static const int _targetSampleRate = 8000;
+
   /// 每段录制时长（秒）
   static const int _segmentDuration = 8;
+
   /// 最大总录制时长（秒），56s = 7 轮（每轮 8s）
   static const int _maxTotalDuration = 56;
 
@@ -49,7 +59,9 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
   void initState() {
     super.initState();
     // 监听悬浮窗识曲状态变化（开启/关闭）刷新入口按钮
-    FloatingRecognitionService.instance.addListener(_onFloatingRecognitionChanged);
+    FloatingRecognitionService.instance.addListener(
+      _onFloatingRecognitionChanged,
+    );
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
@@ -65,7 +77,10 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
 
   @override
   void dispose() {
-    FloatingRecognitionService.instance.removeListener(_onFloatingRecognitionChanged);
+    _contentScrolled.dispose();
+    FloatingRecognitionService.instance.removeListener(
+      _onFloatingRecognitionChanged,
+    );
     _pulseController.dispose();
     _recorder.dispose();
     super.dispose();
@@ -103,15 +118,17 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
     // 切换音频会话为录音模式
     try {
       final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration(
-        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-        avAudioSessionMode: AVAudioSessionMode.defaultMode,
-        androidAudioAttributes: AndroidAudioAttributes(
-          contentType: AndroidAudioContentType.music,
-          usage: AndroidAudioUsage.media,
+      await session.configure(
+        const AudioSessionConfiguration(
+          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+          avAudioSessionMode: AVAudioSessionMode.defaultMode,
+          androidAudioAttributes: AndroidAudioAttributes(
+            contentType: AndroidAudioContentType.music,
+            usage: AndroidAudioUsage.media,
+          ),
+          androidWillPauseWhenDucked: false,
         ),
-        androidWillPauseWhenDucked: false,
-      ));
+      );
     } catch (_) {}
 
     await _recordAndRecognizeSegment();
@@ -130,10 +147,13 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
     }
 
     _attemptCount++;
-    debugPrint('[SongRecognition] === 第 $_attemptCount 轮，已用 ${elapsed}s / ${_maxTotalDuration}s ===');
+    debugPrint(
+      '[SongRecognition] === 第 $_attemptCount 轮，已用 ${elapsed}s / ${_maxTotalDuration}s ===',
+    );
 
     final dir = await getTemporaryDirectory();
-    final filePath = '${dir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.wav';
+    final filePath =
+        '${dir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.wav';
     try {
       await _recorder.start(
         RecordConfig(
@@ -241,13 +261,19 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       if (rustResult != null) {
         pcmData = rustResult.pcm;
         maxAmplitude = rustResult.maxAmplitude;
-        debugPrint('[SongRecognition] rust pcm: len=${pcmData.length} (${_targetSampleRate}Hz) maxAmp=$maxAmplitude');
+        debugPrint(
+          '[SongRecognition] rust pcm: len=${pcmData.length} (${_targetSampleRate}Hz) maxAmp=$maxAmplitude',
+        );
       } else {
         // 降级：Dart 实现（原逻辑）
         final rawPcm = _extractPcmFromWav(fileBytes);
-        debugPrint('[SongRecognition] fileBytes=${fileBytes.length}, rawPcm=${rawPcm.length} (${_recordSampleRate}Hz)');
+        debugPrint(
+          '[SongRecognition] fileBytes=${fileBytes.length}, rawPcm=${rawPcm.length} (${_recordSampleRate}Hz)',
+        );
         pcmData = downsamplePcm(rawPcm, _recordSampleRate, _targetSampleRate);
-        debugPrint('[SongRecognition] dart pcm fallback: ${pcmData.length} bytes (${_targetSampleRate}Hz)');
+        debugPrint(
+          '[SongRecognition] dart pcm fallback: ${pcmData.length} bytes (${_targetSampleRate}Hz)',
+        );
         maxAmplitude = computeMaxAmplitude(pcmData);
         if (maxAmplitude >= kSilenceAmplitudeThreshold) {
           pcmData = normalizeGain(pcmData, maxAmplitude);
@@ -315,8 +341,9 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
   Widget build(BuildContext context) {
     // 悬浮窗运行中时同步最新主题色（跟随设置页莫奈/动态取色）
     if (FloatingRecognitionService.instance.isActive) {
-      FloatingRecognitionService.instance
-          .pushThemeColors(Theme.of(context).colorScheme);
+      FloatingRecognitionService.instance.pushThemeColors(
+        Theme.of(context).colorScheme,
+      );
     }
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
@@ -331,55 +358,59 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
         media.size.height - media.padding.top - 52 - media.viewInsets.bottom;
     return SonifyTitleScaffold(
       title: '听歌识曲',
+      // 批次 24：内层滚动信号驱动栏体渐变带浮现（与首页一致）
+      barBackgroundVisible: _contentScrolled,
       trailing: const UserAvatarButton(),
       itemCount: 1,
-      itemBuilder: (context, index) => SizedBox(
-        height: bodyHeight,
-        child: _buildRecognitionBody(colorScheme, textTheme),
+      itemBuilder: (context, index) => ContentScrollSignal(
+        signal: _contentScrolled,
+        child: SizedBox(
+          height: bodyHeight,
+          child: _buildRecognitionBody(colorScheme, textTheme),
+        ),
       ),
     );
   }
 
   Widget _buildRecognitionBody(ColorScheme colorScheme, TextTheme textTheme) {
     return Column(
-        children: [
-          _buildFloatingEntry(colorScheme, textTheme),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  // Dock 避让：消费注入的底部 padding
-                  padding: EdgeInsets.fromLTRB(
-                    24,
-                    24,
-                    24,
-                    24 + MediaQuery.paddingOf(context).bottom,
+      children: [
+        _buildFloatingEntry(colorScheme, textTheme),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                // Dock 避让：消费注入的底部 padding
+                padding: EdgeInsets.fromLTRB(
+                  24,
+                  24,
+                  24,
+                  24 + MediaQuery.paddingOf(context).bottom,
+                ),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight - 48,
                   ),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight - 48,
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        const SizedBox(height: 32),
-                        _buildPulseCircle(colorScheme),
-                        const SizedBox(height: 32),
-                        _buildStatusText(textTheme, colorScheme),
-                        const SizedBox(height: 32),
-                        if (_result != null)
-                          _buildResult(colorScheme, textTheme),
-                        if (_error != null) _buildError(colorScheme, textTheme),
-                      ],
-                    ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const SizedBox(height: 32),
+                      _buildPulseCircle(colorScheme),
+                      const SizedBox(height: 32),
+                      _buildStatusText(textTheme, colorScheme),
+                      const SizedBox(height: 32),
+                      if (_result != null) _buildResult(colorScheme, textTheme),
+                      if (_error != null) _buildError(colorScheme, textTheme),
+                    ],
                   ),
-                );
-              },
-            ),
+                ),
+              );
+            },
           ),
-        ],
-      );
+        ),
+      ],
+    );
   }
 
   /// 悬浮窗识曲入口按钮（顶部横幅）。
@@ -435,7 +466,9 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       child: GestureDetector(
         onTap: _toggleRecording,
         child: ScaleTransition(
-          scale: _isRecording ? _pulseAnimation : const AlwaysStoppedAnimation(1.0),
+          scale: _isRecording
+              ? _pulseAnimation
+              : const AlwaysStoppedAnimation(1.0),
           child: Container(
             width: 140,
             height: 140,
@@ -444,8 +477,8 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
               color: _isRecording
                   ? colorScheme.error
                   : _isLooping
-                      ? colorScheme.tertiary
-                      : colorScheme.primaryContainer,
+                  ? colorScheme.tertiary
+                  : colorScheme.primaryContainer,
               boxShadow: _isRecording
                   ? [
                       BoxShadow(
@@ -458,13 +491,15 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
             ),
             child: Center(
               child: Icon(
-                _isRecording ? Icons.mic : (_isLooping ? Icons.stop : Icons.mic_none),
+                _isRecording
+                    ? Icons.mic
+                    : (_isLooping ? Icons.stop : Icons.mic_none),
                 size: 56,
                 color: _isRecording
                     ? colorScheme.onError
                     : _isLooping
-                        ? colorScheme.onTertiary
-                        : colorScheme.onPrimaryContainer,
+                    ? colorScheme.onTertiary
+                    : colorScheme.onPrimaryContainer,
               ),
             ),
           ),
@@ -509,9 +544,24 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       audioInfo = data;
     }
 
-    final songName = extractField(audioInfo, ['songname', 'song_name', 'name', 'SongName']) ?? '未知歌曲';
-    final artist = extractField(audioInfo, ['singername', 'singer_name', 'artist', 'SingerName']) ?? '未知歌手';
-    final albumName = extractField(audioInfo, ['album_name', 'AlbumName', 'albumname']) ?? '';
+    final songName =
+        extractField(audioInfo, [
+          'songname',
+          'song_name',
+          'name',
+          'SongName',
+        ]) ??
+        '未知歌曲';
+    final artist =
+        extractField(audioInfo, [
+          'singername',
+          'singer_name',
+          'artist',
+          'SingerName',
+        ]) ??
+        '未知歌手';
+    final albumName =
+        extractField(audioInfo, ['album_name', 'AlbumName', 'albumname']) ?? '';
     final score = audioInfo?['score']?.toString() ?? '';
     // 封面 URL（与播放逻辑中的字段顺序一致），union_cover 可能带 {size} 占位符
     final coverUrl = extractCoverUrl(audioInfo);
@@ -529,13 +579,17 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
         const SizedBox(height: 4),
         Text(
           artist,
-          style: textTheme.bodyMedium?.copyWith(color: colorScheme.onSurfaceVariant),
+          style: textTheme.bodyMedium?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
         ),
         if (albumName.isNotEmpty) ...[
           const SizedBox(height: 4),
           Text(
             albumName,
-            style: textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
+            style: textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ],
@@ -565,14 +619,19 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
               if (score.isNotEmpty) ...[
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: colorScheme.primaryContainer,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
                     '匹配度 $score',
-                    style: textTheme.labelSmall?.copyWith(color: colorScheme.primary),
+                    style: textTheme.labelSmall?.copyWith(
+                      color: colorScheme.primary,
+                    ),
                   ),
                 ),
               ],
@@ -618,7 +677,11 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
       width: 96,
       height: 96,
       color: colorScheme.surfaceContainerHighest,
-      child: Icon(Icons.music_note, color: colorScheme.onSurfaceVariant, size: 32),
+      child: Icon(
+        Icons.music_note,
+        color: colorScheme.onSurfaceVariant,
+        size: 32,
+      ),
     );
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
@@ -637,9 +700,15 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
 
   Uint8List _extractPcmFromWav(List<int> bytes) {
     if (bytes.length < 44) return Uint8List.fromList(bytes);
-    if (bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46) {
+    if (bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46) {
       for (int i = 12; i < bytes.length - 4; i++) {
-        if (bytes[i] == 0x64 && bytes[i + 1] == 0x61 && bytes[i + 2] == 0x74 && bytes[i + 3] == 0x61) {
+        if (bytes[i] == 0x64 &&
+            bytes[i + 1] == 0x61 &&
+            bytes[i + 2] == 0x74 &&
+            bytes[i + 3] == 0x61) {
           final pcmStart = i + 8;
           if (pcmStart < bytes.length) {
             return Uint8List.fromList(bytes.sublist(pcmStart));
@@ -667,7 +736,9 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
             Expanded(
               child: Text(
                 _error!,
-                style: textTheme.bodyMedium?.copyWith(color: colorScheme.onErrorContainer),
+                style: textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onErrorContainer,
+                ),
               ),
             ),
           ],

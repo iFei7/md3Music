@@ -28,18 +28,44 @@ class _DockTab {
 
 const Map<String, _DockTab> _kDockTabById = {
   'discover': _DockTab('discover', Icons.home_outlined, Icons.home, '主页'),
-  'favorites': _DockTab('favorites', Icons.favorite_outline, Icons.favorite, '收藏'),
-  'library': _DockTab('library', Icons.library_music_outlined, Icons.library_music, '本地音乐'),
+  'favorites': _DockTab(
+    'favorites',
+    Icons.favorite_outline,
+    Icons.favorite,
+    '收藏',
+  ),
+  'library': _DockTab(
+    'library',
+    Icons.library_music_outlined,
+    Icons.library_music,
+    '本地音乐',
+  ),
   'fm': _DockTab('fm', Icons.radio_outlined, Icons.radio, '私人FM'),
   'search': _DockTab('search', Icons.search_outlined, Icons.search, '搜索'),
-  'recognition': _DockTab('recognition', Icons.mic_none_outlined, Icons.mic, '听歌识曲'),
-  'audiobook': _DockTab('audiobook', Icons.auto_stories_outlined, Icons.auto_stories, '听书'),
-  'settings': _DockTab('settings', Icons.settings_outlined, Icons.settings, '设置'),
+  'recognition': _DockTab(
+    'recognition',
+    Icons.mic_none_outlined,
+    Icons.mic,
+    '听歌识曲',
+  ),
+  'audiobook': _DockTab(
+    'audiobook',
+    Icons.auto_stories_outlined,
+    Icons.auto_stories,
+    '听书',
+  ),
+  'settings': _DockTab(
+    'settings',
+    Icons.settings_outlined,
+    Icons.settings,
+    '设置',
+  ),
   'recent': _DockTab('recent', Icons.history_outlined, Icons.history, '最近播放'),
   'scan': _DockTab('scan', Icons.radar_outlined, Icons.radar, '扫描状态'),
 };
 
-_DockTab _dockTabFor(String id) => _kDockTabById[id] ??
+_DockTab _dockTabFor(String id) =>
+    _kDockTabById[id] ??
     const _DockTab('unknown', Icons.circle_outlined, Icons.circle, '标签页');
 
 /// 底部悬浮玻璃 Dock：导航胶囊 + 常驻播放器圆钮。
@@ -112,6 +138,7 @@ class GlassDockPlayer extends StatefulWidget {
     required this.onSelectTab,
     required this.navExpanded,
     required this.onNavExpandedChanged,
+    this.showNav = true,
   });
 
   /// 当前选中的 tab id（discover / library / fm / search 等）。
@@ -129,6 +156,14 @@ class GlassDockPlayer extends StatefulWidget {
   /// 展开时请求导航让位坍缩。
   final ValueChanged<bool> onNavExpandedChanged;
 
+  /// 是否渲染导航部分（默认 true，一级 tab 页「导航 + 播放器」）。
+  ///
+  /// 批次 24：二级 push 路由页只挂悬浮播放器（用户口径「二级页面不
+  /// 显示悬浮导航但显示悬浮播放器」）——路由页盖在主布局之上，主布局
+  /// 的 Dock 被完全遮住，故由 app.dart 在 Navigator 之上单独渲染一份
+  /// `showNav: false` 的实例；此时导航相关参数均不参与布局。
+  final bool showNav;
+
   @override
   State<GlassDockPlayer> createState() => _GlassDockPlayerState();
 }
@@ -136,6 +171,11 @@ class GlassDockPlayer extends StatefulWidget {
 class _GlassDockPlayerState extends State<GlassDockPlayer>
     with TickerProviderStateMixin {
   /// 播放器圆钮 → 控制小胶囊的展开态（收敛型 AnimatedSize 驱动）。
+  ///
+  /// 仅播放器形态（[GlassDockPlayer.showNav] == false，二级 push 路由页）
+  /// **恒展开**（用户口径「仅显示悬浮播放器时恒展开」）：初始即展开，且
+  /// 不参与「导航展开 ⇒ 播放器收起」的单展开闭环（见 initState 与
+  /// [_onNavExpandedChanged] 守卫）。
   bool _controlsExpanded = false;
 
   static const double _kButtonSize = 52.0;
@@ -209,6 +249,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   @override
   void initState() {
     super.initState();
+    // 仅播放器形态恒展开（二级 push 路由页，用户口径），见字段注释。
+    if (!widget.showNav) _controlsExpanded = true;
     // 状态联动（单展开不变量的反向闭环）：导航展开 ⇒ 播放器工具强制收起。
     // 正向闭环（播放器工具展开 ⇒ 导航坍缩）在 [_expandControls] 中经
     // onNavExpandedChanged 回调完成。两个展开态不得同时存在，否则总宽
@@ -264,6 +306,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   ///   见类文档：胶囊自身不再响应 tap 收起）。
   /// 两条路径均不会反向再改导航值，故无乒乓竞态。
   void _onNavExpandedChanged() {
+    // 仅播放器形态没有导航可展开，恒展开（见字段注释）。
+    if (!widget.showNav) return;
     if (widget.navExpanded.value && _controlsExpanded) {
       setState(() => _controlsExpanded = false);
     }
@@ -327,15 +371,14 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _buildNavPart(tabConfig),
-                const SizedBox(width: 8),
+                // 仅播放器形态（二级 push 路由页）不渲染导航部分，
+                // 播放器球改为整行居中（单展开不变量在此形态下退化）。
+                if (widget.showNav) ...[
+                  _buildNavPart(tabConfig),
+                  const SizedBox(width: 8),
+                ],
                 Flexible(
-                  child: _buildPlayerButton(
-                    player,
-                    song,
-                    isPlaying,
-                    duration,
-                  ),
+                  child: _buildPlayerButton(player, song, isPlaying, duration),
                 ),
               ],
             ),
@@ -468,8 +511,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
           return GestureDetector(
             key: const ValueKey('glass_dock_player_button'),
             behavior: HitTestBehavior.opaque,
-            onVerticalDragStart:
-                canDrag ? (d) => _onPlayerDragStart(buttonContext, d) : null,
+            onVerticalDragStart: canDrag
+                ? (d) => _onPlayerDragStart(buttonContext, d)
+                : null,
             onVerticalDragUpdate: canDrag ? _onPlayerDragUpdate : null,
             onVerticalDragEnd: canDrag ? _onPlayerDragEnd : null,
             onVerticalDragCancel: canDrag ? _onPlayerDragCancel : null,
@@ -657,8 +701,7 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     final width = _marqueeWidth;
     final distanceThreshold = width * 0.5;
     if (dx < 0 &&
-        (-dx >= distanceThreshold ||
-            velocity < -_kSwipeSwitchVelocity)) {
+        (-dx >= distanceThreshold || velocity < -_kSwipeSwitchVelocity)) {
       _commitTrackSwitch(-1); // 向左甩 → 下一曲
     } else if (dx > 0 &&
         (dx >= distanceThreshold || velocity > _kSwipeSwitchVelocity)) {
@@ -752,8 +795,7 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
                         // 环贴按钮外缘：环中心线 = 26 − 0.75 − 0.5 =
                         // 24.75，环外缘 25.5 < 26 不出界，环内缘 24.0
                         // 距 46dp 封面外缘 1dp（封面充满圆内）。
-                        ringRadius:
-                            _kButtonSize / 2 - _kRingStroke / 2 - 0.5,
+                        ringRadius: _kButtonSize / 2 - _kRingStroke / 2 - 0.5,
                         trackColor: cs.onSurface.withValues(alpha: 0.15),
                         progressColor: cs.primary,
                       ),
@@ -877,7 +919,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     // 强制收起」驱动（见类文档）；封面 / 歌名点击进播放页、三个控制钮、
     // 左右滑切歌（下方 onHorizontalDrag*，开关关闭或无歌时不注册）均不变。
     return GestureDetector(
-      onHorizontalDragStart: swipeEnabled ? _onCapsuleHorizontalDragStart : null,
+      onHorizontalDragStart: swipeEnabled
+          ? _onCapsuleHorizontalDragStart
+          : null,
       onHorizontalDragUpdate: swipeEnabled
           ? _onCapsuleHorizontalDragUpdate
           : null,
@@ -895,13 +939,16 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
           // + 3 个按钮(120)，保证小屏（含 320dp）下胶囊自身也不超宽。
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final fixedWidth = _kControlsButtonsWidth +
+              final fixedWidth =
+                  _kControlsButtonsWidth +
                   _kCapsuleCoverSize +
                   _kRingStroke * 2 +
                   _kCapsuleCoverGap +
                   10; // 水平 padding（6 + 4）
-              final marqueeWidth =
-                  (constraints.maxWidth - fixedWidth).clamp(0.0, 120.0);
+              final marqueeWidth = (constraints.maxWidth - fixedWidth).clamp(
+                0.0,
+                120.0,
+              );
               _marqueeWidth = marqueeWidth;
               return Row(
                 mainAxisSize: MainAxisSize.min,
@@ -938,10 +985,12 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
                                     stroke: _kRingStroke,
                                     // 环中心线 = 18 + 0.75 = 18.75：
                                     // 环内缘 18 恰贴 36dp 封面外缘（无间隙）。
-                                    ringRadius: _kCapsuleCoverSize / 2 +
+                                    ringRadius:
+                                        _kCapsuleCoverSize / 2 +
                                         _kRingStroke / 2,
-                                    trackColor:
-                                        cs.onSurface.withValues(alpha: 0.15),
+                                    trackColor: cs.onSurface.withValues(
+                                      alpha: 0.15,
+                                    ),
                                     progressColor: cs.primary,
                                   ),
                                 );
@@ -998,8 +1047,10 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
                             );
                             // 未拖拽 / 无可用宽度：仅当前歌名（零开销路径）。
                             if (dx == 0 || marqueeWidth <= 0) return current;
-                            final progress =
-                                (dx.abs() / marqueeWidth).clamp(0.0, 1.0);
+                            final progress = (dx.abs() / marqueeWidth).clamp(
+                              0.0,
+                              1.0,
+                            );
                             final toNext = dx < 0;
                             final incomingText = _neighborTrackTitle(
                               player,
@@ -1112,7 +1163,10 @@ class _DockNavItem extends StatelessWidget {
           height: 44,
           margin: const EdgeInsets.symmetric(horizontal: 1),
           decoration: selected
-              ? ShapeDecoration(color: cs.secondaryContainer, shape: const StadiumBorder())
+              ? ShapeDecoration(
+                  color: cs.secondaryContainer,
+                  shape: const StadiumBorder(),
+                )
               : null,
           child: Icon(
             selected ? tab.filled : tab.outlined,
@@ -1190,7 +1244,13 @@ class _ProgressRingPainter extends CustomPainter {
         ..strokeWidth = stroke
         ..strokeCap = StrokeCap.round
         ..color = progressColor;
-      canvas.drawArc(rect, -3.1415926535897932 / 2, 2 * 3.1415926535897932 * progress, false, progressPaint);
+      canvas.drawArc(
+        rect,
+        -3.1415926535897932 / 2,
+        2 * 3.1415926535897932 * progress,
+        false,
+        progressPaint,
+      );
     }
   }
 

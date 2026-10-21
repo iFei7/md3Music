@@ -43,29 +43,36 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
   static const double _dragThreshold = 18.0;
 
   // 尺寸常量
-  static const double _iconSize = 48;       // 吸附态圆形 icon 直径（也是展开态高度）
+  static const double _iconSize = 48; // 吸附态圆形 icon 直径（也是展开态高度）
   static const double _maxExpandedWidth = 280; // 浮动态最大宽度
-  static const double _height = _iconSize;  // 浮动态高度，与吸附态一致
+  static const double _height = _iconSize; // 浮动态高度，与吸附态一致
 
   // 测量实际渲染宽度，用于精确的边界约束（修复只能在左半屏拖动的问题）
   final GlobalKey _overlayKey = GlobalKey();
   double get _actualWidth {
-    final renderBox = _overlayKey.currentContext?.findRenderObject() as RenderBox?;
+    final renderBox =
+        _overlayKey.currentContext?.findRenderObject() as RenderBox?;
     return renderBox?.size.width ?? _iconSize;
   }
 
   /// 进入遥控页面：通过全局 navigatorKey，避免依赖 BuildContext。
   void _enterRemotePage() {
     appNavigatorKey.currentState?.push(
-      MaterialPageRoute(builder: (_) => const DlnaRemotePage()),
+      // 命名路由：SecondaryDockController 按名排除（遥控页不挂悬浮播放器）
+      MaterialPageRoute(
+        settings: const RouteSettings(name: '/dlna_remote'),
+        builder: (_) => const DlnaRemotePage(),
+      ),
     );
   }
 
   /// 计算吸附态应使用的 Y 坐标：优先用 [_attachedTop] 记忆值，否则用默认高度。
   /// 始终 clamp 到 [statusBarHeight, maxTop] 范围内，避免越界。
   double _resolveAttachedTop(double statusBarHeight, double maxTop) {
-    return (_attachedTop ?? (statusBarHeight + 56))
-        .clamp(statusBarHeight, maxTop);
+    return (_attachedTop ?? (statusBarHeight + 56)).clamp(
+      statusBarHeight,
+      maxTop,
+    );
   }
 
   /// 吸附到最近的边缘：根据当前位置判断贴左还是贴右，回到吸附态。
@@ -77,8 +84,10 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final width = _actualWidth > _iconSize ? _actualWidth : _maxExpandedWidth;
     final currentX = _floatingPosition?.dx ?? (screenWidth - width);
-    final maxTop = (screenSize.height - _height - bottomInset - 80)
-        .clamp(statusBarHeight, double.infinity);
+    final maxTop = (screenSize.height - _height - bottomInset - 80).clamp(
+      statusBarHeight,
+      double.infinity,
+    );
     final currentY = _floatingPosition?.dy ?? (statusBarHeight + 56);
     setState(() {
       _attachedRight = currentX + width / 2 > screenWidth / 2;
@@ -90,19 +99,29 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
   }
 
   /// 获取悬浮窗在屏幕中的矩形区域，用于判断点击是否在外部。
-  Rect _currentRect(Size screenSize, double statusBarHeight, double bottomInset) {
+  Rect _currentRect(
+    Size screenSize,
+    double statusBarHeight,
+    double bottomInset,
+  ) {
     final width = _expanded ? _actualWidth : _iconSize;
     final height = _expanded ? _height : _iconSize;
-    final maxTop = (screenSize.height - height - bottomInset - 80)
-        .clamp(statusBarHeight, double.infinity);
+    final maxTop = (screenSize.height - height - bottomInset - 80).clamp(
+      statusBarHeight,
+      double.infinity,
+    );
     final maxLeft = (screenSize.width - width).clamp(0.0, double.infinity);
     final left = _expanded
-        ? (_floatingPosition?.dx ?? (screenSize.width - width))
-            .clamp(0.0, maxLeft)
+        ? (_floatingPosition?.dx ?? (screenSize.width - width)).clamp(
+            0.0,
+            maxLeft,
+          )
         : (_attachedRight ? screenSize.width - _iconSize : 0.0);
     final top = _expanded
-        ? (_floatingPosition?.dy ?? (statusBarHeight + 56))
-            .clamp(statusBarHeight, maxTop)
+        ? (_floatingPosition?.dy ?? (statusBarHeight + 56)).clamp(
+            statusBarHeight,
+            maxTop,
+          )
         : _resolveAttachedTop(statusBarHeight, maxTop);
     return Rect.fromLTWH(left, top, width, height);
   }
@@ -132,8 +151,10 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
             ? (screenSize.width - width).clamp(0.0, double.infinity)
             : 0.0;
         // 沿用吸附态记录的 Y，避免拖拽瞬间跳到顶部固定高度
-        final maxTop = (screenSize.height - _height - bottomInset - 80)
-            .clamp(statusBarHeight, double.infinity);
+        final maxTop = (screenSize.height - _height - bottomInset - 80).clamp(
+          statusBarHeight,
+          double.infinity,
+        );
         final initialTop = _resolveAttachedTop(statusBarHeight, maxTop);
         setState(() {
           _expanded = true;
@@ -143,15 +164,16 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
     }
     // 拖拽中：实时更新位置
     if (_isDragging) {
-      final maxTop = (screenSize.height - _height - bottomInset - 80)
-          .clamp(statusBarHeight, double.infinity);
+      final maxTop = (screenSize.height - _height - bottomInset - 80).clamp(
+        statusBarHeight,
+        double.infinity,
+      );
       final maxLeft = (screenSize.width - width).clamp(0.0, double.infinity);
       setState(() {
         final baseDx = _floatingPosition?.dx ?? (screenSize.width - width);
         final baseDy = _floatingPosition?.dy ?? (statusBarHeight + 56);
         final newDx = (baseDx + event.delta.dx).clamp(0.0, maxLeft);
-        final newDy = (baseDy + event.delta.dy)
-            .clamp(statusBarHeight, maxTop);
+        final newDy = (baseDy + event.delta.dy).clamp(statusBarHeight, maxTop);
         _floatingPosition = Offset(newDx, newDy);
       });
     }
@@ -181,8 +203,10 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
           ? (screenWidth - width).clamp(0.0, double.infinity)
           : 0.0;
       // 就近展开：Y 沿用吸附态记录的位置，而不是跳到顶部固定高度
-      final maxTop = (screenSize.height - _height - bottomInset - 80)
-          .clamp(statusBarHeight, double.infinity);
+      final maxTop = (screenSize.height - _height - bottomInset - 80).clamp(
+        statusBarHeight,
+        double.infinity,
+      );
       final initialTop = _resolveAttachedTop(statusBarHeight, maxTop);
       setState(() {
         _expanded = true;
@@ -211,8 +235,10 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
   @override
   Widget build(BuildContext context) {
     // Selector 只监听必要字段，避免 position 每 2 秒更新触发重建
-    return Selector<DlnaProvider,
-        ({bool isCasting, bool isPlaying, String? castTitle, String? deviceName})>(
+    return Selector<
+      DlnaProvider,
+      ({bool isCasting, bool isPlaying, String? castTitle, String? deviceName})
+    >(
       selector: (_, p) => (
         isCasting: p.isCasting,
         isPlaying: p.isPlaying,
@@ -251,7 +277,11 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
                 child: Listener(
                   behavior: HitTestBehavior.translucent,
                   onPointerDown: (event) {
-                    final rect = _currentRect(screenSize, statusBarHeight, bottomInset);
+                    final rect = _currentRect(
+                      screenSize,
+                      statusBarHeight,
+                      bottomInset,
+                    );
                     // 点击在悬浮窗外部 → 吸附回边缘
                     if (!rect.contains(event.position)) {
                       _attachToEdge();
@@ -260,7 +290,13 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
                 ),
               ),
             // 悬浮窗本身（吸附态或浮动态）
-            _buildOverlay(state, theme, screenSize, statusBarHeight, bottomInset),
+            _buildOverlay(
+              state,
+              theme,
+              screenSize,
+              statusBarHeight,
+              bottomInset,
+            ),
           ],
         );
       },
@@ -270,14 +306,17 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
   /// 构建悬浮窗本体：根据 _expanded 状态返回吸附态或浮动态。
   /// 两者共用同一个 Listener 手势处理，确保拖拽和点击一致。
   Widget _buildOverlay(
-    ({bool isCasting, bool isPlaying, String? castTitle, String? deviceName}) state,
+    ({bool isCasting, bool isPlaying, String? castTitle, String? deviceName})
+    state,
     ThemeData theme,
     Size screenSize,
     double statusBarHeight,
     double bottomInset,
   ) {
-    final maxTop = (screenSize.height - _height - bottomInset - 80)
-        .clamp(statusBarHeight, double.infinity);
+    final maxTop = (screenSize.height - _height - bottomInset - 80).clamp(
+      statusBarHeight,
+      double.infinity,
+    );
 
     // 计算位置：用实际渲染宽度做边界约束，避免内容比 _maxExpandedWidth 窄时
     // 被错误限制在左半屏（clamp 上界 = screenWidth - actualWidth）
@@ -287,10 +326,14 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
 
     if (_expanded) {
       final maxLeft = (screenSize.width - width).clamp(0.0, double.infinity);
-      left = (_floatingPosition?.dx ?? (screenSize.width - width))
-          .clamp(0.0, maxLeft);
-      top = (_floatingPosition?.dy ?? (statusBarHeight + 56))
-          .clamp(statusBarHeight, maxTop);
+      left = (_floatingPosition?.dx ?? (screenSize.width - width)).clamp(
+        0.0,
+        maxLeft,
+      );
+      top = (_floatingPosition?.dy ?? (statusBarHeight + 56)).clamp(
+        statusBarHeight,
+        maxTop,
+      );
     } else {
       left = _attachedRight ? screenSize.width - _iconSize : 0.0;
       // 沿用记忆的 Y 位置，使吸附态可在不同高度停留
@@ -304,9 +347,8 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
         key: _overlayKey,
         behavior: HitTestBehavior.opaque,
         onPointerDown: _onPointerDown,
-        onPointerMove: (event) => _onPointerMove(
-          event, screenSize, statusBarHeight, bottomInset,
-        ),
+        onPointerMove: (event) =>
+            _onPointerMove(event, screenSize, statusBarHeight, bottomInset),
         onPointerUp: _onPointerUp,
         child: _expanded
             ? _buildFloatingContent(state, theme)
@@ -317,7 +359,8 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
 
   /// 吸附态内容：半圆形 icon
   Widget _buildAttachedIcon(
-    ({bool isCasting, bool isPlaying, String? castTitle, String? deviceName}) state,
+    ({bool isCasting, bool isPlaying, String? castTitle, String? deviceName})
+    state,
     ThemeData theme,
   ) {
     return Container(
@@ -326,8 +369,12 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
       decoration: BoxDecoration(
         color: theme.colorScheme.primaryContainer,
         borderRadius: _attachedRight
-            ? const BorderRadius.horizontal(left: Radius.circular(_iconSize / 2))
-            : const BorderRadius.horizontal(right: Radius.circular(_iconSize / 2)),
+            ? const BorderRadius.horizontal(
+                left: Radius.circular(_iconSize / 2),
+              )
+            : const BorderRadius.horizontal(
+                right: Radius.circular(_iconSize / 2),
+              ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.2),
@@ -346,7 +393,8 @@ class _DlnaCastingOverlayState extends State<DlnaCastingOverlay> {
 
   /// 浮动态内容：完整标题，宽度根据文本自适应（最大 280）
   Widget _buildFloatingContent(
-    ({bool isCasting, bool isPlaying, String? castTitle, String? deviceName}) state,
+    ({bool isCasting, bool isPlaying, String? castTitle, String? deviceName})
+    state,
     ThemeData theme,
   ) {
     return Container(

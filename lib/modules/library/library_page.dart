@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:material_ui/material_ui.dart';
 import 'package:m3e_core/m3e_core.dart';
 import 'package:provider/provider.dart';
@@ -23,18 +24,20 @@ import 'songs_page.dart';
 /// 页面内容已抽为可嵌入的 [LibraryMusicPanel]（去 Scaffold），收藏页
 /// 「本地」tab 直接嵌入同一面板。
 ///
-/// 顶栏右侧（[SonifyTitleScaffold]）两个动作，均**常驻** trailing：
-/// - **搜索圆钮**（批次 23 常驻，此前在 actions 槽、随面板内列表滚动
-///   浮现）：用户原话「上滑看不到搜索框后顶栏显示圆形搜索按钮」。
-///   滚动浮现链（actionsVisible + 面板滚动信号上传）在真机上按钮会
-///   跟着内层列表滚动才出现、且外层骨架不滚导致模糊带不同步，改为
-///   与扫描钮并列常驻保证入口恒可见；配方用公共组件
-///   [GlassCircleButton]（42dp 圆形液态玻璃 + 20dp 图标），与首页/
-///   听书/搜索页顶栏圆钮完全同款；
-/// - **扫描钮**（常驻）：本页外层骨架是单固定高 item、本身不滚动，
-///   actions 的既有「随骨架滚动淡入」条件永不满足（扫描钮放 actions
-///   时因此**永不显示**，bug）——故常驻 trailing，点击进扫描状态页
-///   （扫描/目录管理能力由该页「扫描选项」承载）。
+/// 顶栏右侧（[SonifyTitleScaffold]）两个动作：
+/// - **扫描钮**（trailing 常驻可见）：本页外层骨架是单固定高 item、
+///   本身不滚动，actions 的既有「随骨架滚动淡入」条件永不满足
+///   （扫描钮放 actions 时因此**永不显示**，bug）——故移到 trailing
+///   常驻，点击进扫描状态页（扫描/目录管理能力由该页「扫描选项」承载）；
+/// - **搜索圆钮**（actions，**随内层歌曲列表滚动浮现**；批次 24 按用户
+///   口径「参考搜索页」重新落地）：面板内列表滚动信号经
+///   [LibraryMusicPanel.listScrolled] 上传到本页的 `_listScrolled`，
+///   经 [SonifyTitleScaffold.actionsVisible] 驱动圆钮淡入；列表在顶部 /
+///   空库（无列表可滚）时不浮现，点击聚焦面板内本地音乐搜索框。
+///   **同一通知器同时注入 [SonifyTitleScaffold.barBackgroundVisible]**：
+///   本页外层骨架自身不滚动，顶栏渐变模糊带不接外部信号就永不浮现
+///   （与首页不一致）；圆钮浮现与栏体出带同拍，正是搜索页坍缩态形态。
+///   配方为公共组件 [GlassCircleButton]（42dp 圆形液态玻璃 + 20dp 图标）。
 ///
 /// 已移除：原「音乐库入口区」快捷宫格（我的收藏/歌单/专辑/歌手/
 /// 最近播放/扫描状态，跨云/本地导航项收敛到音乐库 hub 页）与页面级
@@ -65,9 +68,19 @@ class _LibraryPageState extends State<LibraryPage> {
   /// （空库）时节点处于未 attach 状态，此时聚焦改走 SnackBar 提示。
   final FocusNode _localSearchFocusNode = FocusNode();
 
+  /// 内层歌曲列表滚动信号（true = 已离开顶部）：面板内 TabBarView 的
+  /// 纵向列表滚动经 [LibraryMusicPanel.listScrolled] 上传到此，一份
+  /// 信号两用——
+  /// - [SonifyTitleScaffold.actionsVisible]：驱动顶栏搜索圆钮浮现；
+  /// - [SonifyTitleScaffold.barBackgroundVisible]：驱动顶栏渐变模糊带
+  ///   浮现（本页外层骨架不可滚，不接外部信号则永不与首页同拍）。
+  /// 空库/无音乐时无列表可滚，保持 false。
+  final ValueNotifier<bool> _listScrolled = ValueNotifier<bool>(false);
+
   @override
   void dispose() {
     _localSearchFocusNode.dispose();
+    _listScrolled.dispose();
     super.dispose();
   }
 
@@ -82,41 +95,40 @@ class _LibraryPageState extends State<LibraryPage> {
       body: SonifyTitleScaffold(
         title: '本地音乐',
         itemCount: 1,
-        // 顶栏右侧：搜索圆钮 + 扫描钮，均常驻 trailing（见类文档：
-        // 本页外层骨架不可滚，actions 滚动淡入条件永不满足）。
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 搜索玻璃圆钮（公共组件 GlassCircleButton，42dp 圆 + 20dp
-            // 图标，与首页/听书/搜索页顶栏同款）：点击聚焦面板内本地
-            // 音乐搜索框。批次 23 起常驻可见（此前随内层列表滚动浮现，
-            // 真机上与骨架不滚的顶栏背景脱节、入口不可靠）。
-            GlassCircleButton(
-              key: const ValueKey(_kSearchButtonKey),
-              tooltip: '搜索',
-              icon: Icons.search,
-              onPressed: _focusLocalSearch,
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              key: const ValueKey(_kScanButtonKey),
-              tooltip: '扫描音乐',
-              icon: isScanning
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.add),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ScanStatusPage()),
-                );
-              },
-            ),
-          ],
+        // 顶栏右侧：扫描钮常驻 trailing（本页外层骨架不可滚，actions 的
+        // 滚动淡入条件永不满足，只能常驻槽承载）。
+        trailing: IconButton(
+          key: const ValueKey(_kScanButtonKey),
+          tooltip: '扫描音乐',
+          icon: isScanning
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.add),
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ScanStatusPage()),
+            );
+          },
         ),
+        // 搜索圆钮（actions，随内层列表滚动浮现）与栏体渐变带共用同一
+        // 外部信号：列表离开顶部时二者同拍浮现（搜索页坍缩态形态）。
+        actionsVisible: _listScrolled,
+        barBackgroundVisible: _listScrolled,
+        actions: [
+          // 搜索玻璃圆钮（公共组件 GlassCircleButton，42dp 圆 + 20dp
+          // 图标，与首页/听书/搜索页顶栏同款）：点击聚焦面板内本地
+          // 音乐搜索框。
+          GlassCircleButton(
+            key: const ValueKey(_kSearchButtonKey),
+            tooltip: '搜索',
+            icon: Icons.search,
+            onPressed: _focusLocalSearch,
+          ),
+        ],
         itemBuilder: (context, index) {
           final media = MediaQuery.of(context);
           // 固定高度 = 视口 − 状态栏 − 标题区（8+36+8，与占位 item 同口径）
@@ -128,6 +140,8 @@ class _LibraryPageState extends State<LibraryPage> {
               // 顶栏搜索钮 ↔ 面板搜索框的 FocusNode 传递链（见
               // [_localSearchFocusNode] 与 [_focusLocalSearch]）。
               searchFocusNode: _localSearchFocusNode,
+              // 内层列表滚动信号上传：驱动顶栏搜索圆钮 + 渐变带浮现
+              listScrolled: _listScrolled,
             ),
           );
         },
@@ -138,15 +152,15 @@ class _LibraryPageState extends State<LibraryPage> {
   /// 顶栏搜索钮：聚焦面板内本地音乐搜索框。
   ///
   /// 面板仅在「有本地音乐 / 扫描中」渲染搜索栏（与 [LibraryMusicPanel]
-  /// 的 `if (hasMusic || isScanning)` 同口径）；搜索钮本身只在面板内
-  /// 列表可滚（已上滑）时浮现，空库态按钮不可见——此处的 SnackBar
-  /// 分支是防御性兜底（如库被并发清空），不做静默 no-op。
+  /// 的 `if (hasMusic || isScanning)` 同口径）；钮本身随内层列表滚动
+  /// 浮现，空库态（无列表可滚）不浮现——此处的 SnackBar 分支是防御性
+  /// 兜底（如库被并发清空），不做静默 no-op。
   void _focusLocalSearch() {
     final provider = context.read<LibraryProvider>();
     if (!provider.hasMusic && !provider.isScanning) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('还没有本地音乐，先扫描音乐吧')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('还没有本地音乐，先扫描音乐吧')));
       return;
     }
     _localSearchFocusNode.requestFocus();
@@ -175,10 +189,20 @@ class LibraryMusicPanel extends StatefulWidget {
   /// 生命周期归宿主，面板不重复 dispose。
   final FocusNode? searchFocusNode;
 
+  /// 内层列表滚动信号上传（可选）：非空时，面板内 TabBarView 各页
+  /// 的纵向列表滚动（离开顶部 / 回顶）会写入该通知器，供宿主顶栏
+  /// 动作钮（搜索圆钮）与栏体渐变带随滚动浮现（批次 24：本地音乐
+  /// 「参考搜索页」——一份信号同时注入 SonifyTitleScaffold 的
+  /// actionsVisible 与 barBackgroundVisible，二者同拍）。
+  /// 类型取 [ValueNotifier]（可写）：面板是信号生产方，宿主只消费。
+  /// 不传（收藏页「本地」tab 嵌入形态）时不上传。
+  final ValueNotifier<bool>? listScrolled;
+
   const LibraryMusicPanel({
     super.key,
     this.initialTab = 0,
     this.searchFocusNode,
+    this.listScrolled,
   });
 
   @override
@@ -341,21 +365,42 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
           ),
         ],
         Expanded(
-          // 内容区：空库/扫描态居中占位；有音乐走 5 tab 分类。
-          child: isScanning && !hasMusic
-              ? _buildScanningState(colorScheme)
-              : !hasMusic
-              ? _buildEmptyState(colorScheme)
-              : TabBarView(
-                  controller: _tabController,
-                  children: [
-                    SongsPage(songs: libraryProvider.songs),
-                    AlbumsPage(albums: libraryProvider.albums),
-                    ArtistsPage(artists: libraryProvider.artists),
-                    FoldersPage(folders: libraryProvider.folders),
-                    const LocalFavoritesPanel(),
-                  ],
-                ),
+          // 内层（TabBarView 页面内）纵向列表滚动信号上传：供宿主顶栏
+          // 搜索圆钮 + 渐变模糊带随滚动浮现（批次 24，见
+          // [LibraryPage] 类文档）。
+          // 过滤条件：depth > 0 且 axis == vertical——TabBarView 自身
+          // PageView 的横滑通知 depth==0（且轴为水平），天然被排除；
+          // 空库/扫描态无可滚列表、不发通知，信号保持 false。
+          // 已知取舍：切 tab 不重置信号——旧 tab 滚过后切到新 tab
+          // （列表在顶）时圆钮可能残留可见，属可接受行为（避免为
+          // 重置引入跨 tab 的滚动状态侦听）。
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification.depth > 0 &&
+                  notification.metrics.axis == Axis.vertical) {
+                final scrolled = notification.metrics.pixels > 0;
+                final signal = widget.listScrolled;
+                if (signal != null && signal.value != scrolled) {
+                  signal.value = scrolled;
+                }
+              }
+              return false;
+            },
+            child: isScanning && !hasMusic
+                ? _buildScanningState(colorScheme)
+                : !hasMusic
+                ? _buildEmptyState(colorScheme)
+                : TabBarView(
+                    controller: _tabController,
+                    children: [
+                      SongsPage(songs: libraryProvider.songs),
+                      AlbumsPage(albums: libraryProvider.albums),
+                      ArtistsPage(artists: libraryProvider.artists),
+                      FoldersPage(folders: libraryProvider.folders),
+                      const LocalFavoritesPanel(),
+                    ],
+                  ),
+          ),
         ),
       ],
     );
@@ -435,9 +480,9 @@ void showLibraryScanMenu(BuildContext context) {
               padding: const EdgeInsets.all(AppSpacing.lg),
               child: Text(
                 '扫描本地音乐',
-                style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+                style: Theme.of(
+                  ctx,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
             ),
             ListTile(

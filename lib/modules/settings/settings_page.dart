@@ -48,6 +48,7 @@ import '../../services/kugou_server.dart';
 import '../../utils/landscape_immersive.dart';
 import '../../widgets/seed_color_picker.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
+import '../../widgets/common/content_scroll_signal.dart';
 import '../sound/sounds_page.dart';
 import 'equalizer_settings_page.dart';
 import 'settings_group_heading.dart';
@@ -84,6 +85,12 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage>
     with SingleTickerProviderStateMixin {
+  // 内层滚动信号（true = 已离开顶部）：本页外层骨架是单固定高 item、
+  // 自身不滚动，内层滚动区（列表 / SingleChildScrollView）的滚动经
+  // [ContentScrollSignal] 上传到此，注入 SonifyTitleScaffold 的
+  // barBackgroundVisible 让顶栏渐变模糊带与首页同拍浮现
+  // （批次 24：主页管理 tab 页顶栏背景与首页一致）。
+  final ValueNotifier<bool> _contentScrolled = ValueNotifier<bool>(false);
   final SettingsRepository _settingsRepository = SettingsRepository();
   String _wifiQuality = '128';
   String _mobileQuality = '128';
@@ -206,6 +213,7 @@ class _SettingsPageState extends State<SettingsPage>
 
   @override
   void dispose() {
+    _contentScrolled.dispose();
     _sectionTransition.dispose();
     _searchController.dispose();
     _updater.dispose();
@@ -437,36 +445,36 @@ class _SettingsPageState extends State<SettingsPage>
       child: (level == SettingsLevel.overview && !_useTwoPane)
           ? _buildOverviewTitleScaffold(colorScheme)
           : Scaffold(
-        backgroundColor: groupBackground,
-        appBar: AppBar(
-          // 分组底色模式下顶栏同步透明，与页面底色连成一体
-          backgroundColor: groupBackground,
-          surfaceTintColor: Colors.transparent,
-          leading: level == SettingsLevel.overview
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: level == SettingsLevel.subpage
-                      ? _closeSubpage
-                      : _closeSection,
-                ),
-          title: _buildAppBarTitle(level, category),
-          // 统一对齐规则：设置页内部的一/二/三级页面一律居中；
-          // 总览页则按「是否为底部导航栏可直达的一级页面」判定
-          centerTitle:
-              level != SettingsLevel.overview ||
-              centerPageTitle(context, tabId: 'settings'),
-        ),
-        // 页面切换过渡：先淡出旧层 → 切换内容 → 再淡入新层（严格串行）。
-        // 淡入方向按层级方向区分：下钻自右侧推进、返回自左侧退回。
-        //
-        // 大屏「重组而非拉伸」：设置项是单栏内容，宽屏下约束到
-        // [AppLayout.maxContentWidth] 并居中，多余宽度留白，避免整行 ListTile
-        // 被无脑拉长（手机 <840dp 不触发，等同全宽，无回归）。
-        body: _useTwoPane
-            ? _buildTwoPaneBody(colorScheme, level, category)
-            : _buildSinglePaneBody(colorScheme, level, category),
-      ),
+              backgroundColor: groupBackground,
+              appBar: AppBar(
+                // 分组底色模式下顶栏同步透明，与页面底色连成一体
+                backgroundColor: groupBackground,
+                surfaceTintColor: Colors.transparent,
+                leading: level == SettingsLevel.overview
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: level == SettingsLevel.subpage
+                            ? _closeSubpage
+                            : _closeSection,
+                      ),
+                title: _buildAppBarTitle(level, category),
+                // 统一对齐规则：设置页内部的一/二/三级页面一律居中；
+                // 总览页则按「是否为底部导航栏可直达的一级页面」判定
+                centerTitle:
+                    level != SettingsLevel.overview ||
+                    centerPageTitle(context, tabId: 'settings'),
+              ),
+              // 页面切换过渡：先淡出旧层 → 切换内容 → 再淡入新层（严格串行）。
+              // 淡入方向按层级方向区分：下钻自右侧推进、返回自左侧退回。
+              //
+              // 大屏「重组而非拉伸」：设置项是单栏内容，宽屏下约束到
+              // [AppLayout.maxContentWidth] 并居中，多余宽度留白，避免整行 ListTile
+              // 被无脑拉长（手机 <840dp 不触发，等同全宽，无回归）。
+              body: _useTwoPane
+                  ? _buildTwoPaneBody(colorScheme, level, category)
+                  : _buildSinglePaneBody(colorScheme, level, category),
+            ),
     );
   }
 
@@ -479,33 +487,36 @@ class _SettingsPageState extends State<SettingsPage>
   Widget _buildOverviewTitleScaffold(ColorScheme colorScheme) {
     final media = MediaQuery.of(context);
     // 固定高度 = 视口 − 状态栏 − 标题区（8dp 顶距 + 36dp 行高 + 8dp 底距）
-    final height = media.size.height -
-        media.padding.top -
-        52 -
-        media.viewInsets.bottom;
+    final height =
+        media.size.height - media.padding.top - 52 - media.viewInsets.bottom;
     return SonifyTitleScaffold(
       title: '设置',
+      // 批次 24：内层滚动信号驱动栏体渐变带浮现（与首页一致）
+      barBackgroundVisible: _contentScrolled,
       itemCount: 1,
       itemBuilder: (context, index) {
-        return SizedBox(
-          height: height,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                maxWidth: AppLayout.maxContentWidth,
-              ),
-              child: _transitioned(
-                ListView(
-                  children: [
-                    _buildSearchField(colorScheme),
-                    if (_searchQuery.trim().isNotEmpty)
-                      ..._buildSearchResults(colorScheme)
-                    else
-                      ..._buildCategoryEntries(colorScheme),
-                    const Gap(AppSpacing.xxl),
-                    // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
-                    SizedBox(height: MediaQuery.paddingOf(context).bottom),
-                  ],
+        return ContentScrollSignal(
+          signal: _contentScrolled,
+          child: SizedBox(
+            height: height,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: AppLayout.maxContentWidth,
+                ),
+                child: _transitioned(
+                  ListView(
+                    children: [
+                      _buildSearchField(colorScheme),
+                      if (_searchQuery.trim().isNotEmpty)
+                        ..._buildSearchResults(colorScheme)
+                      else
+                        ..._buildCategoryEntries(colorScheme),
+                      const Gap(AppSpacing.xxl),
+                      // Dock 避让：消费注入的底部 padding（手势条 + Dock 高度）
+                      SizedBox(height: MediaQuery.paddingOf(context).bottom),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -543,9 +554,7 @@ class _SettingsPageState extends State<SettingsPage>
   ) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: AppLayout.maxContentWidth,
-        ),
+        constraints: const BoxConstraints(maxWidth: AppLayout.maxContentWidth),
         child: _transitioned(
           level == SettingsLevel.overview
               ? ListView(
@@ -648,10 +657,8 @@ class _SettingsPageState extends State<SettingsPage>
   late AnimationController _sectionTransition;
 
   /// 当前所在层级
-  SettingsLevel get _level => resolveSettingsLevel(
-    category: _activeSection,
-    subpage: _activeSubpage,
-  );
+  SettingsLevel get _level =>
+      resolveSettingsLevel(category: _activeSection, subpage: _activeSubpage);
 
   /// 按标题取分类；未命中返回 null（状态与模型不同步时降级为空内容）
   SettingsCategory? _categoryNamed(String? title) {
@@ -850,11 +857,7 @@ class _SettingsPageState extends State<SettingsPage>
       // 签到迷你日历卡：账号卡之后、首个分组之前（完整入口见 SignInCalendarPage）
       const SignInMiniCard(),
       const Gap(AppSpacing.sm),
-      ..._overviewGroup(
-        '界面与显示',
-        categories.take(3).toList(),
-        colorScheme,
-      ),
+      ..._overviewGroup('界面与显示', categories.take(3).toList(), colorScheme),
       ..._overviewGroup(
         '播放与音频',
         categories.skip(3).take(2).toList(),
@@ -1177,7 +1180,9 @@ class _SettingsPageState extends State<SettingsPage>
           leading: const Icon(Icons.search, size: 20),
           title: Text(r.label),
           subtitle: Text(
-            r.subpage.isEmpty ? '${r.category} ›' : '${r.category} › ${r.subpage}',
+            r.subpage.isEmpty
+                ? '${r.category} ›'
+                : '${r.category} › ${r.subpage}',
           ),
           trailing: const Icon(Icons.chevron_right, size: 20),
           onTap: () => _openSearchResult(r),
@@ -2234,7 +2239,8 @@ class _SettingsPageState extends State<SettingsPage>
                 _settingsRepository.setStartupAutoPlaySource(value);
               },
             ),
-            trailing: _startupAutoPlaySource == 'resume' && !_restoreMemoryEnabled
+            trailing:
+                _startupAutoPlaySource == 'resume' && !_restoreMemoryEnabled
                 ? _statusText('需开启记忆播放状态')
                 : null,
           ),
@@ -2309,9 +2315,7 @@ class _SettingsPageState extends State<SettingsPage>
         if (_crossfadeEnabled)
           SwitchListTile(
             title: const Text('自动混音（AutoMix）'),
-            subtitle: const Text(
-              '按节拍对齐过渡点、按节奏自适应时长，BPM 接近时自动对拍',
-            ),
+            subtitle: const Text('按节拍对齐过渡点、按节奏自适应时长，BPM 接近时自动对拍'),
             value: _automixEnabled,
             onChanged: (value) {
               HapticFeedback.lightImpact();
@@ -3052,10 +3056,11 @@ class _SettingsPageState extends State<SettingsPage>
               final candidates = _updater.candidates;
               UpdateManifest? selected;
               if (candidates.isNotEmpty) {
-                selected = candidates[_selectedApkCandidate.clamp(
-                  0,
-                  candidates.length - 1,
-                )];
+                selected =
+                    candidates[_selectedApkCandidate.clamp(
+                      0,
+                      candidates.length - 1,
+                    )];
               }
               // ignore: discarded_futures
               _updater.startDownload(selected);
@@ -3210,7 +3215,6 @@ class _SettingsPageState extends State<SettingsPage>
       showToast('已清除缓存', long: true);
     }
   }
-
 }
 
 /// Tab 管理面板：支持拖拽排序 + 显示/隐藏开关。
@@ -3417,7 +3421,6 @@ class _DesktopShortcutPanel extends StatelessWidget {
   }
 }
 
-
 /// 逐字歌词时间偏移设置（仅在线音乐生效）。
 ///
 /// 滑块精调 ±1500ms，输入框支持 ±10000ms；正值 = 歌词延后显示。
@@ -3616,8 +3619,7 @@ class SettingsAccountCard extends StatelessWidget {
                     builder: (context, avatar, _) => CircleAvatar(
                       radius: 20,
                       backgroundColor: colorScheme.surfaceContainerHighest,
-                      backgroundImage:
-                          (avatar != null && avatar.isNotEmpty)
+                      backgroundImage: (avatar != null && avatar.isNotEmpty)
                           ? CachedNetworkImageProvider(avatar)
                           : null,
                       child: (avatar == null || avatar.isEmpty)
@@ -3662,10 +3664,8 @@ class SettingsAccountCard extends StatelessWidget {
                             // gradeInfo 变化时重建；登录且有数据时显示
                             // 「Lv.{等级} · 听歌 {时长}」，否则占位文案
                             Selector<KugouProvider, (bool, KugouGradeInfo?)>(
-                              selector: (_, kugou) => (
-                                kugou.isLoggedIn,
-                                kugou.gradeInfo,
-                              ),
+                              selector: (_, kugou) =>
+                                  (kugou.isLoggedIn, kugou.gradeInfo),
                               builder: (context, gradeState, _) {
                                 final (gradeLoggedIn, grade) = gradeState;
                                 return GradeBriefChip(
