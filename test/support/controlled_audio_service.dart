@@ -20,6 +20,9 @@ class ControlledAudioService {
   Completer<void>? pauseCompleter;
   Completer<void>? pauseStarted;
   Object? nextSetUrlError;
+  /// 下一次 pause() 抛出的异常（批次26：模拟平台层 pause() 偶发失败，
+  /// 验证暂停淡出收尾的异常逃逸路径；模式同 [nextSetUrlError]）。
+  Object? nextPauseError;
   bool playing = false;
   bool autoResumeAfterLoad = false;
   bool get isCrossfading => false;
@@ -45,6 +48,9 @@ class ControlledAudioService {
   Future<void> pause() async {
     pauseCommandCount++;
     if (!(pauseStarted?.isCompleted ?? true)) pauseStarted!.complete();
+    final error = nextPauseError;
+    nextPauseError = null;
+    if (error != null) throw error;
     final completer = pauseCompleter;
     if (completer != null) await completer.future;
     final wasPlaying = playing;
@@ -196,8 +202,12 @@ class _ControlledAudioPlayer {
   double speed = 1.0;
   double volume = 1;
   Completer<void>? volumeChanged;
+  /// setVolume 写入序列（批次26：暂停淡出/淡入收尾回归取证，
+  /// 用于验证抢占时不出现「先恢复再被打到 0.01」的音量抖动）。
+  final List<double> volumeWrites = [];
   void setVolume(double value) {
     volume = value;
+    volumeWrites.add(value);
     final changed = volumeChanged;
     if (changed != null && !changed.isCompleted) changed.complete();
   }

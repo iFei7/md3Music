@@ -3955,36 +3955,65 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       final currentVol = target.volume;
       const steps = 10;
       const stepMs = 50; // 10步 x 50ms = 500ms
-      // 淡出循环加 try-catch：若中途被切歌/清列表等竞态打断抛异常，
-      // 仍要确保最终 pause 执行，否则播放器继续播放、playingStream 不发
-      // false，WakeLock 无法释放（暂停后功耗降不下来）
+      // 批次26：淡出收整段（循环 + pause + 音量恢复）包进 try/finally。
+      // 历史缺陷：`await _audioService?.pause()` 无 try 保护，平台层偶发
+      // 抛异常时下面的 setVolume(_volume) 恢复全部被跳过，淡出写下的 0
+      // 被永久留下——之后任何不经 setUrl 的恢复播放路径（中断 GAIN 自动
+      // 恢复、_restoreLatestPlaybackAfterStalePause、resume 非淡入分支）
+      // 都会「进度条走、完全没声音」。
+      // finally 判据沿用既有 3973/3987 口径：fadeToken 仍属于本次淡出
+      // 才恢复；被 resume 抢占时（fadeToken 已被自增）由 resume 淡入
+      // finally 统一收尾（批次17 契约），否则会出现「先恢复再被打到
+      // 0.01」的音量抖动。
       try {
-        for (int i = steps - 1; i >= 0; i--) {
-          // 被更新的 fade / 切歌抢占就停手，别再动音量
-          if (fadeToken != _fadeToken ||
-              !_playbackRequestGate.isCurrent(pauseGeneration)) {
-            break;
+        // 淡出循环加 try-catch：若中途被切歌/清列表等竞态打断抛异常，
+        // 仍要确保最终 pause 执行，否则播放器继续播放、playingStream 不发
+        // false，WakeLock 无法释放（暂停后功耗降不下来）
+        try {
+          for (int i = steps - 1; i >= 0; i--) {
+            // 被更新的 fade / 切歌抢占就停手，别再动音量
+            if (fadeToken != _fadeToken ||
+                !_playbackRequestGate.isCurrent(pauseGeneration)) {
+              break;
+            }
+            target.setVolume(currentVol * i / steps);
+            await Future.delayed(const Duration(milliseconds: stepMs));
           }
-          target.setVolume(currentVol * i / steps);
-          await Future.delayed(const Duration(milliseconds: stepMs));
+        } catch (_) {}
+        if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
+          return;
         }
-      } catch (_) {}
-      if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
-        if (fadeToken == _fadeToken) target.setVolume(_volume);
-        return;
+        try {
+          await _audioService?.pause();
+        } catch (error) {
+          // 取证：平台层 pause() 偶发失败（正是「音量永久 0」的入口）。
+          // 留痕后原样抛出，错误传播语义与淡出关闭路径保持一致；
+          // 音量恢复不依赖本 catch，由 finally 无条件收尾。
+          debugPrint('[VolAudit] 暂停淡出 pause() 异常，音量仍按 finally 收尾: '
+              '$error');
+          rethrow;
+        }
+        if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
+          await _restoreLatestPlaybackAfterStalePause();
+          return;
+        }
+        // 恢复音量设置（下次播放时使用）
+        // 取证：暂停淡出收尾会直接把音量拉回 _volume。若它发生在交叉淡化期间
+        // （未被 _fadeToken 拦住），听感正是「音量突然变大」。
+        debugPrint('[VolAudit] 暂停淡出收尾 tokenOk=${fadeToken == _fadeToken} '
+            '目标=${_volume.toStringAsFixed(3)} '
+            '播放器当前=${target.volume.toStringAsFixed(3)}');
+      } finally {
+        // 批次26：见上方注释。token 已易主（被 resume / 淡化抢占）时不
+        // 由本方法恢复，交由抢占方的淡入 finally 统一收尾，避免抖动。
+        // setVolume 自身再包 try-catch：播放器可能已随 dispose 释放，
+        // 收尾本身不能再向外抛。
+        if (fadeToken == _fadeToken) {
+          try {
+            target.setVolume(_volume);
+          } catch (_) {}
+        }
       }
-      await _audioService?.pause();
-      if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
-        await _restoreLatestPlaybackAfterStalePause();
-        return;
-      }
-      // 恢复音量设置（下次播放时使用）
-      // 取证：暂停淡出收尾会直接把音量拉回 _volume。若它发生在交叉淡化期间
-      // （未被 _fadeToken 拦住），听感正是「音量突然变大」。
-      debugPrint('[VolAudit] 暂停淡出收尾 tokenOk=${fadeToken == _fadeToken} '
-          '目标=${_volume.toStringAsFixed(3)} '
-          '播放器当前=${target.volume.toStringAsFixed(3)}');
-      if (fadeToken == _fadeToken) target.setVolume(_volume);
     } else {
       if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
         return;
@@ -4026,6 +4055,24 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// 拖动进度条时直接暂停（无淡入淡出），避免拖动期间音量渐变影响体验。
+  ///
+  /// 批次26 评估结论：此处**不做**音量对齐（不像 pause() 淡出那样把音量
+  /// 恢复回 `_volume`）。依据：
+  /// 1. `_fadeToken++` 只会抢占 Dart 侧淡入/淡出循环，且抢占判定在每步
+  ///    **写音量之前**——break 时最后写入的值 ≥ currentVol/steps，不会是
+  ///    淡出终点 0；播放器也随即被本方法 pause，中间音量不可闻。
+  /// 2. 所有续播路径都会重写音量，中间值不会永久停留：`completeSeekSession`
+  ///    → `resume()` 淡入分支的 finally 无条件恢复 `_volume`（批次17）；
+  ///    reload 分支与拖动期间的新播放意图都走 setUrl，由 AudioService 归一化
+  ///    通路重新下发音量；交叉淡化场景由 `abortCrossfade()` 的补偿斜坡收尾
+  ///    （终点即 `_userVolume * _vnAttenLinear`）。
+  /// 3. 反之在此处补写音量属净负收益：直写播放器会绕过音量均衡衰减（VN）
+  ///    把响歌抬满；走 `_audioService.setVolume` 则是异步写入，会和紧随
+  ///    其后的 resume 淡入首写 0.01 争序，且与淡出/淡入恢复口径（直写播放
+  ///    器）不一致。
+  /// 残留窗口（淡出循环已跑完写过 0、尚未执行平台 pause 的瞬间被抢占）
+  /// 实际不可达：pause() 已同步翻转 isPlaying，拖动传入 wasPlaying=false
+  /// 时根本不会调用本方法；即便被其他时序命中，后续 resume 仍会重写音量。
   Future<void> pauseForSeek() {
     _invalidatePlaybackRequest(
       source: _PlaybackRequestCancellationSource.seekGesturePause,

@@ -59,6 +59,151 @@ class ResumePlaybackAction extends AudioFocusAction {
 /// duck 降音量的相对比例（当前音量的 0.5 倍）。
 const double kDuckVolumeRatio = 0.5;
 
+// ── 批次26: 播放抑制（playback suppression）观测与保守策略 ──
+
+/// suppression 持续多久才触发保守自动暂停。
+///
+/// 取 10s：TRANSIENT_AUDIO_FOCUS_LOSS（瞬时焦点丢失）通常几百 ms 内自行
+/// 恢复，此阈值确保只对持续性抑制（拔耳机 / 蓝牙断开后无声）生效，
+/// 避免对短暂抖动过度反应。
+const Duration kSuppressionAutoPauseDelay = Duration(seconds: 10);
+
+/// 批次26: suppression reason 值 → 中文说明。
+///
+/// 对齐 `androidx.media3.common.Player.PLAYBACK_SUPPRESSION_REASON_*`：
+/// 0=NONE, 1=TRANSIENT_AUDIO_FOCUS_LOSS, 2=UNSUITABLE_AUDIO_OUTPUT。
+/// fork Dart 侧原样透传 int（见 just_audio.dart playbackSuppressionReasonStream）。
+String playbackSuppressionReasonLabel(int reason) {
+  switch (reason) {
+    case 0:
+      return '无抑制';
+    case 1:
+      return '瞬时音频焦点丢失';
+    case 2:
+      return '无合适音频输出设备';
+    default:
+      return '未知($reason)';
+  }
+}
+
+/// 批次26: [PlaybackSuppressionObserver] 需要的外部状态与副作用出口。
+///
+/// 抽成抽象类是为了单测：测试用可控 Stream + 录制 context 驱动观测器，
+/// 无需实例化 [AudioService]（其单例构造会创建真实播放器）。
+abstract class PlaybackSuppressionContext {
+  /// 保守自动暂停策略开关（默认 false = 只诊断）。
+  bool get autoPauseEnabled;
+
+  /// 活动播放器是否处于 playWhenReady 语义的播放中。
+  bool get isPlaying;
+
+  /// [role] 当前是否为活动播放器（交叉淡化 promote 后动态变化）。
+  bool isActiveRole(String role);
+
+  /// 留痕：reason 每次变化（含回到 NONE）调用一次。
+  void onObserve({required String role, required int reason});
+
+  /// 策略触发点：suppression 持续超时且用户无操作时调用（具体暂停动作
+  /// 由 context 实现方决定；默认关闭时永远不该被调用）。
+  void onAutoPause({required String role, required int reason});
+}
+
+/// 批次26: 单个播放器实例的 suppression 观测器。
+///
+/// 订阅 fork 新增的 `playbackSuppressionReasonStream`（每个 AudioPlayer
+/// 实例各一条 EventChannel 转发），做两件事：
+/// 1. 留痕：reason 每次变化经 [PlaybackSuppressionContext.onObserve] 记录
+///    （含回到 NONE），供取证「进度条走但没声音」；
+/// 2. 保守策略：默认关闭；开启后仅当「本角色是活动播放器 + 播放中 +
+///    suppression 持续 [kSuppressionAutoPauseDelay] 且用户无操作」才经
+///    [PlaybackSuppressionContext.onAutoPause] 请求暂停。
+///
+/// 铁律落地：自动行为有开关、默认关闭；订阅内一切异常只吞不上抛，
+/// 绝不影响播放链路。
+@visibleForTesting
+class PlaybackSuppressionObserver {
+  PlaybackSuppressionObserver({
+    required this.role,
+    required Stream<int> reasonStream,
+    required this.context,
+    Timer Function(Duration duration, void Function() callback)? timerFactory,
+  }) : _timerFactory = timerFactory ?? Timer.new {
+    // cancelOnError: false：事件流异常绝不中断观测（诊断通道必须比被观测
+    // 对象更长寿）；onError 吞掉，异常不上抛。
+    _sub = reasonStream.listen(
+      _onReason,
+      onError: (Object _) {},
+      cancelOnError: false,
+    );
+  }
+
+  /// 播放器角色：'main' / 'aux'（绑定订阅时确定，终身不变）。
+  final String role;
+
+  final PlaybackSuppressionContext context;
+
+  final Timer Function(Duration duration, void Function() callback)
+  _timerFactory;
+  StreamSubscription<int>? _sub;
+  Timer? _autoPauseTimer;
+  int _lastReason = 0;
+
+  void _onReason(int reason) {
+    _lastReason = reason;
+    try {
+      context.onObserve(role: role, reason: reason);
+      _applyPolicy(reason);
+    } catch (e) {
+      // 观测/策略失败绝不影响播放链路
+      debugPrint('[Suppression] 观测器处理异常 role=$role reason=$reason: $e');
+    }
+  }
+
+  void _applyPolicy(int reason) {
+    // 未开策略 / 本角色不是活动播放器（如交叉淡化中的淡出方）：
+    // 不干预，并清掉可能残留的倒计时（含运行中关闭开关的场景）。
+    if (!context.autoPauseEnabled || !context.isActiveRole(role)) {
+      _cancelAutoPauseTimer();
+      return;
+    }
+    // 恢复出声或本就暂停：不存在「用户误以为在播放」的风险，取消倒计时。
+    if (reason == 0 || !context.isPlaying) {
+      _cancelAutoPauseTimer();
+      return;
+    }
+    // 保守：首次 arm 后不因 reason 1→2 抖动重置时限（更早暂停而非更晚）。
+    if (_autoPauseTimer != null) return;
+    _autoPauseTimer = _timerFactory(
+      kSuppressionAutoPauseDelay,
+      _onAutoPauseTimer,
+    );
+  }
+
+  void _onAutoPauseTimer() {
+    _autoPauseTimer = null;
+    // 到点复检：期间可能恢复出声 / 被暂停 / 角色互换 / 用户操作过。
+    // 任一条件不再满足就放弃本次触发（宁可漏暂停，不可误暂停）。
+    if (_lastReason == 0) return;
+    if (!context.isActiveRole(role) || !context.isPlaying) return;
+    context.onAutoPause(role: role, reason: _lastReason);
+  }
+
+  /// 用户播放操作：取消挂起的自动暂停倒计时（策略语义是「持续抑制
+  /// 且用户无操作」才干预）。
+  void noteUserActivity() => _cancelAutoPauseTimer();
+
+  void _cancelAutoPauseTimer() {
+    _autoPauseTimer?.cancel();
+    _autoPauseTimer = null;
+  }
+
+  Future<void> dispose() async {
+    _cancelAutoPauseTimer();
+    await _sub?.cancel();
+    _sub = null;
+  }
+}
+
 /// 决策函数：按 [mode] 策略与中断事件，返回应执行的动作。
 ///
 /// 纯函数（无副作用、不触碰播放器），由 AudioService 的
@@ -221,6 +366,8 @@ class AudioService {
     _bindActiveStreams();
     _watchSessionIds(_mainPlayer);
     _restoreVolumeNormalizationFromPrefs();
+    // 批次26: suppression 观测 context（无状态，仅持有本服务引用）
+    _suppressionContext = _AudioServiceSuppressionContext(this);
   }
 
   /// 启动时从持久化设置恢复音量均衡开关/参考响度并应用（不依赖打开设置页）。
@@ -554,6 +701,121 @@ class AudioService {
   /// 不请求焦点），所以事件源固定是主播放器，不随角色互换改变。
   StreamSubscription<int>? _media3FocusSub;
 
+  // ── 批次26: 播放抑制（suppression）观测与保守策略 ──
+
+  /// suppression 观测器（主/辅播放器各一条）。角色互换不重订阅，
+  /// 读取点决策见 [_bindSuppressionObserver]。
+  final List<PlaybackSuppressionObserver> _suppressionObservers = [];
+
+  /// 观测器 context（无状态，仅持有本服务引用）。构造期赋值。
+  late final PlaybackSuppressionContext _suppressionContext;
+
+  /// 保守自动暂停开关，**默认 false（只诊断）**。
+  bool _suppressionAutoPauseEnabled = false;
+
+  /// 批次26: 订阅单个播放器实例的 suppression 事件流。
+  ///
+  /// 读取点决策（为什么与 [_media3FocusSub] 只挂主播放器不同、也不随角色
+  /// 互换重订阅）：
+  /// - 焦点事件永远由主播放器持有（辅播放器 androidApplyAudioAttributes=
+  ///   false 不请求焦点），所以焦点源固定是 main；
+  /// - suppression 是**每个 ExoPlayer 实例**自行计算的音频输出状态，fork
+  ///   按实例 id 各走一条 EventChannel（just_audio.dart 的
+  ///   playbackSuppressionReasonStream）。交叉淡化期间淡出方仍在出声，
+  ///   它被抑制同样「无声」，只订 [_activePlayer] 会漏掉淡出方；
+  /// - 订阅按**实例**而非按角色绑定：promote（[_promoteIncoming]）只改
+  ///   [_activePlayer] 指向，两个实例与两条订阅原样有效，因此角色互换后
+  ///   **无需重订阅**（与 [_bindActiveStreams] 相反——那里的 ValueStream
+  ///   按实例回放，必须重绑）。是否「活动角色」在事件处理时动态判断；
+  /// - 辅播放器惰性创建，创建时（[_standbyPlayer]）补订；fork 在平台
+  ///   初始化时会自行 ensure 原生订阅，提前挂 .listen 不会丢事件。
+  void _bindSuppressionObserver(AudioPlayer player, String role) {
+    try {
+      final observer = PlaybackSuppressionObserver(
+        role: role,
+        reasonStream: player.playbackSuppressionReasonStream,
+        context: _suppressionContext,
+      );
+      _suppressionObservers.add(observer);
+    } catch (e) {
+      debugPrint('[Suppression] 订阅失败 role=$role: $e');
+    }
+  }
+
+  /// 批次26: suppression 保守自动暂停开关。**默认 false（只诊断）**。
+  ///
+  /// 决策依据（为什么默认关、以及为什么值得留这个开关）：
+  /// - 「进度条走但没声音」时用户可能误以为在播放而干等。开启后，
+  ///   suppression 持续 [kSuppressionAutoPauseDelay] 且用户无任何播放
+  ///   操作时，才暂停活动播放器，把播放状态改得与听感一致（暂停图标 +
+  ///   进度停走），恢复出声后用户一键即可继续；恢复出声**不会**自动续播
+  ///   （自动 resume 属于激进自动行为，不做）。
+  /// - 默认关闭的原因：铁律要求播放链路内的自动行为默认关且可被用户
+  ///   设置关闭；且 TRANSIENT 型抑制通常几百 ms 内自行恢复，此时暂停
+  ///   反而误伤。仅诊断已覆盖主要排障诉求（对齐 Sonify 参考实现：
+  ///   onPlaybackSuppressionReasonChanged 只记 SUPPRESSION，不自动操作）。
+  void setSuppressionAutoPauseEnabled(bool enabled) {
+    if (_suppressionAutoPauseEnabled == enabled) return;
+    _suppressionAutoPauseEnabled = enabled;
+    if (!enabled) {
+      for (final observer in _suppressionObservers) {
+        observer.noteUserActivity();
+      }
+    }
+    debugPrint('[Suppression] 自动暂停策略${enabled ? '开启' : '关闭'}');
+  }
+
+  /// 批次26: 用户播放操作入口：取消挂起的 suppression 自动暂停倒计时
+  /// （策略语义是「持续抑制且用户无操作」才干预）。
+  void _noteUserPlaybackActivity() {
+    for (final observer in _suppressionObservers) {
+      observer.noteUserActivity();
+    }
+  }
+
+  /// 批次26: suppression 留痕（reason 每次变化，含回到 NONE）。
+  ///
+  /// 对齐既有 [AudioFocus] 取证风格走 debugPrint（DiagnosticLogger 会
+  /// 重定向入库）。字段：reason 值+中文含义、角色 main/aux、activeIsMain、
+  /// 当前歌曲（可得时）、播放态。
+  void _logPlaybackSuppression(String role, int reason) {
+    final activeIsMain = _activePlayer == _mainPlayer;
+    final song = _suppressionSongLabel(role);
+    debugPrint(
+      '[Suppression] reason=$reason(${playbackSuppressionReasonLabel(reason)}) '
+      'role=$role activeIsMain=$activeIsMain '
+      'playing=${_activePlayer.playing}'
+      '${song == null ? '' : ' song=$song'}',
+    );
+  }
+
+  /// 批次26: 从该角色的序列状态取当前歌曲标题（不可得时返回 null）。
+  String? _suppressionSongLabel(String role) {
+    final player = role == 'main' ? _mainPlayer : _auxPlayer;
+    final tag = player?.sequenceState.currentSource?.tag;
+    if (tag is Map) {
+      final title = tag['title'];
+      if (title is String && title.isNotEmpty) return title;
+    }
+    return null;
+  }
+
+  /// 批次26: 保守自动暂停执行点（仅策略开启且持续抑制时由观测器调用）。
+  ///
+  /// 不标记 `_pausedByInterruption`：suppression 解除后**不自动续播**
+  /// （自动 resume 属于激进自动行为，铁律禁止默认开启）。
+  void _autoPauseForSuppression(String role, int reason) {
+    if (!_suppressionAutoPauseEnabled) return;
+    final player = _activePlayer;
+    if (!player.playing) return;
+    debugPrint(
+      '[Suppression] 持续抑制 ${kSuppressionAutoPauseDelay.inSeconds}s '
+      '且用户无操作，自动暂停（role=$role reason=$reason）',
+    );
+    // ignore: discarded_futures
+    player.pause();
+  }
+
   Future<void> init() async {
     await _mainPlayer.setLoopMode(LoopMode.off);
     await _configureAudioSession();
@@ -562,6 +824,10 @@ class AudioService {
     _media3FocusSub = _mainPlayer.audioFocusChangeStream.listen(
       _handleMedia3FocusChange,
     );
+    // 批次26: suppression 观测（主播放器；辅播放器创建时补订）。
+    // 放在 setLoopMode 之后：主播放器平台此时已激活，getter 会立即建立
+    // 原生 EventChannel 订阅。
+    _bindSuppressionObserver(_mainPlayer, 'main');
   }
 
   /// 是否因为音频焦点中断而暂停（pauseAndResume 模式）。
@@ -650,6 +916,8 @@ class AudioService {
   Future<void> play() async {
     // 用户主动播放：清除中断暂停标记（避免后续无关 GAIN 误恢复）
     _pausedByInterruption = false;
+    // 批次26: 用户操作取消 suppression 自动暂停倒计时
+    _noteUserPlaybackActivity();
     await _activePlayer.play();
   }
 
@@ -659,6 +927,8 @@ class AudioService {
     void Function(Object error, StackTrace stackTrace)? onError,
   }) async {
     _pausedByInterruption = false;
+    // 批次26: 用户操作取消 suppression 自动暂停倒计时
+    _noteUserPlaybackActivity();
     final player = _activePlayer;
     await dispatchPlaybackCommand(
       player.play(),
@@ -680,6 +950,8 @@ class AudioService {
   Future<void> pause() async {
     // 用户主动暂停：清除中断暂停标记（中断引起的暂停不在 GAIN 时自动恢复）
     _pausedByInterruption = false;
+    // 批次26: 用户操作取消 suppression 自动暂停倒计时
+    _noteUserPlaybackActivity();
     // 淡化进行中被暂停：先收掉正在淡出的那一路，否则它会继续响。
     // keepVolume：紧接着就 pause，恢复音量只会让淡入中的一路先"升上去"再停
     // （用户实测报的「点暂停时音量突然变大」）。
@@ -696,6 +968,8 @@ class AudioService {
 
   Future<void> seek(Duration position) async {
     abortCrossfade();
+    // 批次26: 用户操作取消 suppression 自动暂停倒计时
+    _noteUserPlaybackActivity();
     await _activePlayer.seek(position);
   }
 
@@ -712,6 +986,8 @@ class AudioService {
     Duration? initialPosition,
   }) async {
     abortCrossfade();
+    // 批次26: 用户操作取消 suppression 自动暂停倒计时
+    _noteUserPlaybackActivity();
     // 音量均衡响度：歌曲未带响度时，回退查「url → 响度」缓存（KugouPlayUrl 解析时记录）
     if (loudnessLufs == null) {
       final cached = loudnessForUrl(url);
@@ -754,6 +1030,8 @@ class AudioService {
     Duration? initialPosition,
   }) async {
     abortCrossfade();
+    // 批次26: 用户操作取消 suppression 自动暂停倒计时
+    _noteUserPlaybackActivity();
     // 每次新建实例：一个 ConcatenatingAudioSource 不能同时 attach 到两个
     // 播放器上，而活动播放器会在交叉淡化时互换。
     final playlistSource = ConcatenatingAudioSource(children: []);
@@ -795,11 +1073,15 @@ class AudioService {
 
   Future<void> seekToNext() async {
     abortCrossfade();
+    // 批次26: 用户操作取消 suppression 自动暂停倒计时
+    _noteUserPlaybackActivity();
     await _activePlayer.seekToNext();
   }
 
   Future<void> seekToPrevious() async {
     abortCrossfade();
+    // 批次26: 用户操作取消 suppression 自动暂停倒计时
+    _noteUserPlaybackActivity();
     await _activePlayer.seekToPrevious();
   }
 
@@ -868,6 +1150,8 @@ class AudioService {
       _auxPlayer = aux;
       // 辅播放器有独立会话，它的 id 一就绪就要通知均衡器去挂第二个实例
       _watchSessionIds(aux);
+      // 批次26: 辅播放器补订 suppression（惰性创建，见 _bindSuppressionObserver）
+      _bindSuppressionObserver(aux, 'aux');
       return aux;
     }
     return _mainPlayer;
@@ -1255,6 +1539,12 @@ class AudioService {
       await sub.cancel();
     }
     _activeSubs.clear();
+    // 批次26: 取消 suppression 观测（含挂起的自动暂停倒计时），不泄漏
+    for (final observer in _suppressionObservers) {
+      // ignore: discarded_futures
+      observer.dispose();
+    }
+    _suppressionObservers.clear();
     for (final sub in _sessionIdSubs) {
       await sub.cancel();
     }
@@ -1264,6 +1554,33 @@ class AudioService {
     await _auxPlayer?.dispose();
     await _mainPlayer.dispose();
   }
+}
+
+/// 批次26: [AudioService] 侧的 [PlaybackSuppressionContext] 实现：
+/// 把观测器的状态查询与副作用出口接到真实播放器上。
+class _AudioServiceSuppressionContext implements PlaybackSuppressionContext {
+  _AudioServiceSuppressionContext(this._service);
+
+  final AudioService _service;
+
+  @override
+  bool get autoPauseEnabled => _service._suppressionAutoPauseEnabled;
+
+  @override
+  bool get isPlaying => _service._activePlayer.playing;
+
+  @override
+  bool isActiveRole(String role) =>
+      role ==
+      (_service._activePlayer == _service._mainPlayer ? 'main' : 'aux');
+
+  @override
+  void onObserve({required String role, required int reason}) =>
+      _service._logPlaybackSuppression(role, reason);
+
+  @override
+  void onAutoPause({required String role, required int reason}) =>
+      _service._autoPauseForSuppression(role, reason);
 }
 
 UriAudioSource createAudioSource({

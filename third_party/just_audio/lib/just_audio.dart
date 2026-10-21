@@ -123,6 +123,10 @@ class AudioPlayer {
   // MD3Music fork: Media3 AudioFocusManager 原始焦点事件（Android）
   final _audioFocusSubject = BehaviorSubject<int>.seeded(0);
   StreamSubscription<int>? _audioFocusSubscription;
+  // MD3Music fork: Media3 playbackSuppressionReason 播放抑制事件（Android）。
+  // Java 侧 AudioPlayer 经 BetterEventChannel 转发 {'suppressionReason': int}。
+  final _playbackSuppressionSubject = BehaviorSubject<int>.seeded(0);
+  StreamSubscription<dynamic>? _playbackSuppressionSubscription;
 
   String? _id;
   final _proxy = _ProxyHttpServer();
@@ -620,6 +624,49 @@ class AudioPlayer {
       // ignore: discarded_futures
       MethodChannel('com.ryanheise.just_audio.methods.$id')
           .invokeMethod('setForceKeepPlaying', {'keepPlaying': pendingKeep});
+    }
+  }
+
+  /// MD3Music fork: 播放抑制（playback suppression）原因事件流（Android）。
+  ///
+  /// 取值为 `androidx.media3.common.Player.PLAYBACK_SUPPRESSION_REASON_*` 常量：
+  /// * `0` = `PLAYBACK_SUPPRESSION_REASON_NONE`：无抑制，正常出声；
+  /// * `1` = `PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS`：
+  ///   瞬时音频焦点丢失，等待焦点回调期间抑制输出；
+  /// * `2` = `PLAYBACK_SUPPRESSION_REASON_UNSUITABLE_AUDIO_OUTPUT`：
+  ///   无合适音频输出设备（如拔掉耳机 / 蓝牙断开）。
+  ///
+  /// 行为语义：suppression != 0 时，ExoPlayer 的 `playWhenReady` 仍可能为
+  /// true、`playbackState` 仍为 READY、position 继续前进，但音频输出被抑制
+  /// （无声）。排查「进度条走但没声音」时优先订阅本流，确认是否为抑制导致。
+  /// 仅 Android 有效，其他平台恒为 0。
+  Stream<int> get playbackSuppressionReasonStream {
+    _ensurePlaybackSuppressionSubscription();
+    return _playbackSuppressionSubject.stream;
+  }
+
+  /// MD3Music fork: 新增 suppression 事件订阅（不改变既有行为）。
+  /// 与 [_ensureAudioFocusSubscription] 同构：播放器真正激活（native 创建）
+  /// 后才订阅；平台切换时由 setPlatform 再次调用以使用新平台 id 重订阅。
+  void _ensurePlaybackSuppressionSubscription() {
+    final id = _id;
+    // 额外允许单元测试（FLUTTER_TEST）订阅，以便用 mock channel 验证事件解码。
+    if ((!_isAndroid() && !_isUnitTest()) || id == null) return;
+    // idle 平台（未播放）没有 native 实现，订阅与补发都会 MissingPlugin；
+    // 播放器真正激活（native 创建）后再订阅。
+    if (_platformValue is _IdleAudioPlayer) return;
+    if (_playbackSuppressionSubscription != null) return;
+    _playbackSuppressionSubscription =
+        EventChannel('com.ryanheise.just_audio.suppression_events.$id')
+            .receiveBroadcastStream()
+            .listen(_onPlaybackSuppressionEvent);
+  }
+
+  /// MD3Music fork: 解码 suppression 事件（Java 侧发送 {'suppressionReason': int}）。
+  /// 非契约 payload 安全忽略，避免异常事件拖垮事件流。
+  void _onPlaybackSuppressionEvent(dynamic event) {
+    if (event is Map && event['suppressionReason'] is int) {
+      _playbackSuppressionSubject.add(event['suppressionReason'] as int);
     }
   }
 
@@ -1882,6 +1929,8 @@ class AudioPlayer {
         _platformValue = platform;
         // MD3Music fork: 平台 id 确定后建立焦点事件订阅（切换平台时自动重订阅）
         _ensureAudioFocusSubscription();
+        // MD3Music fork: 平台 id 确定后建立 suppression 事件订阅（切换平台时自动重订阅）
+        _ensurePlaybackSuppressionSubscription();
         return platform;
       });
       if (checkInterruption() || _disposed) return inactiveResult(platform);
@@ -2007,6 +2056,9 @@ class AudioPlayer {
         // MD3Music fork: 取消焦点事件订阅（id 失效）
         await _audioFocusSubscription?.cancel();
         _audioFocusSubscription = null;
+        // MD3Music fork: 取消 suppression 事件订阅（id 失效）
+        await _playbackSuppressionSubscription?.cancel();
+        _playbackSuppressionSubscription = null;
       }
     }
   }
