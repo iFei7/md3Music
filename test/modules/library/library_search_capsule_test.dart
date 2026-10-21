@@ -107,9 +107,9 @@ void main() {
     expect(find.byIcon(Icons.search), findsWidgets);
   });
 
-  testWidgets('内层歌曲列表滚动后搜索圆钮浮现，点击聚焦面板搜索框（FocusNode 传递链）',
+  testWidgets('搜索圆钮常驻顶栏，点击聚焦面板搜索框（FocusNode 传递链）',
       (tester) async {
-    // 30 首：内层曲目 ListView 可滚，滚动信号驱动搜索钮浮现
+    // 30 首：内层曲目 ListView 可滚（批次 23 起滚动不再影响钮的可见性）
     _seedLocalMusic(count: 30);
     await _pumpLibraryPage(tester);
     // 首帧 + 面板 postFrame（先 unfocus 再做缓存恢复）
@@ -124,12 +124,7 @@ void main() {
     // 未滚动前不聚焦（面板 postFrame 主动 unfocus 过）
     expect(focusNode!.hasFocus, isFalse);
 
-    // 上滑内层歌曲列表 → 搜索圆钮浮现（actionsVisible）
-    await tester.drag(find.byType(ListView), const Offset(0, -200));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-
-    // 点顶栏搜索钮（浮现后可点）
+    // 点顶栏常驻搜索圆钮（无需先滚动列表）
     await tester.tap(find.byKey(_kSearchButtonKey));
     await tester.pump();
 
@@ -137,8 +132,7 @@ void main() {
     expect(focusNode.hasFocus, isTrue);
   });
 
-  testWidgets('空库：搜索圆钮不浮现（无列表可滚），点不到聚焦入口',
-      (tester) async {
+  testWidgets('空库：搜索圆钮仍常驻（点后走无本地音乐提示）', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await _pumpLibraryPage(tester);
     await tester.pump();
@@ -146,18 +140,13 @@ void main() {
 
     // 空库：面板不渲染搜索栏（与线上同口径）
     expect(find.byType(TextField), findsNothing);
-
-    // 空库渲染空态、无列表可滚 → 滚动信号无从产生 → 搜索圆钮保持
-    // 隐藏（actions 区 AnimatedOpacity 目标值 0 + IgnorePointer）
-    final opacity = tester.widget<AnimatedOpacity>(
-      find
-          .ancestor(
-            of: find.byKey(_kSearchButtonKey),
-            matching: find.byType(AnimatedOpacity),
-          )
-          .first,
-    );
-    expect(opacity.opacity, 0);
     expect(find.text('还没有本地音乐'), findsOneWidget);
+
+    // 批次 23：钮常驻可见，点得到（无列表可滚也照样在场）；点击走
+    // _focusLocalSearch 的守卫分支——SnackBar 提示
+    await tester.tap(find.byKey(_kSearchButtonKey));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(tester.takeException(), isNull);
   });
 }

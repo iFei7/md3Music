@@ -30,6 +30,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:md3music/core/theme/app_theme.dart';
 import 'package:md3music/modules/audiobook/audiobook_page.dart';
 import 'package:md3music/modules/recognition/song_recognition_page.dart';
+import 'package:md3music/modules/search/search_page.dart';
 import 'package:md3music/modules/user/favorites_page.dart';
 import 'package:md3music/modules/user/play_history_page.dart';
 import 'package:md3music/providers/favorites_provider.dart';
@@ -40,6 +41,7 @@ import 'package:md3music/providers/player_provider.dart';
 import 'package:md3music/providers/playlist_collection_notifier.dart';
 import 'package:md3music/providers/theme_provider.dart';
 import 'package:md3music/services/kugou_api/kugou_api_client.dart';
+import 'package:md3music/widgets/common/glass_circle_button.dart';
 import 'package:md3music/widgets/common/user_avatar_button.dart';
 
 import '../../test_helpers/fake_secure_storage.dart';
@@ -199,6 +201,19 @@ void main() {
     await pumpPage(tester, const AudiobookPage());
     expect(find.byType(AppBar), findsNothing, reason: '听书页不应再有 AppBar');
     expectUnified(recordGeometry(tester, 'audiobook', '听书'), 'audiobook');
+    // 批次 23：本页无页面内搜索框 → 顶栏搜索圆钮常驻 trailing（与头像
+    // 并排），配方为 GlassCircleButton（与主页同款）
+    final searchButton = find.ancestor(
+      of: find.byTooltip('搜索听书'),
+      matching: find.byType(GlassCircleButton),
+    );
+    expect(searchButton, findsOneWidget,
+        reason: '听书页应有常驻的搜索圆钮（GlassCircleButton）');
+    final searchRect = tester.getRect(searchButton);
+    final avatarRect = tester.getRect(find.byType(UserAvatarButton));
+    expect(searchRect.size, const Size(42, 42), reason: '圆钮 42dp');
+    expect(searchRect.right, lessThanOrEqualTo(avatarRect.left),
+        reason: '搜索圆钮在头像左侧');
   });
 
   testWidgets('播放历史：顶栏与其余导航页同构', (tester) async {
@@ -206,6 +221,37 @@ void main() {
     expectUnified(
       recordGeometry(tester, 'play_history', '播放历史'),
       'play_history',
+    );
+  });
+
+  testWidgets('搜索页：坍缩后顶栏搜索圆钮为 GlassCircleButton（与主页同款）',
+      (tester) async {
+    await pumpPage(tester, const SearchPage());
+
+    // 展开态：坍缩圆钮不在场（胶囊行内的搜索框在场）
+    expect(find.byKey(const ValueKey('search-collapsed-icon')), findsNothing);
+
+    final outerScrollable = tester.state<ScrollableState>(
+      find
+          .descendant(
+            of: find.byType(NestedScrollView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    outerScrollable.position.jumpTo(60);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    // 坍缩态：圆钮在场且为 GlassCircleButton（批次 23 前是裸 IconButton，
+    // 与其余页面圆钮样式不一致）。key 挂在 GlassCircleButton 本体上，
+    // 直接用 widget 类型断言（ancestor 查找器不含自身）。
+    final finder = find.byKey(const ValueKey('search-collapsed-icon'));
+    expect(finder, findsOneWidget);
+    expect(
+      tester.widget<GlassCircleButton>(finder),
+      isA<GlassCircleButton>(),
+      reason: '坍缩搜索钮应为 42dp 圆形液态玻璃（GlassCircleButton）',
     );
   });
 }

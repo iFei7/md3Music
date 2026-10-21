@@ -36,6 +36,7 @@ import 'package:md3music/providers/player_provider.dart';
 import 'package:md3music/providers/playlist_collection_notifier.dart';
 import 'package:md3music/providers/theme_provider.dart';
 import 'package:md3music/services/kugou_api/kugou_api_client.dart';
+import 'package:md3music/widgets/common/glass_circle_button.dart';
 import 'package:md3music/widgets/common/sonify_title_scaffold.dart';
 import 'package:md3music/widgets/common/user_avatar_button.dart';
 
@@ -338,9 +339,27 @@ void main() {
   testWidgets('search：滚动后渐变模糊带与三页同构造（单片 BackdropFilter + tint 兄弟层）', (tester) async {
     await pumpHost(tester, const SearchPage());
 
+    // 顶栏带的那枚 BackdropFilter（按 sigma 唯一定位；批次 23 起坍缩
+    // 态顶栏多了 GlassCircleButton 自带的一枚 LiquidGlassSurface 模糊，
+    // 二者不能混）：栏带 sigma = kSonifyBarBlurSigma，圆钮玻璃 sigma 18
+    // 且只作用于 42dp 圆钮自身区域（ClipOval 裁剪）。
+    final barBlur = find.byWidgetPredicate((w) {
+      if (w is! BackdropFilter) return false;
+      return w.filter ==
+          ui.ImageFilter.blur(
+            sigmaX: kSonifyBarBlurSigma,
+            sigmaY: kSonifyBarBlurSigma,
+          );
+    });
+    expect(
+      barBlur,
+      findsOneWidget,
+      reason: '顶栏渐变带应有且仅有一枚 sigma=kSonifyBarBlurSigma 的模糊',
+    );
+
     // 初始态（outer offset=0）：栏背景不浮现（与 SonifyTitleScaffold 同拍）
     final barOpacityFinder = find.ancestor(
-      of: find.byType(BackdropFilter),
+      of: barBlur,
       matching: find.byType(AnimatedOpacity),
     );
     // 展开态模糊带不可见：AnimatedOpacity 目标值 0（此时带仍在树中，
@@ -375,42 +394,40 @@ void main() {
       reason: '栏背景淡入时长应为 120ms',
     );
 
-    // 单片均匀模糊：全页仅 1 个 BackdropFilter（批次 17 口径）
-    final backdrops = find.byType(BackdropFilter);
+    // 带内单片均匀模糊：sigma 3、child 非 null（SizedBox.expand）
+    // （批次 17 口径；本 finder 已按 sigma 唯一定位到栏带）
     expect(
-      backdrops,
-      findsOneWidget,
-      reason: '搜索页顶栏应为单片模糊（全页仅 1 个 BackdropFilter）',
-    );
-    expect(
-      tester.widget<BackdropFilter>(backdrops.first).filter,
-      ui.ImageFilter.blur(
-        sigmaX: kSonifyBarBlurSigma,
-        sigmaY: kSonifyBarBlurSigma,
-      ),
-      reason: '模糊 sigma 应为 kSonifyBarBlurSigma',
-    );
-    expect(
-      tester.widget<BackdropFilter>(backdrops.first).child,
+      tester.widget<BackdropFilter>(barBlur).child,
       isA<SizedBox>(),
       reason: 'BackdropFilter child 非 null（SizedBox.expand）',
     );
 
-    // 图层纪律：BackdropFilter 不得被 ShaderMask / Opacity 包裹
+    // 图层纪律：栏带模糊不得被 ShaderMask / Opacity 包裹
     // （saveLayer 内嵌模糊失效；AnimatedOpacity 全显不产生 saveLayer）
     expect(
-      find.ancestor(of: backdrops, matching: find.byType(ShaderMask)),
+      find.ancestor(of: barBlur, matching: find.byType(ShaderMask)),
       findsNothing,
     );
     expect(
-      find.ancestor(of: backdrops, matching: find.byType(Opacity)),
+      find.ancestor(of: barBlur, matching: find.byType(Opacity)),
       findsNothing,
+    );
+
+    // 坍缩态圆钮自带玻璃模糊：只存在于 GlassCircleButton 内部
+    // （LiquidGlassSurface sigma 18），与栏带模糊分层互不干扰
+    expect(
+      find.descendant(
+        of: find.byType(GlassCircleButton),
+        matching: find.byType(BackdropFilter),
+      ),
+      findsOneWidget,
+      reason: '坍缩圆钮（GlassCircleButton）自带一枚玻璃模糊',
     );
 
     // tint 叠色层：与模糊层同 Stack 的兄弟层（带内唯一 DecoratedBox），
     // 状态栏锚定渐变（sb=0 退化 stops [0, 1]），surface 系
     final band = find
-        .ancestor(of: backdrops.first, matching: find.byType(ClipRect))
+        .ancestor(of: barBlur, matching: find.byType(ClipRect))
         .last;
     final tint = find.descendant(of: band, matching: find.byType(DecoratedBox));
     expect(tint, findsOneWidget,
@@ -419,7 +436,7 @@ void main() {
             as BoxDecoration)
         .gradient! as LinearGradient;
     final surface =
-        Theme.of(tester.element(backdrops.first)).colorScheme.surface;
+        Theme.of(tester.element(barBlur)).colorScheme.surface;
     expect(tintGradient.begin, Alignment.topCenter);
     expect(tintGradient.end, Alignment.bottomCenter);
     expect(tintGradient.stops, const [0.0, 1.0]);

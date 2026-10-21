@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../providers/kugou_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
+import '../../widgets/common/glass_circle_button.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/common/user_avatar_button.dart';
 import '../../widgets/smart_artwork_image.dart';
@@ -88,20 +89,28 @@ class _AudiobookPageState extends State<AudiobookPage> {
           ? const Scaffold(body: Center(child: M3ELoadingIndicator()))
           : SonifyTitleScaffold(
               title: '听书',
-              trailing: const UserAvatarButton(),
-              actions: [
-                IconButton(
-                  tooltip: '搜索听书',
-                  icon: const Icon(Icons.search),
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const AudiobookSearchPage(),
-                      ),
-                    );
-                  },
-                ),
-              ],
+              // 批次 23：本页无页面内搜索框（不同于首页/本地音乐），搜索
+              // 钮放 actions 槽会「滚动后才浮现」→ 冷启动/未滚动时无入口。
+              // 故与头像并排常驻 trailing；圆钮配方用公共组件
+              // [GlassCircleButton]（与主页/本地音乐/搜索页同款）。
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GlassCircleButton(
+                    icon: Icons.search,
+                    tooltip: '搜索听书',
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const AudiobookSearchPage(),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  const UserAvatarButton(),
+                ],
+              ),
               itemCount: items.length,
               itemBuilder: (context, index) => items[index],
             ),

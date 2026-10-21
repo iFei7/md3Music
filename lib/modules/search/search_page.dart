@@ -20,6 +20,7 @@ import '../../services/kugou_api/kugou_api_client.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../widgets/pinchable_grid_view.dart';
 import '../../widgets/song_list_item.dart';
+import '../../widgets/common/glass_circle_button.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/common/user_avatar_button.dart';
@@ -455,9 +456,12 @@ class _SearchPageState extends State<SearchPage>
           // - 渐变模糊带：单片 BackdropFilter（sigma
           //   kSonifyBarBlurSigma）+ tint 兄弟层（状态栏锚定渐变），
           //   _showBarBackground 驱动 120ms 淡入/回顶消失；
-          // - actions 坍缩搜索图标：胶囊滚完（_collapsed，阈值 52）后
+          // - actions 坍缩搜索圆钮：胶囊滚完（_collapsed，阈值 52）后
           //   在头像左侧浮出，点击 animateTo(0) + 聚焦（批次 19 交互
-          //   不变）；与头像间距 SizedBox(width: 8) 由 _TopBar 承担。
+          //   不变）；批次 23 改为与主页/听书/本地音乐同款的
+          //   [GlassCircleButton]（42dp 圆形液态玻璃，此前为裸
+          //   IconButton，样式与其余页面不统一）；与头像间距
+          //   SizedBox(width: 8) 由 _TopBar 承担。
           Positioned.fill(
             child: SonifyTitleOverlay(
               title: '搜索',
@@ -469,10 +473,10 @@ class _SearchPageState extends State<SearchPage>
                   valueListenable: _collapsed,
                   builder: (context, collapsed, _) {
                     if (!collapsed) return const SizedBox.shrink();
-                    return IconButton(
+                    return GlassCircleButton(
                       key: const ValueKey('search-collapsed-icon'),
                       tooltip: '搜索',
-                      icon: const Icon(Icons.search),
+                      icon: Icons.search,
                       onPressed: _onCollapsedSearchTap,
                     );
                   },

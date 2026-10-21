@@ -9,6 +9,7 @@ import 'package:m3e_core/m3e_core.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/theme/app_theme.dart';
 import '../../widgets/common/cover_rail.dart';
+import '../../widgets/common/glass_circle_button.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
 import '../../widgets/common/user_avatar_button.dart';
@@ -341,21 +342,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
   /// 顶栏玻璃圆钮：42dp 圆形液态玻璃（sonify Title.kt:849-873 材质），
   /// 图标 20dp。用于折叠后的顶栏搜索/识曲按钮。
+  /// 批次 23：实现抽为公共组件 [GlassCircleButton]（听书/本地音乐/搜索页
+  /// 顶栏圆钮同款），此处保留私有包装仅为调用侧零改动。
   Widget _buildGlassCircleButton(IconData icon, VoidCallback onTap) {
-    return LiquidGlassSurface(
-      shape: GlassShape.circle,
-      child: SizedBox(
-        width: 42,
-        height: 42,
-        child: IconButton(
-          // 顶满玻璃圆钮（默认 48dp 会溢出 42dp 容器）
-          constraints: const BoxConstraints.tightFor(width: 42, height: 42),
-          padding: EdgeInsets.zero,
-          icon: Icon(icon, size: 20),
-          onPressed: onTap,
-        ),
-      ),
-    );
+    return GlassCircleButton(icon: icon, onPressed: onTap);
   }
 
   /// 滚动后顶栏动作按钮：头像左侧的搜索圆钮 + 识曲圆钮，
