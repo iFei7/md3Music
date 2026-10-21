@@ -305,7 +305,7 @@ void main() {
       expect(tintGradient.colors.last, surface.withValues(alpha: 0));
     });
 
-    testWidgets('渐变模糊带 blur sigma 3（单片第三档）且叠色为 surface 系',
+    testWidgets('渐变模糊带 blur sigma 18（dock 配方）且叠色为 surface 系',
         (tester) async {
       final (widget, controller) = _host(title: '发现');
       await tester.pumpWidget(widget);
@@ -315,9 +315,9 @@ void main() {
       await tester.pump();
 
       // 材质来源：LiquidGlassSurface dock 配方（blurSigma 18 + cs.surface
-      // 叠色）；批次 17 用户反馈 3 切片（18/9/3）分界线明显、非线性，
-      // 退化为单片并取第三档（最弱档）sigma 3——需要加强只改此常量
-      expect(kSonifyBarBlurSigma, 3);
+      // 叠色）；批次 17 退化为单片（σ3），批次 25 因不透明白卡内容滚过时
+      // σ3 糊不出磨砂结构（顶栏观感=实色条）回归 dock 同档 18
+      expect(kSonifyBarBlurSigma, 18);
       // 单带收敛后的状态栏区域叠色单值（双带合并，反馈③）
       expect(kSonifyBarTopAlpha, 0.42);
 

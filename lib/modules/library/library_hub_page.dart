@@ -34,7 +34,7 @@ import '../user/cloud_music_page.dart';
 import '../user/favorites_page.dart';
 import '../user/play_history_page.dart';
 import '../user/purchased_page.dart';
-import 'library_page.dart' show LibraryPage, showLibraryScanMenu;
+import 'library_page.dart' show LibraryPage;
 
 /// 音乐库一级页（IA 改版：资产入口聚合中枢）。
 ///
@@ -578,27 +578,14 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
       title: '音乐库',
       itemCount: 1,
       // 顶栏右侧：用户头像常驻（trailing 不随滚动淡入淡出，四页统一
-      // 形态）；扫描钮走 actions（栏体浮现后淡入）。批次 19：移除
-      // 常驻搜索圆钮，全局搜索由底部导航常驻搜索 tab 承载。
+      // 形态）。批次 19：移除常驻搜索圆钮，全局搜索由底部导航常驻搜索
+      // tab 承载；批次 25：移除 actions 扫描钮（用户：上滑顶栏不需要
+      // 扫描按钮）——扫描入口收敛为本地音乐页 trailing 扫描钮 +
+      // 扫描状态页。
       trailing: const UserAvatarButton(),
       // 批次 24：内层列表滚动信号驱动栏体渐变带浮现（本页外层骨架
       // 不滚动，offset>0 条件永不满足，与首页不一致）。
       barBackgroundVisible: _contentScrolled,
-      actions: [
-        IconButton(
-          tooltip: '扫描音乐',
-          icon: library.isScanning
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.add),
-          onPressed: library.isScanning
-              ? null
-              : () => showLibraryScanMenu(context),
-        ),
-      ],
       itemBuilder: (context, index) {
         final media = MediaQuery.of(context);
         // 固定高度 = 视口 − 状态栏 − 标题区（8+36+8，与占位 item 同口径）

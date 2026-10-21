@@ -23,10 +23,10 @@ import 'package:material_ui/material_ui.dart';
 /// ```
 ///
 /// 过滤规则：只认 `axis == vertical` 的 ScrollUpdate/End 通知（TabBarView
-/// 自身 PageView 的横滑通知轴为水平，天然排除；嵌套列表的 `depth > 0`
-/// 不是必须条件——外层骨架的通知由骨架自己的监听器处理，不会冒泡到本
-/// 组件内部，见 [ScrollNotification] 的冒泡方向）。列表回顶
-/// （pixels <= 0，含顶部橡皮筋负数）时信号复位为 false。
+/// 自身 PageView 的横滑通知轴为水平，天然排除；**不按 depth 过滤**——
+/// 批次 21 本地音乐页曾按 `depth > 0` 过滤，真机上圆钮不浮现而 hub 同款
+/// 无 depth 过滤的路径正常（用户批次 25 反馈），统一收口到本组件后去掉了
+/// 该变量）。列表回顶（pixels <= 0，含顶部橡皮筋负数）时信号复位为 false。
 class ContentScrollSignal extends StatelessWidget {
   const ContentScrollSignal({
     super.key,
@@ -34,26 +34,30 @@ class ContentScrollSignal extends StatelessWidget {
     required this.child,
   });
 
-  /// 「已离开顶部」信号（true = 浮现）。生命周期归宿主页面。
-  final ValueNotifier<bool> signal;
+/// 「已离顶部」信号（true = 浮现）。生命周期归宿主页面。
+/// 可空：为 null（嵌入形态无顶栏可驱动，如收藏页「本地」tab）时
+/// 本组件退化为直通 child、不挂监听器（批次 25）。
+final ValueNotifier<bool>? signal;
 
-  /// 业务区子树（通常为固定高的 item 内容）。
-  final Widget child;
+/// 业务区子树（通常为固定高的 item 内容）。
+final Widget child;
 
-  @override
-  Widget build(BuildContext context) {
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification is ScrollUpdateNotification ||
-            notification is ScrollEndNotification) {
-          final scrolled =
-              notification.metrics.axis == Axis.vertical &&
-              notification.metrics.pixels > 0;
-          if (signal.value != scrolled) signal.value = scrolled;
-        }
-        return false;
-      },
-      child: child,
-    );
-  }
+@override
+Widget build(BuildContext context) {
+  final signal = this.signal;
+  if (signal == null) return child;
+  return NotificationListener<ScrollNotification>(
+    onNotification: (notification) {
+      if (notification is ScrollUpdateNotification ||
+          notification is ScrollEndNotification) {
+        final scrolled =
+            notification.metrics.axis == Axis.vertical &&
+            notification.metrics.pixels > 0;
+        if (signal.value != scrolled) signal.value = scrolled;
+      }
+      return false;
+    },
+    child: child,
+  );
+}
 }

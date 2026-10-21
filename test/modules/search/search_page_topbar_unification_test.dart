@@ -343,18 +343,22 @@ void main() {
     // 态顶栏多了 GlassCircleButton 自带的一枚 LiquidGlassSurface 模糊，
     // 二者不能混）：栏带 sigma = kSonifyBarBlurSigma，圆钮玻璃 sigma 18
     // 且只作用于 42dp 圆钮自身区域（ClipOval 裁剪）。
-    final barBlur = find.byWidgetPredicate((w) {
-      if (w is! BackdropFilter) return false;
-      return w.filter ==
-          ui.ImageFilter.blur(
-            sigmaX: kSonifyBarBlurSigma,
-            sigmaY: kSonifyBarBlurSigma,
-          );
-    });
+    // 栏带模糊层按 key 定位：批次 25 起栏带 σ18 与玻璃圆钮（
+    // LiquidGlassSurface 自带 σ18 BackdropFilter）同值，不能再按 sigma
+    // 唯一区分。
+    final barBlur = find.byKey(const ValueKey('sonify_bar_blur'));
     expect(
       barBlur,
       findsOneWidget,
-      reason: '顶栏渐变带应有且仅有一枚 sigma=kSonifyBarBlurSigma 的模糊',
+      reason: '顶栏渐变带应有且仅有一枚模糊层（key sonify_bar_blur）',
+    );
+    expect(
+      tester.widget<BackdropFilter>(barBlur).filter,
+      ui.ImageFilter.blur(
+        sigmaX: kSonifyBarBlurSigma,
+        sigmaY: kSonifyBarBlurSigma,
+      ),
+      reason: '栏带模糊 sigma 应为 kSonifyBarBlurSigma（dock 配方 18）',
     );
 
     // 初始态（outer offset=0）：栏背景不浮现（与 SonifyTitleScaffold 同拍）
@@ -394,8 +398,8 @@ void main() {
       reason: '栏背景淡入时长应为 120ms',
     );
 
-    // 带内单片均匀模糊：sigma 3、child 非 null（SizedBox.expand）
-    // （批次 17 口径；本 finder 已按 sigma 唯一定位到栏带）
+    // 带内单片均匀模糊：child 非 null（SizedBox.expand），sigma 读常量
+    // （批次 25 起 = dock 配方 18；本 finder 已按 sigma 唯一定位到栏带）
     expect(
       tester.widget<BackdropFilter>(barBlur).child,
       isA<SizedBox>(),

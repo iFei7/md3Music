@@ -321,8 +321,9 @@ void main() {
     expect(find.byIcon(Icons.search), findsNothing);
     // 右上角用户头像钮常驻（四页顶栏完全统一）
     expect(find.byType(UserAvatarButton), findsOneWidget);
-    // 扫描钮保留（原 FAB 职责）
-    expect(find.byIcon(Icons.add), findsOneWidget);
+    // 批次25：顶栏扫描钮已移除（用户：上滑不需要）——hub 内 Icons.add
+    // 一处都不到；扫描入口收敛为本地音乐页 trailing + 扫描状态页
+    expect(find.byIcon(Icons.add), findsNothing);
     // 旧四段结构整体移除：无分段控件、无 PageView
     expect(find.byType(SonifySegmentedControl), findsNothing);
     expect(find.byType(PageView), findsNothing);

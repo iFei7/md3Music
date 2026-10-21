@@ -460,10 +460,14 @@ class _PinnedLargeTitle extends StatelessWidget {
 /// 叠色统一 cs.surface 系，均取自 `LiquidGlassSurface`
 /// （lib/widgets/common/liquid_glass_surface.dart，默认参数 = 悬浮 Dock
 /// 玻璃配方：blurSigma 18 + surface α0.12 叠色）。批次 17 起：用户反馈
-/// 3 切片（18/9/3）分界线明显、非线性，退化为**单片第三档强度** sigma 3
-/// ——第三档本就是切片配方里的最弱档，单片化后观感最接近原底部两档的
-/// 柔和段；层次感交给 tint 渐变（顶部浓 → 底缘渐隐）。需要加强模糊只改
-/// [kSonifyBarBlurSigma] 一个常量。叠色 alpha 历程：批次 11/12 逐步
+/// 3 切片（18/9/3）分界线明显、非线性，退化为**单片**；批次 25 起模糊
+/// 强度回归 dock 同档 **sigma 18**（与 LiquidGlassSurface 完全同配方，
+/// 无切片分界）——σ3 弱模糊在不透明白卡内容（搜索结果/音乐库/设置）
+/// 滚过时糊不出磨砂结构，顶栏观感退化为一条实色（用户反馈「上滑后
+/// 变实色条」）；σ18 让内容边缘/封面滚过时呈现明显磨砂玻璃感，与主页
+/// （半透明玻璃卡内容）观感拉齐。层次感交给 tint 渐变（顶部浓 → 底缘
+/// 渐隐）。需要调整模糊只改 [kSonifyBarBlurSigma] 一个常量。叠色 alpha
+/// 历程：批次 11/12 逐步
 /// 下调（0.7 → 0.40 → 0.32）均因用户反馈"偏实/遮罩感"；双带合并后
 /// 收敛为状态栏区域单值 α0.42（[kSonifyBarTopAlpha]）+ 自状态栏下缘起
 /// 线性淡出。仍高于 dock 的 0.12：顶栏是全宽可读性带、固定大标题直接
@@ -497,8 +501,8 @@ class _TopBar extends StatelessWidget {
       child: Stack(
         children: [
           // 渐变模糊带：Positioned.fill 覆盖「状态栏 + 栏体」全带（y=0 起），
-          // 滚动即整体淡入（120ms）；单片均匀模糊（批次 17：3 切片 18/9/3
-          // 分界线明显/非线性，退化为单片第三档 sigma 3）。
+          // 滚动即整体淡入（120ms）；单片均匀模糊（批次 25 起回归 dock
+          // 配方 σ18，此前 3 切片/σ3 历程见常量文档）。
           // 注意：AnimatedOpacity 全显（opacity=1）时不产生 saveLayer，
           // BackdropFilter 模糊不受影响（见类文档图层纪律）。
           Positioned.fill(
@@ -522,9 +526,13 @@ class _TopBar extends StatelessWidget {
               child: ClipRect(
                 child: Stack(
                   children: [
-                    // ① 单片模糊层（全带同一 sigma，铺满整带）
+                    // ① 单片模糊层（全带同一 sigma，铺满整带）。
+                    // key 'sonify_bar_blur'：σ 与 LiquidGlassSurface 玻璃
+                    // 钮（GlassCircleButton 自带 σ18 BackdropFilter）同值
+                    // 后，测试无法再按 sigma 唯一定位栏带，改按 key。
                     Positioned.fill(
                       child: BackdropFilter(
+                        key: const ValueKey('sonify_bar_blur'),
                         filter: ImageFilter.blur(
                           sigmaX: kSonifyBarBlurSigma,
                           sigmaY: kSonifyBarBlurSigma,
@@ -638,14 +646,15 @@ class _TopBar extends StatelessWidget {
   }
 }
 
-/// 顶栏渐变模糊带的模糊 sigma：**单片第三档强度**（用户批次 17）。
+/// 顶栏渐变模糊带的模糊 sigma：**单片 dock 配方**（批次 25 起）。
 ///
-/// 口径：3 切片（18/9/3）真机三段分界线明显、非线性，退化为单片；
-/// 取切片配方里的第三档（最弱档）——单片化后观感最接近原底部两档的
-/// 柔和段，层次由 tint 渐变（状态栏全强度 → 底缘渐隐）提供。需要
-/// 加强模糊只改此一个常量（如 9 = 原中档、18 = 原顶档/dock 配方值）。
-/// 非私有：供 widget 测试断言（见 test/widgets/sonify_title_scaffold_test.dart）。
-const double kSonifyBarBlurSigma = 3;
+/// 口径：3 切片（18/9/3）真机三段分界线明显、非线性，批次 17 退化为
+/// 单片（σ3）；批次 25 因「不透明白卡内容（搜索/音乐库/设置）滚过时
+/// σ3 糊不出磨砂结构、顶栏观感退化为实色条」（用户反馈）回归 dock 同
+/// 档 18（与 LiquidGlassSurface 同配方、无切片分界）。层次由 tint 渐变
+/// （状态栏全强度 → 底缘渐隐）提供。非私有：供 widget 测试断言
+/// （见 test/widgets/sonify_title_scaffold_test.dart）。
+const double kSonifyBarBlurSigma = 18;
 
 /// 顶栏渐变模糊带在状态栏区域的叠色 alpha：状态栏条全强度覆盖，
 /// 自状态栏下缘起对栏体线性淡出，至带底缘严格 alpha 0（渐变语义见

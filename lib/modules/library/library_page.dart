@@ -10,6 +10,7 @@ import '../../core/utils/app_toast.dart';
 import '../../providers/library_provider.dart';
 import '../../providers/local_favorites_provider.dart';
 import '../player/full_player_route.dart';
+import '../../widgets/common/content_scroll_signal.dart';
 import '../../widgets/common/glass_circle_button.dart';
 import '../../widgets/common/liquid_glass_surface.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
@@ -365,27 +366,17 @@ class _LibraryMusicPanelState extends State<LibraryMusicPanel>
           ),
         ],
         Expanded(
-          // 内层（TabBarView 页面内）纵向列表滚动信号上传：供宿主顶栏
-          // 搜索圆钮 + 渐变模糊带随滚动浮现（批次 24，见
-          // [LibraryPage] 类文档）。
-          // 过滤条件：depth > 0 且 axis == vertical——TabBarView 自身
-          // PageView 的横滑通知 depth==0（且轴为水平），天然被排除；
-          // 空库/扫描态无可滚列表、不发通知，信号保持 false。
-          // 已知取舍：切 tab 不重置信号——旧 tab 滚过后切到新 tab
-          // （列表在顶）时圆钮可能残留可见，属可接受行为（避免为
-          // 重置引入跨 tab 的滚动状态侦听）。
-          child: NotificationListener<ScrollNotification>(
-            onNotification: (notification) {
-              if (notification.depth > 0 &&
-                  notification.metrics.axis == Axis.vertical) {
-                final scrolled = notification.metrics.pixels > 0;
-                final signal = widget.listScrolled;
-                if (signal != null && signal.value != scrolled) {
-                  signal.value = scrolled;
-                }
-              }
-              return false;
-            },
+          child: ContentScrollSignal(
+            // 内层（TabBarView 页面内）纵向列表滚动信号上传：供宿主顶栏
+            // 搜索圆钮 + 渐变模糊带随滚动浮现（批次 24，见
+            // [LibraryPage] 类文档）。批次 25：从自制 depth>0 监听器统一
+            // 到公共泵 ContentScrollSignal（与音乐库 hub 同款——真机上
+            // hub 路径正常、depth>0 路径圆钮不浮现，去掉该变量）。
+            // 空库/扫描态无可滚列表、不发通知，信号保持 false。
+            // 已知取舍：切 tab 不重置信号——旧 tab 滚过后切到新 tab
+            // （列表在顶）时圆钮可能残留可见，属可接受行为（避免为
+            // 重置引入跨 tab 的滚动状态侦听）。
+            signal: widget.listScrolled,
             child: isScanning && !hasMusic
                 ? _buildScanningState(colorScheme)
                 : !hasMusic
