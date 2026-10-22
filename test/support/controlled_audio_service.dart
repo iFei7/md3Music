@@ -20,6 +20,10 @@ class ControlledAudioService {
   Completer<void>? pauseCompleter;
   Completer<void>? pauseStarted;
   Object? nextSetUrlError;
+  /// 批次28：持续生效的 setUrl 失败注入（每次装载都抛出），用于验证
+  /// 「恢复装载与自动重解析装载接连失败」的多轮失败场景；与一次性的
+  /// [nextSetUrlError] 并存，一次性错误优先。
+  Object? persistentSetUrlError;
   bool playing = false;
   bool autoResumeAfterLoad = false;
   bool get isCrossfading => false;
@@ -91,7 +95,7 @@ class ControlledAudioService {
     Duration? initialPosition,
   }) {
     sourceInitialPositions.add(initialPosition);
-    final error = nextSetUrlError;
+    final error = nextSetUrlError ?? persistentSetUrlError;
     nextSetUrlError = null;
     if (error != null) return Future<void>.error(error);
     return _beginLoad();

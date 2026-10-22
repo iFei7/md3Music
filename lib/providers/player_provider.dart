@@ -1451,19 +1451,15 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       // 装载期间的回退采样由 [_positionRewindGate] 抑制。
       _updatePosition(state.position);
 
-      // 冷启动时清除在线歌曲的旧 URL（酷狗播放链接有时效性，上次会话的 URL 大概率已过期）
-      // 强制 _resolveAndPlayCurrentSong 重新通过 API 获取有效链接。
-      // 批次27：必须用 clearUrl: true——copyWith(url: null) 走 `url ?? this.url`
-      // null 合并语义是 no-op，旧 URL 实际从未被清掉，续播直接装载过期链接
-      // 导致装载失败（再叠加失败出口静默，就是「续播进度走但没声音」）。
-      if (_currentSong != null && _currentSong!.isOnline) {
-        _currentSong = _currentSong!.copyWith(clearUrl: true);
-      }
-      for (int i = 0; i < _playlist.length; i++) {
-        if (_playlist[i].isOnline) {
-          _playlist[i] = _playlist[i].copyWith(clearUrl: true);
-        }
-      }
+      // 批次28：恢复播放流**保留旧 URL 直接装载**（对齐 Sonify 的持久化
+      // URL 缓存设计，见 sonify-ref KugouRepository.kt:1902-2000——播放 URL
+      // 带 TTL 持久化到磁盘，重启后在 TTL 内直接复用、零网络请求）。旧 URL
+      // 大多数时候仍有效（v5.9.20 时代用户能听到续播正是这个原因），且直接
+      // 装载不需要登录/token/本地服务器就绪——冷启动早期这三者常未就绪，
+      // 强制重新解析反而每次冷启动都失败（批次27 真机反馈）。装载失败
+      // （403 等）再走下方一轮自动重解析兜底。
+      // 注意：批次27 曾在此无条件 clearUrl 强制重解析，真机验证每次冷启动
+      // 都因登录/服务器未就绪而失败（进度清零 + 提示重试），故撤销。
 
       // just_audio 的 LoopMode 始终设 off：项目通过 setUrl 加载单一 AudioSource，
       // LoopMode.one/all 在单 source 下会自动循环且不触发 completed 事件，
@@ -1482,8 +1478,41 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         play: false,
       );
       _ensureNotDisposed();
+      // 批次28：旧 URL 装载失败（非 canceled）→ 自动 clearUrl + 重新解析 +
+      // 装载一轮（对齐 Sonify 的 lastGood 兜底之外的重解析路径）。只补这一
+      // 轮、不无限重试：再失败就落回批次27 的既有收敛（_playbackNotReady +
+      // 哨兵文案 kSilentResolveErrorText，仍不武装自动重试）。重入防护走
+      // _retryFailedFlight 并发门：与其他恢复流（网络恢复/回前台）互斥，
+      // 门被占时直接放弃本轮自动重解析（用户仍可手动重试）。
       if (result.succeeded) {
         _updatePosition(state.position);
+      } else if (result != _PlaybackRequestResult.canceled) {
+        final token = _retryFailedFlight.tryStart();
+        if (token != null) {
+          try {
+            if (_currentSong != null && _currentSong!.isOnline) {
+              _prefetchedUrlQuality.remove(_currentSong!.id);
+              _currentSong = _currentSong!.copyWith(clearUrl: true);
+              if (_currentIndex >= 0 && _currentIndex < _playlist.length) {
+                _playlist[_currentIndex] = _currentSong!;
+              }
+            }
+            final retry = await _resolveAndPlayCurrentSong(
+              seekTo: state.position,
+              play: false,
+            );
+            _ensureNotDisposed();
+            if (retry.succeeded) {
+              _updatePosition(state.position);
+              // 批次28：重试装载成功即播放流真正就绪——清掉首轮失败残留的
+              // 哨兵文案与未就绪标志，避免「已在装载成功后仍挂着重试提示」。
+              _playbackNotReady = false;
+              _resolveError = null;
+            }
+          } finally {
+            _retryFailedFlight.releaseIfOwned(token);
+          }
+        }
       }
       // 冷启动恢复完成即下发一次媒体通知元数据（含封面）。此前首次下发要等
       // playingStream/切歌事件，封面加载完全依赖当时的临时网络下载，在线封面
@@ -4236,14 +4265,18 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       _updateNotification();
     } catch (_) {}
     if (needsReload) {
-      // 批次27：此处**不**再清旧 URL。冷启动路径的过期链接已由
-      // [_restoreState] 的 clearUrl 真正清掉（song.url == null 自然走解析）；
-      // 交互路径的 URL 是刚解析的、大概率仍有效，无条件清会多一次 API
-      // 调用并改变既有语义。真正过期导致的装载失败会再次收敛进
-      // [_markResolveFailure]，用户主动重试走 [retryCurrentPlayback]
-      // （那里自带 clearUrl，先例见 _retryFailedPlayback）。
+      // 批次27：此处**不**清旧 URL——恢复路径的旧 URL 已由 [_restoreState]
+      // 直接装载（批次28 起，见彼处注释）；交互路径的 URL 是刚解析的、大概率
+      // 仍有效，无条件清会多一次 API 调用并改变既有语义。真正过期导致的装载
+      // 失败会再次收敛进 [_markResolveFailure]，用户主动重试走
+      // [retryCurrentPlayback]（那里自带 clearUrl，先例见 _retryFailedPlayback）。
+      // 批次28：reload 必须带 seekTo: _position——这是「重试丢进度 + 进度
+      // 清零」的直接根因：不带 seekTo 时装载成功从 0 开始播，随后的
+      // _saveState() 把 0 写进持久化、覆盖真实进度。带上后续播从上次进度
+      // 继续（_setUrlAndPlay 走 initialPosition 平台一次性定位）。
       final result = await _resolveAndPlayCurrentSong(
         playbackRequest: playbackRequest,
+        seekTo: _position,
       );
       if (!_isPlaybackRequestCurrent(playbackRequest) || _isDisposed) return;
       if (!result.succeeded) {
