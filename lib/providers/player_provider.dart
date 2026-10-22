@@ -67,6 +67,17 @@ enum SleepTimerMode {
 
 const Duration kAudioSourceLoadDeadline = Duration(seconds: 15);
 
+/// 批次27：冷启动静默恢复（`_resolveAndPlayCurrentSong(play: false)`）装载
+/// 失败时的提示文案。
+///
+/// 与交互失败的 [_resolveErrorText] 文案分开是有意的：本文案同时是「不武装
+/// 自动重试」的哨兵——[_retryFailedPlayback] 与后台兜底定时器见到它就直接
+/// 返回。静默失败没有用户播放意图，若按普通失败武装自动重试，网络恢复/回
+/// 前台时会在后台直接起播，属于新的自动播放行为。用户点「重试」走
+/// [PlayerProvider.retryCurrentPlayback]（先清 _resolveError 再以 play=true
+/// 重新解析），届时失败即回到普通交互失败语义。
+const String kSilentResolveErrorText = '上次播放的歌曲暂时无法播放，点击重试';
+
 enum _PlaybackRequestCancellationSource {
   userPause,
   seekGesturePause,
@@ -125,6 +136,9 @@ String? safePlaybackErrorMessage(String? error) {
     '播放恢复失败，请稍后重试' => '播放恢复失败，请重试',
     '无法获取云盘播放链接' => '无法获取云盘播放链接，请重试',
     '音频引擎尚未就绪' => '播放器尚未就绪，请重试',
+    // 批次27：静默恢复文案原样透出。默认分支会改写成「播放失败，请重试」，
+    // 丢失「上次播放/点击重试」的语境。
+    kSilentResolveErrorText => kSilentResolveErrorText,
     _ => '播放失败，请重试',
   };
 }
@@ -193,11 +207,17 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// 给平台音源装载设用户等待截止；超时不假装取消原生IO，迟到结算单独记账。
+  ///
+  /// [silentFailure]：装载失败是否按静默路径（冷启动恢复 `play=false`）收敛——
+  /// true 时 [_resolveError] 写非打扰的哨兵文案 [kSilentResolveErrorText] 且不
+  /// 武装自动重试（该路径没有用户播放意图，后台自动重试等于新的自动播放行为）；
+  /// false（默认，交互播放路径）保持既有的「播放失败，请重试」。
   Future<bool> _runAudioSourceLoad(
     Future<void> Function() load, {
     required int? request,
     required Song? song,
     String entry = 'player_provider',
+    bool silentFailure = false,
   }) async {
     final timer = Stopwatch()..start();
     _logPlaybackEvent('load.begin', request: request, song: song, entry: entry);
@@ -280,8 +300,17 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         _completionReadyRequest = null;
         _isPlaying = false;
         _isResolvingUrl = false;
-        _playbackNotReady = error is AudioSourceLoadDeadlineExceeded;
-        _resolveError = '播放失败，请重试';
+        // 批次27：装载失败（含非超时的平台异常）一律标记「播放流未就绪」。
+        // 原实现只有截止超时置位，其他平台异常漏置：后续 resume() 的
+        // needsReload 判 false，play() 直接打到没有可用音源的播放器上——
+        // 不播、无输出、通知栏不显示，而 Dart 侧 _isPlaying 已乐观置真，
+        // 用户看到「播放中但没声音」。置位后 resume() 会走重新解析分支。
+        // 文案按 silentFailure 分流：静默路径不武装自动重试（见
+        // [_retryFailedPlayback] 的哨兵门控）。
+        _playbackNotReady = true;
+        _resolveError = silentFailure
+            ? kSilentResolveErrorText
+            : '播放失败，请重试';
         notifyListeners();
         try {
           _updateNotification();
@@ -1124,7 +1153,13 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 仅当存在失败标记（[_resolveError] 非空）且未在播放/解析中时触发，
   /// 避免打扰用户主动暂停的播放。成功后停止后台兜底重试定时器。
   Future<void> _retryFailedPlayback() async {
-    if (_resolveError == null) return;
+    // 批次27：静默恢复失败（文案哨兵 kSilentResolveErrorText）不武装自动
+    // 重试——冷启动失败没有用户播放意图，后台/网络恢复时自动重试会直接
+    // 起播，属于新的自动播放行为。用户主动点重试走 retryCurrentPlayback
+    // （先清 _resolveError 再以 play=true 重新解析），不受此门控影响。
+    if (_resolveError == null || _resolveError == kSilentResolveErrorText) {
+      return;
+    }
     if (_currentIndex < 0 || _playlist.isEmpty) return;
     if (_isPlaying ||
         _isResolvingUrl ||
@@ -1212,13 +1247,20 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 后台失败兜底重试：App 在后台且当前歌曲加载失败时，周期性重试直到成功
   /// 或有限预算耗尽。回前台会取消计时并开启新的恢复窗口。
   void _startRetryFailedTimer() {
-    if (_resolveError == null || _retryFailedTimer != null) return;
+    // 批次27：静默恢复失败同样不启动后台兜底定时器（同 _retryFailedPlayback
+    // 的门控理由：无用户播放意图的后台自动重试等于新的自动播放行为）。
+    if (_resolveError == null ||
+        _resolveError == kSilentResolveErrorText ||
+        _retryFailedTimer != null) {
+      return;
+    }
     _scheduleNextFailedRetry(_currentSong?.id);
   }
 
   void _scheduleNextFailedRetry(String? songId) {
     if (!_isAppBackgrounded ||
         _resolveError == null ||
+        _resolveError == kSilentResolveErrorText ||
         songId == null ||
         _retryFailedTimer != null) {
       return;
@@ -1410,13 +1452,16 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       _updatePosition(state.position);
 
       // 冷启动时清除在线歌曲的旧 URL（酷狗播放链接有时效性，上次会话的 URL 大概率已过期）
-      // 强制 _resolveAndPlayCurrentSong 重新通过 API 获取有效链接
+      // 强制 _resolveAndPlayCurrentSong 重新通过 API 获取有效链接。
+      // 批次27：必须用 clearUrl: true——copyWith(url: null) 走 `url ?? this.url`
+      // null 合并语义是 no-op，旧 URL 实际从未被清掉，续播直接装载过期链接
+      // 导致装载失败（再叠加失败出口静默，就是「续播进度走但没声音」）。
       if (_currentSong != null && _currentSong!.isOnline) {
-        _currentSong = _currentSong!.copyWith(url: null);
+        _currentSong = _currentSong!.copyWith(clearUrl: true);
       }
       for (int i = 0; i < _playlist.length; i++) {
         if (_playlist[i].isOnline) {
-          _playlist[i] = _playlist[i].copyWith(url: null);
+          _playlist[i] = _playlist[i].copyWith(clearUrl: true);
         }
       }
 
@@ -3796,6 +3841,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         ),
         request: request,
         song: song,
+        // 批次27：playAfter=false 即冷启动恢复等静默准备路径（本方法的
+        // playAfter 由 _resolveAndPlayCurrentSongImpl 的 play 透传），装载
+        // 失败按静默路径收敛（哨兵文案 + 不武装自动重试）。
+        silentFailure: !playAfter,
       );
       if (!loaded) {
         await _reassertUserPauseAfterCanceledLoad(request);
@@ -3859,7 +3908,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         _isPlaying = false;
         _isResolvingUrl = false;
         _playbackNotReady = false;
-        _resolveError = '播放失败，请重试';
+        // 批次27：文案按 silentFailure 同规则分流（静默路径不武装自动重试）。
+        _resolveError = playAfter
+            ? '播放失败，请重试'
+            : kSilentResolveErrorText;
         notifyListeners();
         try {
           _updateNotification();
@@ -4125,8 +4177,46 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// 批次27：播放器客观状态兜底——当前是否没有可播放的音源
+  /// （对应 ExoPlayer STATE_IDLE）。
+  ///
+  /// 为什么需要这层兜底：[_playbackNotReady] / [_isResolvingUrl] 是事件
+  /// 驱动的状态标志，可能因各种时序漏置——冷启动恢复失败时播放器从未装载
+  /// 过音源，平台不会主动播报状态，一个 playerState 事件都不会来，标志全部
+  /// 停留在初始 false。此时若只信标志，`play()` 只是空操作（不播、无输出、
+  /// Media3 通知不显示），而 Dart 侧 `_isPlaying` 已乐观置真——正是「进度条
+  /// 走但没声音」的根因。播放器实例的客观状态（有没有音源）才是最终真相，
+  /// 与标志取或。
+  ///
+  /// 判据选型：服务级 `processingState == idle`（just_audio 语义：没有装载
+  /// 任何音源时为 idle，与 ExoPlayer STATE_IDLE 一一对应），而非
+  /// `sequenceState.currentSource == null`——
+  /// - 装载失败后 sequence 已先于平台装载广播，currentSource 依然非空，
+  ///   反而漏掉「失败后」这一态；idle 则覆盖「从未装载」与「失败回到 idle」；
+  /// - 服务级 getter 读的是活动播放器（交叉淡化换手后跟随新歌），与
+  ///   playCommand 的下发目标一致；
+  /// - `stop()` 后 sequence 保留但平台回 idle，此时同样无法直接出声，判为
+  ///   需重新装载是正确的；本 App 的 stop() 调用均伴随清空当前歌曲
+  ///   （clearPlaylist / 队列删空），不会误伤正常 resume。
+  bool _playerHasNoLoadedSource() {
+    final service = _audioService;
+    if (service == null) return false;
+    try {
+      return service.processingState == just_audio.ProcessingState.idle;
+    } catch (_) {
+      // 动态类型探测失败（测试替身未实现该 getter 等）时不阻断主流程，
+      // 退回纯标志判定。
+      return false;
+    }
+  }
+
   Future<void> resume() async {
-    final needsReload = _playbackNotReady || _isResolvingUrl;
+    // needsReload 三重判据（批次27）：
+    // 1. 状态标志：_playbackNotReady / _isResolvingUrl（事件驱动，可能漏置）；
+    // 2. 播放器客观状态兜底：_playerHasNoLoadedSource()——没有音源时
+    //    play() 是空操作，必须改走重新解析/装载分支。
+    final needsReload =
+        _playbackNotReady || _isResolvingUrl || _playerHasNoLoadedSource();
     final progressBaseline = _lastPlatformPosition;
     final playbackRequest = _issuePlaybackRequest();
     _playbackProgressGate.begin(playbackRequest, baseline: progressBaseline);
@@ -4146,6 +4236,12 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       _updateNotification();
     } catch (_) {}
     if (needsReload) {
+      // 批次27：此处**不**再清旧 URL。冷启动路径的过期链接已由
+      // [_restoreState] 的 clearUrl 真正清掉（song.url == null 自然走解析）；
+      // 交互路径的 URL 是刚解析的、大概率仍有效，无条件清会多一次 API
+      // 调用并改变既有语义。真正过期导致的装载失败会再次收敛进
+      // [_markResolveFailure]，用户主动重试走 [retryCurrentPlayback]
+      // （那里自带 clearUrl，先例见 _retryFailedPlayback）。
       final result = await _resolveAndPlayCurrentSong(
         playbackRequest: playbackRequest,
       );
@@ -4155,6 +4251,13 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         _resolveError = _resolveErrorText(_currentSong);
         notifyListeners();
         _updateNotification();
+      } else {
+        // 批次27：重新装载成功即真正恢复播放，清掉静默/交互失败残留文案，
+        // 否则错误提示条会在「已经在响」的时候继续挂着。
+        if (_resolveError != null) {
+          _resolveError = null;
+          notifyListeners();
+        }
       }
       _saveState();
       return;
@@ -4299,6 +4402,26 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// 批次27：解析/装载失败出口的统一收敛。
+  ///
+  /// [_playbackNotReady] 必须置位：否则后续 `resume()` 的 needsReload 判
+  /// false，`play()` 会打到没有音源的播放器（ExoPlayer STATE_IDLE）上——
+  /// 不播、无输出、Media3 now-playing 通知不显示，而 Dart 侧 `_isPlaying`
+  /// 已乐观置真，用户看到「播放中但没声音、无通知栏控件」，进度条只是恢复
+  /// 路径回填的假象。置位后 `resume()` 会走重新解析分支。
+  ///
+  /// play=false（冷启动恢复等静默路径）：[_resolveError] 写非打扰的静默文案
+  /// [kSilentResolveErrorText]，不弹窗不 toast；且该文案是「不武装自动重试」
+  /// 的哨兵（见 [_retryFailedPlayback] / [_startRetryFailedTimer]）。
+  /// play=true：保持既有行为，错误文案由调用方按既有规则设置。
+  void _markResolveFailure({required bool play}) {
+    _playbackNotReady = true;
+    if (!play) {
+      _resolveError = kSilentResolveErrorText;
+    }
+    notifyListeners();
+  }
+
   Future<bool> _resolveAndPlayCurrentSongImpl({
     Duration? seekTo,
     bool play = true,
@@ -4354,6 +4477,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           if (play) {
             onLoginRequired?.call();
           }
+          // 批次27：失败出口收敛（详见 [_markResolveFailure]）。
+          _markResolveFailure(play: play);
           return false;
         }
 
@@ -4419,6 +4544,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
               outcome: localApiFailure?.name ?? 'no_url',
             );
             _isResolvingUrl = false;
+            // 批次27：失败出口收敛（详见 [_markResolveFailure]）。
+            _markResolveFailure(play: play);
             return false;
           }
         } catch (e) {
@@ -4431,6 +4558,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
             error: e,
           );
           _isResolvingUrl = false;
+          // 批次27：失败出口收敛（详见 [_markResolveFailure]）。
+          _markResolveFailure(play: play);
           return false;
         }
       } else {
@@ -4479,12 +4608,19 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         );
         if (!loaded || !_isPlaybackRequestCurrent(request)) return false;
       } else {
-        _resolveError = _resolveErrorText(_currentSong);
+        // 批次27：失败出口收敛（详见 [_markResolveFailure]）——静默路径换
+        // 非打扰文案；交互路径保持既有的 _resolveErrorText 提示。
+        _playbackNotReady = true;
+        _resolveError = play
+            ? _resolveErrorText(_currentSong)
+            : kSilentResolveErrorText;
         notifyListeners();
         return false;
       }
     } else {
-      _resolveError = '音频引擎尚未就绪';
+      // 批次27：失败出口收敛（详见 [_markResolveFailure]）。
+      _playbackNotReady = true;
+      _resolveError = play ? '音频引擎尚未就绪' : kSilentResolveErrorText;
       notifyListeners();
       return false;
     }

@@ -1067,7 +1067,10 @@ void main() {
       expect(player.currentSong?.id, song.id);
       expect(player.currentIndex, 0);
       expect(player.isPlaying, isFalse);
-      expect(player.isPlaybackNotReady, isFalse);
+      // 批次27：装载 Future 异常（非超时）同样置「播放流未就绪」——
+      // 原实现只有截止超时置位，漏置会让后续 resume() 把 play() 打到没有
+      // 可用音源的播放器上（无声、无通知）。置位后 resume() 走重新解析。
+      expect(player.isPlaybackNotReady, isTrue);
       expect(audio.playCommandCount, 0);
 
       final retry = player.retryCurrentPlayback();
