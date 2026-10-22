@@ -206,6 +206,19 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     DiagnosticLogger.instance.info('[Playback] ${jsonEncode(fields)}');
   }
 
+  /// URL 指纹（批次29）：取 host + 路径段 + 长度的稳定哈希前 8 位。
+  /// 播放链接含签名 token（跨会话必不同），全文入日志既泄露又无可比性；
+  /// 指纹用于跨会话比对「这次装载的是不是上次那条链接」。
+  String _urlFingerprint(String url) {
+    try {
+      final uri = Uri.parse(url);
+      final basis = '${uri.host}${uri.path}${url.length}';
+      return basis.hashCode.toUnsigned(32).toRadixString(16).padLeft(8, '0');
+    } catch (_) {
+      return 'unparseable';
+    }
+  }
+
   /// 给平台音源装载设用户等待截止；超时不假装取消原生IO，迟到结算单独记账。
   ///
   /// [silentFailure]：装载失败是否按静默路径（冷启动恢复 `play=false`）收敛——
@@ -4036,36 +4049,65 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       final currentVol = target.volume;
       const steps = 10;
       const stepMs = 50; // 10步 x 50ms = 500ms
-      // 淡出循环加 try-catch：若中途被切歌/清列表等竞态打断抛异常，
-      // 仍要确保最终 pause 执行，否则播放器继续播放、playingStream 不发
-      // false，WakeLock 无法释放（暂停后功耗降不下来）
+      // 批次26：淡出收整段（循环 + pause + 音量恢复）包进 try/finally。
+      // 历史缺陷：`await _audioService?.pause()` 无 try 保护，平台层偶发
+      // 抛异常时下面的 setVolume(_volume) 恢复全部被跳过，淡出写下的 0
+      // 被永久留下——之后任何不经 setUrl 的恢复播放路径（中断 GAIN 自动
+      // 恢复、_restoreLatestPlaybackAfterStalePause、resume 非淡入分支）
+      // 都会「进度条走、完全没声音」。
+      // finally 判据沿用既有 3973/3987 口径：fadeToken 仍属于本次淡出
+      // 才恢复；被 resume 抢占时（fadeToken 已被自增）由 resume 淡入
+      // finally 统一收尾（批次17 契约），否则会出现「先恢复再被打到
+      // 0.01」的音量抖动。
       try {
-        for (int i = steps - 1; i >= 0; i--) {
-          // 被更新的 fade / 切歌抢占就停手，别再动音量
-          if (fadeToken != _fadeToken ||
-              !_playbackRequestGate.isCurrent(pauseGeneration)) {
-            break;
+        // 淡出循环加 try-catch：若中途被切歌/清列表等竞态打断抛异常，
+        // 仍要确保最终 pause 执行，否则播放器继续播放、playingStream 不发
+        // false，WakeLock 无法释放（暂停后功耗降不下来）
+        try {
+          for (int i = steps - 1; i >= 0; i--) {
+            // 被更新的 fade / 切歌抢占就停手，别再动音量
+            if (fadeToken != _fadeToken ||
+                !_playbackRequestGate.isCurrent(pauseGeneration)) {
+              break;
+            }
+            target.setVolume(currentVol * i / steps);
+            await Future.delayed(const Duration(milliseconds: stepMs));
           }
-          target.setVolume(currentVol * i / steps);
-          await Future.delayed(const Duration(milliseconds: stepMs));
+        } catch (_) {}
+        if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
+          return;
         }
-      } catch (_) {}
-      if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
-        if (fadeToken == _fadeToken) target.setVolume(_volume);
-        return;
+        try {
+          await _audioService?.pause();
+        } catch (error) {
+          // 取证：平台层 pause() 偶发失败（正是「音量永久 0」的入口）。
+          // 留痕后原样抛出，错误传播语义与淡出关闭路径保持一致；
+          // 音量恢复不依赖本 catch，由 finally 无条件收尾。
+          debugPrint('[VolAudit] 暂停淡出 pause() 异常，音量仍按 finally 收尾: '
+              '$error');
+          rethrow;
+        }
+        if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
+          await _restoreLatestPlaybackAfterStalePause();
+          return;
+        }
+        // 恢复音量设置（下次播放时使用）
+        // 取证：暂停淡出收尾会直接把音量拉回 _volume。若它发生在交叉淡化期间
+        // （未被 _fadeToken 拦住），听感正是「音量突然变大」。
+        debugPrint('[VolAudit] 暂停淡出收尾 tokenOk=${fadeToken == _fadeToken} '
+            '目标=${_volume.toStringAsFixed(3)} '
+            '播放器当前=${target.volume.toStringAsFixed(3)}');
+      } finally {
+        // 批次26：见上方注释。token 已易主（被 resume / 淡化抢占）时不
+        // 由本方法恢复，交由抢占方的淡入 finally 统一收尾，避免抖动。
+        // setVolume 自身再包 try-catch：播放器可能已随 dispose 释放，
+        // 收尾本身不能再向外抛。
+        if (fadeToken == _fadeToken) {
+          try {
+            target.setVolume(_volume);
+          } catch (_) {}
+        }
       }
-      await _audioService?.pause();
-      if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
-        await _restoreLatestPlaybackAfterStalePause();
-        return;
-      }
-      // 恢复音量设置（下次播放时使用）
-      // 取证：暂停淡出收尾会直接把音量拉回 _volume。若它发生在交叉淡化期间
-      // （未被 _fadeToken 拦住），听感正是「音量突然变大」。
-      debugPrint('[VolAudit] 暂停淡出收尾 tokenOk=${fadeToken == _fadeToken} '
-          '目标=${_volume.toStringAsFixed(3)} '
-          '播放器当前=${target.volume.toStringAsFixed(3)}');
-      if (fadeToken == _fadeToken) target.setVolume(_volume);
     } else {
       if (!_playbackRequestGate.isCurrent(pauseGeneration) || _isDisposed) {
         return;
@@ -4107,6 +4149,24 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// 拖动进度条时直接暂停（无淡入淡出），避免拖动期间音量渐变影响体验。
+  ///
+  /// 批次26 评估结论：此处**不做**音量对齐（不像 pause() 淡出那样把音量
+  /// 恢复回 `_volume`）。依据：
+  /// 1. `_fadeToken++` 只会抢占 Dart 侧淡入/淡出循环，且抢占判定在每步
+  ///    **写音量之前**——break 时最后写入的值 ≥ currentVol/steps，不会是
+  ///    淡出终点 0；播放器也随即被本方法 pause，中间音量不可闻。
+  /// 2. 所有续播路径都会重写音量，中间值不会永久停留：`completeSeekSession`
+  ///    → `resume()` 淡入分支的 finally 无条件恢复 `_volume`（批次17）；
+  ///    reload 分支与拖动期间的新播放意图都走 setUrl，由 AudioService 归一化
+  ///    通路重新下发音量；交叉淡化场景由 `abortCrossfade()` 的补偿斜坡收尾
+  ///    （终点即 `_userVolume * _vnAttenLinear`）。
+  /// 3. 反之在此处补写音量属净负收益：直写播放器会绕过音量均衡衰减（VN）
+  ///    把响歌抬满；走 `_audioService.setVolume` 则是异步写入，会和紧随
+  ///    其后的 resume 淡入首写 0.01 争序，且与淡出/淡入恢复口径（直写播放
+  ///    器）不一致。
+  /// 残留窗口（淡出循环已跑完写过 0、尚未执行平台 pause 的瞬间被抢占）
+  /// 实际不可达：pause() 已同步翻转 isPlaying，拖动传入 wasPlaying=false
+  /// 时根本不会调用本方法；即便被其他时序命中，后续 resume 仍会重写音量。
   Future<void> pauseForSeek() {
     _invalidatePlaybackRequest(
       source: _PlaybackRequestCancellationSource.seekGesturePause,
@@ -4244,8 +4304,25 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     // 1. 状态标志：_playbackNotReady / _isResolvingUrl（事件驱动，可能漏置）；
     // 2. 播放器客观状态兜底：_playerHasNoLoadedSource()——没有音源时
     //    play() 是空操作，必须改走重新解析/装载分支。
-    final needsReload =
-        _playbackNotReady || _isResolvingUrl || _playerHasNoLoadedSource();
+    // 批次29：判据明细取证——「无重试提醒但无声无通知」若因判据失灵
+    // （三判据全 false 而播放器实际 idle），必须能从日志还原每个判据的
+    // 真值与播放器客观状态（processingState/sequence 有无 source）。
+    final noLoadedSource = _playerHasNoLoadedSource();
+    final needsReload = _playbackNotReady || _isResolvingUrl || noLoadedSource;
+    _logPlaybackEvent(
+      'resume.judgement',
+      request: null,
+      song: _currentSong,
+      outcome: needsReload ? 'reload' : 'direct_play',
+      details: <String, Object?>{
+        'notReadyFlag': _playbackNotReady,
+        'resolvingUrlFlag': _isResolvingUrl,
+        'noLoadedSource': noLoadedSource,
+        'needsReload': needsReload,
+        'hasCurrentSong': _currentSong != null,
+        if (_currentSong != null) 'songHasUrl': _currentSong!.url != null,
+      },
+    );
     final progressBaseline = _lastPlatformPosition;
     final playbackRequest = _issuePlaybackRequest();
     _playbackProgressGate.begin(playbackRequest, baseline: progressBaseline);
@@ -4633,6 +4710,27 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
           _playlist[_currentIndex] = _currentSong!;
           notifyListeners();
         }
+        // 批次29：统一装载出口取证——「续播无声+无通知+无重试提醒」症状
+        // 意味着装载链路自认成功（load.end=ready），必须能分辨这次装载用的
+        // 是**上次会话残留的旧 URL**（批次28 起恢复流保留旧 URL 直接装载）
+        // 还是**本轮新解析的 URL**，以及 seekTo 落点。URL 含签名 token 不打
+        // 全文，只留 host + 长度 + 指纹（跨会话可比对是否同一条链接）。
+        final reusedOldUrl =
+            _currentSong!.isOnline && _currentSong!.url == playbackUrl;
+        _logPlaybackEvent(
+          'source.loading',
+          request: request,
+          song: _currentSong,
+          outcome: reusedOldUrl ? 'reuse_restored_url' : 'fresh_url',
+          details: <String, Object?>{
+            'urlReused': reusedOldUrl,
+            'urlHost': Uri.tryParse(playbackUrl)?.host,
+            'urlLen': playbackUrl.length,
+            'urlFingerprint': _urlFingerprint(playbackUrl),
+            if (seekTo != null) 'seekToMs': seekTo.inMilliseconds,
+            'playAfter': play,
+          },
+        );
         final loaded = await _setUrlAndPlay(
           playbackUrl,
           seekTo: seekTo,

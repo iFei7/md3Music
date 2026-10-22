@@ -106,6 +106,10 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private final BetterEventChannel focusEventChannel;
     // MD3Music fork: 焦点事件监听引用（dispose 时按同一引用注销）
     private AudioFocusManager.AudioFocusEventListener focusEventListener;
+    // MD3Music fork: 播放抑制（playbackSuppressionReason）事件通道
+    // （ExoPlayerImpl.updatePlaybackInfo 经 Player.Listener 回调转发到 Dart）。
+    // 新增 suppression 事件转发（不改变既有行为）。
+    private final BetterEventChannel suppressionEventChannel;
 
     private ProcessingState processingState;
     private long updatePosition;
@@ -254,6 +258,12 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 messenger, "com.ryanheise.just_audio.focus_events." + id);
         focusEventListener = focusChange -> focusEventChannel.success(focusChange);
         AudioFocusManager.addAudioFocusEventListener(focusEventListener);
+        // MD3Music fork: 新增 suppression 事件转发（不改变既有行为）。
+        // ExoPlayerImpl 在 playbackSuppressionReason 变化时经
+        // Player.Listener.onPlaybackSuppressionReasonChanged 回调本类重写方法，
+        // 再经 BetterEventChannel 以 {'suppressionReason': int} 发往 Dart。
+        suppressionEventChannel = new BetterEventChannel(
+                messenger, "com.ryanheise.just_audio.suppression_events." + id);
         processingState = ProcessingState.idle;
         if (audioLoadConfiguration != null) {
             Map<?, ?> loadControlMap = (Map<?, ?>)audioLoadConfiguration.get("androidLoadControl");
@@ -499,6 +509,28 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             } catch (Exception e) {
                 Log.w("AudioFocusFork", "onEvents push playing failed: " + e);
             }
+        }
+    }
+
+    /// MD3Music fork: 新增 suppression 事件转发（不改变既有行为）。
+    /// ExoPlayerImpl.updatePlaybackInfo 在 playbackSuppressionReason 变化时
+    /// 经 ListenerSet（主 looper 派发）回调本方法；reason 取值对齐
+    /// androidx.media3.common.Player.PLAYBACK_SUPPRESSION_REASON_*：
+    /// 0=NONE, 1=TRANSIENT_AUDIO_FOCUS_LOSS, 2=UNSUITABLE_AUDIO_OUTPUT。
+    /// suppression != NONE 时 playWhenReady 仍可能为 true、playbackState 仍为
+    /// READY、position 继续前进，但音频输出被抑制（无声）——转发供 Dart 侧诊断
+    /// 「进度条走但没声音」。仅新增事件通道，不影响任何播放/焦点处理逻辑。
+    @Override
+    public void onPlaybackSuppressionReasonChanged(int playbackSuppressionReason) {
+        try {
+            Map<String, Object> event = new HashMap<>();
+            event.put("suppressionReason", playbackSuppressionReason);
+            suppressionEventChannel.success(event);
+            android.util.Log.i("AudioFocusFork",
+                    "onPlaybackSuppressionReasonChanged reason=" + playbackSuppressionReason);
+        } catch (Exception e) {
+            android.util.Log.w("AudioFocusFork",
+                    "push playbackSuppressionReason failed: " + e);
         }
     }
 
@@ -2166,6 +2198,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         AudioFocusManager.setIgnoreAudioFocus(false);
         AudioFocusManager.setForceKeepPlaying(false);
         focusEventChannel.endOfStream();
+        // MD3Music fork: 关闭 suppression 事件通道（新增事件转发，不影响既有通道）
+        suppressionEventChannel.endOfStream();
         // MD3Music fork: 释放 MediaSession（与 player 关联）
         if (mediaSession != null) {
             mediaSession.release();
