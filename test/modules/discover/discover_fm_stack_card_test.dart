@@ -186,6 +186,35 @@ Widget _customScrollHost(Widget child) => Scaffold(
       ),
     );
 
+/// 批次31：帧序列断言——被划走的卡（[title]）只要还在 widget 树里，
+/// 就必须处于「飞出中」：祖先 Opacity 叠乘后 < 1（渐隐）或祖先
+/// Transform 水平平移非零（飞移）。二者皆无 = 「无变换、全不透明、
+/// 停在原位」的可见帧，即用户看到的「划走后往回闪一下」。
+///
+/// 卡面子树（SmoothClipRRect→ClipPath / CachedNetworkImage / Text）不引入
+/// Opacity/Transform，故祖先链上只有飞出/跟手两种包装。
+void _expectDismissedCardInFlight(WidgetTester tester, String title) {
+  final finder = find.text(title);
+  if (finder.evaluate().isEmpty) return; // 已切走（指针前移）：无所谓
+  final element = tester.element(finder);
+  var opacity = 1.0;
+  var dx = 0.0;
+  element.visitAncestorElements((e) {
+    final w = e.widget;
+    if (w is Opacity) {
+      opacity *= w.opacity;
+    } else if (w is Transform) {
+      dx += w.transform.storage[12]; // Matrix4 列主序：平移 x
+    }
+    return true; // 继续向上遍历
+  });
+  expect(
+    opacity < 0.999 || dx.abs() > 0.5,
+    isTrue,
+    reason: '「$title」出现闪回可见帧（opacity=$opacity, dx=$dx）',
+  );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -199,6 +228,10 @@ void main() {
     WidgetTester tester, {
     Widget Function(Widget child)? host,
     _FmAdapter? adapterOverride,
+    // 批次31：播放路径用例注入可控 next() 的测试播放器（真机
+    // player.next() 有异步耗时窗口，真实 PlayerProvider 在假音频服务下
+    // 不可驱动）。
+    PlayerProvider? playerOverride,
   }) async {
     SharedPreferences.setMockInitialValues({});
     installFakeSecureStorage();
@@ -231,7 +264,7 @@ void main() {
     // pump 序列排空 microtask 即可让 _restoreStation 读到已登录态，
     // 后续的用户信息/VIP 校验请求由假 adapter 消化。
     unawaited(kugou.switchAccount('test-uid'));
-    final player = PlayerProvider();
+    final player = playerOverride ?? PlayerProvider();
     final favorites = FavoritesProvider(syncOnStart: false);
     final localFavorites = LocalFavoritesProvider();
     await tester.pumpWidget(
@@ -375,6 +408,198 @@ void main() {
         expect(find.text('乙'), findsOneWidget,
             reason: '前卡滑出后下一首（乙）应前移为前卡（真机滑动手感）');
         expect(find.text('甲'), findsNothing);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次31：dismiss 收尾无「划走卡闪回」——逐帧检查（未播放路径）',
+        (tester) async {
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        expect(find.text('甲'), findsOneWidget);
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-40, 0));
+        await tester.pump(); // 帧在拖拽中途落地（真机必有）
+        await gesture.moveBy(const Offset(-400, 0));
+        await gesture.up();
+
+        // 逐帧推进飞出（220ms）与收尾：每一帧里，被划走的甲只要还在
+        // 树里就必须处于「飞出中」（渐隐/飞移）——不允许出现无变换、
+        // 全不透明、停在原位的可见帧（即「划走后往回闪一下」）。
+        for (var i = 0; i < 20; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          _expectDismissedCardInFlight(tester, '甲');
+        }
+        // 收尾后的补货 dio 请求带 zero-duration Timer，补 pump 排空
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(find.text('甲'), findsNothing, reason: '收尾后甲应被切走');
+        expect(find.text('乙'), findsOneWidget, reason: '乙前移为前卡');
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次31：dismiss 收尾无「划走卡闪回」——播放跟随 next() 的异步窗口内也不闪回',
+        (tester) async {
+      // 真机主场景：正在播本电台时滑走前卡。player.next() 有真实异步
+      // 耗时（解析播放链/装载），该窗口内被划走的卡必须保持不可见——
+      // 用延迟 100ms 的测试 next() 坐实这个窗口（回归前此处必有
+      // 多帧「甲全不透明停原位」的闪回）。
+      final testPlayer = _FmTestPlayerProvider(
+        nextDelay: const Duration(milliseconds: 100),
+      );
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester, playerOverride: testPlayer);
+      try {
+        testPlayer.setTestPlaybackState(
+          currentSong: const Song(
+            id: 'ha', // 与 personalFmSongs[0].hash 对齐 → playingIndex=0
+            title: '甲',
+            artist: '测试歌手',
+            album: '测试专辑',
+            duration: Duration(minutes: 3),
+          ),
+          isPlaying: true,
+        );
+        // next() 完成后切到乙（hash 'hb' → playingIndex=1 → base 前移）
+        testPlayer.nextTarget = const Song(
+          id: 'hb',
+          title: '乙',
+          artist: '测试歌手',
+          album: '测试专辑',
+          duration: Duration(minutes: 3),
+        );
+        await tester.pump();
+        expect(find.text('甲'), findsOneWidget);
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-40, 0));
+        await tester.pump();
+        await gesture.moveBy(const Offset(-400, 0));
+        await gesture.up();
+
+        // 飞出 220ms + next() 延迟 100ms：逐帧检查整个窗口无闪回。
+        for (var i = 0; i < 26; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          _expectDismissedCardInFlight(tester, '甲');
+        }
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(testPlayer.nextCallCount, 1,
+            reason: '播放中滑走 → player.next() 播放跟随契约');
+        expect(find.text('甲'), findsNothing);
+        expect(find.text('乙'), findsOneWidget,
+            reason: 'next() 切歌后乙应成为前卡');
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次31：未过阈值松手 → 回弹动画收敛到 0（非瞬移，有中间值帧）',
+        (tester) async {
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        final origin = tester.getTopLeft(find.text('甲'));
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-30, 0)); // 越过 slop：drag start
+        await gesture.moveBy(const Offset(-30, 0)); // 首个 update → _dragDx<0
+        await gesture.up(); // |dx| < 90、零时间戳 → 速度 0 → 回弹分支
+
+        await tester.pump(); // 第 0 帧：回弹起点 = 松手位移
+        final released = tester.getTopLeft(find.text('甲')).dx - origin.dx;
+        expect(released, lessThan(0.0), reason: '松手时卡应停在拖拽位移处');
+
+        // 16ms：明显收敛但远未归位（easeOutCubic 约 76% 保留）——
+        // 瞬移实现会在这一帧直接归位。
+        await tester.pump(const Duration(milliseconds: 16));
+        final mid = tester.getTopLeft(find.text('甲')).dx - origin.dx;
+        expect(mid, greaterThan(released), reason: '已开始回弹（非瞬移）');
+        expect(mid, lessThan(released * 0.5), reason: '16ms 时仍保留一半以上位移');
+
+        // 100ms：仍在回弹中途（easeOutCubic 约 9% 保留）
+        await tester.pump(const Duration(milliseconds: 84));
+        final late = tester.getTopLeft(find.text('甲')).dx - origin.dx;
+        expect(late, lessThan(0.0), reason: '100ms 时仍未归位');
+        expect(late, greaterThan(released * 0.3), reason: '保留已不足三成');
+
+        // 180ms 播完：精确归位（isAnimating=false → 读 _dragDx=0）
+        await tester.pump(const Duration(milliseconds: 80));
+        final settled = tester.getTopLeft(find.text('甲')).dx - origin.dx;
+        expect(settled, 0.0, reason: '回弹播完后应精确归位');
+
+        expect(find.text('甲'), findsOneWidget, reason: '未过阈值不得 dismiss');
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次31 契约：速度放行——位移不足 90 但速度 > 700 也能 dismiss',
+        (tester) async {
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        // fling 用 50 个带时间戳的 move 坐实速度估算：位移 -90（吸收
+        // slop 后 _dragDx≈-71，仍不足 90 阈值）、速度 1000px/s（> 700）
+        // → 必须走速度分支放行飞出。注：距离不能太短——识别器的
+        // isFlingGesture 还要求拟合样本跨度 > touchSlop(18)，-30px 的
+        // fling 跨度仅 ~11px 会被判非 fling、速度清零。
+        await tester.fling(find.text('甲'), const Offset(-90, 0), 1000);
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(find.text('甲'), findsNothing);
+        expect(find.text('乙'), findsOneWidget,
+            reason: '速度放行：快速轻扫也应 dismiss');
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次31 契约：拖拽中途帧落地，前卡 GestureDetector 实例不换（批次7 回归）',
+        (tester) async {
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        final frontDetector = find.ancestor(
+          of: find.text('甲'),
+          matching: find.byType(GestureDetector),
+        );
+        final before = tester.element(frontDetector);
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-40, 0));
+        // 帧在拖拽中途落地：拖拽态重建若换掉 GestureDetector 类型，
+        // 识别器会从 pointerRouter 摘除、后续 move/up 丢失（批次7 真机
+        // 「滑不动」根因）。
+        await tester.pump();
+        expect(
+          identical(tester.element(frontDetector), before),
+          isTrue,
+          reason: '拖拽态重建不得更换前卡 GestureDetector 实例',
+        );
+
+        await gesture.moveBy(const Offset(-400, 0));
+        await gesture.up();
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(find.text('乙'), findsOneWidget,
+            reason: '识别器全程存活，抬手应正常 dismiss');
       } finally {
         _teardown(kugou, player, favorites, localFavorites);
       }
@@ -583,6 +808,49 @@ void main() {
       }
     });
   });
+}
+
+/// 批次31：FM 播放路径测试播放器——currentSong/isPlaying 走测试态，
+/// next() 延迟 [nextDelay] 后切到 [nextTarget] 并 notifyListeners，
+/// 模拟真机 player.next() 的异步耗时窗口（该窗口内被划走的卡必须保持
+/// 不可见，不得闪回；真实 PlayerProvider 在假音频服务下不可驱动）。
+class _FmTestPlayerProvider extends PlayerProvider {
+  _FmTestPlayerProvider({required this.nextDelay});
+
+  final Duration nextDelay;
+  Song? _testCurrentSong;
+  bool _testIsPlaying = false;
+
+  /// next() 被调用次数（播放跟随契约断言）。
+  int nextCallCount = 0;
+
+  /// next() 完成后切换到的曲目（id 需与列表某首 hash 对齐）。
+  Song? nextTarget;
+
+  @override
+  Song? get currentSong => _testCurrentSong;
+
+  @override
+  bool get isPlaying => _testIsPlaying;
+
+  void setTestPlaybackState({Song? currentSong, required bool isPlaying}) {
+    _testCurrentSong = currentSong;
+    _testIsPlaying = isPlaying;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> next({bool autoPlay = true}) async {
+    nextCallCount++;
+    if (nextDelay > Duration.zero) {
+      await Future.delayed(nextDelay);
+    }
+    final target = nextTarget;
+    if (target != null) {
+      _testCurrentSong = target;
+      notifyListeners();
+    }
+  }
 }
 
 /// 测试播放器：覆写 currentSong/isPlaying 为测试态（_pumpNowPlaying 注入），

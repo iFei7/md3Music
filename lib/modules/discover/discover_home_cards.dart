@@ -79,7 +79,7 @@ class DiscoverFmStackCard extends StatefulWidget {
 }
 
 class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   /// 当前挂载实例（下拉刷新重拉入口用）：堆叠卡在发现页全局唯一，
   /// initState 登记、dispose 摘除；未挂载时 reloadCurrentStation no-op。
   static _DiscoverFmStackCardState? _activeInstance;
@@ -113,6 +113,25 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   double _flyDx = 0;
   bool _flying = false;
 
+  /// 批次31：回弹时长。落在 150~200ms 区间取 180ms——与飞出的 220ms
+  /// 拉开档次（回弹是「轻拨一下」，比全幅飞出短一截），easeOutCubic
+  /// 收尾。
+  static const Duration _kSpringBackDuration = Duration(milliseconds: 180);
+
+  /// 批次31：未过阈值松手后的回弹动画（0→1，[_kSpringBackDuration]）。
+  ///
+  /// 选型：新增独立小控制器，而非复用 _flyCtrl 反向——_flyCtrl 的
+  /// 220ms 时长与 easeOutCubic 读时曲线都是为「飞出渐隐」定的，回弹
+  /// 要的是 150~200ms 且位移从松手值收敛到 0（曲线语义正好反过来）；
+  /// 反向复用还会和飞出窗口/[_flying] 标记/whenComplete 时序全搅在
+  /// 一起。回弹值在 _buildStackArea 的 AnimatedBuilder 里读出
+  /// （Listenable.merge 合并两个控制器逐帧重建），不走每帧 setState。
+  late final AnimationController _springBackCtrl;
+
+  /// 回弹起点（松手时的跟手位移）。动画值 = _springFromDx ×
+  /// (1 − easeOutCubic(t))，t 走 _springBackCtrl.value（线性）。
+  double _springFromDx = 0;
+
   bool _prefetching = false;
 
   FmStation get _station => kHomeFmStations[_stationIndex];
@@ -125,6 +144,11 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
       vsync: this,
       duration: const Duration(milliseconds: 220),
     );
+    // 批次31：回弹控制器（未过阈值松手时把跟手位移收敛回 0）
+    _springBackCtrl = AnimationController(
+      vsync: this,
+      duration: _kSpringBackDuration,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _restoreStation();
@@ -135,6 +159,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   void dispose() {
     if (_activeInstance == this) _activeInstance = null;
     _flyCtrl.dispose();
+    _springBackCtrl.dispose();
     super.dispose();
   }
 
@@ -298,10 +323,24 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     unawaited(refill?.append()); // 立即补一批
   }
 
-  /// 前卡滑出后的切歌联动：
-  /// - 正在播本电台队列且播放中 → player.next()（播放跟随滑动）；
-  /// - 其余（未播/暂停在别的队列）→ 只前移视觉指针，不打断/抢启动播放。
-  Future<void> _onDismissed() async {
+  /// dismiss 收尾（批次31）：飞出动画播完后的状态切换。
+  ///
+  /// 重构要点：「同步判定 + 同步状态更新」与「async 播放跟随执行」分离，
+  /// 清飞出态（_flying/_flyDx/_dragDx）与视觉指针前移（_stackOffset += 1）
+  /// 合并进**同一次 setState**，杜绝中间可见帧——
+  /// - 未播放本电台：t=1 帧下层已前移就位（layer1 shrink=0 全尺寸、
+  ///   与指针前移后的 layer0 形态逐项吻合），一次 setState 即无缝交接。
+  ///   此前分成「setState 清飞出态」→「_onDismissed 里再 setState 前移
+  ///   指针」两次，靠 Flutter 帧合并才没露馅；播放路径一 await 就露出
+  ///   「划走的卡全不透明停回原位」的闪回帧（真机用户可见）。
+  /// - 正在播本电台且播放中：先 await player.next()（播放索引驱动 base
+  ///   前移、_stackOffset 不动——契约保持），再清飞出态。等待期间保持
+  ///   _flying=true：被划走的卡停在 t=1 的不可见态，下层（下一首）已
+  ///   全尺寸就位；next() 成功路径的 notifyListeners 后即 return，与
+  ///   本方法的 setState 落在同一微任务排水期内、合并为同一帧，无缝
+  ///   交接。next() 失败（拿不到播放链接等）回落到「仅前移视觉指针」，
+  ///   不卡死在飞出态（_flying 会屏蔽新手势）。
+  Future<void> _finishDismiss() async {
     final kugou = context.read<KugouProvider>();
     final player = context.read<PlayerProvider>();
     final songs = kugou.personalFmSongs;
@@ -309,11 +348,22 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     final playingIndex = playingId == null
         ? -1
         : songs.indexWhere((s) => s.hash == playingId);
+    var followed = false;
     if (playingIndex >= 0 && player.isPlaying) {
-      await player.next();
-    } else {
-      if (mounted) setState(() => _stackOffset += 1);
+      try {
+        await player.next();
+        followed = true;
+      } catch (_) {
+        // 播放跟随失败：不卡死，回落非播放分支收尾（见 followed=false）
+      }
     }
+    if (!mounted) return;
+    setState(() {
+      _flying = false;
+      _flyDx = 0;
+      _dragDx = 0;
+      if (!followed) _stackOffset += 1;
+    });
   }
 
   void _onDragEnd(DragEndDetails details) {
@@ -332,14 +382,18 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
       });
       _flyCtrl.forward(from: 0).whenComplete(() {
         if (!mounted) return;
-        setState(() {
-          _flying = false;
-          _flyDx = 0;
-        });
-        unawaited(_onDismissed());
+        unawaited(_finishDismiss());
       });
     } else {
+      // 批次31：未过阈值 → 回弹动画（180ms easeOutCubic 收敛到 0），
+      // 替代此前的瞬移 setState(_dragDx = 0)（松手「跳」回原位很跳戏）。
+      // 动画值在 _buildStackArea 的 AnimatedBuilder 里读出并施加到前卡
+      // 子树，不走每帧 setState；_dragDx 先归零，回弹播完（isAnimating
+      // =false）后视图自然落回 0。
+      if (_dragDx == 0) return;
+      _springFromDx = _dragDx;
       setState(() => _dragDx = 0);
+      _springBackCtrl.forward(from: 0);
     }
   }
 
@@ -442,9 +496,18 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     // 层级构建必须放进 AnimatedBuilder builder：每个动画 tick 都要带
     // 最新飞出进度 t 重算各层形态（前卡滑出渐隐、下层前移）。
     return AnimatedBuilder(
-      animation: _flyCtrl,
+      // 批次31：飞出与回弹共用这一个 AnimatedBuilder——两个控制器的
+      // tick 都触发逐帧重建（回弹期间前卡跟手位移由动画值驱动，不走
+      // 每帧 setState）。
+      animation: Listenable.merge([_flyCtrl, _springBackCtrl]),
       builder: (context, _) {
         final t = _flying ? Curves.easeOutCubic.transform(_flyCtrl.value) : 0.0;
+        // 回弹进行中：前卡跟手位移由动画值驱动（与飞出同款读时
+        // easeOutCubic）；否则用跟手值 _dragDx。
+        final dragDx = _springBackCtrl.isAnimating
+            ? _springFromDx *
+                (1 - Curves.easeOutCubic.transform(_springBackCtrl.value))
+            : _dragDx;
         final children = <Widget>[];
         for (var layer = _kStackDepth - 1; layer >= 0; layer--) {
           final idx = base + _stackOffset + layer;
@@ -454,6 +517,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
             songs[idx],
             layer: layer,
             flyProgress: t,
+            dragDx: dragDx,
             playingIndex: playingIndex,
             isPlaying: isPlaying,
           ));
@@ -476,6 +540,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     KugouSongDetail song, {
     required int layer,
     required double flyProgress,
+    required double dragDx,
     required int playingIndex,
     required bool isPlaying,
   }) {
@@ -487,6 +552,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
         playingIndex: playingIndex,
         isPlaying: isPlaying,
         flyProgress: flyProgress,
+        dragDx: dragDx,
       );
     }
     // 下方层：缩小下沉 + 半透明（层级暗示）；飞出时随 t 前移一级
@@ -525,6 +591,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     required int playingIndex,
     required bool isPlaying,
     required double flyProgress,
+    required double dragDx,
   }) {
     Widget card = _buildFrontCard(context, song, playingIndex, isPlaying);
     // 飞出中的前卡：沿 _flyDx 平移 + 渐隐（_flying 优先于跟手位移）
@@ -536,12 +603,12 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
           child: card,
         ),
       );
-    } else if (_dragDx != 0) {
-      // 跟手拖拽（仅前卡）：位移/旋转施加在子树，识别器不重建
+    } else if (dragDx != 0) {
+      // 跟手拖拽/回弹（仅前卡）：位移/旋转施加在子树，识别器不重建
       card = Transform.translate(
-        offset: Offset(_dragDx, 0),
+        offset: Offset(dragDx, 0),
         child: Transform.rotate(
-          angle: _dragDx / 1200,
+          angle: dragDx / 1200,
           child: card,
         ),
       );
@@ -551,16 +618,33 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
       onHorizontalDragUpdate: (d) {
         // 飞出中忽略新手势：防 220ms 窗口内二次 dismiss
         if (_flying) return;
-        setState(() => _dragDx += d.delta.dx);
+        setState(() {
+          if (_springBackCtrl.isAnimating) {
+            // 批次31：回弹中途再次跟手——从当前视觉位移无缝接续并停掉
+            // 回弹，否则跟手值与回弹值两套位移打架（卡片会「跳」回
+            // 松开点）。
+            _dragDx = _springDx;
+            _springBackCtrl.stop();
+          }
+          _dragDx += d.delta.dx;
+        });
       },
       onHorizontalDragEnd: _onDragEnd,
       onHorizontalDragCancel: () {
         if (_flying) return;
+        // 批次31：一并停掉回弹（纵向滚动抢走手势时卡片瞬间归位，
+        // 不留半截回弹与归位值打架）。
+        _springBackCtrl.stop();
         setState(() => _dragDx = 0);
       },
       child: card,
     );
   }
+
+  /// 批次31：回弹中的当前视觉位移（easeOutCubic 读时施加，与飞出同款）。
+  /// 回弹中途再次跟手时以它为起点，保证位移连续。
+  double get _springDx => _springFromDx *
+      (1 - Curves.easeOutCubic.transform(_springBackCtrl.value));
 
   /// 前卡：大图封面 + 歌名/歌手 + 播放暂停 + 收藏红心。
   Widget _buildFrontCard(
