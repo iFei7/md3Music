@@ -472,6 +472,47 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// （实测把起播拖成 23 秒）。
   Duration _lastPlatformPosition = Duration.zero;
 
+  /// 批次30：平台位置事件最后到达时刻（stalled 巡检判据 A 的时钟基线）。
+  /// 只由 positionStream 写入（[_observePlatformPosition]）；null = 当前
+  /// 播放会话内还没收到过任何平台位置事件（尚未起播，不构成「停发」）。
+  DateTime? _lastPlatformPositionAt;
+
+  // —— 批次30：stalled 巡检器（续播/恢复播放无声死局修复）——
+  // 平台 stalled（无数据可播、停发位置事件）时，[_initStreams] 里所有挂在
+  // positionStream 的看门狗（位置兜底切歌 / CDN 速率检测 / 预防性预取）全部
+  // 停摆；fork 的 position getter 又按挂钟外推
+  // （third_party/just_audio/lib/just_audio.dart:800），Dart 侧看到进度
+  // 正常在走、实际无声。故需要本独立 Timer 巡检器，不依赖位置事件驱动。
+
+  /// 巡检周期：1s 一帧，与诊断采样同档但语义独立（采样只在 playing 时留痕，
+  /// 巡检负责发现「平台停发位置事件的无声死局」）。
+  static const Duration _stallPatrolInterval = Duration(seconds: 1);
+
+  /// 判据 A（事件停发）阈值：平台位置事件静默超过该时长视为停发。
+  /// 正常播放时 just_audio 的位置流最多 200ms 一帧，3s 静默只可能是 stalled。
+  static const Duration _stallEventSilenceThreshold = Duration(seconds: 3);
+
+  /// 防抖：stall 判据（A/B 取或）需持续成立该时长才触发恢复，
+  /// 避免 UI 卡顿导致的事件迟到把一次误判放大成换源。
+  static const Duration _stallPatrolPersistWindow = Duration(seconds: 3);
+
+  /// 恢复观察窗：触发 [_handleCdnStall] 后等待平台位置事件恢复的最时长；
+  /// 超时仍无事件且仍在播放 → 判定恢复失败，走既有失败收敛。
+  /// 需覆盖「URL 解析 + 新源装载 + 首次缓冲」的全过程。
+  static const Duration _stallRecoveryWatchWindow = Duration(seconds: 12);
+
+  // 可注入副本：测试经构造参数缩小阈值；生产恒等于上面的常量。
+  final Duration _stallEventSilence;
+  final Duration _stallPatrolPersist;
+  final Duration _stallRecoveryWatch;
+  Timer? _stallPatrolTimer;
+  /// 判据持续成立的起点（防抖基线）；null = 当前未成立或已复位。
+  DateTime? _stallConditionSince;
+  /// 恢复观察窗截止时刻；null = 不在观察期。
+  DateTime? _stallRecoveryWatchUntil;
+  /// 本次恢复触发时刻：判「恢复后是否有新的平台位置事件」的基线。
+  DateTime? _stallRecoveryTriggeredAt;
+
   /// 起播定位后的速率检测宽限期。
   ///
   /// `setMediaSources(..., initialPosition)` 已由 ExoPlayer 原生定位，但跳转到
@@ -682,6 +723,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   bool _observePlatformPosition(Duration value) {
     _lastPlatformPosition = value;
+    // 批次30：stalled 巡检判据 A 的时钟基线——平台位置事件每到达一次即刷新；
+    // 平台 stalled 停发事件后该时间戳不再前进，巡检器据此发现「没声音了」。
+    _lastPlatformPositionAt = DateTime.now();
     final songId = _currentSong?.id;
     if (value > Duration.zero && songId != null) {
       _lastNonZeroPlatformPosition = value;
@@ -862,12 +906,22 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   PlayerProvider({
     Duration audioSourceLoadTimeout = kAudioSourceLoadDeadline,
     @visibleForTesting Duration? playbackDiagnosticSampleInterval,
+    @visibleForTesting Duration? stallPatrolEventSilence,
+    @visibleForTesting Duration? stallPatrolPersistWindow,
+    @visibleForTesting Duration? stallPatrolRecoveryWatchWindow,
     PlaybackRecoveryBudget? failedRecoveryBudget,
     PlayerStateRepository? stateRepository,
     @visibleForTesting bool? isAndroidForTest,
   }) : _audioSourceLoadTimeout = audioSourceLoadTimeout,
        _playbackDiagnosticSampleInterval =
            playbackDiagnosticSampleInterval ?? const Duration(seconds: 10),
+       // 批次30：stalled 巡检阈值注入（仅测试缩小，生产走常量默认值）
+       _stallEventSilence =
+           stallPatrolEventSilence ?? _stallEventSilenceThreshold,
+       _stallPatrolPersist =
+           stallPatrolPersistWindow ?? _stallPatrolPersistWindow,
+       _stallRecoveryWatch =
+           stallPatrolRecoveryWatchWindow ?? _stallRecoveryWatchWindow,
        _stateRepo = stateRepository ?? PlayerStateRepository(),
        _failedRecoveryBudget = failedRecoveryBudget ?? PlaybackRecoveryBudget(),
        _isAndroidPlatform = isAndroidForTest ?? Platform.isAndroid {
@@ -1745,6 +1799,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
         debugPrint('[PlayerState] playingStream → $isPlaying');
         _isPlaying = isPlaying;
         _updatePlaybackDiagnosticSampling(isPlaying);
+        // 批次30：stalled 巡检器与诊断采样同生命周期（playing 起、停即止），
+        // 但由独立 Timer 驱动，不依赖 positionStream（平台停发事件时唯一的
+        // 活跃看门狗，见 [_patrolPlaybackStall]）。
+        _updateStallPatrol(isPlaying);
         WakelockService.instance.setSongPlaying(isPlaying);
         // CSCC 时长计时：暂停时停表、恢复时续表（墙钟累计，天然扣除暂停）。
         ListenReportService.instance.onPlayingChanged(isPlaying);
@@ -1972,6 +2030,207 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {
       // 诊断采样失败不得改变播放状态或中断播放器事件处理。
     }
+  }
+
+  /// 批次30：按播放态启停 stalled 巡检器。
+  ///
+  /// 与 [_updatePlaybackDiagnosticSampling] 同调用点（playingStream），但
+  /// 语义独立：诊断采样只在 playing 时留痕；巡检负责发现平台 stalled 的
+  /// 无声死局，必须由独立 Timer 驱动——位置事件正是 stalled 时停发的东西。
+  void _updateStallPatrol(bool isPlaying) {
+    if (!isPlaying) {
+      _stopStallPatrol();
+      return;
+    }
+    if (_stallPatrolTimer?.isActive ?? false) return;
+    _resetStallPatrolEpisode();
+    _stallPatrolTimer = Timer.periodic(
+      _stallPatrolInterval,
+      (_) => _patrolPlaybackStall(),
+    );
+  }
+
+  void _stopStallPatrol() {
+    _stallPatrolTimer?.cancel();
+    _stallPatrolTimer = null;
+    _resetStallPatrolEpisode();
+  }
+
+  /// 复位本回合巡检状态（防抖基线 + 恢复观察窗）。播放态迁移 / 触发恢复时调用。
+  void _resetStallPatrolEpisode() {
+    _stallConditionSince = null;
+    _stallRecoveryWatchUntil = null;
+    _stallRecoveryTriggeredAt = null;
+  }
+
+  /// 批次30：stalled 巡检（续播/恢复播放无声死局修复）。
+  ///
+  /// 判据（取或，持续 [_stallPatrolPersist] 防抖）：
+  /// - **A 事件停发**：[_lastPlatformPositionAt] 距上次更新超过
+  ///   [_stallEventSilence]。平台 stalled 时 positionStream 静默，既有看门狗
+  ///   （位置兜底 / CDN 速率检测 / 预防性预取）全部停摆，只能靠时钟发现。
+  /// - **B 外推超界**：`player.position > player.bufferedPosition`。fork 的
+  ///   position getter 在 `playing && ready` 时按
+  ///   `updatePosition + (now - updateTime) * speed` 挂钟外推
+  ///   （third_party/just_audio/lib/just_audio.dart:800），平台停发事件后
+  ///   外推值只会单调甩开不再增长的 bufferedPosition——缓冲耗尽铁证。
+  ///   仅统计 bufferedPosition > 0 的采样，排除平台未上报缓冲的初始态。
+  ///
+  /// 门控（与既有 CDN 看门狗同口径，见 [_initStreams]）：仅在线歌曲、播放中、
+  /// 播放流 ready、非 completion 处理中、非解析中、非起播/跳转宽限期
+  /// （[_insideRateCheckGrace]）、非 URL 加载保护期（[_urlLoadGuardWindow]）、
+  /// 非失败收敛态（[_resolveError] 已置位时等用户重试/换歌，不循环触发）。
+  ///
+  /// 触发后**复用既有恢复** [_handleCdnStall]（URL 刷新 + 断点续播，真机
+  /// 07:40 日志实证可用），不新写恢复逻辑；随后进入恢复观察窗：收到新的
+  /// 平台位置事件且播放流 ready → 恢复成功；超时仍无事件 → 恢复失败，
+  /// 走既有失败收敛（[_markResolveFailure]），让用户看到「播放失败请重试」
+  /// 而非进度条挂钟外推在走、实际无声的静默假播。
+  void _patrolPlaybackStall() {
+    if (_isDisposed) return;
+    final service = _audioService;
+    if (service == null) return;
+    final platformPlaying = service.player.playing ?? _isPlaying;
+    if (!(_isPlaying || platformPlaying)) {
+      // 不再播放：巡检没有意义，自停并复位本回合状态
+      _stopStallPatrol();
+      return;
+    }
+    final song = _currentSong;
+    if (song == null || !song.isOnline) return;
+    if (_handlingCompletion) return;
+    if (_resolveError != null) return;
+    if (_isResolvingUrl) return;
+    if (_insideRateCheckGrace()) return;
+    if (DateTime.now().difference(_lastUrlLoadStarted) < _urlLoadGuardWindow) {
+      return;
+    }
+    // 平台仍在 loading/buffering：它自己还在努力（首次缓冲/换源装载），
+    // 不是 stalled；且 fork 的挂钟外推本就只在 ready 时生效，判据 B 同口径。
+    if (service.processingState != just_audio.ProcessingState.ready) return;
+
+    final now = DateTime.now();
+    final lastEventAt = _lastPlatformPositionAt;
+    final eventSilence = lastEventAt == null ? null : now.difference(lastEventAt);
+    // 判据 A：必须收到过至少一次事件才有基线，避免把「尚未起播」误判成停发
+    final criterionA = lastEventAt != null && eventSilence! > _stallEventSilence;
+    // 判据 B：挂钟外推位置超过缓冲末端
+    final extrapolatedPosition = service.player.position;
+    final bufferedPosition = service.player.bufferedPosition;
+    final criterionB =
+        bufferedPosition > Duration.zero && extrapolatedPosition > bufferedPosition;
+
+    // —— 恢复观察窗：触发 [_handleCdnStall] 后的成败判定 ——
+    final watchUntil = _stallRecoveryWatchUntil;
+    if (watchUntil != null) {
+      final triggeredAt = _stallRecoveryTriggeredAt;
+      final freshEvent = lastEventAt != null &&
+          triggeredAt != null &&
+          lastEventAt.isAfter(triggeredAt);
+      if (freshEvent &&
+          service.processingState == just_audio.ProcessingState.ready) {
+        _logPlaybackEvent(
+          'stall.recovered',
+          request: _diagnosticPlaybackRequest,
+          song: song,
+          outcome: 'resumed',
+          elapsed: now.difference(triggeredAt),
+        );
+        debugPrint('[StallPatrol] 恢复成功：平台位置事件已恢复');
+        _resetStallPatrolEpisode();
+        return;
+      }
+      if (now.isBefore(watchUntil)) return; // 观察窗内：等待恢复结果
+      _markStallRecoveryFailed();
+      return;
+    }
+
+    if (!criterionA && !criterionB) {
+      // 判据消失（事件恢复 / 缓冲回到位置前方）：复位防抖基线
+      _stallConditionSince = null;
+      return;
+    }
+
+    final conditionSince = _stallConditionSince;
+    if (conditionSince == null) {
+      // 首次成立：记录起点，等持续窗口做防抖
+      _stallConditionSince = now;
+      _logPlaybackEvent(
+        'stall.suspected',
+        request: _diagnosticPlaybackRequest,
+        song: song,
+        outcome: 'watching',
+        details: <String, Object?>{
+          'criterionA': criterionA,
+          'criterionB': criterionB,
+          'platformPositionMs': _lastPlatformPosition.inMilliseconds,
+          'extrapolatedPositionMs': extrapolatedPosition.inMilliseconds,
+          'bufferedPositionMs': bufferedPosition.inMilliseconds,
+          'eventSilenceMs': eventSilence?.inMilliseconds,
+        },
+      );
+      return;
+    }
+    final persisted = now.difference(conditionSince);
+    if (persisted < _stallPatrolPersist) return;
+
+    // 持续成立且超过防抖窗：判定 stalled，触发既有恢复链路
+    _stallConditionSince = null;
+    _stallRecoveryTriggeredAt = now;
+    _stallRecoveryWatchUntil = now.add(_stallRecoveryWatch);
+    _logPlaybackEvent(
+      'stall.detected',
+      request: _diagnosticPlaybackRequest,
+      song: song,
+      outcome: 'recover_triggered',
+      details: <String, Object?>{
+        'criterionA': criterionA,
+        'criterionB': criterionB,
+        'platformPositionMs': _lastPlatformPosition.inMilliseconds,
+        'extrapolatedPositionMs': extrapolatedPosition.inMilliseconds,
+        'bufferedPositionMs': bufferedPosition.inMilliseconds,
+        'eventSilenceMs': eventSilence?.inMilliseconds,
+        'persistMs': persisted.inMilliseconds,
+      },
+    );
+    debugPrint(
+      '[StallPatrol] 判定 stalled（A=$criterionA B=$criterionB '
+      'silence=${eventSilence?.inMilliseconds}ms '
+      'pos=${_lastPlatformPosition.inMilliseconds}ms '
+      'buffered=${bufferedPosition.inMilliseconds}ms），触发既有恢复',
+    );
+    // 复用既有 CDN 换源恢复（URL 刷新 + 断点续播），不新写恢复逻辑
+    unawaited(_handleCdnStall());
+  }
+
+  /// 批次30：stalled 恢复失败（无网 / 解析失败 / 装载失败）的可见收敛。
+  ///
+  /// stalled 发生在用户正在听歌时，属交互路径：写交互文案
+  /// （[safePlaybackErrorMessage] 呈现为「播放失败，请检查网络后重试」）并
+  /// 经 [_markResolveFailure] 置位「播放流未就绪」，让 resume() 走重新解析
+  /// 分支——用户看到重试入口，而不是进度条挂钟外推在走、实际无声的假播。
+  /// 装载失败路径已在 `_runAudioSourceLoad` / `_setUrlAndPlay` 内自行收敛，
+  /// 此处覆盖「解析不到新 URL」的静默出口；重复置位是幂等的。
+  void _markStallRecoveryFailed() {
+    _resetStallPatrolEpisode();
+    if (_isDisposed) return;
+    final request = _diagnosticPlaybackRequest;
+    if (request == null || !_isPlaybackRequestCurrent(request)) return;
+    _logPlaybackEvent(
+      'stall.recovery_failed',
+      request: request,
+      song: _currentSong,
+      outcome: 'resolve_failure',
+      retryable: _currentSong?.isOnline ?? false,
+    );
+    debugPrint('[StallPatrol] 恢复失败：收敛为可重试的播放失败态');
+    if (_resolveError == null) {
+      _resolveError = '播放失败，请检查网络';
+    }
+    _markResolveFailure(play: true);
+    try {
+      _updateNotification();
+    } catch (_) {}
   }
 
   int? _handlingCompletionRequest;
@@ -6095,6 +6354,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     _isDisposed = true;
     _playbackDiagnosticSampleTimer?.cancel();
     _playbackDiagnosticSampleTimer = null;
+    // 批次30：stalled 巡检器取消（独立 Timer，_isDisposed 已置位双重保险）
+    _stallPatrolTimer?.cancel();
+    _stallPatrolTimer = null;
     _invalidatePlaybackRequest(
       source: _PlaybackRequestCancellationSource.providerDispose,
     );
