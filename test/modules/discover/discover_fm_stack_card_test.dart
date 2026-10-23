@@ -215,6 +215,43 @@ void _expectDismissedCardInFlight(WidgetTester tester, String title) {
   );
 }
 
+/// 批次32：读取前卡（[title]）祖先链上的 Opacity 叠乘值与 Transform
+/// 水平平移量（遍历方式与 [_expectDismissedCardInFlight] 一致，单独取样）。
+(double, double) _readFrontCard(WidgetTester tester, String title) {
+  final element = tester.element(find.text(title));
+  var opacity = 1.0;
+  var dx = 0.0;
+  element.visitAncestorElements((e) {
+    final w = e.widget;
+    if (w is Opacity) {
+      opacity *= w.opacity;
+    } else if (w is Transform) {
+      dx += w.transform.storage[12]; // Matrix4 列主序：平移 x
+    }
+    return true; // 继续向上遍历
+  });
+  return (opacity, dx);
+}
+
+/// 批次32：读取下层卡（[title]）祖先链上 Transform.scale 的缩放与
+/// Transform.translate 的纵向位移。下层卡祖先链上仅此两种 Transform
+/// （scale 的 m11≠1、translate 的 m24≠0），前卡的 rotate 不在本链。
+(double, double) _readLowerLayerCard(WidgetTester tester, String title) {
+  final element = tester.element(find.text(title));
+  var scale = 1.0;
+  var dy = 0.0;
+  element.visitAncestorElements((e) {
+    final w = e.widget;
+    if (w is Transform) {
+      final s = w.transform.storage;
+      if (s[0] != 1.0) scale = s[0]; // scale 矩阵 m11
+      dy += s[13]; // 列主序：平移 y
+    }
+    return true; // 继续向上遍历
+  });
+  return (scale, dy);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -428,7 +465,7 @@ void main() {
         await gesture.moveBy(const Offset(-400, 0));
         await gesture.up();
 
-        // 逐帧推进飞出（220ms）与收尾：每一帧里，被划走的甲只要还在
+        // 逐帧推进飞出（200ms）与收尾：每一帧里，被划走的甲只要还在
         // 树里就必须处于「飞出中」（渐隐/飞移）——不允许出现无变换、
         // 全不透明、停在原位的可见帧（即「划走后往回闪一下」）。
         for (var i = 0; i < 20; i++) {
@@ -486,7 +523,7 @@ void main() {
         await gesture.moveBy(const Offset(-400, 0));
         await gesture.up();
 
-        // 飞出 220ms + next() 延迟 100ms：逐帧检查整个窗口无闪回。
+        // 飞出 200ms + next() 延迟 100ms：逐帧检查整个窗口无闪回。
         for (var i = 0; i < 26; i++) {
           await tester.pump(const Duration(milliseconds: 16));
           _expectDismissedCardInFlight(tester, '甲');
@@ -600,6 +637,215 @@ void main() {
 
         expect(find.text('乙'), findsOneWidget,
             reason: '识别器全程存活，抬手应正常 dismiss');
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次32：跟手渐隐——拖拽中前卡透明度随 |dx| 递减且不低于下限 0.35',
+        (tester) async {
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        // 首 move 只触发 drag start（pending offset 被吸收，既有用例同款
+        // 口径），次 move 起才产出 onHorizontalDragUpdate。
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-60, 0)); // _dragDx = -60
+        await tester.pump();
+        final (small, _) = _readFrontCard(tester, '甲');
+        expect(small, lessThan(1.0), reason: '有位移即渐隐（不再不透明跟手）');
+        expect(small, greaterThan(0.35), reason: '下限之上');
+
+        await gesture.moveBy(const Offset(-240, 0)); // _dragDx = -300
+        await tester.pump();
+        final (mid, _) = _readFrontCard(tester, '甲');
+        expect(mid, lessThan(small), reason: 'easeIn：|dx| 越大越透');
+        expect(mid, greaterThan(0.35), reason: '下限之上');
+
+        await gesture.moveBy(const Offset(-740, 0)); // |dx|=1040 > 容器宽
+        await tester.pump();
+        final (floorHit, _) = _readFrontCard(tester, '甲');
+        expect(floorHit, closeTo(0.35, 0.001),
+            reason: '归一化进度 clamp 到 1 → 命中下限');
+
+        await gesture.up(); // 超阈值 → 飞出收尾
+        await tester.pumpAndSettle();
+        // 收尾补货请求带 zero-duration Timer，补 pump 排空
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('乙'), findsOneWidget, reason: '渐隐不影响 dismiss 契约');
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次32：飞出距离动态化——目标 dx 绝对值 > 容器宽度（LayoutBuilder 实测）',
+        (tester) async {
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        // 容器宽度走 LayoutBuilder 实测（分区宽 = 屏宽 − 2×titleMargin），
+        // 不写死屏宽。
+        final stackFinder = find.ancestor(
+          of: find.text('甲'),
+          matching: find.byType(LayoutBuilder),
+        );
+        final width = tester.getSize(stackFinder.first).width;
+        expect(width, greaterThan(0));
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-40, 0));
+        await gesture.moveBy(const Offset(-400, 0));
+        await gesture.up();
+        await tester.pump(); // t=0 帧：前卡 Transform = 完整飞出目标
+
+        final (_, dx) = _readFrontCard(tester, '甲');
+        expect(
+          dx.abs(),
+          greaterThan(width),
+          reason: '飞出目标 = 容器宽 + 余量，须真正滑出分区边界（旧值固定 480）',
+        );
+
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('乙'), findsOneWidget);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次32：飞出时长 ≤200ms——208ms 时前卡已收尾切走', (tester) async {
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-40, 0));
+        await gesture.moveBy(const Offset(-400, 0));
+        await gesture.up();
+        // 首帧只立动画起点（value=0），先补零帧；随后逐帧推进飞出：
+        // 192ms（12×16ms）时应仍在窗口内；208ms 应收尾完成。
+        // 旧实现 220ms 在 208ms 帧后甲仍在飞出中 → 本断言红。
+        await tester.pump();
+        for (var i = 1; i <= 13; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          if (i == 10) {
+            // 160ms（80% 时段）：前卡 easeIn 后段加速消失——opacity≈0.31；
+            // 若误用 easeOut 曲线（前快后慢）此时已≈0.01，本断言红。
+            final (midOpacity, _) = _readFrontCard(tester, '甲');
+            expect(midOpacity, inInclusiveRange(0.2, 0.5),
+                reason: '前卡飞出须 easeIn（后段加速消失）');
+          }
+          if (i == 12) {
+            expect(find.text('甲'), findsOneWidget, reason: '192ms 仍在飞出窗口');
+          }
+        }
+        await tester.pump(); // 收尾 setState 落帧
+        expect(find.text('甲'), findsNothing, reason: '208ms 应收尾完成（≤200ms）');
+        expect(find.text('乙'), findsOneWidget);
+
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次32：飞出终点透明度 0——t=1 后、next() 返回前甲保持全透明',
+        (tester) async {
+      // 播放路径：200ms 飞出完成 → _finishDismiss await next()（延迟
+      // 100ms）。该窗口内被划走的甲必须停在 t=1 的全透明态（终点收敛 0）。
+      final testPlayer = _FmTestPlayerProvider(
+        nextDelay: const Duration(milliseconds: 100),
+      );
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester, playerOverride: testPlayer);
+      try {
+        testPlayer.setTestPlaybackState(
+          currentSong: const Song(
+            id: 'ha', // 与 personalFmSongs[0].hash 对齐 → playingIndex=0
+            title: '甲',
+            artist: '测试歌手',
+            album: '测试专辑',
+            duration: Duration(minutes: 3),
+          ),
+          isPlaying: true,
+        );
+        testPlayer.nextTarget = const Song(
+          id: 'hb',
+          title: '乙',
+          artist: '测试歌手',
+          album: '测试专辑',
+          duration: Duration(minutes: 3),
+        );
+        await tester.pump();
+        expect(find.text('甲'), findsOneWidget);
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-40, 0));
+        await gesture.moveBy(const Offset(-400, 0));
+        await gesture.up();
+
+        // 首帧只立动画起点（value=0），先补零帧；208ms（13×16ms）时
+        // 飞出已完成（200ms）但 next() 未返回（100ms 延迟）
+        await tester.pump();
+        for (var i = 0; i < 13; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        final (opacity, _) = _readFrontCard(tester, '甲');
+        expect(find.text('甲'), findsOneWidget,
+            reason: 'next() 未返回，甲仍在树（_flying 保持）');
+        expect(opacity, closeTo(0.0, 0.001),
+            reason: 't=1：透明度终点收敛到 0');
+        expect(testPlayer.nextCallCount, 1,
+            reason: '200ms 飞出完成即触发收尾（旧 220ms 此时尚未触发）');
+
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(testPlayer.nextCallCount, 1);
+        expect(find.text('甲'), findsNothing);
+        expect(find.text('乙'), findsOneWidget);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次32：下层 easeOut 前移——飞出前 1/3 时段已走过一半以上位移',
+        (tester) async {
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-40, 0));
+        await gesture.moveBy(const Offset(-400, 0));
+        await gesture.up();
+        // 前 1/3 时段（200ms ÷ 3 ≈ 66ms）：easeOutCubic(0.33)≈0.70 过半；
+        // 线性插值同期仅 1/3（scale≈0.973 < 0.98、dy≈9.3 > 7）。该口径
+        // 同时锁死下层不得误用前卡的 easeIn（前慢后快，同期仅 ~13%）。
+        // 注：up() 后首帧 pump 只立动画起点（value=0），先补零帧再推时长。
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 66));
+        final (scale, dy) = _readLowerLayerCard(tester, '乙');
+        expect(scale, greaterThanOrEqualTo(0.98),
+            reason: 'scale 变化量（0.96→1）已过半');
+        expect(dy, lessThanOrEqualTo(7.0),
+            reason: 'dy 变化量（14→0）已过半（线性同期仅 1/3）');
+
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('乙'), findsOneWidget);
       } finally {
         _teardown(kugou, player, favorites, localFavorites);
       }

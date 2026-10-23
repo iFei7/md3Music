@@ -108,21 +108,38 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   /// 前卡拖拽位移（跟手）。
   double _dragDx = 0;
 
+  /// 批次32：堆叠区宽度（LayoutBuilder 实测缓存，build 内赋值不触发重建）。
+  /// 飞出距离 = 宽度 + [_kFlyOutExtra]——前卡真正滑出分区边界即止，
+  /// 替代此前写死的 480px（480 < 常见分区宽时飞不出边界）。
+  double _stackWidth = 0;
+
   /// dismiss 飞出动画：0→1，飞出位移 = _flyDx × (1 − t)。
   late final AnimationController _flyCtrl;
   double _flyDx = 0;
   bool _flying = false;
 
-  /// 批次31：回弹时长。落在 150~200ms 区间取 180ms——与飞出的 220ms
-  /// 拉开档次（回弹是「轻拨一下」，比全幅飞出短一截），easeOutCubic
-  /// 收尾。
+  /// 批次32：飞出时长。批次31 的 220ms 缩短到 200ms（用户口径
+  /// 「划出去即消失」：飞出段短促）；与回弹 180ms 仍保持档次差。
+  static const Duration _kFlyOutDuration = Duration(milliseconds: 200);
+
+  /// 批次32：飞出目标距离余量（容器宽度 + 余量）。余量兜住卡片阴影/
+  /// 圆角的视觉溢出，避免「看似出界实际还露一条边」。
+  static const double _kFlyOutExtra = 64.0;
+
+  /// 批次32：跟手渐隐透明度下限。拖到一半若全透明，用户看不到自己拖的
+  /// 卡；0.35 保留「越拖越透」的感知又不至于消失。
+  static const double _kDragOpacityFloor = 0.35;
+
+  /// 批次31：回弹时长。落在 150~200ms 区间取 180ms——与飞出的 200ms
+  /// （批次32 [_kFlyOutDuration]）拉开档次（回弹是「轻拨一下」，比全幅
+  /// 飞出短一截），easeOutCubic 收尾。
   static const Duration _kSpringBackDuration = Duration(milliseconds: 180);
 
   /// 批次31：未过阈值松手后的回弹动画（0→1，[_kSpringBackDuration]）。
   ///
   /// 选型：新增独立小控制器，而非复用 _flyCtrl 反向——_flyCtrl 的
-  /// 220ms 时长与 easeOutCubic 读时曲线都是为「飞出渐隐」定的，回弹
-  /// 要的是 150~200ms 且位移从松手值收敛到 0（曲线语义正好反过来）；
+  /// 200ms 时长与 easeIn 读时曲线（批次32）都是为「飞出渐隐」定的，
+  /// 回弹要的是 150~200ms 且位移从松手值收敛到 0（曲线语义正好反过来）；
   /// 反向复用还会和飞出窗口/[_flying] 标记/whenComplete 时序全搅在
   /// 一起。回弹值在 _buildStackArea 的 AnimatedBuilder 里读出
   /// （Listenable.merge 合并两个控制器逐帧重建），不走每帧 setState。
@@ -142,7 +159,7 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     _activeInstance = this;
     _flyCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 220),
+      duration: _kFlyOutDuration,
     );
     // 批次31：回弹控制器（未过阈值松手时把跟手位移收敛回 0）
     _springBackCtrl = AnimationController(
@@ -367,17 +384,20 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   }
 
   void _onDragEnd(DragEndDetails details) {
-    // 飞出中忽略新手势收尾：220ms 飞出窗口内再次抬手不应触发二次 dismiss
+    // 飞出中忽略新手势收尾：200ms 飞出窗口内再次抬手不应触发二次 dismiss
     if (_flying) return;
     final dx = _dragDx;
     const threshold = 90.0;
     final velocity = details.velocity.pixelsPerSecond.dx;
     if (dx.abs() > threshold || velocity.abs() > 700) {
-      // 飞出方向沿拖拽方向（速度够时即使位移不足也放行）
+      // 飞出方向沿拖拽方向（速度够时即使位移不足也放行）；
+      // 批次32：飞出目标 = 容器宽 + 余量（[_kFlyOutExtra]）——滑出分区
+      // 边界即止，不再写死 480px（LayoutBuilder 实测宽度缓存于
+      // [_stackWidth]，交互前必已测量）。
       final dir = (dx != 0) ? dx.sign : velocity.sign;
       setState(() {
         _flying = true;
-        _flyDx = dir * 480;
+        _flyDx = dir * (_stackWidth + _kFlyOutExtra);
         _dragDx = 0;
       });
       _flyCtrl.forward(from: 0).whenComplete(() {
@@ -495,41 +515,58 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     // 由后往前叠：下面两张缩小/下沉，前卡置顶可拖拽。
     // 层级构建必须放进 AnimatedBuilder builder：每个动画 tick 都要带
     // 最新飞出进度 t 重算各层形态（前卡滑出渐隐、下层前移）。
-    return AnimatedBuilder(
-      // 批次31：飞出与回弹共用这一个 AnimatedBuilder——两个控制器的
-      // tick 都触发逐帧重建（回弹期间前卡跟手位移由动画值驱动，不走
-      // 每帧 setState）。
-      animation: Listenable.merge([_flyCtrl, _springBackCtrl]),
-      builder: (context, _) {
-        final t = _flying ? Curves.easeOutCubic.transform(_flyCtrl.value) : 0.0;
-        // 回弹进行中：前卡跟手位移由动画值驱动（与飞出同款读时
-        // easeOutCubic）；否则用跟手值 _dragDx。
-        final dragDx = _springBackCtrl.isAnimating
-            ? _springFromDx *
-                (1 - Curves.easeOutCubic.transform(_springBackCtrl.value))
-            : _dragDx;
-        final children = <Widget>[];
-        for (var layer = _kStackDepth - 1; layer >= 0; layer--) {
-          final idx = base + _stackOffset + layer;
-          if (idx >= songs.length) continue;
-          children.add(_buildLayeredCard(
-            context,
-            songs[idx],
-            layer: layer,
-            flyProgress: t,
-            dragDx: dragDx,
-            playingIndex: playingIndex,
-            isPlaying: isPlaying,
-          ));
-        }
-        return SizedBox(
-          height: 320,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              for (final child in children) Positioned.fill(child: child),
-            ],
-          ),
+    //
+    // 批次32：外层 LayoutBuilder 实测堆叠区宽度，缓存到 [_stackWidth]
+    // 供 _onDragEnd 计算飞出距离（事件回调里拿不到 constraints）。
+    // build 内赋值仅作缓存、不触发重建；AnimatedBuilder 保持常驻。
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _stackWidth = constraints.maxWidth;
+        return AnimatedBuilder(
+          // 批次31：飞出与回弹共用这一个 AnimatedBuilder——两个控制器的
+          // tick 都触发逐帧重建（回弹期间前卡跟手位移由动画值驱动，不走
+          // 每帧 setState）。
+          animation: Listenable.merge([_flyCtrl, _springBackCtrl]),
+          builder: (context, _) {
+            // 批次32：前卡与下层曲线分离——前卡 easeIn（后段加速消失，
+            // 视觉=滑出去就没了）；下层 easeOutCubic（前快后慢），前卡
+            // 一划走下一张立刻趋向全尺寸上位，不等飞出尾声。
+            final raw = _flying ? _flyCtrl.value : 0.0;
+            final t = _flying ? Curves.easeIn.transform(raw) : 0.0;
+            final layerEase =
+                _flying ? Curves.easeOutCubic.transform(raw) : 0.0;
+            // 回弹进行中：前卡跟手位移由动画值驱动（与飞出同款读时
+            // easeOutCubic）；否则用跟手值 _dragDx。
+            final dragDx = _springBackCtrl.isAnimating
+                ? _springFromDx *
+                    (1 - Curves.easeOutCubic.transform(_springBackCtrl.value))
+                : _dragDx;
+            final children = <Widget>[];
+            for (var layer = _kStackDepth - 1; layer >= 0; layer--) {
+              final idx = base + _stackOffset + layer;
+              if (idx >= songs.length) continue;
+              children.add(_buildLayeredCard(
+                context,
+                songs[idx],
+                layer: layer,
+                // 批次32：前卡走 easeIn（t），下层走 easeOutCubic
+                // （layerEase）——两套曲线分离，互不跟随。
+                flyProgress: layer == 0 ? t : layerEase,
+                dragDx: dragDx,
+                playingIndex: playingIndex,
+                isPlaying: isPlaying,
+              ));
+            }
+            return SizedBox(
+              height: 320,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  for (final child in children) Positioned.fill(child: child),
+                ],
+              ),
+            );
+          },
         );
       },
     );
@@ -555,7 +592,8 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
         dragDx: dragDx,
       );
     }
-    // 下方层：缩小下沉 + 半透明（层级暗示）；飞出时随 t 前移一级
+    // 下方层：缩小下沉 + 半透明（层级暗示）；飞出时随 easeOut 进度前移
+    // 一级（批次32：flyProgress 已是 easeOutCubic 变换值，前快后慢）。
     final shrink = (layer - flyProgress).clamp(0.0, layer.toDouble());
     return Transform.scale(
       scale: 1 - shrink * 0.04,
@@ -594,7 +632,9 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     required double dragDx,
   }) {
     Widget card = _buildFrontCard(context, song, playingIndex, isPlaying);
-    // 飞出中的前卡：沿 _flyDx 平移 + 渐隐（_flying 优先于跟手位移）
+    // 飞出中的前卡：沿 _flyDx 平移 + 渐隐（_flying 优先于跟手位移）。
+    // 批次32：flyProgress 为 easeIn 变换值——后段加速消失，视觉上
+    // 「滑出去就没了」；t=1 时透明度精确收敛到 0。
     if (_flying) {
       card = Transform.translate(
         offset: Offset(_flyDx * (1 - flyProgress), 0),
@@ -604,19 +644,25 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
         ),
       );
     } else if (dragDx != 0) {
-      // 跟手拖拽/回弹（仅前卡）：位移/旋转施加在子树，识别器不重建
-      card = Transform.translate(
-        offset: Offset(dragDx, 0),
-        child: Transform.rotate(
-          angle: dragDx / 1200,
-          child: card,
+      // 跟手拖拽/回弹（仅前卡）：位移/旋转施加在子树，识别器不重建。
+      // 批次32：外层套渐隐——透明度随 |dx| 增长而下降（easeIn 型，
+      // 越拖越透），下限 [_kDragOpacityFloor]；回弹中同拍生效（位移
+      // 收敛回 0，透明度随之恢复）。
+      card = Opacity(
+        opacity: _dragOpacity(dragDx),
+        child: Transform.translate(
+          offset: Offset(dragDx, 0),
+          child: Transform.rotate(
+            angle: dragDx / 1200,
+            child: card,
+          ),
         ),
       );
     }
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onHorizontalDragUpdate: (d) {
-        // 飞出中忽略新手势：防 220ms 窗口内二次 dismiss
+        // 飞出中忽略新手势：防 200ms 窗口内二次 dismiss
         if (_flying) return;
         setState(() {
           if (_springBackCtrl.isAnimating) {
@@ -645,6 +691,17 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   /// 回弹中途再次跟手时以它为起点，保证位移连续。
   double get _springDx => _springFromDx *
       (1 - Curves.easeOutCubic.transform(_springBackCtrl.value));
+
+  /// 批次32：跟手渐隐透明度。以 [_stackWidth] 归一化位移，easeIn 曲线
+  /// （越拖越透：单位位移的透明度损失随位移加大而加速），下限
+  /// [_kDragOpacityFloor]。回弹中同样生效（位移收敛回 0，透明度随之
+  /// 恢复），与回弹位移动画天然同拍。
+  double _dragOpacity(double dx) {
+    if (_stackWidth <= 0) return 1.0; // 未测量（极端情形）：不渐隐
+    final p = (dx.abs() / _stackWidth).clamp(0.0, 1.0);
+    return _kDragOpacityFloor +
+        (1 - _kDragOpacityFloor) * (1 - Curves.easeIn.transform(p));
+  }
 
   /// 前卡：大图封面 + 歌名/歌手 + 播放暂停 + 收藏红心。
   Widget _buildFrontCard(
