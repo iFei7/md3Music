@@ -22,7 +22,9 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../data/repositories/settings_repository.dart';
 import 'github_release_client.dart';
+import 'release_info.dart';
 import 'release_version.dart';
 import 'update_manifest.dart';
 
@@ -68,8 +70,11 @@ enum InAppUpdateCheckResult {
 
 /// 应用内更新器（ChangeNotifier，供设置页对话框订阅）。
 class InAppUpdater extends ChangeNotifier {
-  InAppUpdater({Dio? dio})
-    : _dio =
+  InAppUpdater({
+    Dio? dio,
+    ReleaseSource? source,
+    Future<bool> Function()? readBetaChannel,
+  }) : _dio =
           dio ??
           Dio(
             BaseOptions(
@@ -82,7 +87,10 @@ class InAppUpdater extends ChangeNotifier {
               maxRedirects: 5,
               headers: {'User-Agent': GithubReleaseClient.userAgent},
             ),
-          );
+          ),
+       _source = source ?? GithubReleaseClient(),
+       _readBetaChannel =
+           readBetaChannel ?? _defaultReadBetaChannel;
 
   /// MethodChannel：android/ 侧需注册同名通道并实现 `installApk`，
   /// 配套说明见 lib/modules/update/ANDROID_SETUP_NOTES.md。
@@ -95,6 +103,16 @@ class InAppUpdater extends ChangeNotifier {
   static const String _cacheDirName = 'update_apk';
 
   final Dio _dio;
+
+  /// Release 数据源（批次34：Beta 通道开启时经 [ReleaseSource.fetchChannelDetail]
+  /// 查 Pre-release 列表，关闭时走正式 Latest——行为与原来一致）。
+  final ReleaseSource _source;
+
+  /// Beta 通道开关读取（默认读 SettingsRepository，测试可注入）。
+  final Future<bool> Function() _readBetaChannel;
+
+  static Future<bool> _defaultReadBetaChannel() =>
+      SettingsRepository().getBetaChannelEnabled();
 
   InAppUpdaterPhase _phase = InAppUpdaterPhase.idle;
   UpdateManifest? _manifest;
@@ -148,7 +166,10 @@ class InAppUpdater extends ChangeNotifier {
       final info = await PackageInfo.fromPlatform();
       _packageName = info.packageName;
 
-      final detail = await GithubReleaseClient().fetchLatestDetail();
+      // 批次34：按 Beta 通道开关选数据源——显式清单与隐式清单两条路径
+      // 共用同一个 detail，通道切换天然对两条路径同时生效。
+      final beta = await _readBetaChannel();
+      final detail = await _source.fetchChannelDetail(beta: beta);
       final release = detail?.info;
       if (release == null || release.tagName.isEmpty) {
         _resetToIdle();
@@ -247,13 +268,28 @@ class InAppUpdater extends ChangeNotifier {
     }
   }
 
+  /// 批次34：Beta 通道下的「是否有更新」判定（纯函数，便于单测）。
+  ///
+  /// - 版本号新于本地 → 新版；
+  /// - 版本号相同且远端构建号（Release body「构建号: N」）大于本地
+  ///   PackageInfo.buildNumber → 新版（同 versionName 的相邻快照）；
+  /// - 任一侧构建号无法比较时退化为 versionName 判断（宁可不提示）。
+  static bool isBetaNewerVersion({
+    required String remoteVersion,
+    required int remoteBuild,
+    required String localVersion,
+    required int localBuild,
+  }) {
+    if (isNewerRelease(remoteVersion, localVersion)) return true;
+    if (isNewerRelease(localVersion, remoteVersion)) return false;
+    return remoteBuild > 0 && localBuild > 0 && remoteBuild > localBuild;
+  }
+
   /// 从 Release body 解析 CI 构建号（「- 构建号: N」行，jq 写入的 run_number）。
   /// 旧 Release body 无此行 → 返回 0（比较退化为 versionName）。
-  static int _buildNumberFromBody(String body) {
-    final match = RegExp(r'构建号[:：]\s*(\d+)').firstMatch(body);
-    if (match == null) return 0;
-    return int.tryParse(match.group(1)!) ?? 0;
-  }
+  /// 批次34：实现抽至 release_info.dart 的公共 [buildNumberFromBody]，
+  /// 供自动提醒（UpdateCheckService）复用，此处保留转发以稳住调用点。
+  static int _buildNumberFromBody(String body) => buildNumberFromBody(body);
 
   /// 从 Release body 提取更新说明行（最多 8 行、每行 ≤200 字符）。
   ///
@@ -316,9 +352,15 @@ class InAppUpdater extends ChangeNotifier {
   ///
   /// [target] 为下载目标清单：null 时用 [_manifest]（默认推荐项）；
   /// UI 允许用户在 [candidates] 中切换 ABI 后传入对应清单。
+  /// [accelerated] 为 true 时（批次34）下载 URL 走 ghclone.com 镜像前缀
+  /// （与发布页加速链一致，302 转发 GitHub CDN）；字节数 + SHA-256 校验
+  /// 逻辑不变（校验数据均来自清单），文件名仍取自原始 apkUrl。
   /// 流程：downloading(进度) → verifying → readyToInstall，任一步失败
   /// 转入 error 并清理半成品文件。
-  Future<void> startDownload([UpdateManifest? target]) async {
+  Future<void> startDownload(
+    UpdateManifest? target, {
+    bool accelerated = false,
+  }) async {
     final manifest = target ?? _manifest;
     if (manifest == null ||
         (_phase != InAppUpdaterPhase.available &&
@@ -340,14 +382,19 @@ class InAppUpdater extends ChangeNotifier {
             : '${base.path}/$_cacheDirName',
       );
       await dir.create(recursive: true);
+      // 文件名从原始 apkUrl 取：镜像域名不混入文件名（同名覆盖语义不变）
       apkFile = File(_joinPath(dir.path, _apkFileName(manifest.apkUrl)));
       // 上一次中断可能残留同名文件，先删
       if (await apkFile.exists()) {
         await apkFile.delete();
       }
 
+      // 加速镜像只是 302 转发 GitHub CDN，清单校验（字节/SHA-256）兜底真实性
+      final downloadUrl = accelerated
+          ? 'https://ghclone.com/${manifest.apkUrl}'
+          : manifest.apkUrl;
       await _dio.download(
-        manifest.apkUrl,
+        downloadUrl,
         apkFile.path,
         onReceiveProgress: _onDownloadProgress,
       );
@@ -452,6 +499,15 @@ class InAppUpdater extends ChangeNotifier {
 
   /// 回到 idle 并丢弃清单/文件引用（对话框关闭后调用）。
   void reset() => _resetToIdle();
+
+  /// 批次34：仅测试用——直接就绪一个清单，绕过 [check] 的平台门禁
+  /// （Platform.isAndroid）与网络检查，便于验证下载路径。
+  @visibleForTesting
+  void debugMarkAvailable(UpdateManifest manifest) {
+    _manifest = manifest;
+    _candidates = <UpdateManifest>[manifest];
+    _phase = InAppUpdaterPhase.available;
+  }
 
   void _resetToIdle() {
     _manifest = null;

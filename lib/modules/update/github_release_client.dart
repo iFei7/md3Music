@@ -3,6 +3,10 @@ import 'package:flutter/foundation.dart';
 
 import 'release_info.dart';
 
+// 批次34：ReleaseDetail / ReleaseAsset / buildNumberFromBody 已上移至
+// release_info.dart（纯数据层），此处 re-export 保持既有导入路径兼容。
+export 'release_info.dart' show ReleaseAsset, ReleaseDetail, buildNumberFromBody;
+
 /// 从 302 的 Location 头解析 tag 名。
 ///
 /// `/releases/latest` 的 Location 形如
@@ -107,6 +111,12 @@ class GithubReleaseClient implements ReleaseSource {
     'https://github.com/$owner/$repo/releases',
   );
 
+  /// 批次34：Pre-release 列表端点（Beta 通道数据源）。
+  /// per_page=15 足够覆盖：lite 快照按时间倒序，最新的合格项必在前几条。
+  static final Uri apiPreReleasesUri = Uri.parse(
+    'https://api.github.com/repos/$owner/$repo/releases?per_page=15',
+  );
+
   final Dio _dio;
 
   /// 查询 GitHub 标记为 Latest 的正式 Release（含附件与说明）。
@@ -146,6 +156,54 @@ class GithubReleaseClient implements ReleaseSource {
     final detail = await fetchLatestDetail();
     return detail?.info;
   }
+
+  /// 批次34：查询最新的 lite Pre-release（Beta 通道数据源）。
+  ///
+  /// GET `/releases?per_page=15`，按时间倒序取**第一个**同时满足
+  /// `prerelease == true` 且 [isLiteTag] 的条目：
+  /// - `ci-<sha>` 产物条目天然被 [isLiteTag] 排除；
+  /// - 正式版（prerelease=false）跳过；
+  /// - 历史遗留 `lite-<sha7>` 形式的 tag 保留可选中（isLiteTag 原语义）。
+  /// 非 2xx / 响应异常 / 无合格项 → null（与既有风格一致，不抛异常）。
+  Future<ReleaseDetail?> fetchLatestPreReleaseDetail() async {
+    try {
+      final response = await _dio.getUri<dynamic>(
+        apiPreReleasesUri,
+        options: Options(
+          headers: {
+            'User-Agent': userAgent,
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+        ),
+      );
+      if (response.statusCode != 200 || response.data is! List) {
+        debugPrint(
+          '[UpdateCheck] /releases HTTP ${response.statusCode}'
+          '${response.data is! List ? '（响应非数组）' : ''}',
+        );
+        return null;
+      }
+      for (final raw in response.data as List) {
+        if (raw is! Map) continue;
+        final item = Map<String, dynamic>.from(raw);
+        if (item['prerelease'] != true) continue;
+        final tag = (item['tag_name'] as String?)?.trim() ?? '';
+        if (!isLiteTag(tag)) continue;
+        return _detailFromApiItem(item);
+      }
+      debugPrint('[UpdateCheck] releases 列表中无合格 lite Pre-release');
+      return null;
+    } catch (error) {
+      debugPrint('[UpdateCheck] Pre-release 列表查询失败：$error');
+      return null;
+    }
+  }
+
+  /// 批次34：按通道分流——Beta 走 Pre-release 列表，否则走正式 Latest。
+  @override
+  Future<ReleaseDetail?> fetchChannelDetail({required bool beta}) =>
+      beta ? fetchLatestPreReleaseDetail() : fetchLatestDetail();
   /// 从 GitHub API 的 Release JSON 对象构造 [ReleaseDetail]。
   ReleaseDetail? _detailFromApiItem(Map<String, dynamic> item) {
     final tagName = (item['tag_name'] as String?)?.trim();
@@ -193,43 +251,3 @@ class GithubReleaseClient implements ReleaseSource {
   }
 }
 
-/// GitHub Release 的一个附件（asset）。
-class ReleaseAsset {
-  const ReleaseAsset({
-    required this.name,
-    required this.size,
-    required this.downloadUrl,
-    this.sha256,
-  });
-
-  /// 附件文件名，形如 `GraceMusic-v5.9.0-...-standard-arm64.apk`。
-  final String name;
-
-  /// 附件精确字节数（GitHub API 直接提供）。
-  final int size;
-
-  /// 下载直链（github.com 域，302 跳 CDN 由 HTTP 客户端自动跟随）。
-  final String downloadUrl;
-
-  /// GitHub API 提供的附件 SHA-256（`sha256:<64hex>` 中的 hex 部分）；
-  /// null 表示响应未带 digest，只能做字节数校验。
-  final String? sha256;
-}
-
-/// 一次「带附件详情」的 Release 查询结果。
-class ReleaseDetail {
-  const ReleaseDetail({
-    required this.info,
-    required this.assets,
-    required this.body,
-  });
-
-  /// 基础信息（tag / version / 页面地址）。
-  final ReleaseInfo info;
-
-  /// 全部附件（含 APK）。
-  final List<ReleaseAsset> assets;
-
-  /// Release 说明原文（Markdown），用于更新说明展示。
-  final String body;
-}

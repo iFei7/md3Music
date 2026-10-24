@@ -42,6 +42,10 @@ class SettingsRepository {
   static const String _keyUpdateLastNotifiedVersion =
       'update_last_notified_version';
 
+  /// 批次34：Beta 通道更新开关：开启后更新检查改查 GitHub Pre-release
+  /// （开发快照），版本更频繁但可能不稳定。默认关闭。
+  static const String _keyBetaChannelEnabled = 'settings_beta_channel_enabled';
+
   /// 签到日历键：登录时按账号隔离（`settings_signed_days_$userid`），
   /// 未登录（游客）用全局键。
   String get _signedDaysKey {
@@ -126,9 +130,15 @@ class SettingsRepository {
     return prefs.getBool(_keyUpdateReminderEnabled) ?? true;
   }
 
+  /// 批次34：写入提醒开关时同时清空上次检查时间戳。
+  ///
+  /// 修复「开关不生效」：自动检查每 12 小时才放行一次，期间用户切开关
+  /// 后无论开/关都感知不到变化。清零后下次检查（启动/立即检查）不再被
+  /// 窗口阻挡，开关切换即时可感知。开与关都清，保证重开行为一致。
   Future<void> setUpdateReminderEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyUpdateReminderEnabled, enabled);
+    await prefs.setInt(_keyUpdateLastCheckMs, 0);
   }
 
   /// 上次成功发起 Release 检查的时间戳（ms）；未检查过返回 0。
@@ -151,6 +161,18 @@ class SettingsRepository {
   Future<void> setUpdateLastNotifiedVersion(String version) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyUpdateLastNotifiedVersion, version);
+  }
+
+  /// 批次34：Beta 通道更新开关（默认关闭）。
+  /// 开启后自动提醒与应用内「检查更新」均改查 Pre-release 快照。
+  Future<bool> getBetaChannelEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyBetaChannelEnabled) ?? false;
+  }
+
+  Future<void> setBetaChannelEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyBetaChannelEnabled, value);
   }
 
   Future<bool> getAutoReceiveVip() async {

@@ -35,6 +35,7 @@ import '../../data/repositories/settings_repository.dart';
 import '../onboarding/onboarding_page.dart';
 import '../onboarding/user_agreement_page.dart';
 import '../update/in_app_updater.dart';
+import '../update/update_check_service.dart';
 import '../update/update_manifest.dart';
 import '../user/account_manager_sheet.dart';
 import '../user/grade_display.dart';
@@ -103,6 +104,8 @@ class _SettingsPageState extends State<SettingsPage>
   bool _uploadListeningDuration = false;
   // 新版本提醒开关（默认开启，关闭后启动时不再检查新版本）
   bool _updateReminderEnabled = true;
+  // 批次34：Beta 通道开关（默认关闭，开启后更新检查改查 Pre-release 快照）
+  bool _betaChannelEnabled = false;
   // 上次已提醒的新版本号（形如 5.6.5，空串=无）。用于「更新最新版本」副标题提示。
   String _pendingUpdateVersion = '';
   // 应用内更新器：检查→下载→校验→安装的状态机，供更新对话框订阅
@@ -316,6 +319,8 @@ class _SettingsPageState extends State<SettingsPage>
         .getCloseLocalMusicComments();
     final updateReminderEnabled = await _settingsRepository
         .getUpdateReminderEnabled();
+    final betaChannelEnabled = await _settingsRepository
+        .getBetaChannelEnabled();
     final pendingUpdateVersion = await _settingsRepository
         .getUpdateLastNotifiedVersion();
     final viperMasterEnabled = await _settingsRepository
@@ -331,6 +336,7 @@ class _SettingsPageState extends State<SettingsPage>
       _autoReceiveVip = autoReceiveVip;
       _uploadListeningDuration = uploadListeningDuration;
       _updateReminderEnabled = updateReminderEnabled;
+      _betaChannelEnabled = betaChannelEnabled;
       _pendingUpdateVersion = pendingUpdateVersion;
       _useDynamicColor = useDynamicColor;
       _useCoverSeedColor = useCoverSeedColor;
@@ -392,12 +398,29 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   /// 新版本提醒开关：写入后下次启动生效（本次运行已排期的检查不撤销）。
+  /// 批次34：打开开关时立即强制检查一次——发现新版走既有 toast 提醒，
+  /// 让开关切换有即时生效感（force 跳过 12h 窗口，但不跳过开关/去重判定）。
   Future<void> _setUpdateReminderEnabled(bool value) async {
     HapticFeedback.lightImpact();
     setState(() {
       _updateReminderEnabled = value;
     });
     await _settingsRepository.setUpdateReminderEnabled(value);
+    if (value) {
+      // ignore: discarded_futures
+      UpdateCheckService.instance.checkNow(force: true);
+    }
+  }
+
+  /// 批次34：Beta 通道开关——开启后自动提醒与手动「检查更新」均改查
+  /// GitHub Pre-release 快照（versionName 相同时按构建号比较）。
+  /// 只写偏好，下次检查即按新通道取数，无需重启。
+  Future<void> _setBetaChannelEnabled(bool value) async {
+    HapticFeedback.lightImpact();
+    setState(() {
+      _betaChannelEnabled = value;
+    });
+    await _settingsRepository.setBetaChannelEnabled(value);
   }
 
   Future<void> _loadVersion() async {
@@ -2731,6 +2754,19 @@ class _SettingsPageState extends State<SettingsPage>
             _setUpdateReminderEnabled(value);
           },
         ),
+        // 批次34：Beta 通道——同时接收测试版（Pre-release）快照
+        // search: Beta 通道 测试版 prerelease 快照 更新
+        SwitchListTile(
+          title: const Text('Beta 通道'),
+          subtitle: const Text(
+            '同时接收测试版（Pre-release）更新，更新更频繁但可能不稳定',
+          ),
+          value: _betaChannelEnabled,
+          onChanged: (value) {
+            // ignore: discarded_futures
+            _setBetaChannelEnabled(value);
+          },
+        ),
         ListTile(
           title: const Text('检查更新'),
           subtitle: Text(
@@ -3050,6 +3086,24 @@ class _SettingsPageState extends State<SettingsPage>
           TextButton(
             onPressed: () => Navigator.pop(dialogCtx),
             child: const Text('取消'),
+          ),
+          // 批次34：加速下载——ghclone.com 镜像转发 GitHub CDN，
+          // 与发布页加速链一致；校验逻辑（字节/SHA-256）不变
+          FilledButton.tonal(
+            onPressed: () {
+              final candidates = _updater.candidates;
+              UpdateManifest? selected;
+              if (candidates.isNotEmpty) {
+                selected =
+                    candidates[_selectedApkCandidate.clamp(
+                      0,
+                      candidates.length - 1,
+                    )];
+              }
+              // ignore: discarded_futures
+              _updater.startDownload(selected, accelerated: true);
+            },
+            child: const Text('⚡ 加速下载'),
           ),
           FilledButton(
             onPressed: () {
