@@ -85,11 +85,20 @@ void main() {
   /// 收尾推进 ≥8s fake 时间：KugouApiClient `_onRequest` 等待本地服务就绪的
   /// 8s 超时 Timer 在请求失败后仍挂在 fake async 区，不推进会在测试结束时
   /// 触发 pending timer 断言（见 search_page_capsule_test 同款处理）。
+  ///
+  /// 批次 35：宿主钉死竖屏——flutter test 默认窗口 800×600 即横屏，横屏
+  /// 下搜索页坍缩态（offset ≥ 52）整栏会滑出隐藏（新特性，见
+  /// test/widgets/sonify_title_scaffold_landscape_test.dart）；本文件断言
+  /// 竖屏坍缩交互（圆钮浮出/点击回顶聚焦）既有路径，故注入竖屏
+  /// MediaQuery（400×800）。
   Future<void> pumpHost(WidgetTester tester, Widget child) async {
     await tester.pumpWidget(
-      MultiProvider(
-        providers: _providers,
-        child: MaterialApp(theme: _testTheme, home: child),
+      MediaQuery(
+        data: const MediaQueryData(size: Size(400, 800)),
+        child: MultiProvider(
+          providers: _providers,
+          child: MaterialApp(theme: _testTheme, home: child),
+        ),
       ),
     );
     await tester.pump();

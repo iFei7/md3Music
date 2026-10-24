@@ -52,16 +52,24 @@ void _seedLocalMusic({int count = 1}) {
 
 Future<void> _pumpLibraryPage(WidgetTester tester) async {
   await tester.pumpWidget(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => LibraryProvider()),
-        ChangeNotifierProvider(create: (_) => PlayerProvider()),
-        ChangeNotifierProvider(
-          create: (_) => FavoritesProvider(syncOnStart: false),
-        ),
-        ChangeNotifierProvider(create: (_) => LocalFavoritesProvider()),
-      ],
-      child: const MaterialApp(home: LibraryPage()),
+    // 批次 35：钉死竖屏——flutter test 默认窗口 800×600 即横屏，横屏
+    // 下顶栏随滚动整体上滑隐藏（新特性，见
+    // test/widgets/sonify_title_scaffold_landscape_test.dart）；本文件
+    // 断言竖屏「顶栏搜索圆钮浮现后点击聚焦面板搜索框」既有路径，
+    // 故注入竖屏 MediaQuery（400×800）。
+    MediaQuery(
+      data: const MediaQueryData(size: Size(400, 800)),
+      child: MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => LibraryProvider()),
+          ChangeNotifierProvider(create: (_) => PlayerProvider()),
+          ChangeNotifierProvider(
+            create: (_) => FavoritesProvider(syncOnStart: false),
+          ),
+          ChangeNotifierProvider(create: (_) => LocalFavoritesProvider()),
+        ],
+        child: const MaterialApp(home: LibraryPage()),
+      ),
     ),
   );
 }

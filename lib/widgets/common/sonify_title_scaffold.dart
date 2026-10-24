@@ -35,6 +35,16 @@ import '../../core/theme/app_theme.dart';
 /// 栏体背景改随「骨架滚动 **或** 外部信号」二者取或浮现，与
 /// [actionsVisible] 同一套外置信号机制。
 ///
+/// **横屏「上滑隐藏顶栏」（批次 35）**：横屏设备高度小，为尽可能减少
+/// 页面纵向遮挡，横屏 + 内容滚动（离开顶部）时顶栏整体（固定大标题 +
+/// 渐变模糊带 + 右上头像 + actions）以 180ms easeOut 动画向上滑出屏幕
+/// （translateY = −（状态栏 + 标题区 52dp））并淡出；回顶（offset ≤ 0）
+/// 滑回恢复。竖屏完全维持现状（固定悬浮、滚动只出模糊带）。判定口径为
+/// 壳层纯方向：[MediaQuery.orientationOf] == [Orientation.landscape]。
+/// 驱动源与栏背景同源（骨架自身 offset > 0 或外部 [barBackgroundVisible]
+/// 注入的内层列表滚动，二者取或）；搜索页（NestedScrollView 结构）由
+/// 坍缩态信号驱动，见 [SonifyTitleOverlay.topBarHidden]。
+///
 /// **去掉的机制**（批次 8 起）：大标题随滚动折叠为小标题（位置/尺寸
 /// 变化）及 180ms 端点吸附——与"标题位置固定"的诉求直接冲突，且小标题
 /// 与固定大标题同时可见会造成双标题，故整条折叠链路移除；短内容页的
@@ -125,6 +135,17 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
   /// （Title.kt:640-653）。
   final ValueNotifier<bool> _showBarBackground = ValueNotifier(false);
 
+  /// 批次 35：横屏「上滑隐藏顶栏」信号（true = 顶栏整体已滑出屏幕）。
+  /// 与 [_showBarBackground] 同源（骨架自身 offset > 0 或外部
+  /// barBackgroundVisible 注入的内层列表滚动，二者取或），横屏时二者
+  /// 同真；**竖屏恒 false**（顶栏固定悬浮不隐藏，既有路径不变）。
+  /// 横竖屏切换（MediaQuery 变化）经 [didChangeDependencies] 重算。
+  final ValueNotifier<bool> _topBarHidden = ValueNotifier(false);
+
+  /// 当前是否横屏的方向缓存（[didChangeDependencies] 刷新）：滚动通知
+  /// 分发路径上只读缓存，不做 InheritedWidget 查找。
+  bool _landscape = false;
+
   bool _disposed = false;
 
   @override
@@ -136,9 +157,20 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 批次 35：横竖屏切换走这里（MediaQuery 依赖变化）——刷新方向缓存
+    // 并按新方向重算顶栏隐藏态（横屏 = 滚动信号，竖屏恒 false）。
+    // 与滚动回调共用同一出口，等值防抖。
+    _landscape = MediaQuery.orientationOf(context) == Orientation.landscape;
+    _updateFromScroll();
+  }
+
+  @override
   void dispose() {
     _disposed = true;
     _showBarBackground.dispose();
+    _topBarHidden.dispose();
     widget.barBackgroundVisible?.removeListener(_updateFromScroll);
     _internalController?.dispose();
     super.dispose();
@@ -165,6 +197,12 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
         (widget.barBackgroundVisible?.value ?? false);
     if (_showBarBackground.value != showBar) {
       _showBarBackground.value = showBar;
+    }
+    // 批次 35：横屏时顶栏随同一滚动信号整体上滑隐藏（竖屏恒 false，
+    // 顶栏固定悬浮不隐藏）。等值防抖，避免动画壳反复重启。
+    final hideBar = _landscape && showBar;
+    if (_topBarHidden.value != hideBar) {
+      _topBarHidden.value = hideBar;
     }
   }
 
@@ -240,6 +278,9 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
             child: SonifyTitleOverlay(
               title: widget.title,
               showBarBackground: _showBarBackground,
+              // 批次 35：横屏「上滑隐藏顶栏」驱动信号（竖屏时 overlay 内
+              // 的方向判定忽略它，顶栏结构逐字节维持既有悬浮形态）。
+              topBarHidden: _topBarHidden,
               statusBarHeight: media.padding.top,
               trailing: widget.trailing,
               actions: widget.actions,
@@ -269,6 +310,14 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
 /// 用法约定：置于页面级 Stack 中、以 [Positioned.fill]（或等价全屏约束）
 /// 包裹；`showBarBackground` 由宿主页的滚动信号驱动（offset > 0 即
 /// 浮现，回顶消失）。
+///
+/// **横屏「上滑隐藏顶栏」（批次 35）**：注入 [topBarHidden] 且宿主为
+/// 横屏时，整栏（[_TopBar] 渐变模糊带 + [_PinnedLargeTitle] 大标题 +
+/// 右上头像 + actions）随该通知器整体上滑出屏（translateY = −（状态栏
+/// + 标题区 52dp））并同步淡出（180ms easeOut），信号回落即滑回恢复；
+/// 竖屏（或未注入信号）时本参数被方向判定忽略，返回原 Stack 结构，
+/// 与批次 35 之前逐字节一致。滑出壳包在整个 Stack 之外，模糊带与
+/// 标题/头像同拍随行，不出现「带还在、标题走了」的分裂。
 class SonifyTitleOverlay extends StatelessWidget {
   const SonifyTitleOverlay({
     super.key,
@@ -278,6 +327,7 @@ class SonifyTitleOverlay extends StatelessWidget {
     this.trailing,
     this.actions,
     this.actionsVisible,
+    this.topBarHidden,
   });
 
   /// 页面大标题文本（固定悬浮，不折叠）。
@@ -300,8 +350,60 @@ class SonifyTitleOverlay extends StatelessWidget {
   /// [showBarBackground]（默认行为）。见 [SonifyTitleScaffold.actionsVisible]。
   final ValueListenable<bool>? actionsVisible;
 
+  /// 批次 35：横屏「上滑隐藏顶栏」信号（true = 整栏滑出屏幕）。
+  ///
+  /// 骨架页（SonifyTitleScaffold）传入 [_SonifyTitleScaffoldState] 的
+  /// 同源滚动信号（横屏 = 骨架 offset > 0 或外部 barBackgroundVisible
+  /// 注入的内层列表滚动；竖屏恒 false）；搜索页传入坍缩态通知器
+  /// （outer offset ≥ 52 = 坍缩态 = 顶栏隐藏）。**竖屏时本参数被方向
+  /// 判定忽略**（顶栏固定悬浮不隐藏），仅横屏生效。
+  final ValueListenable<bool>? topBarHidden;
+
   @override
   Widget build(BuildContext context) {
+    final hideSignal = topBarHidden;
+    if (hideSignal != null &&
+        MediaQuery.orientationOf(context) == Orientation.landscape) {
+      // 横屏隐藏壳（批次 35）：整栏随信号整体上滑 + 淡出，回顶滑回。
+      // 壳包在整个 Stack 之外——模糊带（key 'sonify_bar_blur'）与
+      // 标题/头像同拍随行，不出「带还在、标题走了」的分裂；隐藏态
+      // IgnorePointer 断开命中（栏体已出屏，不应再吸收点按）。
+      return ValueListenableBuilder<bool>(
+        valueListenable: hideSignal,
+        builder: (context, hidden, child) {
+          return IgnorePointer(
+            ignoring: hidden,
+            child: AnimatedOpacity(
+              opacity: hidden ? 0 : 1,
+              duration: kSonifyTopBarHideDuration,
+              curve: Curves.easeOut,
+              child: TweenAnimationBuilder<double>(
+                tween: Tween<double>(
+                  begin: 0,
+                  end: hidden ? -(statusBarHeight + _kTitleZoneHeight) : 0,
+                ),
+                duration: kSonifyTopBarHideDuration,
+                curve: Curves.easeOut,
+                builder: (context, offset, child) => Transform.translate(
+                  offset: Offset(0, offset),
+                  child: child,
+                ),
+                child: child,
+              ),
+            ),
+          );
+        },
+        child: _buildStack(),
+      );
+    }
+    // 竖屏（或未注入隐藏信号）：固定悬浮顶栏，结构与批次 35 之前逐字节
+    // 一致（回归锁 test/widgets/sonify_title_scaffold_test.dart）。
+    return _buildStack();
+  }
+
+  /// 顶栏 Stack（渐变模糊带 [_TopBar] + 固定悬浮大标题）：横屏隐藏壳的
+  /// 子节点；竖屏直接作为本组件产物。
+  Widget _buildStack() {
     return Stack(
       children: [
         Positioned(
@@ -645,6 +747,17 @@ class _TopBar extends StatelessWidget {
     );
   }
 }
+
+/// 横屏「上滑隐藏顶栏」的滑出距离口径（批次 35）：标题区高 = 占位 item
+/// 同口径（8dp 顶距 + 36dp 标题行高 + 8dp 底距 = 52dp）。整栏实际上滑
+/// 距离 = 状态栏 + 本值；渐变模糊带（状态栏 + 54dp 栏体）比之多出的
+/// 2dp 为 tint 渐变全透明尾，随行出屏后由外层淡出兜底，肉眼不可见。
+const double _kTitleZoneHeight = 52;
+
+/// 横屏「上滑隐藏顶栏」动画时长（批次 35）：150-200ms 区间取 180ms、
+/// easeOut；竖屏不适用（顶栏固定悬浮，无隐藏动画）。
+/// 非私有：供 widget 测试断言动画收敛时长。
+const Duration kSonifyTopBarHideDuration = Duration(milliseconds: 180);
 
 /// 顶栏渐变模糊带的模糊 sigma：**单片 dock 配方**（批次 25 起）。
 ///

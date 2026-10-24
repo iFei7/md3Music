@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show max;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
@@ -13,9 +14,35 @@ import 'full_player.dart';
 /// 实现淡入淡出效果与拖拽距离线性绑定。
 final ValueNotifier<double> playerExpansion = ValueNotifier<double>(0.0);
 
-/// 基础触发阈值：屏幕高度的 20%。
+/// 基础触发阈值：屏幕长边的 20%（经 [playerExpandDistanceThreshold]
+/// 钳制 [kPlayerExpandDistanceMin] - [kPlayerExpandDistanceMax]）。
 /// 上滑距离达到或超过该阈值后松手，FullPlayer 完整展开。
+///
+/// 「长边」口径（批次35，方案 P0-4）：调用方传入 max(宽, 高)（竖屏时即
+/// 屏高，数值与改动前一致）——横屏矮视口下按短边（屏高）过灵敏。
 const double kPlayerExpandDistanceRatio = 0.2;
+
+/// 拖拽展开距离阈值的固定上下限（批次35 Pad 分档）。
+///
+/// Pad 横屏长边更大（如 1440×1080 → 0.2×1440 = 288px），纯比例阈值
+/// 拖拽行程过长；钳制后 Pad 阈值封顶 [kPlayerExpandDistanceMax]。
+/// 手机横屏长边 ≤ ~1000dp（0.2 倍 ≤ 200px）、竖屏长边即屏高（480-1000
+/// → 96-200px）均落在钳制区间内——手机 / 竖屏数值逐字节不变，仅 Pad
+/// 大视口（长边 > 1200）封顶。
+const double kPlayerExpandDistanceMin = 96.0;
+const double kPlayerExpandDistanceMax = 240.0;
+
+/// 松手展开距离阈值（批次35）：长边 [kPlayerExpandDistanceRatio] 比例值，
+/// 并按 [kPlayerExpandDistanceMin] / [kPlayerExpandDistanceMax] 钳制。
+///
+/// [shouldExpandPlayer] 的距离判定与 [DraggablePlayerRoute] 透明度前
+/// 20% 区间分母（buildTransitions）共用本函数——两处同源，不会出现
+/// 「够阈值不展开 / 透明度 ramp 不对齐」的分裂。
+double playerExpandDistanceThreshold(double longEdge) =>
+    (longEdge * kPlayerExpandDistanceRatio).clamp(
+      kPlayerExpandDistanceMin,
+      kPlayerExpandDistanceMax,
+    );
 
 /// 速度阈值（px/s，向上为正）：快速上滑即使距离不足也展开。
 const double kPlayerFlingVelocityThreshold = 900.0;
@@ -30,6 +57,10 @@ const double kPlayerPullBackVelocityThreshold = 100.0;
 /// 松手判定：距离达标、速度达标、加速度达标三者任一即展开。
 /// 加速度取绝对值：快速甩动时起手加速、末端减速，两者都代表强甩动。
 ///
+/// 距离阈值 = [playerExpandDistanceThreshold]（长边 0.2 倍，按
+/// [kPlayerExpandDistanceMin] - [kPlayerExpandDistanceMax] 钳制，批次35
+/// Pad 分档）：手机 / 竖屏数值不变，Pad 大长边封顶 240px。
+///
 /// 回拉判定优先：松手瞬间手指仍在向下运动（velocity < -阈值）时，说明用户在
 /// 上滑后又往回拉（加速度向下）。此时即使累计上滑距离超过 20%，也不展开——
 /// 避免「滑上去又拉回来却仍进入 FullPlayer」的误触发。
@@ -37,12 +68,12 @@ const double kPlayerPullBackVelocityThreshold = 100.0;
 /// 区分「末端减速的甩动」与「向下回拉」。
 bool shouldExpandPlayer({
   required double dragDistance, // 向上累计距离 px（≥0）
-  required double screenHeight,
+  required double screenHeight, // 屏幕长边 px（竖屏即屏高，横屏为宽）
   required double velocity, // 向上为正 px/s
   required double acceleration, // 向上为正 px/s²（允许为负，末端减速）
 }) {
   if (velocity < -kPlayerPullBackVelocityThreshold) return false;
-  return dragDistance >= screenHeight * kPlayerExpandDistanceRatio ||
+  return dragDistance >= playerExpandDistanceThreshold(screenHeight) ||
       velocity > kPlayerFlingVelocityThreshold ||
       acceleration.abs() > kPlayerAccelerationThreshold;
 }
@@ -98,7 +129,8 @@ void openFullPlayer(BuildContext context) {
 ///
 /// [dragOriginTop]/[screenHeight] 由 MiniPlayer 上滑拖拽传入（拖拽模式）：
 /// - 拖拽模式：FullPlayer 顶端从 [dragOriginTop]（= MiniPlayer 顶端）开始
-///   跟随手指上移，透明度在前 20% 屏高内线性 0→1；
+///   跟随手指上移，透明度在前 20% 屏长内线性 0→1（[screenHeight] 按
+///   max(宽, 高) 长边传入，见 [kPlayerExpandDistanceRatio]）；
 /// - 不传（点击打开）：保持原有淡入 + 15% 上滑动画。
 DraggablePlayerRoute<void> fullPlayerRoute(
   BuildContext context, {
@@ -357,12 +389,26 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
         // origin = 拖拽模式的 MiniPlayer 顶端；顶栏拖拽（含 tap 模式）用
         // topBarDragTotal（= MiniPlayer 顶端），实现点击进入也能原路返回
         if (isDragMode || topBarDrag) {
-          final height = screenHeight ?? MediaQuery.sizeOf(context).height;
+          // 长边口径（批次35，方案 P0-4）：透明度前 20% 区间的分母与
+          // shouldExpandPlayer 的距离阈值同源按长边计算——横屏矮视口下
+          // 按短边（屏高）过灵敏；竖屏时长边即屏高，数值不变。拖拽模式
+          // 的 screenHeight 由 Dock 侧按长边传入（见 glass_dock_player
+          // _onPlayerDragEnd），此处兜底 tap 模式（未传）同样取长边。
+          // Pad 分档（批次35）：分母走 playerExpandDistanceThreshold
+          // （长边 0.2 倍并按 96-240 钳制）——与松手展开距离阈值同源，
+          //  Pad 大视口下透明度 ramp 与「够不够阈值」不错位。
+          final height =
+              screenHeight ??
+              max(
+                MediaQuery.sizeOf(context).width,
+                MediaQuery.sizeOf(context).height,
+              );
           final origin = topBarDragTotal ?? dragOriginTop!;
           final pos = controller.isAnimating ? _easedPosition(raw) : raw;
           final dy = origin * (1 - pos);
-          final opacity = (pos * origin / (kPlayerExpandDistanceRatio * height))
-              .clamp(0.0, 1.0);
+          final opacity =
+              (pos * origin / playerExpandDistanceThreshold(height))
+                  .clamp(0.0, 1.0);
           if (pos != playerExpansion.value) {
             // 让出当前 build 帧：build 阶段直接改 ValueNotifier 会触发
             // 监听者 setState() during build（_dependents/descendant 断言）。

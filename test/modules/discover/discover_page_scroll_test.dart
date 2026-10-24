@@ -90,19 +90,27 @@ void main() {
     final favorites = FavoritesProvider(syncOnStart: false);
     final localFavorites = LocalFavoritesProvider();
     await tester.pumpWidget(
-      MaterialApp(
-        theme: _testTheme,
-        navigatorObservers: [?observer],
-        home: MultiProvider(
-          providers: [
-            ChangeNotifierProvider<KugouProvider>.value(value: kugou),
-            ChangeNotifierProvider<PlayerProvider>.value(value: player),
-            ChangeNotifierProvider<FavoritesProvider>.value(value: favorites),
-            ChangeNotifierProvider<LocalFavoritesProvider>.value(
-              value: localFavorites,
-            ),
-          ],
-          child: const DiscoverPage(),
+      // 批次 35：钉死竖屏——flutter test 默认窗口 800×600 即横屏，横屏
+      // 下顶栏随滚动整体上滑隐藏（新特性，见
+      // test/widgets/sonify_title_scaffold_landscape_test.dart）；本文件
+      // 断言竖屏「标题固定 / 圆钮滚动浮现」既有路径，故注入竖屏
+      // MediaQuery（400×800）。
+      MediaQuery(
+        data: const MediaQueryData(size: Size(400, 800)),
+        child: MaterialApp(
+          theme: _testTheme,
+          navigatorObservers: [?observer],
+          home: MultiProvider(
+            providers: [
+              ChangeNotifierProvider<KugouProvider>.value(value: kugou),
+              ChangeNotifierProvider<PlayerProvider>.value(value: player),
+              ChangeNotifierProvider<FavoritesProvider>.value(value: favorites),
+              ChangeNotifierProvider<LocalFavoritesProvider>.value(
+                value: localFavorites,
+              ),
+            ],
+            child: const DiscoverPage(),
+          ),
         ),
       ),
     );

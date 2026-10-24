@@ -15,20 +15,28 @@ final _testTheme = AppTheme.lightTheme.copyWith(
 
 /// 构建测试宿主：无系统 inset（测试环境 status bar = 0）、AppTheme 主题。
 /// 返回外部 ScrollController 供滚动注入。
+///
+/// 批次 35：显式注入**竖屏** MediaQuery——flutter test 默认窗口 800×600
+/// 即横屏，而横屏下顶栏会随滚动整体上滑隐藏（新特性，见
+/// test/widgets/sonify_title_scaffold_landscape_test.dart）；本文件断言
+/// 的是竖屏「固定悬浮」既有路径，故钉死竖屏口径（400×800）。
 (Widget, ScrollController) _host({
   int itemCount = 30,
   required String title,
 }) {
   final controller = ScrollController();
-  final widget = MaterialApp(
-    theme: _testTheme,
-    home: SonifyTitleScaffold(
-      title: title,
-      itemCount: itemCount,
-      controller: controller,
-      itemBuilder: (context, index) => SizedBox(
-        height: 100,
-        child: ListTile(title: Text('item $index')),
+  final widget = MediaQuery(
+    data: const MediaQueryData(size: Size(400, 800)),
+    child: MaterialApp(
+      theme: _testTheme,
+      home: SonifyTitleScaffold(
+        title: title,
+        itemCount: itemCount,
+        controller: controller,
+        itemBuilder: (context, index) => SizedBox(
+          height: 100,
+          child: ListTile(title: Text('item $index')),
+        ),
       ),
     ),
   );

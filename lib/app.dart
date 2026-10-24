@@ -182,6 +182,12 @@ class MyApp extends StatelessWidget {
 /// 渲染在 `MaterialApp.builder` 的 Stack（Navigator 之上），盖过整屏
 /// 不透明的二级路由；导航相关参数为占位值（`showNav: false` 下不参与
 /// 布局）。播放控制 / 进度环 / 左右滑切歌复用 [GlassDockPlayer] 实现。
+///
+/// 批次35：横屏下 GlassDockPlayer 自身切换为「右侧纵条 + 播放球」形态
+/// （内部 Align 重新锚位），外层 Align 只是铺满占位，两种方向同构。
+/// Pad 横屏分档（批次35）：最短边 ≥ 600 时由 Dock 内部
+/// [GlassDockPlayer.isPadLandscape] 选 Pad 档几何；本层的避让注入
+/// （见 [_AppViewState] 内二级页注入）按同一判定选档，两侧同源。
 class _SecondaryFloatingPlayer extends StatelessWidget {
   const _SecondaryFloatingPlayer();
 
@@ -417,13 +423,32 @@ class _AppViewState extends State<_AppView> {
                     // 二级页 Dock 避让：与主布局同口径注入底部 padding，
                     // 页面内读 MediaQuery.paddingOf(context).bottom 消费。
                     // 主布局同时被盖住（其自身注入与本注入叠加不可见，无害）。
+                    // 批次35：横屏下二级 Dock 为右侧纵条（仅播放器形态），
+                    // 避让改注右侧 padding.right（与竖屏底部注入同模式）；
+                    // 竖屏注入不变。Pad 横屏分档（最短边 ≥ 600）按
+                    // GlassDockPlayer.isPadLandscape 选档（与 Dock 侧同源）。
                     final mq = MediaQuery.of(context);
+                    final isLandscape =
+                        MediaQuery.orientationOf(context) ==
+                        Orientation.landscape;
+                    final isPadLandscape = GlassDockPlayer.isPadLandscape(
+                      context,
+                    );
                     navigator = MediaQuery(
                       data: mq.copyWith(
                         padding: mq.padding.copyWith(
-                          bottom:
-                              mq.padding.bottom +
-                              _MainLayoutState._kDockReservedBottom,
+                          bottom: isLandscape
+                              ? mq.padding.bottom
+                              : mq.padding.bottom +
+                                    _MainLayoutState._kDockReservedBottom,
+                          right: isLandscape
+                              ? mq.padding.right +
+                                    (isPadLandscape
+                                        ? _MainLayoutState
+                                              ._kDockReservedRightPad
+                                        : _MainLayoutState
+                                              ._kDockReservedRight)
+                              : mq.padding.right,
                         ),
                       ),
                       child: navigator,
@@ -696,6 +721,30 @@ class _MainLayoutState extends State<_MainLayout>
   /// 容器的底部 padding 应读取 MediaQuery.paddingOf(context).bottom 消费
   /// 该值——内容延伸到 Dock 后面（悬浮感），滚动末尾靠这个 padding 让位。
   static const double _kDockReservedBottom = 72.0;
+
+  /// 横屏右纵条 Dock 避让宽度（批次35）：纵条宽 + 右间距。
+  ///
+  /// 与 [_kDockReservedBottom] 完全同模式注入 `MediaQuery.padding.right`
+  /// （页面内读 paddingOf(context).right 消费；横屏 Dock 形态见
+  /// [GlassDockPlayer.kLandscapeRailWidth] 等常量，一处定义两处消费）。
+  /// 纵条几何：右距 12（同竖屏底距）+ 纵条宽 52（导航项 44 + 水平
+  /// padding 8）；展开体悬浮覆盖在纵条左侧之上，不占避让。
+  ///
+  /// Pad 横屏分档（批次35）：最短边 ≥ 600 的横屏 Pad 纵条宽 60，避让
+  /// 同步换 [_kDockReservedRightPad]（72）——两处注入（一级页 / 二级页）
+  /// 均按 [GlassDockPlayer.isPadLandscape] 选档，与 Dock 侧几何**同源
+  /// 派生**（壳与内容判据同源，防「Pad 壳装手机内容」错位）。
+  static const double _kDockReservedRight =
+      GlassDockPlayer.kLandscapeRailWidth +
+      GlassDockPlayer.kLandscapeRailRightMargin;
+
+  /// Pad 横屏档避让宽度（批次35）：Pad 档纵条宽 60 + 右距 12 = 72。
+  ///
+  /// 与 [_kDockReservedRight] 同模式：由 Dock 侧 Pad 档常量派生，按
+  /// [GlassDockPlayer.isPadLandscape]（横屏 + 最短边 ≥ 600）选档消费。
+  static const double _kDockReservedRightPad =
+      GlassDockPlayer.kLandscapeRailWidthPad +
+      GlassDockPlayer.kLandscapeRailRightMargin;
 
   /// 词幕连接失败弹窗展示中标记，防止连发 connect_failed 时重复弹窗。
 
@@ -1335,12 +1384,32 @@ class _MainLayoutState extends State<_MainLayout>
       ],
     );
 
-    // 仅竖屏注入 Dock 避让高度（横屏侧边导航场景另行处理，保持原状）。
+    // 竖屏注入 Dock 避让高度（横屏改注右侧避让，见下）。
     // 注入值 = mq.padding.bottom（已含系统手势条）+ Dock 专属高度，页面内
     // 读 MediaQuery.paddingOf(context).bottom 即可一次拿到「手势条 + Dock」
     // 的完整让位量。已适配的页面（收藏 / 新碟 / 榜单 / 发现二级页等）自动
     // 生效；未读取的硬编码 padding 页面需各自补读。
-    if (!isLandscape) {
+    if (isLandscape) {
+      // 横屏一级页右侧避让（批次35）：Dock 为右侧纵条，注入
+      // padding.right = 纵条宽 + 右距（与竖屏底部注入完全同模式；
+      // 常量见 _kDockReservedRight）。纵条垂直居中不占纵向空间，
+      // 底部注入在横屏下不再需要。
+      // Pad 分档（批次35）：最短边 ≥ 600 的横屏 Pad 避让换
+      // _kDockReservedRightPad（72）——按 GlassDockPlayer.isPadLandscape
+      // 选档，与 Dock 侧几何同源派生（防「Pad 壳装手机内容」错位）。
+      content = MediaQuery(
+        data: mq.copyWith(
+          padding: mq.padding.copyWith(
+            right:
+                mq.padding.right +
+                (GlassDockPlayer.isPadLandscape(context)
+                    ? _kDockReservedRightPad
+                    : _kDockReservedRight),
+          ),
+        ),
+        child: content,
+      );
+    } else {
       content = MediaQuery(
         data: mq.copyWith(
           padding: mq.padding.copyWith(
@@ -1351,37 +1420,55 @@ class _MainLayoutState extends State<_MainLayout>
       );
     }
 
-    // 悬浮玻璃 Dock：底部居中（导航胶囊 + 播放器圆钮）。
-    // 单展开不变量：任意时刻 nav 与 player 恰好一个展开，仅两种合法组合
-    // [导航胶囊 + 播放器球] / [导航球 + 播放器胶囊]。
-    // 完整播放页往返：openFullPlayer / close 不触碰折叠状态，关闭播放页后
-    // Dock 恢复「打开前的那个唯一展开组件」（状态只由用户点击驱动，可预期）。
-    // 内容必须 Positioned.fill 延伸到 Dock 后面（悬浮感的来源），滚动末尾
-    // 让位由上方注入的 MediaQuery padding 承担。
+    // 悬浮玻璃 Dock：竖屏底部居中（导航胶囊 + 播放器圆钮）；横屏右侧
+    // 纵条（批次35，GlassDockPlayer 内部按纯方向切换形态，此处只需
+    // 把宿主区域从底部横条改为铺满——展开态点外坍缩屏障需要全屏区域，
+    // 纵条自身定位由 Dock 内部 Align(centerRight) 承担）。两个方向的
+    // 构造参数完全一致（横屏导航恒纵排，navExpanded 不参与其布局）。
     return Stack(
       children: [
         Positioned.fill(child: content),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: GlassDockPlayer(
-            key: const ValueKey('glass_dock'),
-            selectedTabId: currentTab.id,
-            onSelectTab: _switchToTab,
-            navExpanded: _navExpanded,
-            onNavExpandedChanged: (expanded) {
-              // 双向闭环：true = 点坍缩圆或播放器工具收起时请求导航展开；
-              // false = 播放器工具胶囊展开时请求导航让位。两个方向都保证
-              // 「恰好一个展开」，无双坍缩驻留路径。
-              if (expanded) {
-                _expandNav();
-              } else {
-                _collapseNav();
-              }
-            },
+        if (isLandscape)
+          Positioned.fill(
+            child: GlassDockPlayer(
+              key: const ValueKey('glass_dock'),
+              selectedTabId: currentTab.id,
+              onSelectTab: _switchToTab,
+              navExpanded: _navExpanded,
+              onNavExpandedChanged: (expanded) {
+                // 双向闭环：true = 点坍缩圆或播放器工具收起时请求导航展开；
+                // false = 播放器工具胶囊展开时请求导航让位。两个方向都保证
+                // 「恰好一个展开」，无双坍缩驻留路径。
+                if (expanded) {
+                  _expandNav();
+                } else {
+                  _collapseNav();
+                }
+              },
+            ),
+          )
+        else
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: GlassDockPlayer(
+              key: const ValueKey('glass_dock'),
+              selectedTabId: currentTab.id,
+              onSelectTab: _switchToTab,
+              navExpanded: _navExpanded,
+              onNavExpandedChanged: (expanded) {
+                // 双向闭环：true = 点坍缩圆或播放器工具收起时请求导航展开；
+                // false = 播放器工具胶囊展开时请求导航让位。两个方向都保证
+                // 「恰好一个展开」，无双坍缩驻留路径。
+                if (expanded) {
+                  _expandNav();
+                } else {
+                  _collapseNav();
+                }
+              },
+            ),
           ),
-        ),
       ],
     );
   }

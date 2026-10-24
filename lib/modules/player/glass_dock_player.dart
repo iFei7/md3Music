@@ -1,3 +1,5 @@
+import 'dart:math' show max;
+
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
@@ -131,6 +133,36 @@ _DockTab _dockTabFor(String id) =>
 /// - **隐藏**：完整播放页展开（playerExpansion > 0.5）时整体移除，不产帧；
 ///   Dock 自身上滑拖拽期间豁免（拖拽会把 expansion 推过 0.5，此时 Dock
 ///   必须保持在树中维持手势事件流，视觉上由 Opacity(1-exp) 淡出）。
+/// - **横屏右纵条（批次35，纯方向判定）**：`MediaQuery.orientationOf` 为
+///   横屏时 Dock 从底部横条切换为**右侧纵向悬浮条**（用户口径「横屏设备
+///   高度小，尽可能减少页面纵向遮挡」）：垂直居中于右侧安全区
+///   （SafeArea right/top/bottom），与页面右缘间距同竖屏 Dock 底距口径
+///   （12dp）。纵条内部纵向排列：
+///   · 上部：导航项**纵排**（复用竖屏 [_DockNavItem] 配方，44dp 圆形；
+///     横屏导航恒展开——纵排不占横向预算，无坍缩态，不参与竖屏单展开
+///     闭环；项径随横屏矮视口高度预算自适应，见 [_landscapeNavItemSize]）；
+///   · 下部：播放球 42dp（[kLandscapeBallSize]，GlassCircleButton 同口径，
+///     进度环 + 圆形封面缩略图，与竖屏播放球同源配方）。
+///   播放球点击 → 控件**横向展开**（宽度动画 42 → [kLandscapeControlsWidth]
+///   270dp，260ms easeOutCubic）：展开体 = 封面小图（外周进度环）+ 标题/
+///   歌手 + 上一曲/播放暂停/下一曲（复用竖屏胶囊控件与 PlayerProvider
+///   交互语义，横向排布），**从球体向左伸出**、悬浮覆盖在纵条/页面右下
+///   之上，不推挤导航项；**再点球 或 点展开体外部**（整屏点外坍缩屏障，
+///   纵条层在其之上命中测试优先，导航项/球体/展开体均不被误吞）→ 坍缩
+///   回 42dp 球。横屏播放球保留竖屏同款上滑拖拽（展开 FullPlayer，松手
+///   三阈值按**长边口径**，见 [_onPlayerDragEnd]）。
+///   页面右侧避让由 app.dart 注入
+///   `MediaQuery.padding.right += 纵条宽 + 右距`（与竖屏底部注入
+///   `_kDockReservedBottom` 完全同模式），常量一处定义两处消费（见
+///   [kLandscapeRailWidth] / [kLandscapeRailRightMargin]）。
+/// - **Pad 横屏分档（批次35，最短边口径）**：横屏内再按视口**最短边**
+///   分档——[GlassDockPlayer.isPadLandscape]（横屏 + 最短边 ≥
+///   [kLandscapePadBreakpoint] 600）命中 Pad 档，纵条几何整体上浮一档
+///   （球 42→48、项径足额/上限 44→48、项间距 4→6、球间距 8→10、
+///   纵条宽 52→60、展开宽 270→320，见 Pad 档常量）；手机横屏档
+///   （最短边 < 600，含全部手机横屏形态）数值逐字节不变。
+///   app.dart 两处避让注入（一级页 / 二级页）按同一判定选档——
+///   壳与内容判据同源，防「Pad 壳装手机内容」错位。
 class GlassDockPlayer extends StatefulWidget {
   const GlassDockPlayer({
     super.key,
@@ -163,6 +195,66 @@ class GlassDockPlayer extends StatefulWidget {
   /// 的 Dock 被完全遮住，故由 app.dart 在 Navigator 之上单独渲染一份
   /// `showNav: false` 的实例；此时导航相关参数均不参与布局。
   final bool showNav;
+
+  // ── 横屏右纵条几何常量（批次35）：一处定义，Dock 布局与 app.dart
+  //    避让注入（MediaQuery.padding.right += 纵条宽 + 右距）同源消费 ──
+
+  /// 横屏播放球直径（与 GlassCircleButton 42dp 圆钮同口径）。
+  static const double kLandscapeBallSize = 42.0;
+
+  /// 横屏播放球中央的圆形封面直径（42dp 球内，距外缘各 3dp）。
+  static const double kLandscapeBallCoverSize = 36.0;
+
+  /// 横屏纵条外宽（导航项足径 44dp + 容器水平 padding 4×2 = 52dp；
+  /// 项径压缩时容器宽不变——SizedBox 锁定，球体 42dp 恒可容纳）。
+  static const double kLandscapeRailWidth = 52.0;
+
+  /// 横屏纵条与页面右缘间距（与竖屏 Dock 底距 12dp 同口径）。
+  static const double kLandscapeRailRightMargin = 12.0;
+
+  /// 横屏展开体（玻璃容器）宽度：270dp = 内容 260（封面含环 39 + 间距 8
+  /// + 标题/歌手 ~83 + 三钮 120）+ 水平 padding 10；落在设计规格
+  /// 240-280dp 区间。AnimatedSize 动画的即此宽度（42 → 270）。
+  static const double kLandscapeControlsWidth = 270.0;
+
+  // ── 横屏 Pad 分档常量（批次35）：最短边 ≥ 600 的横屏平板专用档，
+  //    与上方手机横屏档并列；app.dart 避让注入按同源判定选档消费 ──
+
+  /// Pad 横屏分档断点：视口**最短边** ≥ 600dp 判为 Pad 横屏档（与方向
+  /// 无关——手机横屏最短边 < 600，不会误判成 Pad）。
+  ///
+  /// sonify 踩坑结论：按 screenWidthDp（宽）判定时手机横屏宽度也超
+  /// 600，会误入 Pad 档——禁用；必须按最短边。数值与
+  /// core/layout/responsive_layout.dart 的 `_compactBreakpoint` 一致，
+  /// 但此处按纯视口口径判定（不读 DeviceProvider 的用户覆盖），保证
+  /// Dock 壳与 app.dart 避让内容判据同源。
+  static const double kLandscapePadBreakpoint = 600.0;
+
+  /// Pad 档横屏播放球直径（手机档 [kLandscapeBallSize] 42 上浮一档）。
+  static const double kLandscapeBallSizePad = 48.0;
+
+  /// Pad 档横屏播放球中央的圆形封面直径（48dp 球内，距外缘各 3dp，
+  /// 同手机档 6dp 总口径）。
+  static const double kLandscapeBallCoverSizePad = 42.0;
+
+  /// Pad 档横屏纵条外宽（导航项足径 48dp + 容器水平 padding 6×2 =
+  /// 60dp；项径压缩时容器宽不变——SizedBox 锁定，球体 48dp 恒可容纳）。
+  static const double kLandscapeRailWidthPad = 60.0;
+
+  /// Pad 档横屏展开体（玻璃容器）宽度：320dp = 手机档 270 上浮一档
+  /// （内容 310 = 封面含环 39 + 间距 8 + 标题/歌手 ~143 + 三钮 120）。
+  /// AnimatedSize 动画目标宽度（48 → 320）。
+  static const double kLandscapeControlsWidthPad = 320.0;
+
+  /// Pad 横屏分档判定（批次35）：横屏 + 视口最短边 ≥
+  /// [kLandscapePadBreakpoint]。
+  ///
+  /// **同源不变量**：Dock 布局（本文件选档）与 app.dart 两处避让注入
+  /// （一级页 / 二级页 `padding.right`）共用本函数——壳与内容判据必须
+  /// 同源，否则会出现「Pad 壳装手机内容」的避让错位。
+  static bool isPadLandscape(BuildContext context) =>
+      MediaQuery.orientationOf(context) == Orientation.landscape &&
+      MediaQuery.sizeOf(context).shortestSide >= kLandscapePadBreakpoint;
 
   @override
   State<GlassDockPlayer> createState() => _GlassDockPlayerState();
@@ -201,6 +293,53 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
 
   /// 左右滑切歌的最低松手速度（px/s，|primaryVelocity| 达标才切）。
   static const double _kSwipeSwitchVelocity = 400.0;
+
+  // ── 横屏右纵条私有几何（批次35）：由 [GlassDockPlayer] 公开常量派生 ──
+
+  /// 展开体右缘（距屏右）= 球体左缘 = 右距 + (纵条宽 − 球径)/2 + 球径。
+  /// 展开体悬浮覆盖在纵条左缘之上（纵条层后渲染，玻璃盖住展开体右端）。
+  static const double _kLandscapeControlsRight =
+      GlassDockPlayer.kLandscapeRailRightMargin +
+      (GlassDockPlayer.kLandscapeRailWidth -
+              GlassDockPlayer.kLandscapeBallSize) /
+          2 +
+      GlassDockPlayer.kLandscapeBallSize;
+
+  /// Pad 档展开体右缘（距屏右）= 球体左缘（Pad 档几何，推导公式同
+  /// [_kLandscapeControlsRight]；手机档逐字节不变）。
+  static const double _kLandscapeControlsRightPad =
+      GlassDockPlayer.kLandscapeRailRightMargin +
+      (GlassDockPlayer.kLandscapeRailWidthPad -
+              GlassDockPlayer.kLandscapeBallSizePad) /
+          2 +
+      GlassDockPlayer.kLandscapeBallSizePad;
+
+  /// 横屏纵条内导航项之间的纵向间距（手机横屏档）。
+  static const double _kLandscapeNavItemGap = 4.0;
+
+  /// 横屏纵条内导航部分与播放球之间的间距（同竖屏 Row 内 8dp 口径）。
+  static const double _kLandscapeNavBallGap = 8.0;
+
+  /// Pad 档导航项之间的纵向间距（手机档 4 上浮一档）。
+  static const double _kLandscapeNavItemGapPad = 6.0;
+
+  /// Pad 档导航部分与播放球之间的间距（手机档 8 上浮一档）。
+  static const double _kLandscapeNavBallGapPad = 10.0;
+
+  /// 横屏纵条容器水平 padding（手机横屏档 4；纵条宽 = 项径足额 + 2×本值）。
+  static const double _kLandscapeRailPaddingH = 4.0;
+
+  /// Pad 档纵条容器水平 padding（手机档 4 上浮一档）。
+  static const double _kLandscapeRailPaddingHPad = 6.0;
+
+  /// 横屏导航项足径 / 压缩下限（手机横屏档：高度预算充足时足额 44，
+  /// 项数多 / 矮视口逐档压缩，下限 28）。
+  static const double _kLandscapeNavItemFullSize = 44.0;
+  static const double _kLandscapeNavItemMinSize = 28.0;
+
+  /// Pad 档导航项足径（手机档 44 上浮一档；压缩下限沿用
+  /// [_kLandscapeNavItemMinSize]——Pad 横屏高度充裕踩不到下限）。
+  static const double _kLandscapeNavItemFullSizePad = 48.0;
 
   // ── 上滑展开拖拽状态（与 FullPlayer 顶栏下滑收起镜像的判定口径） ──
 
@@ -246,10 +385,17 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   /// 最近一次布局得到的歌名区宽度（跟手位移上限与切歌距离阈值用）。
   double _marqueeWidth = 0.0;
 
+  /// 横屏首次布局修正标记（批次35）：initState 期读不到 MediaQuery
+  /// （继承依赖未就绪），「仅播放器形态恒展开」（竖屏二级页语义）的
+  /// 横屏复位改在 [didChangeDependencies] 首帧前一次性完成。
+  bool _landscapeInitDone = false;
+
   @override
   void initState() {
     super.initState();
     // 仅播放器形态恒展开（二级 push 路由页，用户口径），见字段注释。
+    // 横屏形态下由 didChangeDependencies 复位为「播放球初始坍缩」
+    // （横屏展开语义：点击展开 / 点外坍缩）。
     if (!widget.showNav) _controlsExpanded = true;
     // 状态联动（单展开不变量的反向闭环）：导航展开 ⇒ 播放器工具强制收起。
     // 正向闭环（播放器工具展开 ⇒ 导航坍缩）在 [_expandControls] 中经
@@ -274,6 +420,22 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
       duration: const Duration(milliseconds: 200),
     );
     _dragReturnSettle.addListener(_onDragReturnTick);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 横屏首次布局：把「仅播放器形态恒展开」（竖屏二级页语义）复位为
+    // 横屏播放球初始坍缩态——横屏形态定义为「播放球（点击横向展开，
+    // 点击外部即坍缩）」，纵条常驻形态是球而非展开体。initState 期不能
+    // 读 MediaQuery（继承依赖未就绪），故在此一次性修正（仅首次，
+    // 不覆盖用户后续操作）。
+    if (_landscapeInitDone) return;
+    _landscapeInitDone = true;
+    if (_controlsExpanded &&
+        MediaQuery.orientationOf(context) == Orientation.landscape) {
+      setState(() => _controlsExpanded = false);
+    }
   }
 
   @override
@@ -308,6 +470,10 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   void _onNavExpandedChanged() {
     // 仅播放器形态没有导航可展开，恒展开（见字段注释）。
     if (!widget.showNav) return;
+    // 横屏：导航恒纵排（全部可见项），不参与竖屏单展开闭环——
+    // navExpanded 变化不驱动播放球展开态（横屏展开/坍缩只由点球 /
+    // 点展开体外部驱动，见 _toggleLandscapeControls）。
+    if (MediaQuery.orientationOf(context) == Orientation.landscape) return;
     if (widget.navExpanded.value && _controlsExpanded) {
       setState(() => _controlsExpanded = false);
     }
@@ -332,6 +498,18 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     widget.onNavExpandedChanged(false);
   }
 
+  /// 横屏播放球点击：展开 ↔ 坍缩（批次35，横屏形态语义）。
+  ///
+  /// 与竖屏的差异：竖屏播放器工具的展开走 [_expandControls]（同时请求
+  /// 导航坍缩让位，单展开不变量），收起只经「点坍缩导航圆 / 切 tab」闭环；
+  /// 横屏导航恒纵排、展开体悬浮覆盖不推挤导航项，故球体自身即可双向
+  /// 切换，且不触碰 navExpanded（避免横屏操作污染竖屏单展开状态——
+  /// 旋转回竖屏后 Dock 恢复「打开前的那个唯一展开组件」，可预期）。
+  void _toggleLandscapeControls() {
+    AppHaptics.click();
+    setState(() => _controlsExpanded = !_controlsExpanded);
+  }
+
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PlayerProvider>();
@@ -342,6 +520,11 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     // 主页管理配置（显隐/排序/label）：低频 watch——设置页改动即时反映
     // 到 Dock；不进 positionNotifier 高频通道。
     final tabConfig = context.watch<TabConfigProvider>();
+
+    // 横屏壳层判定用**纯方向**（项目约定，批次35）：横屏 → 右侧纵条形态；
+    // 竖屏 → 既有底部横条逻辑（逐字节不变）。
+    final isLandscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
 
     // 完整播放页展开时整体隐藏（>0.5 直接移除，不产帧）。
     // 豁免：Dock 自身上滑拖拽期间（playerDragActive）exp 会被推过 0.5，
@@ -357,32 +540,464 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
           child: Opacity(opacity: (1.0 - exp).clamp(0.0, 1.0), child: child),
         );
       },
-      child: SafeArea(
-        top: false,
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            // 布局防御：播放器按钮用 Flexible（loose）吃剩余宽度，
-            // 极限屏宽下歌名区先压缩，整体任何状态不超屏宽。
-            // 布局恒定：左 = 悬浮导航、右 = 悬浮播放器；单展开不变量
-            // 保证「导航胶囊 + 播放器球」「导航球 + 播放器胶囊」
-            // 两种组合在 320dp 屏均不超宽。
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // 仅播放器形态（二级 push 路由页）不渲染导航部分，
-                // 播放器球改为整行居中（单展开不变量在此形态下退化）。
-                if (widget.showNav) ...[
-                  _buildNavPart(tabConfig),
-                  const SizedBox(width: 8),
-                ],
-                Flexible(
-                  child: _buildPlayerButton(player, song, isPlaying, duration),
+      child: isLandscape
+          ? _buildLandscapeDock(player, song, isPlaying, duration, tabConfig)
+          : SafeArea(
+              top: false,
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  // 布局防御：播放器按钮用 Flexible（loose）吃剩余宽度，
+                  // 极限屏宽下歌名区先压缩，整体任何状态不超屏宽。
+                  // 布局恒定：左 = 悬浮导航、右 = 悬浮播放器；单展开不变量
+                  // 保证「导航胶囊 + 播放器球」「导航球 + 播放器胶囊」
+                  // 两种组合在 320dp 屏均不超宽。
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 仅播放器形态（二级 push 路由页）不渲染导航部分，
+                      // 播放器球改为整行居中（单展开不变量在此形态下退化）。
+                      if (widget.showNav) ...[
+                        _buildNavPart(tabConfig),
+                        const SizedBox(width: 8),
+                      ],
+                      Flexible(
+                        child: _buildPlayerButton(
+                          player,
+                          song,
+                          isPlaying,
+                          duration,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
+              ),
+            ),
+    );
+  }
+
+  // ── 横屏右纵条（批次35）──
+
+  /// 横屏形态：右侧纵向悬浮条（导航项纵排 + 播放球）+ 播放球横向展开。
+  ///
+  /// 三层 Stack（后渲染者命中测试优先）：
+  /// 1. **点外坍缩屏障**（仅展开态）：整屏吸收页面点击；纵条层与展开体层
+  ///    均在其之上，纵条上的导航项点击不被误吞（展开体只占球左侧区域）；
+  /// 2. **展开体层**：右缘贴球体左缘（悬浮覆盖在纵条/页面右下之上，不
+  ///    推挤导航项），AnimatedSize 右缘锚定向左生长（球径 → 展开宽，
+  ///    手机档 42→270dp / Pad 档 48→320dp）；
+  /// 3. **纵条层**：SafeArea(right/top/bottom) + 右缘间距 12（同竖屏
+  ///    Dock 底距口径）+ 玻璃胶囊纵条（导航项纵排 + 播放球）。
+  ///
+  /// 球体垂直中心由纵条几何推算（纵条在安全区内垂直居中、球贴纵条底部
+  /// 内缘「导航与球间距」档位值），展开体层据此与球体同高对齐——横屏
+  /// 展开体从球体向左伸出。
+  ///
+  /// **Pad 横屏分档（批次35）**：入口处按 [GlassDockPlayer.isPadLandscape]
+  /// （横屏 + 最短边 ≥ 600）选档——Pad 档球径/项径/间距/纵条宽/展开宽
+  /// 整体上浮一档；手机横屏档（最短边 < 600）选档结果与改造前逐字节
+  /// 一致。判定与 app.dart 避让注入同源（防「Pad 壳装手机内容」错位）。
+  Widget _buildLandscapeDock(
+    PlayerProvider player,
+    dynamic song,
+    bool isPlaying,
+    Duration? duration,
+    TabConfigProvider tabConfig,
+  ) {
+    final padding = MediaQuery.paddingOf(context);
+    final viewport = MediaQuery.sizeOf(context);
+    // Pad 横屏分档（批次35）：横屏内按视口最短边再分档——最短边 ≥ 600
+    // 命中 Pad 档（球/项径/间距/纵条宽/展开宽整体上浮一档）；手机横屏
+    // （最短边 < 600，含全部手机横屏形态）走手机档，数值逐字节不变。
+    // 判定与 app.dart 避让注入同源（GlassDockPlayer.isPadLandscape）。
+    final isPad = GlassDockPlayer.isPadLandscape(context);
+    final ballSize =
+        isPad
+            ? GlassDockPlayer.kLandscapeBallSizePad
+            : GlassDockPlayer.kLandscapeBallSize;
+    final ballCoverSize =
+        isPad
+            ? GlassDockPlayer.kLandscapeBallCoverSizePad
+            : GlassDockPlayer.kLandscapeBallCoverSize;
+    final railWidth =
+        isPad
+            ? GlassDockPlayer.kLandscapeRailWidthPad
+            : GlassDockPlayer.kLandscapeRailWidth;
+    final railPaddingH =
+        isPad ? _kLandscapeRailPaddingHPad : _kLandscapeRailPaddingH;
+    final controlsWidth =
+        isPad
+            ? GlassDockPlayer.kLandscapeControlsWidthPad
+            : GlassDockPlayer.kLandscapeControlsWidth;
+    final navItemGap =
+        isPad ? _kLandscapeNavItemGapPad : _kLandscapeNavItemGap;
+    final navBallGap = isPad ? _kLandscapeNavBallGapPad : _kLandscapeNavBallGap;
+    final controlsRight =
+        isPad ? _kLandscapeControlsRightPad : _kLandscapeControlsRight;
+    final allTabs = tabConfig.visibleTabs;
+    // 项径自适应（横屏矮视口高度预算，见 [_landscapeNavItemSize]）。
+    final navItemSize = _landscapeNavItemSize(
+      allTabs.length,
+      viewport,
+      padding,
+      isPad,
+    );
+    // 导航区高（项数 × 项径 + 项间距 + 导航与球间距）：无导航（二级页
+    // 仅播放器形态，或可见 tab 为空）时为 0，且不占球间距。
+    final navSectionHeight = !widget.showNav || allTabs.isEmpty
+        ? 0.0
+        : allTabs.length * navItemSize +
+              (allTabs.length - 1) * navItemGap +
+              navBallGap;
+    // 纵条高 = 垂直 padding(16) + 导航区 + 球(档位径)。
+    final railHeight = 16 + navSectionHeight + ballSize;
+    // 球体垂直中心：安全区内垂直居中的纵条内，球贴导航区下方——
+    // offset = 上 padding(8) + 导航区 + 球径/2。
+    // 必须按**实际渲染结构**（上 padding → 导航区 → 球）推算：旧公式
+    // 「railHeight − 球间距 − 球径/2」把上下 padding(16) 全前置，仅当
+    // 球间距恰为 8（手机档）时巧合相等；Pad 档球间距 10 会偏差
+    // (10 − 8) = 2px，展开体与球体错位（批次35 Pad 分档修复点；
+    // 手机档 / 无导航形态数值不变）。
+    final ballCenterY =
+        padding.top +
+        (viewport.height - padding.top - padding.bottom - railHeight) / 2 +
+        8 +
+        navSectionHeight +
+        ballSize / 2;
+    return Stack(
+      children: [
+        // 1) 点外坍缩屏障（仅展开态）
+        if (_controlsExpanded)
+          Positioned.fill(
+            child: GestureDetector(
+              key: const ValueKey('glass_dock_landscape_dismiss_barrier'),
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _controlsExpanded = false),
             ),
           ),
+        // 2) 展开体层（右缘贴球体左缘，与球体同垂直中心）
+        Positioned(
+          right: controlsRight,
+          top: ballCenterY - ballSize / 2,
+          child: AnimatedSize(
+            duration: _kMorphDuration,
+            curve: Curves.easeOutCubic,
+            // 右缘锚定：从球体向左生长，不顶出纵条（同竖屏播放器部分）。
+            alignment: Alignment.centerRight,
+            child: _controlsExpanded
+                ? _buildLandscapeControlsBody(
+                    player,
+                    song,
+                    duration,
+                    ballSize: ballSize,
+                    controlsWidth: controlsWidth,
+                  )
+                : SizedBox(width: 0, height: ballSize),
+          ),
+        ),
+        // 3) 纵条层
+        Positioned.fill(
+          child: SafeArea(
+            top: true,
+            right: true,
+            bottom: true,
+            left: false,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.only(
+                  right: GlassDockPlayer.kLandscapeRailRightMargin,
+                ),
+                child: LiquidGlassContainer(
+                  key: const ValueKey('glass_dock_landscape_rail'),
+                  shape: GlassShape.pill,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: railPaddingH,
+                    vertical: 8,
+                  ),
+                  child: SizedBox(
+                    width: railWidth - railPaddingH * 2,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        if (widget.showNav && allTabs.isNotEmpty) ...[
+                          _buildLandscapeNavPart(
+                            allTabs,
+                            navItemSize,
+                            navItemGap,
+                          ),
+                          SizedBox(height: navBallGap),
+                        ],
+                        _buildLandscapePlayerBall(
+                          player,
+                          song,
+                          isPlaying,
+                          duration,
+                          ballSize: ballSize,
+                          ballCoverSize: ballCoverSize,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 横屏导航项径自适应：足额 44dp（手机档）；项数多时按「纵条可用高度」
+  /// 逐档压缩，保证横屏矮视口下纵条不溢出。
+  /// 可用高 = 视口高 − 上下安全区 − 纵条垂直 padding(16) − 导航与球间距
+  ///  − 球径；剩余预算在各项 + 间距间均分，下限 28dp。
+  ///
+  /// 【Pad 分档点】（批次35落地）：[isPad]（= 宿主
+  /// [GlassDockPlayer.isPadLandscape] 判定结果，最短边 ≥ 600）时足额档 /
+  /// 上限上浮一档（44→48），项间距 / 球间距 / 球径同步换 Pad 档常量——
+  /// Pad 横屏可视高度更充裕（~600-800），足额 48dp 不溢出且更舒展；
+  /// 手机横屏档（isPad = false）公式与数值逐字节不变。
+  double _landscapeNavItemSize(
+    int count,
+    Size viewport,
+    EdgeInsets padding,
+    bool isPad,
+  ) {
+    final fullSize =
+        isPad ? _kLandscapeNavItemFullSizePad : _kLandscapeNavItemFullSize;
+    final gap = isPad ? _kLandscapeNavItemGapPad : _kLandscapeNavItemGap;
+    final ballSize =
+        isPad
+            ? GlassDockPlayer.kLandscapeBallSizePad
+            : GlassDockPlayer.kLandscapeBallSize;
+    final navBallGap =
+        isPad ? _kLandscapeNavBallGapPad : _kLandscapeNavBallGap;
+    if (count <= 0) return fullSize;
+    final budget =
+        viewport.height -
+        padding.top -
+        padding.bottom -
+        16 -
+        navBallGap -
+        ballSize;
+    final perItem = (budget - (count - 1) * gap) / count;
+    return perItem.clamp(_kLandscapeNavItemMinSize, fullSize);
+  }
+
+  /// 横屏导航部分：可见 tab **纵向排列**（复用竖屏 [_DockNavItem] 配方，
+  /// 圆形 + 选中态 secondaryContainer 圆底 + filled 图标）。
+  /// 横屏导航恒展开（纵排不占横向预算，无坍缩态），不参与竖屏单展开闭环。
+  ///
+  /// [itemGap] 由宿主按 Pad 分档传入（手机档 4 / Pad 档 6）——必须与
+  /// [_buildLandscapeDock] 的 navPartHeight 预算同源，否则「预算按 6、
+  /// 渲染按 4」会让球体垂直中心推算偏移、展开体与球体错位。
+  Widget _buildLandscapeNavPart(
+    List<TabItem> tabs,
+    double itemSize,
+    double itemGap,
+  ) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < tabs.length; i++) ...[
+          if (i > 0) SizedBox(height: itemGap),
+          KeyedSubtree(
+            key: ValueKey('glass_dock_landscape_nav_${tabs[i].id}'),
+            child: _DockNavItem(
+              tab: _dockTabFor(tabs[i].id),
+              label: tabs[i].label,
+              selected: widget.selectedTabId == tabs[i].id,
+              width: itemSize,
+              height: itemSize,
+              margin: EdgeInsets.zero,
+              onTap: () {
+                AppHaptics.tick();
+                widget.onSelectTab(tabs[i].id);
+              },
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 横屏播放球：42dp（手机档）/ 48dp（Pad 档）玻璃球（与竖屏播放球
+  /// 同源配方：外周进度环 + 中央圆形封面缩略图 / 音符占位），点击横向
+  /// 展开/坍缩；保留竖屏同款上滑拖拽（拖拽展开 FullPlayer，松手三阈值
+  /// 长边口径见 [_onPlayerDragEnd]）。
+  ///
+  /// [ballSize] / [ballCoverSize] 由宿主按 Pad 分档传入（批次35）。
+  Widget _buildLandscapePlayerBall(
+    PlayerProvider player,
+    dynamic song,
+    bool isPlaying,
+    Duration? duration, {
+    required double ballSize,
+    required double ballCoverSize,
+  }) {
+    // RepaintBoundary 隔离：进度环 ~200ms 重绘不外溢（同竖屏口径）。
+    return RepaintBoundary(
+      child: Builder(
+        builder: (buttonContext) {
+          // 上滑展开（P0-1）：song == null 不注册拖拽回调（不抢手势）。
+          final canDrag = song != null;
+          return GestureDetector(
+            key: const ValueKey('glass_dock_landscape_ball'),
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragStart: canDrag
+                ? (d) => _onPlayerDragStart(buttonContext, d)
+                : null,
+            onVerticalDragUpdate: canDrag ? _onPlayerDragUpdate : null,
+            onVerticalDragEnd: canDrag ? _onPlayerDragEnd : null,
+            onVerticalDragCancel: canDrag ? _onPlayerDragCancel : null,
+            child: _buildCircle(
+              song,
+              isPlaying,
+              duration,
+              player,
+              size: ballSize,
+              coverSize: ballCoverSize,
+              iconSize: 20,
+              onTap: _toggleLandscapeControls,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// 横屏展开体：封面小图（外周进度环）+ 标题/歌手 + 上一曲/播放暂停/
+  /// 下一曲（复用竖屏 [_buildControlsCapsule] 的控件与 [PlayerProvider]
+  /// 交互语义，横向排布；封面 / 歌名点击进播放页）。
+  /// 不注册左右滑切歌（横屏展开体窄条形态，手势让位给点外坍缩屏障；
+  /// 竖屏胶囊的 onHorizontalDrag* 路径不变）。
+  ///
+  /// [ballSize] / [controlsWidth] 由宿主按 Pad 分档传入（批次35）：展开体
+  /// 与球体同高，宽度 = 档位展开宽（手机档 270 / Pad 档 320）。
+  Widget _buildLandscapeControlsBody(
+    PlayerProvider player,
+    dynamic song,
+    Duration? duration, {
+    required double ballSize,
+    required double controlsWidth,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return LiquidGlassContainer(
+      key: const ValueKey('glass_dock_landscape_controls'),
+      shape: GlassShape.pill,
+      padding: const EdgeInsets.fromLTRB(6, 0, 4, 0),
+      child: SizedBox(
+        height: ballSize,
+        width: controlsWidth - 10,
+        child: Row(
+          children: [
+            // 封面小图（外周进度环，与竖屏胶囊同一 painter 口径）：点击进播放页。
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: song == null ? null : () => openFullPlayer(context),
+              child: SizedBox(
+                width: _kCapsuleCoverSize + _kRingStroke * 2,
+                height: _kCapsuleCoverSize + _kRingStroke * 2,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Positioned.fill(
+                      child: ValueListenableBuilder<Duration>(
+                        valueListenable: player.positionNotifier,
+                        builder: (context, position, _) {
+                          final progress =
+                              (duration != null && duration > Duration.zero)
+                              ? (position.inMilliseconds /
+                                        duration.inMilliseconds)
+                                    .clamp(0.0, 1.0)
+                              : 0.0;
+                          return CustomPaint(
+                            size: Size.square(
+                              _kCapsuleCoverSize + _kRingStroke * 2,
+                            ),
+                            painter: _ProgressRingPainter(
+                              progress: progress,
+                              stroke: _kRingStroke,
+                              // 环中心线 = 18 + 0.75：环内缘贴 36dp 封面外缘。
+                              ringRadius:
+                                  _kCapsuleCoverSize / 2 + _kRingStroke / 2,
+                              trackColor: cs.onSurface.withValues(alpha: 0.15),
+                              progressColor: cs.primary,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    ClipOval(
+                      child: SizedBox(
+                        width: _kCapsuleCoverSize,
+                        height: _kCapsuleCoverSize,
+                        child: PlayerArtworkImage(
+                          artworkUri: song?.artworkUri as String?,
+                          fallbackFilePath: song?.localPath as String?,
+                          fit: BoxFit.cover,
+                          iconSize: 16,
+                          backgroundColor: cs.surfaceContainerHighest,
+                          iconColor: cs.onSurfaceVariant,
+                          // 36dp 缩略图按 128px 解码（同竖屏胶囊口径）。
+                          decodeCap: 128,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: _kCapsuleCoverGap),
+            // 标题 / 歌手：点击进播放页。
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: song == null ? null : () => openFullPlayer(context),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      song?.displayName ?? '未在播放',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    Text(
+                      song?.artist ?? '',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            _DockIconButton(
+              icon: Icons.skip_previous,
+              tooltip: '上一曲',
+              onTap: song == null ? null : player.previous,
+            ),
+            _DockIconButton(
+              icon: player.isPlaying ? Icons.pause : Icons.play_arrow,
+              tooltip: player.isPlaying ? '暂停' : '播放',
+              onTap: song == null
+                  ? null
+                  : () => player.isPlaying ? player.pause() : player.resume(),
+            ),
+            _DockIconButton(
+              icon: Icons.skip_next,
+              tooltip: '下一曲',
+              onTap: song == null ? null : player.next,
+            ),
+          ],
         ),
       ),
     );
@@ -598,7 +1213,11 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     _dragDistance = 0.0;
     // primaryVelocity 向下为正，换算为「向上为正」
     final velocity = -(details.primaryVelocity ?? 0.0);
-    final screenHeight = MediaQuery.sizeOf(context).height;
+    // 长边口径（批次35，方案 P0-4）：横屏矮视口下按屏高（短边）的 20%
+    // 过灵敏（如 800×400 横屏阈值仅 80px，轻扫即展开）。统一按长边
+    // max(宽, 高) 计算——竖屏时长边即屏高，数值不变。
+    final viewport = MediaQuery.sizeOf(context);
+    final screenHeight = max(viewport.width, viewport.height);
     final progress = playerExpansion.value;
     if (shouldExpandPlayer(
       dragDistance: distance,
@@ -759,21 +1378,30 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   }
 
   /// 播放器圆钮：外周进度环 + 中央播放标识。
+  ///
+  /// [size] / [coverSize] / [iconSize] 支持横屏 42dp 球（批次35；竖屏
+  /// 默认值与改动前逐项一致）。[onTap] 非空时替代默认的 [_expandControls]
+  /// ——横屏球体用 [_toggleLandscapeControls] 双向切换语义（竖屏胶囊
+  /// 自身不响应 tap 收起的收紧语义不适用于横屏）。
   Widget _buildCircle(
     dynamic song,
     bool isPlaying,
     Duration? duration,
-    PlayerProvider player,
-  ) {
+    PlayerProvider player, {
+    double size = _kButtonSize,
+    double coverSize = _kCircleCoverSize,
+    double iconSize = 22,
+    VoidCallback? onTap,
+  }) {
     final cs = Theme.of(context).colorScheme;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: song == null ? null : _expandControls,
+      onTap: song == null ? null : (onTap ?? _expandControls),
       child: LiquidGlassContainer(
         shape: GlassShape.circle,
         child: SizedBox(
-          width: _kButtonSize,
-          height: _kButtonSize,
+          width: size,
+          height: size,
           child: Stack(
             alignment: Alignment.center,
             children: [
@@ -788,14 +1416,14 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
                               .clamp(0.0, 1.0)
                         : 0.0;
                     return CustomPaint(
-                      size: const Size.square(_kButtonSize),
+                      size: Size.square(size),
                       painter: _ProgressRingPainter(
                         progress: progress,
                         stroke: _kRingStroke,
-                        // 环贴按钮外缘：环中心线 = 26 − 0.75 − 0.5 =
-                        // 24.75，环外缘 25.5 < 26 不出界，环内缘 24.0
-                        // 距 46dp 封面外缘 1dp（封面充满圆内）。
-                        ringRadius: _kButtonSize / 2 - _kRingStroke / 2 - 0.5,
+                        // 环贴按钮外缘：环中心线 = size/2 − 0.75 − 0.5，
+                        // 环外缘 size/2 − 0.5 < size/2 不出界（52dp 口径下
+                        // 环内缘 24.0 距 46dp 封面外缘 1dp，封面充满圆内）。
+                        ringRadius: size / 2 - _kRingStroke / 2 - 0.5,
                         trackColor: cs.onSurface.withValues(alpha: 0.15),
                         progressColor: cs.primary,
                       ),
@@ -808,11 +1436,11 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
               if (song == null)
                 Icon(
                   Icons.music_note,
-                  size: 22,
+                  size: iconSize,
                   color: cs.onSurfaceVariant.withValues(alpha: 0.6),
                 )
               else
-                _buildCircleArtwork(song, isPlaying, cs),
+                _buildCircleArtwork(song, isPlaying, cs, coverSize: coverSize),
             ],
           ),
         ),
@@ -826,11 +1454,18 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   /// 高频通道）。播放中叠加 [PlayingSpectrumIndicator] 律动图标；暂停时叠
   /// 静态 pause 图标（两分支均垫一层略暗圆形遮罩——用户复验：直接叠图标
   /// 在亮封面上不可读，加略暗底）。
-  Widget _buildCircleArtwork(dynamic song, bool isPlaying, ColorScheme cs) {
+  ///
+  /// [coverSize] 支持横屏 42dp 球（36dp 封面，批次35；竖屏默认 46dp 不变）。
+  Widget _buildCircleArtwork(
+    dynamic song,
+    bool isPlaying,
+    ColorScheme cs, {
+    double coverSize = _kCircleCoverSize,
+  }) {
     Widget cover = ClipOval(
       child: SizedBox(
-        width: _kCircleCoverSize,
-        height: _kCircleCoverSize,
+        width: coverSize,
+        height: coverSize,
         // PlayerArtworkImage 未指定 width/height 时流式布局，由 SizedBox 约束。
         child: PlayerArtworkImage(
           artworkUri: song.artworkUri as String?,
@@ -855,8 +1490,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
         children: [
           cover,
           Container(
-            width: _kCircleCoverSize,
-            height: _kCircleCoverSize,
+            width: coverSize,
+            height: coverSize,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
@@ -880,8 +1515,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
         children: [
           cover,
           Container(
-            width: _kCircleCoverSize,
-            height: _kCircleCoverSize,
+            width: coverSize,
+            height: coverSize,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
@@ -1128,6 +1763,9 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
 /// Dock 导航项：icon-only（label 仅用于无障碍朗读），激活时 filled 图标 +
 /// secondaryContainer 圆形底（AnimatedContainer 收敛动画）。
 /// [width] 随可见 tab 数自适应（见 `_buildNavPill` 的溢出复核）。
+///
+/// [height] / [margin] 为横屏纵排形态开放（批次35：44dp 圆形、零外边距）；
+/// 竖屏默认值与改动前逐项一致。
 class _DockNavItem extends StatelessWidget {
   const _DockNavItem({
     required this.tab,
@@ -1135,6 +1773,8 @@ class _DockNavItem extends StatelessWidget {
     required this.selected,
     required this.width,
     required this.onTap,
+    this.height = 44,
+    this.margin = const EdgeInsets.symmetric(horizontal: 1),
   });
 
   final _DockTab tab;
@@ -1143,6 +1783,12 @@ class _DockNavItem extends StatelessWidget {
 
   /// 图标块宽度（dp），左右各另有 1dp 外边距。
   final double width;
+
+  /// 图标块高度（dp）。
+  final double height;
+
+  /// 图标块外边距（竖屏横排为左右各 1dp；横屏纵排为零）。
+  final EdgeInsetsGeometry margin;
 
   final VoidCallback onTap;
 
@@ -1160,8 +1806,8 @@ class _DockNavItem extends StatelessWidget {
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
           width: width,
-          height: 44,
-          margin: const EdgeInsets.symmetric(horizontal: 1),
+          height: height,
+          margin: margin,
           decoration: selected
               ? ShapeDecoration(
                   color: cs.secondaryContainer,
