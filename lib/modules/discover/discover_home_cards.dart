@@ -113,10 +113,22 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
   /// 替代此前写死的 480px（480 < 常见分区宽时飞不出边界）。
   double _stackWidth = 0;
 
-  /// dismiss 飞出动画：0→1，飞出位移 = _flyDx × (1 − t)。
+  /// dismiss 飞出动画：0→1，飞出位移 = [_flyFromDx] → [_flyDx] 连续
+  /// 插值（批次33，见 [_flyFromDx]；旧公式 _flyDx×(1−t) 方向反了必闪回）。
   late final AnimationController _flyCtrl;
   double _flyDx = 0;
   bool _flying = false;
+
+  /// 批次33：飞出起点位移（松手瞬间的跟手位移，[_onDragEnd] 放行分支
+  /// setState 之前捕获）。飞出位移从它连续插值到 [_flyDx]——t=0 精确
+  /// 落在释放位置，与松手前最后一帧跟手连续，杜绝「松手首帧瞬移到界外
+  /// 再滑回原位」的闪回（旧公式 raw=0 时 offset=_flyDx 必有此帧）。
+  double _flyFromDx = 0;
+
+  /// 批次33：飞出起点的 dismiss 进度（释放瞬间的拖拽进度，
+  /// clamp(|_flyFromDx|/_stackWidth)，[_onDragEnd] 捕获）。飞出中下层
+  /// 卡前移进度从它 easeOutCubic 收敛到 1，松手边界连续。
+  double _flyFromProgress = 0;
 
   /// 批次32：飞出时长。批次31 的 220ms 缩短到 200ms（用户口径
   /// 「划出去即消失」：飞出段短促）；与回弹 180ms 仍保持档次差。
@@ -395,6 +407,14 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
       // 边界即止，不再写死 480px（LayoutBuilder 实测宽度缓存于
       // [_stackWidth]，交互前必已测量）。
       final dir = (dx != 0) ? dx.sign : velocity.sign;
+      // 批次33：捕获释放瞬间的跟手位移与 dismiss 进度（setState 之前、
+      // 与放行判定同源）——飞出位移/透明度从释放位置连续插值到界外，
+      // 下层进度从释放进度连续收敛，松手边界零跳变（真根因：旧飞出
+      // 公式起点在界外，松手首帧瞬移+滑回=用户反馈的闪回）。
+      _flyFromDx = dx;
+      _flyFromProgress = _stackWidth > 0
+          ? (dx.abs() / _stackWidth).clamp(0.0, 1.0)
+          : 0.0; // 未测量（极端情形）：进度兜 0
       setState(() {
         _flying = true;
         _flyDx = dir * (_stackWidth + _kFlyOutExtra);
@@ -533,14 +553,28 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
             // 一划走下一张立刻趋向全尺寸上位，不等飞出尾声。
             final raw = _flying ? _flyCtrl.value : 0.0;
             final t = _flying ? Curves.easeIn.transform(raw) : 0.0;
-            final layerEase =
-                _flying ? Curves.easeOutCubic.transform(raw) : 0.0;
             // 回弹进行中：前卡跟手位移由动画值驱动（与飞出同款读时
             // easeOutCubic）；否则用跟手值 _dragDx。
             final dragDx = _springBackCtrl.isAnimating
                 ? _springFromDx *
                     (1 - Curves.easeOutCubic.transform(_springBackCtrl.value))
                 : _dragDx;
+            // 批次33：统一 dismiss 进度 p——下层卡（下一首）的前移量。
+            // 拖拽/回弹中：|视觉dx| / 容器宽（视觉 dx 即上面的 dragDx，
+            // 回弹中取回弹动画当前位移），与手指 1:1 耦合——旧实现只在
+            // _flying 时推进（layerEase），拖拽中下层完全冻结、松手后才动；
+            // 飞出中：从释放进度 _flyFromProgress 起 easeOutCubic 收敛到 1
+            // （前快后慢，下一张速位上位），raw=0 时精确等于释放时进度。
+            final double dismissProgress;
+            if (_flying) {
+              dismissProgress = _flyFromProgress +
+                  (1 - _flyFromProgress) *
+                      Curves.easeOutCubic.transform(raw);
+            } else {
+              dismissProgress = _stackWidth > 0
+                  ? (dragDx.abs() / _stackWidth).clamp(0.0, 1.0)
+                  : 0.0; // 未测量（极端情形）：下层不前移
+            }
             final children = <Widget>[];
             for (var layer = _kStackDepth - 1; layer >= 0; layer--) {
               final idx = base + _stackOffset + layer;
@@ -549,9 +583,9 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
                 context,
                 songs[idx],
                 layer: layer,
-                // 批次32：前卡走 easeIn（t），下层走 easeOutCubic
-                // （layerEase）——两套曲线分离，互不跟随。
-                flyProgress: layer == 0 ? t : layerEase,
+                // 批次33：前卡走 easeIn（t），下层走统一 dismiss 进度 p
+                // （拖拽跟手前移、飞出从释放进度 easeOutCubic 续进）。
+                progress: layer == 0 ? t : dismissProgress,
                 dragDx: dragDx,
                 playingIndex: playingIndex,
                 isPlaying: isPlaying,
@@ -576,7 +610,10 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     BuildContext context,
     KugouSongDetail song, {
     required int layer,
-    required double flyProgress,
+    /// 层级进度（批次33 起下层改传统一 dismiss 进度）：
+    /// 前卡（layer=0）= 飞出 easeIn 进度 t；下层 = 统一 dismiss 进度 p
+    /// （拖拽中与手指 1:1，飞出中从释放进度 easeOutCubic 收敛到 1）。
+    required double progress,
     required double dragDx,
     required int playingIndex,
     required bool isPlaying,
@@ -588,13 +625,14 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
         song,
         playingIndex: playingIndex,
         isPlaying: isPlaying,
-        flyProgress: flyProgress,
+        flyProgress: progress,
         dragDx: dragDx,
       );
     }
-    // 下方层：缩小下沉 + 半透明（层级暗示）；飞出时随 easeOut 进度前移
-    // 一级（批次32：flyProgress 已是 easeOutCubic 变换值，前快后慢）。
-    final shrink = (layer - flyProgress).clamp(0.0, layer.toDouble());
+    // 下方层：缩小下沉 + 半透明（层级暗示）；dismiss 进度越大越趋向
+    // 全尺寸前移一级（批次33：progress = 统一 dismiss 进度 p，拖拽中
+    // 即跟手前移，飞出中从释放进度 easeOutCubic 续进到 1，前快后慢）。
+    final shrink = (layer - progress).clamp(0.0, layer.toDouble());
     return Transform.scale(
       scale: 1 - shrink * 0.04,
       child: Transform.translate(
@@ -635,11 +673,22 @@ class _DiscoverFmStackCardState extends State<DiscoverFmStackCard>
     // 飞出中的前卡：沿 _flyDx 平移 + 渐隐（_flying 优先于跟手位移）。
     // 批次32：flyProgress 为 easeIn 变换值——后段加速消失，视觉上
     // 「滑出去就没了」；t=1 时透明度精确收敛到 0。
+    // 批次33：位移/透明度都从「释放位置」连续插值——旧公式
+    // offset=_flyDx×(1−flyProgress) 方向反了（raw=0 时整卡已在边界
+    // 外），松手首帧从释放位置瞬移到界外、再滑回原位渐隐，即用户反复
+    // 反馈的「划走后往回闪一下」；且旧公式 t=0 透明度=1 与松手帧的
+    // 跟手渐隐值也不连续（批次32 的 await 窗口是另一个闪回源，已修）。
     if (_flying) {
+      // 飞出位移：t=0 精确 = _flyFromDx（松手帧跟手位移，无跳变），
+      // t=1 到 _flyDx（容器宽 + _kFlyOutExtra 的界外）；方向沿拖拽、
+      // 全程单调外出不回退。
+      final flyOffset = _flyFromDx + (_flyDx - _flyFromDx) * flyProgress;
+      // 飞出透明度：从释放帧的 _dragOpacity(_flyFromDx) 连续收敛到 0
+      // （t=0 与松手前最后一帧一致，t=1 精确为 0）。
       card = Transform.translate(
-        offset: Offset(_flyDx * (1 - flyProgress), 0),
+        offset: Offset(flyOffset, 0),
         child: Opacity(
-          opacity: 1 - flyProgress,
+          opacity: _dragOpacity(_flyFromDx) * (1 - flyProgress),
           child: card,
         ),
       );

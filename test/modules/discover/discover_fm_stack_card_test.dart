@@ -683,9 +683,34 @@ void main() {
 
     testWidgets('批次32：飞出距离动态化——目标 dx 绝对值 > 容器宽度（LayoutBuilder 实测）',
         (tester) async {
+      // 批次33：终点帧（t=1）取样走播放路径注入——非播放路径
+      // _finishDismiss 的 setState 与动画完成同帧落地，甲在 208ms
+      // 帧即被切走；播放路径 next() 延迟 100ms 让甲留在树里（与
+      // 「飞出终点透明度 0」用例同款模式）。
+      final testPlayer = _FmTestPlayerProvider(
+        nextDelay: const Duration(milliseconds: 100),
+      );
       final (kugou, player, favorites, localFavorites, adapter) =
-          await _pumpCard(tester);
+          await _pumpCard(tester, playerOverride: testPlayer);
       try {
+        testPlayer.setTestPlaybackState(
+          currentSong: const Song(
+            id: 'ha', // 与 personalFmSongs[0].hash 对齐 → playingIndex=0
+            title: '甲',
+            artist: '测试歌手',
+            album: '测试专辑',
+            duration: Duration(minutes: 3),
+          ),
+          isPlaying: true,
+        );
+        testPlayer.nextTarget = const Song(
+          id: 'hb',
+          title: '乙',
+          artist: '测试歌手',
+          album: '测试专辑',
+          duration: Duration(minutes: 3),
+        );
+        await tester.pump();
         // 容器宽度走 LayoutBuilder 实测（分区宽 = 屏宽 − 2×titleMargin），
         // 不写死屏宽。
         final stackFinder = find.ancestor(
@@ -701,11 +726,23 @@ void main() {
         await gesture.moveBy(const Offset(-40, 0));
         await gesture.moveBy(const Offset(-400, 0));
         await gesture.up();
-        await tester.pump(); // t=0 帧：前卡 Transform = 完整飞出目标
-
-        final (_, dx) = _readFrontCard(tester, '甲');
+        // 批次33：飞出改为「释放位置 → 界外目标」的连续插值——t=0 帧
+        // 精确落在释放位置（-500，未出界；边界连续，防松手瞬移），
+        // 飞出目标改在 t=1（200ms）达成，故逐帧推进到飞出完成再取样。
+        await tester.pump();
+        final (_, dxStart) = _readFrontCard(tester, '甲');
         expect(
-          dx.abs(),
+          dxStart.abs(),
+          lessThan(width),
+          reason: 't=0 边界连续：起点=释放位置（尚未出界）',
+        );
+
+        for (var i = 0; i < 13; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        final (_, dxEnd) = _readFrontCard(tester, '甲');
+        expect(
+          dxEnd.abs(),
           greaterThan(width),
           reason: '飞出目标 = 容器宽 + 余量，须真正滑出分区边界（旧值固定 480）',
         );
@@ -713,6 +750,7 @@ void main() {
         await tester.pumpAndSettle();
         await tester.pump(const Duration(milliseconds: 100));
         await tester.pump(const Duration(milliseconds: 100));
+        expect(testPlayer.nextCallCount, 1);
         expect(find.text('乙'), findsOneWidget);
       } finally {
         _teardown(kugou, player, favorites, localFavorites);
@@ -736,10 +774,13 @@ void main() {
         for (var i = 1; i <= 13; i++) {
           await tester.pump(const Duration(milliseconds: 16));
           if (i == 10) {
-            // 160ms（80% 时段）：前卡 easeIn 后段加速消失——opacity≈0.31；
-            // 若误用 easeOut 曲线（前快后慢）此时已≈0.01，本断言红。
+            // 160ms（80% 时段）：前卡 easeIn 后段加速消失——opacity =
+            // 释放帧渐隐值(≈0.675) × (1−easeIn(0.8))(≈0.31) ≈ 0.21；
+            // 若误用 easeOut 曲线（前快后慢）此时已≈0.02，线性同期
+            // ≈0.135，本断言均红。区间下限随公式修正由 0.2 调至 0.15
+            // （叠乘释放帧渐隐值所致，easeIn 意图不变）。
             final (midOpacity, _) = _readFrontCard(tester, '甲');
-            expect(midOpacity, inInclusiveRange(0.2, 0.5),
+            expect(midOpacity, inInclusiveRange(0.15, 0.5),
                 reason: '前卡飞出须 easeIn（后段加速消失）');
           }
           if (i == 12) {
@@ -845,6 +886,317 @@ void main() {
         await tester.pumpAndSettle();
         await tester.pump(const Duration(milliseconds: 100));
         await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('乙'), findsOneWidget);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次33：飞出方向修正——左划 -500 逐帧单调外出到界外，无回撤帧',
+        (tester) async {
+      // 旧公式 offset=_flyDx×(1−t) 方向反了：松手首帧卡片从释放位置
+      // 瞬移到边界外、再滑回原位渐隐——用户反复反馈的「划走后往回闪
+      // 一下」。批次33 改为「释放位置 → 界外目标」的连续插值，逐帧
+      // 坐实单调外出、全程无回撤。
+      // 终点帧（t=1）取样走播放路径注入：非播放路径 _finishDismiss 的
+      // setState 与动画完成同帧落地，甲在 208ms 帧即被切走；播放路径
+      // next() 延迟 100ms 让甲留在树里（与「飞出终点透明度 0」同款）。
+      final testPlayer = _FmTestPlayerProvider(
+        nextDelay: const Duration(milliseconds: 100),
+      );
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester, playerOverride: testPlayer);
+      try {
+        testPlayer.setTestPlaybackState(
+          currentSong: const Song(
+            id: 'ha', // 与 personalFmSongs[0].hash 对齐 → playingIndex=0
+            title: '甲',
+            artist: '测试歌手',
+            album: '测试专辑',
+            duration: Duration(minutes: 3),
+          ),
+          isPlaying: true,
+        );
+        testPlayer.nextTarget = const Song(
+          id: 'hb',
+          title: '乙',
+          artist: '测试歌手',
+          album: '测试专辑',
+          duration: Duration(minutes: 3),
+        );
+        await tester.pump();
+        final stackFinder = find.ancestor(
+          of: find.text('甲'),
+          matching: find.byType(LayoutBuilder),
+        );
+        final width = tester.getSize(stackFinder.first).width;
+        final target = width + 64; // _kFlyOutExtra
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        // 首 move 越过 slop 只触发 drag start（pending offset 被吸收、
+        // 不发 update），次 move 的首个 update delta 从 down 点全额起算
+        // ——两个 move 精确累积到 -500（三连会得 -560）。
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-440, 0)); // _dragDx = -500
+        await tester.pump();
+        final (releaseOpacity, releaseDx) = _readFrontCard(tester, '甲');
+        expect(releaseDx, closeTo(-500, 1e-6),
+            reason: '松手前跟手位移应为 -500');
+
+        await gesture.up();
+        await tester.pump(); // 飞出 t=0 帧：与释放帧连续
+        var prevDx = releaseDx;
+        // 逐帧推进飞出（200ms）：dx 必须从 -500 单调外出（更负）到
+        // -(宽+64)；任何一帧回撤即闪回回归。
+        for (var i = 0; i < 13; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          final (opacity, dx) = _readFrontCard(tester, '甲');
+          expect(
+            dx,
+            lessThan(prevDx),
+            reason: '第 ${i + 1} 帧回撤（dx=$dx, 上一帧=$prevDx）',
+          );
+          expect(dx, lessThanOrEqualTo(-500),
+              reason: '飞出方向必须沿拖拽方向（左划往左走）');
+          expect(opacity, lessThanOrEqualTo(releaseOpacity + 1e-9),
+              reason: '透明度不得回升');
+          // 闪回定义补强：任何一帧不得「位移≈0 且全不透明」
+          _expectDismissedCardInFlight(tester, '甲');
+          prevDx = dx;
+        }
+        expect(prevDx, closeTo(-target, 1e-6),
+            reason: '飞出终点 = 容器宽 + 64 的界外');
+
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(testPlayer.nextCallCount, 1);
+        expect(find.text('甲'), findsNothing);
+        expect(find.text('乙'), findsOneWidget);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次33：飞出方向修正——右划 +500 对称（逐帧单调外出到界外）',
+        (tester) async {
+      // 左划修正的镜像验证：dir 沿拖拽方向取正，飞出目标 = +（宽+64）。
+      // 同样走播放路径注入保终点帧可取样（见左划用例注释）。
+      final testPlayer = _FmTestPlayerProvider(
+        nextDelay: const Duration(milliseconds: 100),
+      );
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester, playerOverride: testPlayer);
+      try {
+        testPlayer.setTestPlaybackState(
+          currentSong: const Song(
+            id: 'ha',
+            title: '甲',
+            artist: '测试歌手',
+            album: '测试专辑',
+            duration: Duration(minutes: 3),
+          ),
+          isPlaying: true,
+        );
+        testPlayer.nextTarget = const Song(
+          id: 'hb',
+          title: '乙',
+          artist: '测试歌手',
+          album: '测试专辑',
+          duration: Duration(minutes: 3),
+        );
+        await tester.pump();
+        final stackFinder = find.ancestor(
+          of: find.text('甲'),
+          matching: find.byType(LayoutBuilder),
+        );
+        final width = tester.getSize(stackFinder.first).width;
+        final target = width + 64;
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        // 首 move 触发 drag start 不发 update，次 move 全额起算——两 move
+        // 精确累积到 +500。
+        await gesture.moveBy(const Offset(60, 0));
+        await gesture.moveBy(const Offset(440, 0)); // _dragDx = +500
+        await tester.pump();
+        final (releaseOpacity, releaseDx) = _readFrontCard(tester, '甲');
+        expect(releaseDx, closeTo(500, 1e-6),
+            reason: '松手前跟手位移应为 +500');
+
+        await gesture.up();
+        await tester.pump();
+        var prevDx = releaseDx;
+        for (var i = 0; i < 13; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          final (opacity, dx) = _readFrontCard(tester, '甲');
+          expect(
+            dx,
+            greaterThan(prevDx),
+            reason: '第 ${i + 1} 帧回撤（dx=$dx, 上一帧=$prevDx）',
+          );
+          expect(dx, greaterThanOrEqualTo(500),
+              reason: '飞出方向必须沿拖拽方向（右划往右走）');
+          expect(opacity, lessThanOrEqualTo(releaseOpacity + 1e-9),
+              reason: '透明度不得回升');
+          _expectDismissedCardInFlight(tester, '甲');
+          prevDx = dx;
+        }
+        expect(prevDx, closeTo(target, 1e-6),
+            reason: '飞出终点 = 容器宽 + 64 的界外');
+
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(testPlayer.nextCallCount, 1);
+        expect(find.text('甲'), findsNothing);
+        expect(find.text('乙'), findsOneWidget);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次33：释放边界连续——松手前后两帧的前卡 dx/opacity 各自相等',
+        (tester) async {
+      // 闪回的另一半根因：旧公式 t=0 时 offset=_flyDx（界外）、opacity=1，
+      // 与松手帧（释放位置 + 跟手渐隐值）双双不连续。批次33 飞出起点
+      // 精确取释放位置与释放帧透明度，边界零跳变。
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-440, 0)); // _dragDx = -500
+        await tester.pump();
+        final (beforeOpacity, beforeDx) = _readFrontCard(tester, '甲');
+
+        await gesture.up();
+        await tester.pump(); // 松手后第一帧（飞出 t=0）
+        final (afterOpacity, afterDx) = _readFrontCard(tester, '甲');
+
+        expect(afterDx, closeTo(beforeDx, 1e-6),
+            reason: '位移边界连续：飞出起点 = 释放位置');
+        expect(afterOpacity, closeTo(beforeOpacity, 1e-6),
+            reason: '透明度边界连续：飞出起点透明度 = 释放帧跟手渐隐值');
+
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('乙'), findsOneWidget);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次33：拖拽中下层卡随 |dx| 前移（scale 递增 / dy 递减，与手指成比例）',
+        (tester) async {
+      // 旧实现下层前移只挂 _flying，拖拽中完全冻结、松手后才动。
+      // 批次33 统一 dismiss 进度 p=|视觉dx|/容器宽，与手指 1:1 耦合。
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester);
+      try {
+        final (scaleRest, dyRest) = _readLowerLayerCard(tester, '乙');
+        expect(scaleRest, closeTo(0.96, 1e-6), reason: '静止时 layer1 缩小 4%');
+        expect(dyRest, closeTo(14.0, 1e-6), reason: '静止时 layer1 下沉 14');
+
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        // 首 move 触发 drag start 不发 update，次 move 全额起算：
+        // 两 move 精确到 -150，再三 move 到 -300。
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-90, 0)); // _dragDx = -150
+        await tester.pump();
+        final (scale150, dy150) = _readLowerLayerCard(tester, '乙');
+
+        await gesture.moveBy(const Offset(-150, 0)); // _dragDx = -300
+        await tester.pump();
+        final (scale300, dy300) = _readLowerLayerCard(tester, '乙');
+
+        expect(scale150, greaterThan(scaleRest),
+            reason: '一经拖拽下层即前移（不再冻结）');
+        expect(dy150, lessThan(dyRest), reason: '下沉量随拖拽收敛');
+        expect(scale300, greaterThan(scale150),
+            reason: '拖得越深，下一张越趋向全尺寸');
+        expect(dy300, lessThan(dy150), reason: '拖得越深，下一张前移越多');
+
+        // 与手指进度成比例：p = 1 − shrink（shrink 由 scale 反推），
+        // |dx| 翻倍 → p 翻倍（1:1 耦合）。
+        final p150 = 1 - (1 - scale150) / 0.04;
+        final p300 = 1 - (1 - scale300) / 0.04;
+        expect(p300, closeTo(2 * p150, 1e-9),
+            reason: 'dismiss 进度与拖拽位移成正比');
+
+        await gesture.up(); // |dx|=300 > 90 → 飞出收尾
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('乙'), findsOneWidget);
+      } finally {
+        _teardown(kugou, player, favorites, localFavorites);
+      }
+    });
+
+    testWidgets('批次33：飞出下层进度连续——松手瞬间 shrink 不变，随后 easeOutCubic 收敛到 0',
+        (tester) async {
+      // 下层进度改统一 dismiss 进度 p：拖拽中 = |dx|/宽；飞出中 = 从
+      // 释放进度 _flyFromProgress 起 easeOutCubic 到 1。松手边界两层
+      // 连续：前卡位移/透明度（见「释放边界连续」用例）与下层 shrink。
+      // 终点帧（t=1）取样走播放路径注入：非播放路径 _finishDismiss 的
+      // setState 与动画完成同帧落地，208ms 帧指针已前移、乙变成前卡，
+      // 下层取样会失去语义；播放路径 next() 延迟 100ms 保住 layer 身份。
+      final testPlayer = _FmTestPlayerProvider(
+        nextDelay: const Duration(milliseconds: 100),
+      );
+      final (kugou, player, favorites, localFavorites, adapter) =
+          await _pumpCard(tester, playerOverride: testPlayer);
+      try {
+        testPlayer.setTestPlaybackState(
+          currentSong: const Song(
+            id: 'ha', // 与 personalFmSongs[0].hash 对齐 → playingIndex=0
+            title: '甲',
+            artist: '测试歌手',
+            album: '测试专辑',
+            duration: Duration(minutes: 3),
+          ),
+          isPlaying: true,
+        );
+        testPlayer.nextTarget = const Song(
+          id: 'hb',
+          title: '乙',
+          artist: '测试歌手',
+          album: '测试专辑',
+          duration: Duration(minutes: 3),
+        );
+        await tester.pump();
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('甲')));
+        await gesture.moveBy(const Offset(-60, 0));
+        await gesture.moveBy(const Offset(-440, 0)); // _dragDx = -500
+        await tester.pump();
+        final (scaleRelease, dyRelease) = _readLowerLayerCard(tester, '乙');
+
+        await gesture.up();
+        await tester.pump(); // 飞出 t=0：下层进度 = 释放时拖拽进度
+        final (scaleFly0, dyFly0) = _readLowerLayerCard(tester, '乙');
+        expect(scaleFly0, closeTo(scaleRelease, 1e-6),
+            reason: '松手瞬间下层 shrink 与松手前一致（进度边界连续）');
+        expect(dyFly0, closeTo(dyRelease, 1e-6),
+            reason: '松手瞬间下层 dy 与松手前一致');
+
+        // 飞出推进：easeOutCubic 收敛到 1 → shrink→0（scale→1、dy→0）
+        for (var i = 0; i < 13; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        final (scaleEnd, dyEnd) = _readLowerLayerCard(tester, '乙');
+        expect(scaleEnd, closeTo(1.0, 1e-6), reason: '飞出完成 shrink=0');
+        expect(dyEnd, closeTo(0.0, 1e-6), reason: '飞出完成 dy=0');
+
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(testPlayer.nextCallCount, 1);
         expect(find.text('乙'), findsOneWidget);
       } finally {
         _teardown(kugou, player, favorites, localFavorites);
