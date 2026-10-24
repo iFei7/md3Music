@@ -1,8 +1,13 @@
-/// 二级路由悬浮播放器控制器测试（批次 24）。
+/// 二级路由悬浮播放器控制器测试（批次 24，批次 36 扩展）。
 ///
 /// 用户口径：二级 push 页面**不显示悬浮导航但显示悬浮播放器**（且恒
 /// 展开）；设置页（/settings 路由）不显示悬浮栏；完整播放页
 /// （DraggablePlayerRoute，本身就是播放器）也不显示。
+///
+/// 批次 36：设置页内 push 的匿名子页（均衡器/声音/关于/登录/签到/
+/// 用户协议等）及其更深后代（如登录页内嵌 webview）整条路由链
+/// **均不显示悬浮 Dock**（transitive 排除）；pop 回一级页后再
+/// push 普通二级页必须恢复正常显示（排除链不污染无关路由）。
 ///
 /// 本测试复刻 app.dart `MaterialApp.builder` 的装配（控制器 +
 /// RouteObserver + 仅播放器 Dock），验证控制器的路由栈深度/排除项
@@ -42,6 +47,44 @@ void _noopSelectTab(String id) {}
 
 void _noopNavChanged(bool expanded) {}
 
+/// 匿名二级子页（复刻 settings_page.dart push 的 EqualizerSettingsPage /
+/// SoundsPage / 登录页等匿名 MaterialPageRoute）。
+///
+/// [pushDeeperKey] 非空时渲染「push 更深页」按钮，用于验证排除链
+/// 向任意深度传递（设置 → 子页 → 更深页）。
+class _AnonSubPage extends StatelessWidget {
+  const _AnonSubPage({required this.label, this.pushDeeperKey});
+
+  final String label;
+  final String? pushDeeperKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final deeperKey = pushDeeperKey;
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label),
+            if (deeperKey != null)
+              TextButton(
+                key: ValueKey(deeperKey),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        const _AnonSubPage(label: '更深匿名页（webview 同款）'),
+                  ),
+                ),
+                child: const Text('push 更深页'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 Future<void> _pumpHarness(WidgetTester tester) async {
   SharedPreferences.setMockInitialValues({});
   final controller = SecondaryDockController();
@@ -59,7 +102,29 @@ Future<void> _pumpHarness(WidgetTester tester) async {
         navigatorObservers: [observer],
         routes: {
           // 与 app.dart 同名命名路由：按名排除悬浮栏的用例目标
-          '/settings': (_) => const Scaffold(body: Center(child: Text('设置页'))),
+          '/settings': (context) => Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('设置页'),
+                  // 复刻 settings_page.dart：设置页内 push 匿名子页
+                  TextButton(
+                    key: const ValueKey('settings-push-anon'),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const _AnonSubPage(
+                          label: '设置子页（均衡器/声音/登录同款）',
+                          pushDeeperKey: 'anon-push-deeper',
+                        ),
+                      ),
+                    ),
+                    child: const Text('push 设置子页'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         },
         home: Builder(
           builder: (context) => Scaffold(
@@ -103,7 +168,7 @@ Future<void> _pumpHarness(WidgetTester tester) async {
             builder: (context, _) {
               return Stack(
                 children: [
-                  if (child != null) child!,
+                  if (child != null) child,
                   if (controller.visible)
                     // 与 app.dart 同款：全屏 Overlay 承载 Tooltip（有界），
                     // Dock 自身 Align(bottomCenter) 钉在屏底
@@ -206,5 +271,99 @@ void main() {
     // 再推几帧：Dock 不因动画/重建闪没
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(GlassDockPlayer), findsOneWidget);
+  });
+
+  // ---- 批次 36：transitive 排除（设置页子孙链） ----
+
+  testWidgets('设置页 push 匿名子页（均衡器/声音/登录同款）：不挂悬浮播放器', (tester) async {
+    await _pumpHarness(tester);
+    await tester.tap(find.byKey(const ValueKey('push-settings')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byKey(const ValueKey('settings-push-anon')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+      find.byType(GlassDockPlayer),
+      findsNothing,
+      reason: '设置页内 push 的匿名子页属于排除链，不显示悬浮 Dock',
+    );
+  });
+
+  testWidgets('设置 → 子页 → 更深页 三级链：整链不挂悬浮播放器', (tester) async {
+    await _pumpHarness(tester);
+    await tester.tap(find.byKey(const ValueKey('push-settings')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byKey(const ValueKey('settings-push-anon')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byKey(const ValueKey('anon-push-deeper')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+      find.byType(GlassDockPlayer),
+      findsNothing,
+      reason: '排除链向任意深度传递（登录页内嵌 webview 同款场景）',
+    );
+  });
+
+  testWidgets('设置子页 pop 回设置页：仍不挂悬浮播放器', (tester) async {
+    await _pumpHarness(tester);
+    await tester.tap(find.byKey(const ValueKey('push-settings')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byKey(const ValueKey('settings-push-anon')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final navigator = tester.state<NavigatorState>(
+      find.byType(Navigator).first,
+    );
+    navigator.pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+      find.byType(GlassDockPlayer),
+      findsNothing,
+      reason: '回到设置页仍命中按名排除',
+    );
+    expect(find.text('设置页'), findsOneWidget);
+  });
+
+  testWidgets('设置子页逐级 pop 回一级后 push 普通二级页：恢复正常显示（不污染）', (tester) async {
+    await _pumpHarness(tester);
+    await tester.tap(find.byKey(const ValueKey('push-settings')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byKey(const ValueKey('settings-push-anon')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // 逐级 pop 回一级页：设置子页 → 设置页 → 主页
+    final navigator = tester.state<NavigatorState>(
+      find.byType(Navigator).first,
+    );
+    navigator.pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    navigator.pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+      find.byType(GlassDockPlayer),
+      findsNothing,
+      reason: '回一级页后栈深 1，不显示',
+    );
+
+    // 再 push 普通二级页（歌单/专辑详情同款匿名 MaterialPageRoute）
+    await tester.tap(find.byKey(const ValueKey('push-secondary')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+      find.byType(GlassDockPlayer),
+      findsOneWidget,
+      reason: '排除链不得污染无关路由：普通二级页仍正常显示 Dock',
+    );
   });
 }

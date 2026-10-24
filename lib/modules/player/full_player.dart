@@ -115,6 +115,11 @@ class _FullPlayerState extends State<FullPlayer>
   /// 重算，保证三者始终一致。
   PlayerTabLayout _tabLayout = (hasCover: true, hasComments: true);
 
+  /// [_syncTabLayout] 是否已至少同步过一次：首次同步（首开）恒落播放列表
+  /// tab（index 0，与竖屏 compact 首开口径一致），之后的结构变化（旋转等）
+  /// 才沿用 [PlayerTabLayoutX.indexAfterChangeFrom]（进入横屏保持在歌词）。
+  bool _tabLayoutSynced = false;
+
   /// 防止 PopScope 回调与 dismiss() 重复触发。
   bool _isDismissing = false;
 
@@ -554,34 +559,64 @@ class _FullPlayerState extends State<FullPlayer>
   }
 
   /// 重算并应用当前 tab 结构：
-  /// 本地歌曲且开启了「关闭本地音乐评论区」时无评论 tab
-  /// （单列布局恒含封面 tab）。
+  /// - 宽屏（横屏/平板，按 [ResponsiveLayout] 同一宽度断点：宽度 >= 600）无封面
+  ///   tab——封面常驻分栏左栏、歌名固定在封面下方（`player_tab_layout.dart` 的
+  ///   `hasCover: !isWideLayout` 推导），歌词/评论/播放列表均进右栏 tab；
+  /// - 本地歌曲且开启了「关闭本地音乐评论区」时无评论 tab
+  ///   （单列布局恒含封面 tab）。
+  ///
+  /// 断点口径与默认分支 `_syncTabLayout` 一致（宽度 >= 600 即非 compact）；
+  /// 默认分支另有 `!widget.dockMode && deviceIsPad` 两项——lite 无车机 dockMode，
+  /// 且 DeviceType 手选平板时 ResponsiveLayout 仍按宽度走 compact，若此处按
+  /// isPadLayout 置位会删掉 compact 布局里唯一的封面 tab（封面不可达），故只认
+  /// 宽度断点，与 ResponsiveLayout 严格同源。
   ///
   /// 结构变化时才重建 TabController（旧实例必须 dispose）。**必须在 build 之前
   /// 调用**：TabBarView.children 由 [_tabLayout] 派生，controller.length 与
   /// children 数量不一致会让 TabBarView 直接抛断言。
   void _syncTabLayout() {
     if (!mounted) return;
+    // 横屏（按宽度断点）为宽屏布局：无封面 tab，封面常驻左栏。
+    // 断点必须与 ResponsiveLayout 的 getScreenType 一致（compact < 600），
+    // 否则分栏布局与 tab 结构会错位。
+    final isWideLayout =
+        getScreenType(MediaQuery.sizeOf(context).width) != ScreenType.compact;
     final player = context.read<PlayerProvider>();
     final song = player.currentSong;
     final isLocalSong = song != null && !song.isOnline;
     final next = resolvePlayerTabLayout(
-      isWideLayout: false,
+      isWideLayout: isWideLayout,
       isLocalSong: isLocalSong,
       closeLocalMusicComments: player.closeLocalMusicComments,
     );
     // 必须比较完整结构：同为 3 个 tab 也可能是「无封面」或「无评论」，
     // 只比长度会漏掉这种变化。
-    if (next == _tabLayout) return;
+    if (next == _tabLayout) {
+      _tabLayoutSynced = true;
+      return;
+    }
 
     final oldIndex = _tabController.index;
     _tabController.dispose();
     _tabLayout = next;
+    // 落点口径：
+    // - 首开（首次同步）：恒落播放列表 tab（index 0），与竖屏 compact 首开
+    //   一致。默认分支首开同样会重建 controller，但落歌词 tab
+    //   （indexAfterChangeFrom(0) == lyricsIndex）；lite 不沿用该落点——
+    //   歌词 tab 的 AM 扫色视图自带 Ticker 自驱动内插，作为首开落页会与
+    //   「先看到队列」的直觉相悖，且让整页长期处于逐帧重建状态。
+    // - 之后的结构变化（旋入横屏 / 切歌 / 设置开关）：沿用
+    //   indexAfterChangeFrom——无封面 tab 时恒落歌词 tab（默认分支口径，
+    //   旋转时歌词不中断）。
+    final initialIndex = _tabLayoutSynced
+        ? next.indexAfterChangeFrom(oldIndex)
+        : 0;
     _tabController = TabController(
       length: next.length,
       vsync: this,
-      initialIndex: next.indexAfterChangeFrom(oldIndex),
+      initialIndex: initialIndex,
     );
+    _tabLayoutSynced = true;
     debugPrint(
       '[PlayerTab] md length=${next.length} '
       'cover=${next.hasCover} comments=${next.hasComments} '
@@ -1255,8 +1290,21 @@ class _FullPlayerState extends State<FullPlayer>
                 localPath: currentSong.localPath,
                 brightness: Theme.of(context).brightness,
               ),
+              // 三档分栏（方案 P1-P，批次36）：竖屏 compact 路径原样不动；
+              // 横屏 medium/expanded 走左右分栏（默认分支 origin/rust-local-force
+              // 口径，提交 26a043f），断点与 getScreenType 一致（<600 / 600-900 / ≥900）。
               ResponsiveLayout(
                 compact: (_) => _buildCompactLayout(
+                  playerProvider,
+                  currentSong,
+                  colorScheme,
+                ),
+                medium: (_) => _buildLandscapeLayout(
+                  playerProvider,
+                  currentSong,
+                  colorScheme,
+                ),
+                expanded: (_) => _buildExpandedLayout(
                   playerProvider,
                   currentSong,
                   colorScheme,
@@ -1402,6 +1450,335 @@ class _FullPlayerState extends State<FullPlayer>
           ),
         ],
       ),
+    );
+  }
+
+  /// 手机横屏分栏布局（medium：600 ≤ 宽度 < 900，[ResponsiveLayout] 宽度断点）。
+  ///
+  /// 方案 P1-P 落地（批次36）：左栏封面+标题（flex 4），右栏 Tab+控件（flex 6）。
+  /// 移植自默认分支 origin/rust-local-force `_buildLandscapeLayout`（提交 26a043f：
+  /// 返回按钮移至最外层 Column、真正位于屏幕最左上角；刘海内嵌等距 padding）。
+  /// 与默认分支的差异（lite 现状裁剪，详见 [_buildSplitLayout] 内注释）：
+  /// - lite 无频谱圆盘封面（_isDiscCover）与车机 dockMode，封面恒左锚定；
+  /// - lite 无写真背景功能（ThemeProvider 无 useArtistPhotoBackground），故默认
+  ///   分支「横屏+写真背景+在线歌曲隐藏左栏封面」（提交 c43d7f0/9e32d06）的条件
+  ///   未移植，左栏封面常驻；
+  /// - 播放/暂停缩放沿用 lite 竖屏封面 idiom（0.97↔1.0 / 300ms easeOutCubic），
+  ///   非默认分支的 0.85 / bottomLeft / 500ms easeOutBack（后者服务频谱圆盘）。
+  Widget _buildLandscapeLayout(
+    PlayerProvider playerProvider,
+    dynamic currentSong,
+    ColorScheme colorScheme,
+  ) => _buildSplitLayout(
+    playerProvider,
+    currentSong,
+    colorScheme,
+    // medium 封面边长：min(可用宽, 可用高-72) 后钳制 [120, 300]
+    artworkCap: 300.0,
+    artworkMinSize: 120.0,
+    widthInset: 0.0,
+  );
+
+  /// Pad 横屏分栏布局（expanded：宽度 ≥ 900，[ResponsiveLayout] 宽度断点）。
+  ///
+  /// 与 medium 的唯一差异：封面边长上限 380（默认分支 `_buildExpandedLayout`
+  /// 口径：宽度再内缩 32 后钳制 [0, 380]，无 120 下限），其余结构完全相同。
+  Widget _buildExpandedLayout(
+    PlayerProvider playerProvider,
+    dynamic currentSong,
+    ColorScheme colorScheme,
+  ) => _buildSplitLayout(
+    playerProvider,
+    currentSong,
+    colorScheme,
+    artworkCap: 380.0,
+    artworkMinSize: 0.0,
+    widthInset: 32.0,
+  );
+
+  /// 分栏布局共用骨架（medium/expanded 共用，差异仅在封面尺寸参数）。
+  ///
+  /// 结构（移植自默认分支提交 26a043f）：最外层 Column 的顶部栏占据整行——
+  /// 返回按钮真正位于屏幕最左上角；其下 Expanded(Row) 左右分栏：
+  /// 左栏 flex 4 = 封面 + 标题，右栏 flex 6 = TabBarView + 底部控件。
+  /// 横屏沉浸（landscape_immersive）下同样工作：SafeArea(bottom: false) 与
+  /// 竖屏 compact 同款，底部留白改由右栏控件内的 bottomPadding 消费。
+  Widget _buildSplitLayout(
+    PlayerProvider playerProvider,
+    dynamic currentSong,
+    ColorScheme colorScheme, {
+    required double artworkCap,
+    required double artworkMinSize,
+    required double widthInset,
+  }) {
+    // 横屏 edgeToEdge 模式：底部需要额外 padding 避免被导航栏遮挡
+    // （竖屏 compact 同款处理，留白 8 而非 16：底部控件更矮）
+    final bottomPadding = MediaQuery.of(context).viewPadding.bottom + 8;
+
+    return SafeArea(
+      bottom: false,
+      child: Column(
+        children: [
+          // 顶部栏放在最外层，占据整行：返回按钮真正在屏幕最左上角（提交 26a043f）
+          _ZenFade(
+            animation: _zenAnimation,
+            child: _buildTopBar(playerProvider),
+          ),
+          Expanded(
+            child: Row(
+              children: [
+                // ── 左栏：封面 + 歌曲信息（flex 4） ──
+                Expanded(
+                  flex: 4,
+                  child: _buildSplitArtworkColumn(
+                    playerProvider,
+                    currentSong,
+                    colorScheme,
+                    artworkCap: artworkCap,
+                    artworkMinSize: artworkMinSize,
+                    widthInset: widthInset,
+                  ),
+                ),
+                // ── 右栏：Tab 内容 + 底部控件（flex 6） ──
+                Expanded(
+                  flex: 6,
+                  child: _buildSplitTabColumn(
+                    playerProvider,
+                    currentSong,
+                    colorScheme,
+                    bottomPadding: bottomPadding,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 分栏左栏：封面 + 标题视作一个整体，以统一间距 g 贴合左栏。
+  /// 方角封面左锚定（文字左缘 = 封面左缘，右侧余量归歌词面板）；纵向居中令上下留白相等。
+  /// 异形屏内嵌「算入」等距而非叠加（移植自默认分支，提交 26a043f）：
+  /// 内层左 padding = clamp(g - 刘海, 0, g)，叠加外层 SafeArea 已让出的刘海后
+  /// 物理左间距 = max(g, 刘海)，不再右推封面。
+  Widget _buildSplitArtworkColumn(
+    PlayerProvider playerProvider,
+    dynamic currentSong,
+    ColorScheme colorScheme, {
+    required double artworkCap,
+    required double artworkMinSize,
+    required double widthInset,
+  }) {
+    return Builder(
+      builder: (context) {
+        const g = 16.0;
+        final cutoutLeft = MediaQuery.viewPaddingOf(context).left;
+        return Padding(
+          padding: EdgeInsets.only(
+            left: (g - cutoutLeft).clamp(0.0, g),
+            top: g,
+            bottom: g,
+          ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // 正方形封面同时受可用宽/高约束（预留标题块高度 72），避免高度
+              // 不足时上下被裁切。medium：min(宽, 高-72).clamp(120, 300)；
+              // expanded：宽再内缩 32 后钳制 [0, 380]（无 120 下限）。
+              final size = (constraints.maxWidth - widthInset)
+                  .clamp(0.0, artworkCap)
+                  .clamp(
+                    0.0,
+                    (constraints.maxHeight - 72).clamp(
+                      0.0,
+                      double.infinity,
+                    ),
+                  );
+              // medium 的 120 下限在 min 之后生效（默认分支口径）：极端矮视口下
+              // 宁可溢出也不出现 <120 的绿豆封面。
+              final boxSize = artworkMinSize > 0
+                  ? size.clamp(artworkMinSize, artworkCap)
+                  : size;
+              return Align(
+                alignment: Alignment.centerLeft,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 封面：固定正方形容器（布局盒边长 = boxSize，测试直接断言）
+                    SizedBox(
+                      width: boxSize,
+                      height: boxSize,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        // 横屏封面仅注册竖向拖拽时，静止点击会被唯一的
+                        // VerticalDragGestureRecognizer 通过 arena sweep 认领，
+                        // 走进 _onTopBarDrag* 的微拖拽收起路径（曾表现为「点击封面闪回」）。
+                        // 加一个 no-op onTap，让静止点击被 TapGestureRecognizer 赢下
+                        // 手势竞技场（与竖屏封面一致）；拖动仍由竖向拖拽识别器接管。
+                        // （移植自默认分支，提交 26a043f）
+                        onTap: () {
+                          _consumeZenPressTap();
+                        },
+                        onVerticalDragStart: _onTopBarDragStart,
+                        onVerticalDragUpdate: _onTopBarDragUpdate,
+                        onVerticalDragEnd: _onTopBarDragEnd,
+                        onVerticalDragCancel: _onTopBarDragCancel,
+                        child: _wrapArtworkZenPress(
+                          // 局部 Selector（P1-2）：播放/暂停只重建缩放层，
+                          // 封面子树经 child 复用不重建（与竖屏封面 idiom 一致）
+                          child: Selector<PlayerProvider, bool>(
+                            selector: (_, player) => player.isPlaying,
+                            builder: (context, isPlaying, child) =>
+                                AnimatedScale(
+                                  scale: isPlaying ? 1.0 : 0.97,
+                                  duration: const Duration(milliseconds: 300),
+                                  curve: Curves.easeOutCubic,
+                                  child: child,
+                                ),
+                            child: _buildCrossfadeArtworkWrapper(
+                              currentSong,
+                              colorScheme,
+                              iconSize: 48,
+                              isPlaying: playerProvider.isPlaying,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // 歌名 / 艺人·专辑：固定在封面正下方，标题块宽度 = 封面布局盒
+                    // boxSize，左边缘与封面左缘对齐（移植自默认分支，提交 26a043f）。
+                    // dense：左栏宽度只有约 40%，标题降一号字避免频繁换行。
+                    SizedBox(
+                      width: boxSize,
+                      child: _buildTitleBlock(
+                        playerProvider,
+                        currentSong,
+                        colorScheme,
+                        alignment: CrossAxisAlignment.stretch,
+                        dense: true,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  /// 分栏右栏：TabBarView（播放列表 / 歌词 / 评论）+ 底部控件。
+  ///
+  /// 宽屏（[_tabLayout].hasCover == false）无封面 tab：封面常驻左栏、歌名固定
+  /// 其下，歌词/评论/播放列表均进右栏 tab（见 `player_tab_layout.dart` 的
+  /// `hasCover: !isWideLayout` 推导，`_syncTabLayout` 按宽度断点置位）。
+  Widget _buildSplitTabColumn(
+    PlayerProvider playerProvider,
+    dynamic currentSong,
+    ColorScheme colorScheme, {
+    required double bottomPadding,
+  }) {
+    return Column(
+      children: [
+        // 内容区（播放列表 / 歌词 / 评论）
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              // 播放列表面板（index 0，最左侧，与 AM 一致）
+              // 左滑切页：列表卡片吃掉了水平拖拽，靠面板内的指针判定回调补齐
+              PlayerPlaylistView(
+                useAmColors: false,
+                onSwipeToNextTab: _showNextTabFromPlaylist,
+              ),
+              // 歌词 tab：内容与竖屏 compact 歌词 tab 同款（结构化歌词走
+              // AppleMusicLyricsView，否则回退 LyricsView；倍速/播放态经局部
+              // Selector 供给），仅去掉 compact 外层的 onTap 包装
+              // （横屏无封面 tab 可跳，且默认分支横屏歌词同样不挂 onTap）。
+              _wrapMd3LyricsWithAuxToggle(
+                _isLoadingLyrics
+                    ? Center(
+                        child: M3ELoadingIndicator(
+                          color: colorScheme.primary,
+                        ),
+                      )
+                    : RepaintBoundary(
+                        // 已解析出结构化歌词（KRC/TTML 逐字或 LRC 行级）时用
+                        // Apple Music 风格视图（扫色 + 自驱动内插）；无结构化
+                        // 歌词时回退旧 LyricsView（保底不空窗）。
+                        child: _lyricMetadata.isNotEmpty
+                            ? Selector<PlayerProvider, (double, bool)>(
+                                selector: (_, player) =>
+                                    (player.speed, player.isPlaying),
+                                builder: (context, state, _) {
+                                  final (speed, isPlaying) = state;
+                                  return AppleMusicLyricsView(
+                                    lyricLines: _lyricMetadata,
+                                    positionListenable:
+                                        playerProvider.positionNotifier,
+                                    adaptPosition: (position) =>
+                                        _adjustedLyricPosition(
+                                          position,
+                                          currentSong,
+                                        ),
+                                    onSeek: (duration) {
+                                      playerProvider.seek(duration);
+                                    },
+                                    // 倍速参与 Ticker 自驱动内插；
+                                    // 播放态直达（暂停立即停帧）
+                                    speed: speed,
+                                    isPlaying: isPlaying,
+                                    // 跟随态上报：驱动底部操作区收起/恢复
+                                    onFollowChanged: (following) =>
+                                        _lyricsFollowing.value = following,
+                                  );
+                                },
+                              )
+                            : LyricsView(
+                                lyrics: _lyrics,
+                                parsedLyrics: _lyricMetadata,
+                                position: Duration.zero,
+                                positionListenable:
+                                    playerProvider.positionNotifier,
+                                adaptPosition: (position) =>
+                                    _adjustedLyricPosition(
+                                      position,
+                                      currentSong,
+                                    ),
+                                onSeek: (duration) {
+                                  playerProvider.seek(duration);
+                                },
+                              ),
+                      ),
+              ),
+              // 评论 tab：本地歌曲且开启了「关闭本地音乐评论区」时不存在
+              if (_tabLayout.hasComments)
+                CommentsView(
+                  songHash: currentSong.id,
+                  albumAudioId: currentSong.albumAudioId,
+                  // 输入不在播放器里：长按评论段/点「回复」弹出仅输入框的托盘
+                  showComposer: false,
+                  onReplyComment: _openComposeSheet,
+                ),
+            ],
+          ),
+        ),
+        // 控制区：底部 padding 包含导航栏高度
+        _ZenFade(
+          animation: _zenAnimation,
+          child: Padding(
+            padding: EdgeInsets.only(bottom: _zenMode ? 8 : bottomPadding),
+            child: _buildControls(
+              playerProvider,
+              colorScheme,
+              isExpanded: true,
+            ),
+          ),
+        ),
+      ],
     );
   }
 

@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/services/audio_service_io.dart';
 import '../../core/services/volume_normalization_service.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
+import '../../utils/landscape_dock_side.dart';
 
 class SettingsRepository {
   static const String _keyDefaultQuality = 'settings_default_quality';
@@ -648,6 +649,29 @@ class SettingsRepository {
   Future<void> setLandscapeImmersiveEnabled(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyLandscapeImmersive, value);
+  }
+
+  // ===== 悬浮 Dock 位置（批次36）=====
+  static const String _keyLandscapeDockSide = 'settings_landscape_dock_side';
+
+  /// 横屏悬浮 Dock 贴边方向，默认 [LandscapeDockSide.right]（= 批次35 起的
+  /// 既有右侧纵条行为，默认值必须与改造前完全一致）。
+  ///
+  /// **为什么用枚举 + String 存储，而不是 bool**：仓库现有开关多为 bool，
+  /// 但本项语义是「方向」而非「开关」，bool 命名只能写成
+  /// `dockOnLeft`，可读性与后续扩展（例如第三档「跟随语言 RTL」）都更差；
+  /// 存枚举 name（'left' / 'right'）对旧版本无副作用（键此前不存在）。
+  /// 解析失败（脏值 / 手改配置）由 [LandscapeDockSide.fromStorage] 回落 right。
+  Future<LandscapeDockSide> getLandscapeDockSide() async {
+    final prefs = await SharedPreferences.getInstance();
+    return LandscapeDockSide.fromStorage(
+      prefs.getString(_keyLandscapeDockSide),
+    );
+  }
+
+  Future<void> setLandscapeDockSide(LandscapeDockSide side) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyLandscapeDockSide, side.name);
   }
 
   /// 音质降级提示开关，默认关闭。播放音质不可用自动降级时弹出提示。

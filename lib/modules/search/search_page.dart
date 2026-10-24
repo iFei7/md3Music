@@ -466,12 +466,13 @@ class _SearchPageState extends State<SearchPage>
             child: SonifyTitleOverlay(
               title: '搜索',
               showBarBackground: _showBarBackground,
-              // 批次 35：横屏「上滑隐藏顶栏」——坍缩态（outer offset ≥
-              // 52，胶囊行已滚完）整栏（标题 + 模糊带 + 头像 + 坍缩
-              // 搜索圆钮）滑出隐藏、展开态滑回；竖屏该信号被 overlay
-              // 内的方向判定忽略，坍缩态仍只负责 actions 搜索圆钮的
-              // 浮现（既有行为不变）。
-              topBarHidden: _collapsed,
+              // 批次 36：横屏「收窄顶栏」——坍缩态（outer offset ≥
+              // 52，胶囊行已滚完）整栏不隐藏、改收窄：标题区 52 →
+              // 38dp、大标题 20sp → 14.5sp（180ms easeOut 插值），
+              // 头像 / 坍缩搜索圆钮 / 渐变模糊带全部保留原尺寸；
+              // 竖屏该信号被 overlay 内的方向判定忽略，坍缩态仍只
+              // 负责 actions 搜索圆钮的浮现（既有行为不变）。
+              topBarCompact: _collapsed,
               statusBarHeight: MediaQuery.of(context).padding.top,
               trailing: const UserAvatarButton(),
               actions: [

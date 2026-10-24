@@ -10,11 +10,12 @@ import '../../core/theme/app_theme.dart';
 /// 结构约定（与 sonify 一级页骨架同构，Title.kt:402-466）：
 /// - 列表首 item = 状态栏占位 + 大标题占位（[SonifyTextStyles.largeTitle]
 ///   20sp Bold、行高 36dp——与右上角 36dp 用户头像等高；水平边距
-///   20dp，距顶 8dp）+ 底部留白；
+///   20dp，距顶 8dp）+ 底部留白。占位 item 的高度按「展开/紧凑」两态
+///   几何给出（竖屏恒展开态，见 [_TitlePlaceholderItem]）；
 /// - **大标题固定悬浮**（[_PinnedLargeTitle]）：位置 = 状态栏 + 8dp 起、
 ///   水平 20dp，滚动过程中**不位移、不缩放、不溶解**（用户反馈①：
 ///   "上滑时标题位置会变，不想要"）。列表首项只保留同尺寸占位
-///  （[_TitlePlaceholderItem]，含高度实测），业务内容从标题下方滚过；
+///   （[_TitlePlaceholderItem]，两态解析高度），业务内容从标题下方滚过；
 /// - 顶栏悬浮叠加在列表之上：背景为**单片均匀模糊 + tint 渐变带**
 ///   （材质对齐 `LiquidGlassSurface` dock 配方）：带内 [ClipRect] 包
 ///   **单个** [BackdropFilter]（`srcOver`，sigma [kSonifyBarBlurSigma]，
@@ -35,15 +36,22 @@ import '../../core/theme/app_theme.dart';
 /// 栏体背景改随「骨架滚动 **或** 外部信号」二者取或浮现，与
 /// [actionsVisible] 同一套外置信号机制。
 ///
-/// **横屏「上滑隐藏顶栏」（批次 35）**：横屏设备高度小，为尽可能减少
-/// 页面纵向遮挡，横屏 + 内容滚动（离开顶部）时顶栏整体（固定大标题 +
-/// 渐变模糊带 + 右上头像 + actions）以 180ms easeOut 动画向上滑出屏幕
-/// （translateY = −（状态栏 + 标题区 52dp））并淡出；回顶（offset ≤ 0）
-/// 滑回恢复。竖屏完全维持现状（固定悬浮、滚动只出模糊带）。判定口径为
-/// 壳层纯方向：[MediaQuery.orientationOf] == [Orientation.landscape]。
+/// **横屏「收窄顶栏」（批次 36，取代批次 35 的「上滑隐藏」）**：
+/// 横屏设备高度小，为尽可能减少页面纵向遮挡，横屏 + 内容滚动（离开
+/// 顶部）时顶栏**不隐藏**，改为**收窄**：标题区从展开态收窄为紧凑态
+/// ——标题区高度 52dp（8+36+8）→ 38dp（6+26+6）、大标题字号
+/// 20sp → 14.5sp（行高 36 → 26dp），列表首项占位高度同步收缩
+/// （内容区随之增高 14dp）；右上头像（36dp）、actions 钮、渐变
+/// 模糊带（状态栏 + 54dp）**全部保留且保持原尺寸/原位置**（只收标题
+/// 区，交互锚点不缩）。回顶（offset ≤ 0）恢复展开态；两态间以
+/// [kSonifyTopBarCompactDuration]（180ms easeOut）插值（与
+/// [SonifyMotion.barFade] 同族、时长更长——几何收窄比透明度淡入需要
+/// 更多时长让位，见常量文档），经 Tween 插值驱动，无每帧 setState。
+/// 竖屏完全维持现状（固定悬浮、滚动只出模糊带）。判定口径为壳层纯
+/// 方向：[MediaQuery.orientationOf] == [Orientation.landscape]。
 /// 驱动源与栏背景同源（骨架自身 offset > 0 或外部 [barBackgroundVisible]
 /// 注入的内层列表滚动，二者取或）；搜索页（NestedScrollView 结构）由
-/// 坍缩态信号驱动，见 [SonifyTitleOverlay.topBarHidden]。
+/// 坍缩态信号驱动，见 [SonifyTitleOverlay.topBarCompact]。
 ///
 /// **去掉的机制**（批次 8 起）：大标题随滚动折叠为小标题（位置/尺寸
 /// 变化）及 180ms 端点吸附——与"标题位置固定"的诉求直接冲突，且小标题
@@ -128,22 +136,20 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
   ScrollController get _controller =>
       widget.controller ?? (_internalController ??= ScrollController());
 
-  /// 大标题占位 item 实测高度（状态栏占位 + 标题 + 底部留白），布局后回填。
-  double _titleItemHeight = 0;
-
   /// 顶栏背景（渐变带组）可见性：列表发生任何滚动即出现，回到顶部消失
   /// （Title.kt:640-653）。
   final ValueNotifier<bool> _showBarBackground = ValueNotifier(false);
 
-  /// 批次 35：横屏「上滑隐藏顶栏」信号（true = 顶栏整体已滑出屏幕）。
+  /// 批次 36：横屏「收窄顶栏」信号（true = 标题区已收窄为紧凑态）。
   /// 与 [_showBarBackground] 同源（骨架自身 offset > 0 或外部
   /// barBackgroundVisible 注入的内层列表滚动，二者取或），横屏时二者
-  /// 同真；**竖屏恒 false**（顶栏固定悬浮不隐藏，既有路径不变）。
+  /// 同真；**竖屏恒 false**（顶栏固定悬浮不收起，既有路径不变）。
   /// 横竖屏切换（MediaQuery 变化）经 [didChangeDependencies] 重算。
-  final ValueNotifier<bool> _topBarHidden = ValueNotifier(false);
+  final ValueNotifier<bool> _topBarCompact = ValueNotifier(false);
 
   /// 当前是否横屏的方向缓存（[didChangeDependencies] 刷新）：滚动通知
-  /// 分发路径上只读缓存，不做 InheritedWidget 查找。
+  /// 分发路径上只读缓存，不做 InheritedWidget 查找。另用于 build 期
+  /// 决定占位 item / overlay 是否挂收窄动画壳（竖屏不挂，结构不变）。
   bool _landscape = false;
 
   bool _disposed = false;
@@ -159,8 +165,8 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // 批次 35：横竖屏切换走这里（MediaQuery 依赖变化）——刷新方向缓存
-    // 并按新方向重算顶栏隐藏态（横屏 = 滚动信号，竖屏恒 false）。
+    // 批次 36：横竖屏切换走这里（MediaQuery 依赖变化）——刷新方向缓存
+    // 并按新方向重算顶栏收窄态（横屏 = 滚动信号，竖屏恒 false）。
     // 与滚动回调共用同一出口，等值防抖。
     _landscape = MediaQuery.orientationOf(context) == Orientation.landscape;
     _updateFromScroll();
@@ -170,7 +176,7 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
   void dispose() {
     _disposed = true;
     _showBarBackground.dispose();
-    _topBarHidden.dispose();
+    _topBarCompact.dispose();
     widget.barBackgroundVisible?.removeListener(_updateFromScroll);
     _internalController?.dispose();
     super.dispose();
@@ -198,11 +204,11 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
     if (_showBarBackground.value != showBar) {
       _showBarBackground.value = showBar;
     }
-    // 批次 35：横屏时顶栏随同一滚动信号整体上滑隐藏（竖屏恒 false，
-    // 顶栏固定悬浮不隐藏）。等值防抖，避免动画壳反复重启。
-    final hideBar = _landscape && showBar;
-    if (_topBarHidden.value != hideBar) {
-      _topBarHidden.value = hideBar;
+    // 批次 36：横屏时顶栏随同一滚动信号收窄为紧凑态（竖屏恒 false，
+    // 顶栏固定悬浮不收）。等值防抖，避免动画壳反复重启。
+    final compactBar = _landscape && showBar;
+    if (_topBarCompact.value != compactBar) {
+      _topBarCompact.value = compactBar;
     }
   }
 
@@ -245,18 +251,15 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            // 大标题占位 item：竖屏恒展开态（无动画壳，
+                            // 与批次 36 前同构）；横屏随 [_topBarCompact]
+                            // 在展开/紧凑两态间动画收缩（占位同步收窄，
+                            // 滚动态内容区随之增高——「减少遮挡」）。
                             _TitlePlaceholderItem(
-                              title: widget.title,
+                              compact: _landscape ? _topBarCompact : null,
+                              statusBarHeight: media.padding.top,
+                              textScaler: media.textScaler,
                               bottomPadding: widget.titleBottomPadding,
-                              onHeightChanged: (h) {
-                                if (h != _titleItemHeight) {
-                                  // 实测高度回来后要重建一次：minHeight 兜底
-                                  // 依赖该值（首帧为 0，次帧起生效）。
-                                  setState(() => _titleItemHeight = h);
-                                  // 高度首测/变化后立即校正一次状态
-                                  _updateFromScroll();
-                                }
-                              },
                             ),
                             for (var i = 0; i < widget.itemCount; i++)
                               widget.itemBuilder(context, i),
@@ -278,9 +281,9 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
             child: SonifyTitleOverlay(
               title: widget.title,
               showBarBackground: _showBarBackground,
-              // 批次 35：横屏「上滑隐藏顶栏」驱动信号（竖屏时 overlay 内
+              // 批次 36：横屏「收窄顶栏」驱动信号（竖屏时 overlay 内
               // 的方向判定忽略它，顶栏结构逐字节维持既有悬浮形态）。
-              topBarHidden: _topBarHidden,
+              topBarCompact: _topBarCompact,
               statusBarHeight: media.padding.top,
               trailing: widget.trailing,
               actions: widget.actions,
@@ -292,10 +295,19 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
     );
   }
 
-  /// 标题区高度 = 首 item 高度 − 状态栏（与占位 item 的标题段同口径）。
-  /// 首帧实测值未回传时为 0，次帧起生效。
+  /// 标题区高度（首 item 高度 − 状态栏）：内容不足一屏时把列表撑到
+  /// 「视口 + 标题区」的 minHeight 兜底口径。
+  ///
+  /// 批次 36 起改解析式计算（原为占位 item 实测回填）：展开态 =
+  /// [_kTitleTopPad] + 20sp largeTitle 行高 36（随字体缩放）+ 底部
+  /// 留白，首帧即精确可用（原实现首帧为 0、次帧才生效）。恒取展开态
+  /// 口径——兜底只需保证 maxScrollExtent > 0，横屏紧凑态由占位 item
+  /// 自身动画收紧（38dp），兜底保留 52dp 余量不影响可滚性（外层
+  /// 橡皮筋上限略增 14dp，与既有「最大橡皮筋一个标题区高度」同族）。
   double _titleZone(MediaQueryData media) =>
-      (_titleItemHeight - media.padding.top).clamp(0.0, double.infinity);
+      _kTitleTopPad +
+      media.textScaler.scale(_kTitleFontSize) * (_kTitleLineHeight / _kTitleFontSize) +
+      widget.titleBottomPadding;
 }
 
 /// 四页共用的顶栏悬浮 overlay：渐变模糊带（[_TopBar]）+ 固定悬浮大标题
@@ -311,13 +323,15 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
 /// 包裹；`showBarBackground` 由宿主页的滚动信号驱动（offset > 0 即
 /// 浮现，回顶消失）。
 ///
-/// **横屏「上滑隐藏顶栏」（批次 35）**：注入 [topBarHidden] 且宿主为
-/// 横屏时，整栏（[_TopBar] 渐变模糊带 + [_PinnedLargeTitle] 大标题 +
-/// 右上头像 + actions）随该通知器整体上滑出屏（translateY = −（状态栏
-/// + 标题区 52dp））并同步淡出（180ms easeOut），信号回落即滑回恢复；
-/// 竖屏（或未注入信号）时本参数被方向判定忽略，返回原 Stack 结构，
-/// 与批次 35 之前逐字节一致。滑出壳包在整个 Stack 之外，模糊带与
-/// 标题/头像同拍随行，不出现「带还在、标题走了」的分裂。
+/// **横屏「收窄顶栏」（批次 36，取代批次 35 的「上滑隐藏」）**：注入
+/// [topBarCompact] 且宿主为横屏时，整栏**不滑出**——渐变模糊带
+/// （[_TopBar]）与右上头像 / actions 保持原尺寸原位置（交互锚点不缩），
+/// 仅固定悬浮大标题（[_PinnedLargeTitle]）在展开/紧凑两态间以 180ms
+/// easeOut 插值：标题区 52dp（8+36+8）→ 38dp（6+26+6）、字号 20sp →
+/// 14.5sp（行高 36 → 26dp）；信号回落即恢复展开态。竖屏（或未注入
+/// 信号）时本参数被方向判定忽略，返回原 Stack 结构（[_buildStack]），
+/// 与批次 36 之前逐字节一致（回归锁
+/// test/widgets/sonify_title_scaffold_test.dart）。
 class SonifyTitleOverlay extends StatelessWidget {
   const SonifyTitleOverlay({
     super.key,
@@ -327,7 +341,7 @@ class SonifyTitleOverlay extends StatelessWidget {
     this.trailing,
     this.actions,
     this.actionsVisible,
-    this.topBarHidden,
+    this.topBarCompact,
   });
 
   /// 页面大标题文本（固定悬浮，不折叠）。
@@ -350,60 +364,40 @@ class SonifyTitleOverlay extends StatelessWidget {
   /// [showBarBackground]（默认行为）。见 [SonifyTitleScaffold.actionsVisible]。
   final ValueListenable<bool>? actionsVisible;
 
-  /// 批次 35：横屏「上滑隐藏顶栏」信号（true = 整栏滑出屏幕）。
+  /// 批次 36：横屏「收窄顶栏」信号（true = 标题区收窄为紧凑态）。
   ///
   /// 骨架页（SonifyTitleScaffold）传入 [_SonifyTitleScaffoldState] 的
   /// 同源滚动信号（横屏 = 骨架 offset > 0 或外部 barBackgroundVisible
   /// 注入的内层列表滚动；竖屏恒 false）；搜索页传入坍缩态通知器
-  /// （outer offset ≥ 52 = 坍缩态 = 顶栏隐藏）。**竖屏时本参数被方向
-  /// 判定忽略**（顶栏固定悬浮不隐藏），仅横屏生效。
-  final ValueListenable<bool>? topBarHidden;
+  /// （outer offset ≥ 52 = 坍缩态 = 顶栏收窄，而非滑出）。**竖屏时
+  /// 本参数被方向判定忽略**（顶栏固定悬浮不收窄），仅横屏生效。
+  final ValueListenable<bool>? topBarCompact;
 
   @override
   Widget build(BuildContext context) {
-    final hideSignal = topBarHidden;
-    if (hideSignal != null &&
+    final compactSignal = topBarCompact;
+    if (compactSignal != null &&
         MediaQuery.orientationOf(context) == Orientation.landscape) {
-      // 横屏隐藏壳（批次 35）：整栏随信号整体上滑 + 淡出，回顶滑回。
-      // 壳包在整个 Stack 之外——模糊带（key 'sonify_bar_blur'）与
-      // 标题/头像同拍随行，不出「带还在、标题走了」的分裂；隐藏态
-      // IgnorePointer 断开命中（栏体已出屏，不应再吸收点按）。
+      // 横屏收窄路径（批次 36）：整栏不出屏，仅固定大标题在两态间
+      // 插值收紧（_TopBar 渐变带与头像/actions 保持原样——只收标题
+      // 区，交互锚点不缩）。信号监听只包 Stack 一层：180ms 插值由
+      // _PinnedLargeTitle 内部 TweenAnimationBuilder 逐帧完成，
+      // 不触发整页重建。
       return ValueListenableBuilder<bool>(
-        valueListenable: hideSignal,
-        builder: (context, hidden, child) {
-          return IgnorePointer(
-            ignoring: hidden,
-            child: AnimatedOpacity(
-              opacity: hidden ? 0 : 1,
-              duration: kSonifyTopBarHideDuration,
-              curve: Curves.easeOut,
-              child: TweenAnimationBuilder<double>(
-                tween: Tween<double>(
-                  begin: 0,
-                  end: hidden ? -(statusBarHeight + _kTitleZoneHeight) : 0,
-                ),
-                duration: kSonifyTopBarHideDuration,
-                curve: Curves.easeOut,
-                builder: (context, offset, child) => Transform.translate(
-                  offset: Offset(0, offset),
-                  child: child,
-                ),
-                child: child,
-              ),
-            ),
-          );
-        },
-        child: _buildStack(),
+        valueListenable: compactSignal,
+        builder: (context, compact, child) => _buildStack(compact: compact),
       );
     }
-    // 竖屏（或未注入隐藏信号）：固定悬浮顶栏，结构与批次 35 之前逐字节
+    // 竖屏（或未注入收窄信号）：固定悬浮顶栏，结构与批次 36 之前逐字节
     // 一致（回归锁 test/widgets/sonify_title_scaffold_test.dart）。
     return _buildStack();
   }
 
-  /// 顶栏 Stack（渐变模糊带 [_TopBar] + 固定悬浮大标题）：横屏隐藏壳的
-  /// 子节点；竖屏直接作为本组件产物。
-  Widget _buildStack() {
+  /// 顶栏 Stack（渐变模糊带 [_TopBar] + 固定悬浮大标题）。
+  ///
+  /// [compact] 非空 = 横屏收窄路径：大标题随布尔值在展开/紧凑两态间
+  /// 动画收紧；null = 竖屏原路径（[_PinnedLargeTitle] 不挂动画壳）。
+  Widget _buildStack({bool? compact}) {
     return Stack(
       children: [
         Positioned(
@@ -418,68 +412,74 @@ class SonifyTitleOverlay extends StatelessWidget {
             actionsVisible: actionsVisible,
           ),
         ),
-        // 固定悬浮大标题：不随滚动位移/缩放/溶解（反馈①）
-        _PinnedLargeTitle(title: title, statusBarHeight: statusBarHeight),
+        // 固定悬浮大标题：不随滚动位移/缩放/溶解（反馈①）；
+        // 横屏收窄路径下随 compact 信号做两态几何插值（批次 36）
+        _PinnedLargeTitle(
+          title: title,
+          statusBarHeight: statusBarHeight,
+          compact: compact,
+        ),
       ],
     );
   }
 }
 
-/// 大标题占位 item：状态栏占位 + 8dp 顶距 + 20sp Bold 标题（行高 36dp，
-/// 与顶栏 36dp 头像等高）+ 底部留白——与旧 _LargeTitleItem 同构同尺寸，
-/// 但标题**不可见**（visible=false + maintainSize + 无语义）：可见标题已
-/// 改为固定悬浮的 [_PinnedLargeTitle]，本项仅提供占位高度与实测
-/// （字体缩放/文本变化自适应，供 [_SonifyTitleScaffoldState._titleZone]
-/// 兜底滚动区使用）。
+/// 大标题占位 item：仅提供首项占位高度（状态栏占位 + 标题区），业务
+/// 内容从标题下方滚过；可见标题为固定悬浮的 [_PinnedLargeTitle]。
+///
+/// **两态几何（批次 36）**：高度解析式计算，不再实测回填（原
+/// [_MeasureSize] 机制）——展开态 = 状态栏 + 8 + 36（20sp largeTitle
+/// 行高，随 textScaler 缩放）+ 底部留白；紧凑态 = 状态栏 + 6 + 26
+/// （14.5sp 行高）+ 6。竖屏（[compact] 为 null）恒展开态、不挂动画
+/// 壳，与批次 36 前同构同尺寸；横屏（[compact] 非空）随收窄信号在
+/// 两态间 180ms easeOut 插值收缩——占位与悬浮标题同步收紧，滚动态
+/// 业务内容起点随之上移 14dp（内容区增高 = 用户要的「减少遮挡」）。
+/// 字体缩放自适应由 textScaler 代入两态公式保证（与原实测等价：
+/// 行高 = scale(字号) × height）。
 class _TitlePlaceholderItem extends StatelessWidget {
   const _TitlePlaceholderItem({
-    required this.title,
+    required this.compact,
+    required this.statusBarHeight,
+    required this.textScaler,
     required this.bottomPadding,
-    required this.onHeightChanged,
   });
 
-  final String title;
+  /// 横屏收窄信号（null = 竖屏/无信号：恒展开态、无动画壳）。
+  final ValueListenable<bool>? compact;
+
+  final double statusBarHeight;
+  final TextScaler textScaler;
+
+  /// 大标题 item 底部留白（展开态口径；紧凑态收窄为定值 6dp）。
   final double bottomPadding;
-  final ValueChanged<double> onHeightChanged;
 
   @override
   Widget build(BuildContext context) {
-    final statusBarHeight = MediaQuery.of(context).padding.top;
-    final cs = Theme.of(context).colorScheme;
-    return _MeasureSize(
-      onSizeChanged: (size) => onHeightChanged(size.height),
-      child: Visibility(
-        // 不可见但保持布局尺寸（占位）与关闭语义（读屏不双报）；
-        // Visibility flag 依赖链：maintainSemantics → maintainSize →
-        // maintainAnimation → maintainState，四者需显式配齐
-        visible: false,
-        maintainState: true,
-        maintainAnimation: true,
-        maintainSize: true,
-        maintainSemantics: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(height: statusBarHeight),
-            Padding(
-              // 距顶 8dp / 水平边距 20dp：Title.kt:1125, 1137
-              padding: const EdgeInsets.fromLTRB(
-                SonifySpacing.titleMargin,
-                8,
-                SonifySpacing.titleMargin,
-                0,
-              ),
-              child: Text(
-                title,
-                style: SonifyTextStyles.largeTitle.copyWith(
-                  color: cs.onSurface,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            SizedBox(height: bottomPadding),
-          ],
+    // 两态标题区高度（不含状态栏）：
+    // 展开 = 8 + 36 + bottomPadding（52 @ ts=1）；紧凑 = 6 + 26 + 6（38）。
+    final expandedZone = _kTitleTopPad +
+        textScaler.scale(_kTitleFontSize) *
+            (_kTitleLineHeight / _kTitleFontSize) +
+        bottomPadding;
+    final compactZone = _kCompactTitleTopPad +
+        textScaler.scale(_kCompactTitleFontSize) *
+            (_kCompactTitleLineHeight / _kCompactTitleFontSize) +
+        _kCompactTitleBottomPad;
+    final signal = compact;
+    if (signal == null) {
+      // 竖屏原路径：展开态定高盒，无动画壳（批次 36 前同构）
+      return SizedBox(height: statusBarHeight + expandedZone);
+    }
+    return ValueListenableBuilder<bool>(
+      valueListenable: signal,
+      builder: (context, compact, _) => TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: compact ? 1 : 0),
+        duration: kSonifyTopBarCompactDuration,
+        curve: Curves.easeOut,
+        // 逐帧插值由 Tween 内部完成，不走 setState：仅本 SizedBox 的
+        // 高度在动，业务 item 子树不被重建
+        builder: (context, t, _) => SizedBox(
+          height: statusBarHeight + expandedZone + (compactZone - expandedZone) * t,
         ),
       ),
     );
@@ -492,29 +492,90 @@ class _TitlePlaceholderItem extends StatelessWidget {
 /// 方案取舍：完全静止（而非透明度微调）——标题是页面的定位锚，任何
 /// 淡出都会让用户在滚动中"找不到标题"；可读性由顶栏渐变带（滚动即
 /// 浮现）保证，无需标题自身变化。
+///
+/// **横屏收窄两态（批次 36）**：[compact] 非空（横屏收窄路径）时，
+/// 标题在展开/紧凑两态间以 [kSonifyTopBarCompactDuration]（180ms
+/// easeOut）插值：字号 20sp → 14.5sp、行高 36 → 26dp、顶距 8 → 6dp。
+/// 竖屏（[compact] 为 null）走原静态路径，Positioned(top: sb+8) +
+/// 20sp 原样，不挂任何动画壳（回归锁逐字节不动）。
+///
+/// 实现说明：Positioned.top 无法随动画插值（且 Positioned 必须是
+/// Stack 直接子级、不能放进 Tween builder 里构造），故紧凑路径以
+/// `top: 状态栏 + 6dp` 为常量锚点，展开态差的 2dp 顶距由内部
+/// [Transform.translate] 补足（t=0 时 dy=2 → 视觉顶距恰为 8dp）。
+/// 字号缩放不产生溢出：文本 maxLines 1 + ellipsis 横向截断、行高由
+/// style height 精确给定（26dp < 36dp），无需 OverflowBox/ClipRect。
 class _PinnedLargeTitle extends StatelessWidget {
-  const _PinnedLargeTitle({required this.title, required this.statusBarHeight});
+  const _PinnedLargeTitle({
+    required this.title,
+    required this.statusBarHeight,
+    this.compact,
+  });
 
   final String title;
   final double statusBarHeight;
 
+  /// 横屏收窄信号（null = 竖屏原路径：静态 20sp、顶距 8dp）；
+  /// 非 null 时随布尔值在展开/紧凑两态间 180ms 插值。
+  final bool? compact;
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final compact = this.compact;
+    if (compact == null) {
+      // 竖屏原路径（批次 36 前逐字节一致）
+      return Positioned(
+        top: statusBarHeight + 8,
+        left: SonifySpacing.titleMargin,
+        right: SonifySpacing.titleMargin,
+        // IgnorePointer：RenderParagraph.hitTestSelf 恒为 true，裸 Text 会
+        // 吸收命中测试——不包的话标题盒区（通宽、与 36dp 头像同竖向带）
+        // 会挡住顶栏头像/动作钮的点按（真机复现：点头像无响应）。
+        child: IgnorePointer(
+          child: Text(
+            title,
+            style: SonifyTextStyles.largeTitle.copyWith(color: cs.onSurface),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      );
+    }
+    // 横屏收窄路径：常量锚点 6dp + Transform 补 2dp 展开差 + 字号/行高
+    // 两态插值（t: 0=展开 1=紧凑）
     return Positioned(
-      top: statusBarHeight + 8,
+      top: statusBarHeight + _kCompactTitleTopPad,
       left: SonifySpacing.titleMargin,
       right: SonifySpacing.titleMargin,
-      // IgnorePointer：RenderParagraph.hitTestSelf 恒为 true，裸 Text 会
-      // 吸收命中测试——不包的话标题盒区（通宽、与 36dp 头像同竖向带）
-      // 会挡住顶栏头像/动作钮的点按（真机复现：点头像无响应）。
-      child: IgnorePointer(
-        child: Text(
-          title,
-          style: SonifyTextStyles.largeTitle.copyWith(color: cs.onSurface),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: compact ? 1 : 0),
+        duration: kSonifyTopBarCompactDuration,
+        curve: Curves.easeOut,
+        builder: (context, t, child) {
+          final fontSize = _kTitleFontSize +
+              (_kCompactTitleFontSize - _kTitleFontSize) * t;
+          return Transform.translate(
+            // 展开态顶距 8dp = 锚点 6 + 2；紧凑态 6dp
+            offset: Offset(0, (1 - t) * (_kTitleTopPad - _kCompactTitleTopPad)),
+            child: IgnorePointer(
+              child: Text(
+                title,
+                style: SonifyTextStyles.largeTitle.copyWith(
+                  fontSize: fontSize,
+                  // 行高随字号同拍插值（36 → 26dp）：height 为倍数，
+                  // 换算成当前字号下的行高 dp
+                  height: (_kTitleLineHeight +
+                          (_kCompactTitleLineHeight - _kTitleLineHeight) * t) /
+                      fontSize,
+                  color: cs.onSurface,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -748,16 +809,34 @@ class _TopBar extends StatelessWidget {
   }
 }
 
-/// 横屏「上滑隐藏顶栏」的滑出距离口径（批次 35）：标题区高 = 占位 item
-/// 同口径（8dp 顶距 + 36dp 标题行高 + 8dp 底距 = 52dp）。整栏实际上滑
-/// 距离 = 状态栏 + 本值；渐变模糊带（状态栏 + 54dp 栏体）比之多出的
-/// 2dp 为 tint 渐变全透明尾，随行出屏后由外层淡出兜底，肉眼不可见。
-const double _kTitleZoneHeight = 52;
+/// 大标题展开态几何（竖屏口径 / 横屏回顶态）：顶距 8dp + 20sp
+/// largeTitle 行高 36dp（20 × 1.8，与 36dp 头像等高）+ 底部留白
+/// （[SonifyTitleScaffold.titleBottomPadding]，默认 8dp）→ 标题区 52dp。
+const double _kTitleTopPad = 8;
+const double _kTitleFontSize = 20;
+const double _kTitleLineHeight = 36;
 
-/// 横屏「上滑隐藏顶栏」动画时长（批次 35）：150-200ms 区间取 180ms、
-/// easeOut；竖屏不适用（顶栏固定悬浮，无隐藏动画）。
+/// 大标题紧凑态几何（批次 36 横屏收窄态）：
+/// - 顶距 8 → **6dp**、底距（titleBottomPadding）→ **6dp**；
+/// - 字号 20sp → **14.5sp**、行高 36 → **26dp**（height = 26/14.5
+///   ≈ 1.793，与 largeTitle 的 1.8 同族比例）；
+/// - 标题区 52 → **38dp**（6 + 26 + 6，落在任务约定的 36-40dp 区间）。
+/// 定值依据：紧凑态仍需与栏体（54dp）内 36dp 头像/42dp actions 圆钮
+/// 同带共存——26dp 行高 + 上下各 6dp 后标题区底缘 = 状态栏 + 32dp，
+/// 仍完全落在渐变模糊带（状态栏 + 54dp）内，标题不被裁切；同时较展开
+/// 态净省 14dp 纵向遮挡（52 − 38），满足横屏「减少遮挡」诉求。
+const double _kCompactTitleTopPad = 6;
+const double _kCompactTitleBottomPad = 6;
+const double _kCompactTitleFontSize = 14.5;
+const double _kCompactTitleLineHeight = 26;
+
+/// 横屏「收窄顶栏」动画时长（批次 36）：150-200ms 区间取 180ms、
+/// easeOut。与 [SonifyMotion.barFade]（120ms，透明度淡入）同族但更长
+/// ——几何收窄（高度/字号/位置三属性插值）比单纯透明度更易被感知，
+/// 取区间中值 180ms 兼顾跟手与柔和（批次 35 滑出动画同款取值）。
+/// 竖屏不适用（顶栏固定悬浮，无收窄动画）。
 /// 非私有：供 widget 测试断言动画收敛时长。
-const Duration kSonifyTopBarHideDuration = Duration(milliseconds: 180);
+const Duration kSonifyTopBarCompactDuration = Duration(milliseconds: 180);
 
 /// 顶栏渐变模糊带的模糊 sigma：**单片 dock 配方**（批次 25 起）。
 ///
@@ -777,30 +856,3 @@ const double kSonifyBarBlurSigma = 18;
 /// 为了补回加深带撤掉后文字区的可读性余量。
 /// 非私有：供 widget 测试断言（见 test/widgets/sonify_title_scaffold_test.dart）。
 const double kSonifyBarTopAlpha = 0.42;
-
-/// 子树尺寸实测（一帧延迟回传），用于大标题占位 item 高度自适应。
-class _MeasureSize extends StatefulWidget {
-  const _MeasureSize({required this.child, required this.onSizeChanged});
-
-  final Widget child;
-  final ValueChanged<Size> onSizeChanged;
-
-  @override
-  State<_MeasureSize> createState() => _MeasureSizeState();
-}
-
-class _MeasureSizeState extends State<_MeasureSize> {
-  Size? _lastSize;
-
-  @override
-  Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final size = (context.findRenderObject() as RenderBox?)?.size;
-      if (size != null && size != _lastSize) {
-        _lastSize = size;
-        widget.onSizeChanged(size);
-      }
-    });
-    return widget.child;
-  }
-}

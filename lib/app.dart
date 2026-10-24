@@ -27,6 +27,7 @@ import 'main.dart'
         pendingShortcutType,
         shortcutTabRequest;
 import 'modules/discover/discover_page.dart';
+import 'utils/landscape_dock_side.dart';
 import 'utils/landscape_immersive.dart';
 import 'modules/user/favorites_page.dart';
 import 'modules/user/play_history_page.dart';
@@ -185,6 +186,9 @@ class MyApp extends StatelessWidget {
 ///
 /// 批次35：横屏下 GlassDockPlayer 自身切换为「右侧纵条 + 播放球」形态
 /// （内部 Align 重新锚位），外层 Align 只是铺满占位，两种方向同构。
+/// 批次36：播放球独立化——横屏形态为「右侧纵条 + 纵条下方独立播放球」
+/// （球与纵条同右距同列、共享避让带；球点击横向展开控件条，展开态滑动
+/// 页面内容即坍缩）。
 /// Pad 横屏分档（批次35）：最短边 ≥ 600 时由 Dock 内部
 /// [GlassDockPlayer.isPadLandscape] 选 Pad 档几何；本层的避让注入
 /// （见 [_AppViewState] 内二级页注入）按同一判定选档，两侧同源。
@@ -412,20 +416,46 @@ class _AppViewState extends State<_AppView> {
           child: SafeInsetsGuard(
             child: _SystemUiUpdater(
               child: ListenableBuilder(
-                listenable: _secondaryDock,
+                // 批次36：除二级路由态外，Dock 贴边方向也需即时重建——
+                // 二级页（含设置页本身）的避让注入方向在切换「靠左/靠右」
+                // 后立即生效，不必等路由关闭或页面重建。
+                listenable: Listenable.merge([
+                  _secondaryDock,
+                  kLandscapeDockSide,
+                ]),
                 builder: (context, _) {
                   // 二级路由态：整屏不透明路由盖住主布局（含完整 Dock），
                   // 在 Navigator 之上单独挂「仅播放器」Dock（恒展开、无导航）。
                   // 设置页 / 完整播放页 / DLNA 遥控页被排除，不挂。
                   final showSecondaryPlayer = _secondaryDock.visible;
                   Widget navigator = child!;
+                  // 批次36：页面内容纵向滚动广播（「展开态滑动内容坍缩」
+                  // 的信号源，用户口径「展开播放器时，滑动内容坍缩」）。
+                  // 挂在 Navigator 外层，一级 tab 页与二级路由页的内容滚动
+                  // 统一覆盖：纵向 ScrollUpdateNotification 时向
+                  // [GlassDockPlayer.contentScrollPulse] 发脉冲，横屏展开态
+                  // Dock 收到即坍缩展开体（球保持）。选型论证（为何不用各页
+                  // 私有 _contentScrolled / ContentScrollSignal）见该常量文档。
+                  // 只认纵向轴：TabBarView 横滑通知轴为水平、天然排除；
+                  // 返回 false 不拦截，通知继续上浮（不影响既有消费者）。
+                  navigator = NotificationListener<ScrollNotification>(
+                    onNotification: (notification) {
+                      if (notification is ScrollUpdateNotification &&
+                          notification.metrics.axis == Axis.vertical) {
+                        GlassDockPlayer.notifyContentScrolled();
+                      }
+                      return false;
+                    },
+                    child: navigator,
+                  );
                   if (showSecondaryPlayer) {
                     // 二级页 Dock 避让：与主布局同口径注入底部 padding，
                     // 页面内读 MediaQuery.paddingOf(context).bottom 消费。
                     // 主布局同时被盖住（其自身注入与本注入叠加不可见，无害）。
-                    // 批次35：横屏下二级 Dock 为右侧纵条（仅播放器形态），
-                    // 避让改注右侧 padding.right（与竖屏底部注入同模式）；
-                    // 竖屏注入不变。Pad 横屏分档（最短边 ≥ 600）按
+                    // 批次35：横屏下二级 Dock 为纵向条（仅播放器形态），
+                    // 避让改注侧向 padding（批次36 起按 Dock 配置的贴边
+                    // 方向注 left 或 right，未配置侧不注入）；竖屏注入不变。
+                    // Pad 横屏分档（最短边 ≥ 600）按
                     // GlassDockPlayer.isPadLandscape 选档（与 Dock 侧同源）。
                     final mq = MediaQuery.of(context);
                     final isLandscape =
@@ -434,6 +464,14 @@ class _AppViewState extends State<_AppView> {
                     final isPadLandscape = GlassDockPlayer.isPadLandscape(
                       context,
                     );
+                    // 批次36：Dock 贴边方向（默认右 = 改造前行为）。避让
+                    // 只注入配置侧，未配置侧保持系统原值（通常 0）——不得
+                    // 双侧同时注入；贴左时镜像改注 padding.left。
+                    final dockLeft =
+                        kLandscapeDockSide.value == LandscapeDockSide.left;
+                    final reserved = isPadLandscape
+                        ? _MainLayoutState._kDockReservedRightPad
+                        : _MainLayoutState._kDockReservedRight;
                     navigator = MediaQuery(
                       data: mq.copyWith(
                         padding: mq.padding.copyWith(
@@ -441,18 +479,34 @@ class _AppViewState extends State<_AppView> {
                               ? mq.padding.bottom
                               : mq.padding.bottom +
                                     _MainLayoutState._kDockReservedBottom,
-                          right: isLandscape
-                              ? mq.padding.right +
-                                    (isPadLandscape
-                                        ? _MainLayoutState
-                                              ._kDockReservedRightPad
-                                        : _MainLayoutState
-                                              ._kDockReservedRight)
+                          left: isLandscape && dockLeft
+                              ? mq.padding.left + reserved
+                              : mq.padding.left,
+                          right: isLandscape && !dockLeft
+                              ? mq.padding.right + reserved
                               : mq.padding.right,
                         ),
                       ),
                       child: navigator,
                     );
+                    // 批次36：横屏几何硬让位（同主布局口径，见 _buildBody 内
+                    // 同款注释）——二级路由页同样没有消费 padding.right 的
+                    // 滚动容器，仅 MediaQuery 注入不产生实际让位，仅播放球
+                    // 形态的 Dock 仍会遮挡内容。横屏下把路由内容几何内缩
+                    // 同一宽度（球居中其中的避让带，手机档 64 / Pad 档 72，
+                    // 与批次35 数值一致、不引入新常量）；竖屏逐字节不变。
+                    // 注入与内缩并存的关系（双重消费风险）同主布局注释：
+                    // 未来页面若消费 paddingOf(context).right，应移除其
+                    // 自身重复 inset。
+                    if (isLandscape) {
+                      navigator = Padding(
+                        padding: EdgeInsets.only(
+                          left: dockLeft ? reserved : 0,
+                          right: dockLeft ? 0 : reserved,
+                        ),
+                        child: navigator,
+                      );
+                    }
                   }
                   return Stack(
                     children: [
@@ -722,13 +776,22 @@ class _MainLayoutState extends State<_MainLayout>
   /// 该值——内容延伸到 Dock 后面（悬浮感），滚动末尾靠这个 padding 让位。
   static const double _kDockReservedBottom = 72.0;
 
-  /// 横屏右纵条 Dock 避让宽度（批次35）：纵条宽 + 右间距。
+  /// 横屏侧向避让宽度（批次35，批次36 球独立化后重算口径）：纵条宽 +
+  /// 边距。**方向无关**——批次36 起 Dock 可贴左/贴右，本值用于配置侧的
+  /// padding（左配置即 `padding.left`），未配置侧不注入。
   ///
   /// 与 [_kDockReservedBottom] 完全同模式注入 `MediaQuery.padding.right`
   /// （页面内读 paddingOf(context).right 消费；横屏 Dock 形态见
   /// [GlassDockPlayer.kLandscapeRailWidth] 等常量，一处定义两处消费）。
   /// 纵条几何：右距 12（同竖屏底距）+ 纵条宽 52（导航项 44 + 水平
-  /// padding 8）；展开体悬浮覆盖在纵条左侧之上，不占避让。
+  /// padding 8）。
+  ///
+  /// **批次36 重算结论（值不变，口径重述）**：播放球独立后与纵条**同右距
+  /// 同列**（球心对齐纵条中线、悬浮在纵条下方），两者落在同一避让带内
+  /// ——独立球**不额外增加避让值**（它不在内容区之上，与纵条共享本避让
+  /// 带）；展开体为瞬时悬浮层同样不占避让。故避让值仍 = 纵条宽 + 右距
+  /// （64），与批次35 逐字节一致。二级页横屏为「仅播放球」形态（无纵条），
+  /// 沿用同值（球居中避让带内，批次35 即为该数值）。
   ///
   /// Pad 横屏分档（批次35）：最短边 ≥ 600 的横屏 Pad 纵条宽 60，避让
   /// 同步换 [_kDockReservedRightPad]（72）——两处注入（一级页 / 二级页）
@@ -1028,6 +1091,9 @@ class _MainLayoutState extends State<_MainLayout>
     WidgetsBinding.instance.addObserver(this);
     // 监听 shortcut 入口的 tab 切换请求（来自 main.dart 的 handleShortcut）
     shortcutTabRequest.addListener(_handleShortcutTabRequest);
+    // 批次36：横屏悬浮 Dock 贴边方向（左/右）变化 → 重建主布局，
+    // 一级页的 padding 注入与几何内缩方向即时跟随。
+    kLandscapeDockSide.addListener(_handleDockSideChanged);
     // 监听外部音频打开请求（文件管理器「用其他应用打开」）
     externalMediaRequest.addListener(_handleExternalMediaRequest);
     // 冷启动：请求可能先于 _MainLayout 挂载到达（用户协议 / 引导页期间），
@@ -1043,9 +1109,16 @@ class _MainLayoutState extends State<_MainLayout>
     _exitController.dispose();
     _navExpanded.dispose();
     shortcutTabRequest.removeListener(_handleShortcutTabRequest);
+    kLandscapeDockSide.removeListener(_handleDockSideChanged);
     externalMediaRequest.removeListener(_handleExternalMediaRequest);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  /// 悬浮 Dock 贴边方向变化（批次36）：重建主布局，一级页内容避让注入
+  /// 与几何内缩按新方向重新计算（Dock 自身由 GlassDockPlayer 监听重建）。
+  void _handleDockSideChanged() {
+    if (mounted) setState(() {});
   }
 
   /// 处理 shortcut 入口的 tab 切换请求。
@@ -1384,28 +1457,55 @@ class _MainLayoutState extends State<_MainLayout>
       ],
     );
 
-    // 竖屏注入 Dock 避让高度（横屏改注右侧避让，见下）。
+    // 竖屏注入 Dock 避让高度（横屏改注侧向避让，方向跟随悬浮 Dock 配置，
+    // 见下）。
     // 注入值 = mq.padding.bottom（已含系统手势条）+ Dock 专属高度，页面内
     // 读 MediaQuery.paddingOf(context).bottom 即可一次拿到「手势条 + Dock」
     // 的完整让位量。已适配的页面（收藏 / 新碟 / 榜单 / 发现二级页等）自动
     // 生效；未读取的硬编码 padding 页面需各自补读。
     if (isLandscape) {
-      // 横屏一级页右侧避让（批次35）：Dock 为右侧纵条，注入
-      // padding.right = 纵条宽 + 右距（与竖屏底部注入完全同模式；
-      // 常量见 _kDockReservedRight）。纵条垂直居中不占纵向空间，
-      // 底部注入在横屏下不再需要。
+      // 横屏一级页侧向避让（批次35 右侧纵条；批次36 起方向可配置）：
+      // 注入侧 = Dock 配置的贴边侧（padding.left 或 padding.right），
+      // 未配置侧保持系统原值、不叠加避让——不做双侧注入。
+      // 注入值 = 纵条宽 + 边距（与竖屏底部注入完全同模式；常量见
+      // _kDockReservedRight）。纵条与球同侧同列、整体垂直居中，不占纵向
+      // 空间，底部注入在横屏下不再需要。
       // Pad 分档（批次35）：最短边 ≥ 600 的横屏 Pad 避让换
       // _kDockReservedRightPad（72）——按 GlassDockPlayer.isPadLandscape
       // 选档，与 Dock 侧几何同源派生（防「Pad 壳装手机内容」错位）。
+      final dockLeft = kLandscapeDockSide.value == LandscapeDockSide.left;
+      final reserved = GlassDockPlayer.isPadLandscape(context)
+          ? _kDockReservedRightPad
+          : _kDockReservedRight;
       content = MediaQuery(
         data: mq.copyWith(
           padding: mq.padding.copyWith(
-            right:
-                mq.padding.right +
-                (GlassDockPlayer.isPadLandscape(context)
-                    ? _kDockReservedRightPad
-                    : _kDockReservedRight),
+            left: dockLeft ? mq.padding.left + reserved : mq.padding.left,
+            right: dockLeft ? mq.padding.right : mq.padding.right + reserved,
           ),
+        ),
+        child: content,
+      );
+      // 批次36：横屏几何硬让位（用户批次36 反馈「悬浮区域没做避让，当前
+      // 有遮挡内容」的根因修复）。上方 MediaQuery 注入只是**语义通道**：
+      // 全项目滚动容器均只消费 padding.bottom（收藏 / 发现 / 搜索 /
+      // 音乐库 hub / FM / 识曲 / 播放历史 / 设置等 30+ 处，无一处读
+      // padding.right / padding.left），纵条与独立球仍实际压在内容上。
+      // 横屏下把内容区**几何内缩**同一宽度（纵条宽 + 边距，与注入同源
+      // 同值，手机档 64 / Pad 档 72），方向跟随 Dock 配置（批次36：贴左
+      // 内缩左侧 gutter、贴右内缩右侧——不双侧内缩），纵条与球落在
+      // 内缩出的 gutter 带中，从几何上消除遮挡。
+      // 与 MediaQuery 注入并存的关系：本 Padding 是当前**唯一生效**的
+      // 让位路径（无页面消费 padding.right）；未来页面若改为消费
+      // paddingOf(context) 的侧向值，应移除其自身重复 inset（或改读
+      // 注入值），否则双重内缩。
+      // 竖屏不在此列：底部 Dock 的「滚动末尾 padding」口径已工作
+      // （各页消费 padding.bottom），且内容延伸到 Dock 后面才有悬浮感——
+      // 竖屏路径逐字节不变。
+      content = Padding(
+        padding: EdgeInsets.only(
+          left: dockLeft ? reserved : 0,
+          right: dockLeft ? 0 : reserved,
         ),
         child: content,
       );
@@ -1420,11 +1520,12 @@ class _MainLayoutState extends State<_MainLayout>
       );
     }
 
-    // 悬浮玻璃 Dock：竖屏底部居中（导航胶囊 + 播放器圆钮）；横屏右侧
-    // 纵条（批次35，GlassDockPlayer 内部按纯方向切换形态，此处只需
-    // 把宿主区域从底部横条改为铺满——展开态点外坍缩屏障需要全屏区域，
-    // 纵条自身定位由 Dock 内部 Align(centerRight) 承担）。两个方向的
-    // 构造参数完全一致（横屏导航恒纵排，navExpanded 不参与其布局）。
+    // 悬浮玻璃 Dock：竖屏底部居中（导航胶囊 + 播放器圆钮）；横屏纵向条
+    // + 纵条旁独立播放球（批次35 纵条化 / 批次36 球独立化，贴边方向
+    // 可配置），GlassDockPlayer 内部按纯方向切换形态，此处只需把宿主区域
+    // 从底部横条改为铺满——展开态点外坍缩屏障需要全屏区域，纵条/球自身
+    // 定位由 Dock 内部 Positioned 按贴边方向显式定位）。两个方向的构造
+    // 参数完全一致（横屏导航恒纵排，navExpanded 不参与其布局）。
     return Stack(
       children: [
         Positioned.fill(child: content),

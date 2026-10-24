@@ -46,6 +46,7 @@ import '../../providers/shortcut_config_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../services/kugou_api/kugou_models.dart';
 import '../../services/kugou_server.dart';
+import '../../utils/landscape_dock_side.dart';
 import '../../utils/landscape_immersive.dart';
 import '../../widgets/seed_color_picker.dart';
 import '../../widgets/common/sonify_title_scaffold.dart';
@@ -132,6 +133,8 @@ class _SettingsPageState extends State<SettingsPage>
   bool _zenCoverLongPress = true;
   // 全屏播放器横屏自动隐藏系统栏开关（默认开启）
   bool _landscapeImmersiveEnabled = true;
+  // 横屏悬浮 Dock 贴边方向（批次36，默认右侧 = 改造前行为）
+  LandscapeDockSide _landscapeDockSide = LandscapeDockSide.right;
   // 音质降级提示开关（默认关闭）：所选音质不可用自动降级时弹出提示
   bool _showQualityDowngradeToast = false;
   // 记忆播放状态开关（默认开启）：冷启动恢复上次播放的歌曲与进度
@@ -305,6 +308,7 @@ class _SettingsPageState extends State<SettingsPage>
     final zenCoverLongPress = await _settingsRepository.getZenCoverLongPress();
     final landscapeImmersiveEnabled = await _settingsRepository
         .getLandscapeImmersiveEnabled();
+    final landscapeDockSide = await _settingsRepository.getLandscapeDockSide();
     final showQualityDowngradeToast = await _settingsRepository
         .getShowQualityDowngradeToast();
     final restoreMemoryEnabled = await _settingsRepository
@@ -362,6 +366,7 @@ class _SettingsPageState extends State<SettingsPage>
       _audioFocusInterruptionMode = audioFocusInterruptionMode;
       _zenCoverLongPress = zenCoverLongPress;
       _landscapeImmersiveEnabled = landscapeImmersiveEnabled;
+      _landscapeDockSide = landscapeDockSide;
       _showQualityDowngradeToast = showQualityDowngradeToast;
       _restoreMemoryEnabled = restoreMemoryEnabled;
       _startupAutoPlayEnabled = startupAutoPlayEnabled;
@@ -2490,6 +2495,56 @@ class _SettingsPageState extends State<SettingsPage>
             // 全局标志即时同步：再次进入播放器或旋转屏幕即按新值应用系统栏
             kLandscapeImmersiveEnabled = value;
           },
+        ),
+        // 批次36：悬浮 Dock 左右位置（横屏纵条 + 独立播放球贴边方向）。
+        // 与上方「横屏隐藏状态栏」同属横屏形态设置，紧邻放置便于发现。
+        // search: 悬浮 dock 位置 靠左 靠右 横屏 避让 播放球
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.xs,
+            AppSpacing.lg,
+            AppSpacing.sm,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SettingsSubGroupLabel('悬浮 Dock 位置'),
+              const Gap(AppSpacing.sm),
+              // 与「失去音频焦点时」同款 M3E 按钮组（横排 + xs 尺寸 + 紧凑密度）
+              M3EToggleButtonGroup(
+                actions: const [
+                  M3EToggleButtonGroupAction(label: Text('靠左')),
+                  M3EToggleButtonGroupAction(label: Text('靠右')),
+                ],
+                direction: Axis.horizontal,
+                size: M3EButtonSize.xs,
+                density: M3EButtonGroupDensity.compact,
+                selectedIndex: _landscapeDockSide == LandscapeDockSide.left
+                    ? 0
+                    : 1,
+                onSelectedIndexChanged: (index) {
+                  if (index == null) return;
+                  final side = index == 0
+                      ? LandscapeDockSide.left
+                      : LandscapeDockSide.right;
+                  HapticFeedback.lightImpact();
+                  setState(() => _landscapeDockSide = side);
+                  _settingsRepository.setLandscapeDockSide(side);
+                  // 全局量即时同步：Dock 布局与页面避让注入均监听该
+                  // ValueNotifier（横屏当场换边、内容同侧避让），无需重启。
+                  kLandscapeDockSide.value = side;
+                },
+              ),
+              const Gap(AppSpacing.sm),
+              Text(
+                '横屏时悬浮导航条与播放球贴靠屏幕左侧或右侧，页面内容向同侧避让；竖屏底部 Dock 不受影响。',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
         ),
         // search: 屏幕常亮 常亮 息屏
         SwitchListTile(

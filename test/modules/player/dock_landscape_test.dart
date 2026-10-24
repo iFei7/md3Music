@@ -1,26 +1,34 @@
-/// 横屏悬浮 Dock「右侧纵向化 + 播放球横向展开 + 页面右侧避让」测试（批次35）。
+/// 横屏悬浮 Dock「右侧纵向化 + 播放球横向展开 + 页面右侧避让」测试
+/// （批次35 建立，批次36 扩展）。
 ///
 /// 用户口径（设计意图）：
 /// 「横屏设备高度小，所以尽可能减少页面纵向上的遮挡。P1-N 悬浮 dock
 ///  横屏在右侧纵向显示（页面右侧要做悬浮 dock 避让），纵向显示悬浮
 ///  dock，播放球（点击横向展开，点击外部即坍缩）。」
+/// 批次36 追加口径：「1、悬浮播放器球独立，与竖屏时一致，展开播放器时，
+///  滑动内容坍缩。2、悬浮区域没做避让，当前有遮挡内容。」
 ///
 /// 覆盖（对应任务清单 4）：
 /// 1. 横屏一级宿主渲染右纵条（key 断言几何：右缘间距 12 / 纵条宽 52 /
 ///    垂直居中 / 导航项纵排 / 播放球 42dp）；
-/// 2. 播放球点击 → 横向展开（宽度 260 + 从球体向左伸出 + 不推挤导航项）；
-/// 3. 点展开体外部（页面内容）→ 坍缩，且屏障吸收不穿透；展开态纵条
-///    导航项点击不被误吞；
-/// 4. 横屏右侧避让：宿主复刻 app.dart 注入逻辑，断言
+/// 2. **批次36 球独立化**：播放球与纵条分离为两个独立悬浮元素（球心不在
+///    纵条矩形内、同列、纵条下方球距 12/14、组合体整体居中）；
+/// 3. 播放球点击 → 横向展开（宽度 260 + 从球体向左伸出 + 不推挤导航项）；
+/// 4. 点展开体外部（页面内容）→ 坍缩，且点击放行到页面（批次36 translucent
+///    屏障语义：不吸收、穿透）；展开态纵条导航项点击不被误吞；
+/// 5. **批次36 滑动内容坍缩**：展开态驱动滚动脉冲 / 真实拖拽页面滚动 →
+///    坍缩（球保持）；球区上滑拖拽不误触坍缩；竖屏恒展开形态不受广播影响；
+/// 6. 横屏右侧避让：宿主复刻 app.dart 注入逻辑，断言
 ///    MediaQuery.padding.right 增量 = 纵条宽 + 右距（竖屏底部注入对照）；
-/// 5. 竖屏对照：竖屏下 Dock 仍是底部横条、几何与避让和改动前一致
+///    **批次36 几何硬让位**：内容区几何内缩同宽（探针右缘 = 屏右 − 避让值）；
+/// 7. 竖屏对照：竖屏下 Dock 仍是底部横条、几何与避让和改动前一致
 ///    （断言口径照抄 dock_nav_library_test / dock_player_collapse_test）；
-/// 6. 拖拽阈值长边口径：横屏宿主拖拽累计 100px（短边口径 80 会误触
+/// 8. 拖拽阈值长边口径：横屏宿主拖拽累计 100px（短边口径 80 会误触
 ///    push）不展开、220px（长边口径 160）展开；单测锁定
 ///    shouldExpandPlayer 长边数值；
-/// 7. **Pad 横屏分档（批次35，shortestSide ≥ 600）**：Pad 宿主
+/// 9. **Pad 横屏分档（批次35，shortestSide ≥ 600）**：Pad 宿主
 ///    （1200×800）断言 Pad 档几何（纵条 60 / 球 48 / 项径 48 / 项距 6 /
-///    球距 10 / 展开宽 320 / 避让 72 且与 Dock 侧同源派生）；手机横屏
+///    球距 12→14 / 展开宽 320 / 避让 72 且与 Dock 侧同源派生）；手机横屏
 ///    宿主（800×400 / 800×599）回归锁——手机档数值逐字节不变；拖拽
 ///    阈值在 Pad 大长边上的钳制行为（0.2×1440=288 → 240）。
 library;
@@ -43,6 +51,7 @@ import 'package:md3music/providers/playlist_collection_notifier.dart';
 import 'package:md3music/providers/shortcut_config_provider.dart';
 import 'package:md3music/providers/tab_config_provider.dart';
 import 'package:md3music/providers/theme_provider.dart';
+import 'package:md3music/utils/landscape_dock_side.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -74,6 +83,11 @@ double get _kReservedRightPad =>
     GlassDockPlayer.kLandscapeRailWidthPad +
     GlassDockPlayer.kLandscapeRailRightMargin;
 
+/// 批次36 球独立化：横屏独立播放球与导航纵条的垂直间距（手机档 12 /
+/// Pad 档 14，Dock 侧公开常量，一处定义两处消费）。
+double get _kBallRailGap => GlassDockPlayer.kLandscapeBallRailGap;
+double get _kBallRailGapPad => GlassDockPlayer.kLandscapeBallRailGapPad;
+
 Song _localSong(String id, String title) => Song(
   id: id,
   title: title,
@@ -85,8 +99,12 @@ Song _localSong(String id, String title) => Song(
 
 /// 页面探针记录（避让注入可读值 / 点击穿透判定）。
 double? _pagePaddingRight;
+double? _pagePaddingLeft;
 double? _pagePaddingBottom;
 bool _pageTapped = false;
+
+/// 可滚动内容模式的滚动控制器（滑动坍缩测试断言内容真的滚了）。
+ScrollController? _scrollController;
 
 /// 导航项点击回记录（展开态导航项不被误吞）。
 String? _selectedTab;
@@ -107,8 +125,14 @@ void _setViewport(WidgetTester tester, Size size) {
 /// - 全量 Provider（与 dock_system_ui_overlay_test 同款，拖拽越阈 push 的
 ///   FullPlayer 需要它们；整页宿主必须提供 KugouProvider）；
 /// - 页面层复刻 Dock 避让注入（**只包内容不包 Dock**，与 app.dart 一致：
-///   横屏注右 padding.right（按 isPadLandscape 选档，批次35）、竖屏注底
-///   padding.bottom）；
+///   横屏注右 padding.right（按 isPadLandscape 选档，批次35）+ 几何硬让位
+///   Padding（批次36）、竖屏注底 padding.bottom）；
+/// - **批次36 滚动广播复刻**：内容层外层挂与 app.dart 同款的
+///   `NotificationListener<ScrollNotification>`（纵向 ScrollUpdateNotification
+///   → GlassDockPlayer.notifyContentScrolled），用于验证「展开态滑动内容
+///   坍缩」机制（app.dart 侧注入点的传播路径由本复刻等价覆盖）；
+/// - [scrollableContent] = true 时页面内容换成可滚动 ListView（滑动坍缩
+///   集成用例：真实拖拽内容滚动），否则为点击探针；
 /// - Dock 层铺满（横屏展开态点外坍缩屏障需要全屏区域；竖屏 Dock 自身
 ///   Align(bottomCenter) 锚位，宿主形状不影响其几何）。
 Future<({PlayerProvider player, ControlledAudioService audio})> _pumpApp(
@@ -116,6 +140,7 @@ Future<({PlayerProvider player, ControlledAudioService audio})> _pumpApp(
   required Size viewport,
   List<Song> songs = const [],
   bool showNav = true,
+  bool scrollableContent = false,
 }) async {
   _setViewport(tester, viewport);
   SharedPreferences.setMockInitialValues({});
@@ -152,8 +177,11 @@ Future<({PlayerProvider player, ControlledAudioService audio})> _pumpApp(
           children: [
             // 页面层（避让注入只包内容，Dock 读外层 MediaQuery）
             Positioned.fill(
-              child: Builder(
-                builder: (context) {
+              child: ValueListenableBuilder<LandscapeDockSide>(
+                valueListenable: kLandscapeDockSide,
+                // 复刻 app.dart _MainLayoutState 的方向监听（addListener →
+                // setState）：切边后内容层重建，侧向注入与几何内缩即时换边。
+                builder: (context, _, _) {
                   final mq = MediaQuery.of(context);
                   // 复刻 app.dart 注入逻辑（批次35 含 Pad 分档）：横屏
                   // 注右 padding.right（按 GlassDockPlayer.isPadLandscape
@@ -164,33 +192,74 @@ Future<({PlayerProvider player, ControlledAudioService audio})> _pumpApp(
                   final isPadLandscape = GlassDockPlayer.isPadLandscape(
                     context,
                   );
-                  return MediaQuery(
-                    data: mq.copyWith(
-                      padding: mq.padding.copyWith(
-                        right: isLandscape
-                            ? mq.padding.right +
-                                  (isPadLandscape
-                                      ? _kReservedRightPad
-                                      : _kReservedRight)
-                            : mq.padding.right,
-                        bottom: isLandscape
-                            ? mq.padding.bottom
-                            : mq.padding.bottom + _kReservedBottom,
-                      ),
-                    ),
-                    child: Builder(
-                      builder: (context) {
-                        _pagePaddingRight = MediaQuery.paddingOf(context).right;
-                        _pagePaddingBottom = MediaQuery.paddingOf(
-                          context,
-                        ).bottom;
-                        return GestureDetector(
-                          key: const ValueKey('page_probe'),
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () => _pageTapped = true,
-                          child: const SizedBox.expand(),
-                        );
+                  // 批次36：复刻 app.dart 的方向感知注入——避让只注
+                  // 配置侧（贴左注 left、贴右注 right），未配置侧保持 0；
+                  // 几何内缩同一切换方向。
+                  final dockLeft =
+                      kLandscapeDockSide.value == LandscapeDockSide.left;
+                  final reserved = isPadLandscape
+                      ? _kReservedRightPad
+                      : _kReservedRight;
+                  final insetStart = isLandscape && dockLeft ? reserved : 0.0;
+                  final insetEnd = isLandscape && !dockLeft ? reserved : 0.0;
+                  return Padding(
+                    padding: EdgeInsets.only(left: insetStart, right: insetEnd),
+                    // 批次36：滚动广播（复刻 app.dart Navigator 外层注入点，
+                    // 纵向滚动 → contentScrollPulse 脉冲）。
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: (notification) {
+                        if (notification is ScrollUpdateNotification &&
+                            notification.metrics.axis == Axis.vertical) {
+                          GlassDockPlayer.notifyContentScrolled();
+                        }
+                        return false;
                       },
+                      child: MediaQuery(
+                        data: mq.copyWith(
+                          padding: mq.padding.copyWith(
+                            left: isLandscape && dockLeft
+                                ? mq.padding.left + reserved
+                                : mq.padding.left,
+                            right: isLandscape && !dockLeft
+                                ? mq.padding.right + reserved
+                                : mq.padding.right,
+                            bottom: isLandscape
+                                ? mq.padding.bottom
+                                : mq.padding.bottom + _kReservedBottom,
+                          ),
+                        ),
+                        child: Builder(
+                          builder: (context) {
+                            _pagePaddingRight = MediaQuery.paddingOf(
+                              context,
+                            ).right;
+                            _pagePaddingLeft = MediaQuery.paddingOf(
+                              context,
+                            ).left;
+                            _pagePaddingBottom = MediaQuery.paddingOf(
+                              context,
+                            ).bottom;
+                            if (scrollableContent) {
+                              _scrollController?.dispose();
+                              _scrollController = ScrollController();
+                              return ListView.builder(
+                                key: const ValueKey('page_probe'),
+                                controller: _scrollController,
+                                itemExtent: 60,
+                                itemCount: 60,
+                                itemBuilder: (_, i) =>
+                                    SizedBox(height: 60, child: Text('项$i')),
+                              );
+                            }
+                            return GestureDetector(
+                              key: const ValueKey('page_probe'),
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () => _pageTapped = true,
+                              child: const SizedBox.expand(),
+                            );
+                          },
+                        ),
+                      ),
                     ),
                   );
                 },
@@ -235,6 +304,9 @@ Future<void> _teardown(
   for (var i = 0; i < 4; i++) {
     await tester.pump(const Duration(milliseconds: 16));
   }
+  // 可滚动内容宿主（批次36 滑动坍缩用例）的滚动控制器回收。
+  _scrollController?.dispose();
+  _scrollController = null;
 }
 
 void main() {
@@ -242,7 +314,11 @@ void main() {
 
   setUp(() {
     _pagePaddingRight = null;
+    _pagePaddingLeft = null;
     _pagePaddingBottom = null;
+    // 批次36：Dock 贴边方向是跨用例存活的全局单例，每例归位默认「靠右」，
+    // 避免前一个「靠左」用例污染后续几何断言。
+    kLandscapeDockSide.value = LandscapeDockSide.right;
     _pageTapped = false;
     _selectedTab = null;
     // playerExpansion / playerDragActive / activePlayerRoute 是跨用例存活的
@@ -250,10 +326,12 @@ void main() {
     playerExpansion.value = 0.0;
     playerDragActive.value = false;
     activePlayerRoute = null;
+    // 批次36：滚动脉冲同为跨用例全局单例，归位防串扰。
+    GlassDockPlayer.contentScrollPulse.value = 0;
   });
 
   group('横屏右纵条（批次35）', () {
-    testWidgets('① 一级宿主渲染右纵条：右缘对齐 + 纵条宽 + 垂直居中', (tester) async {
+    testWidgets('① 一级宿主渲染右纵条：右缘对齐 + 纵条宽 + 组合体居中', (tester) async {
       final (:player, :audio) = await _pumpApp(
         tester,
         viewport: const Size(800, 400),
@@ -279,18 +357,34 @@ void main() {
         );
         // 纵条宽 52（导航项 44 + 水平 padding 8）
         expect(rail.width, closeTo(GlassDockPlayer.kLandscapeRailWidth, 0.001));
-        // 垂直居中于右侧安全区内（测试视口无安全区 inset）
-        expect(rail.center.dy, closeTo(200, 0.5));
+        // 批次36：球独立后纵条内只剩导航项——高 = 垂直 padding 16 +
+        // 4 项×44 + 3 项距×4（无球、无球间距，对照批次35 的 +8+42）
+        expect(rail.height, closeTo(16 + 4 * 44 + 3 * 4, 0.001));
 
-        // 播放球 42dp，位于纵条下部
+        // 播放球 42dp（批次36：独立悬浮元素，纵条下方同列）
         final ball = tester.getRect(find.byKey(_ballKey));
         expect(ball.width, closeTo(GlassDockPlayer.kLandscapeBallSize, 0.001));
         expect(ball.height, closeTo(GlassDockPlayer.kLandscapeBallSize, 0.001));
-        expect(ball.center.dx, closeTo(rail.center.dx, 0.5));
+        // 独立化几何断言①：球心不在纵条矩形内（球与纵条分离）
         expect(
-          ball.bottom,
-          closeTo(rail.bottom - 8, 0.5),
-          reason: '球贴纵条底部内缘 8dp',
+          rail.contains(ball.center),
+          isFalse,
+          reason: '批次36 球独立化：播放球应与纵条分离（球心不在纵条矩形内）',
+        );
+        // 同列：球心与纵条中线对齐（共享同一右侧避让带）
+        expect(ball.center.dx, closeTo(rail.center.dx, 0.5));
+        // 球在纵条下方，间距 = 手机档 12（公开常量 kLandscapeBallRailGap）
+        expect(ball.top - rail.bottom, closeTo(_kBallRailGap, 0.001));
+        // 球右缘落在避让带内（右距 12 + 居中偏移 (52−42)/2 = 5）
+        expect(
+          ball.right,
+          closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin - 5, 0.001),
+        );
+        // 组合体（纵条 + 球距 + 球）整体垂直居中于安全区
+        expect(
+          (rail.top + ball.bottom) / 2,
+          closeTo(200, 0.5),
+          reason: '组合体应整体垂直居中（球独立后纵条随组合体上移）',
         );
       } finally {
         await _teardown(tester, player, audio);
@@ -390,7 +484,9 @@ void main() {
       }
     });
 
-    testWidgets('③ 点展开体外部（页面内容）→ 坍缩，且屏障吸收不穿透', (tester) async {
+    testWidgets('③ 点展开体外部（页面内容）→ 坍缩，且点击放行到页面（批次36 translucent）', (
+      tester,
+    ) async {
       final (:player, :audio) = await _pumpApp(
         tester,
         viewport: const Size(800, 400),
@@ -410,7 +506,15 @@ void main() {
         expect(find.byKey(_controlsKey), findsNothing, reason: '点外部应坍缩');
         expect(find.byKey(_barrierKey), findsNothing);
         expect(find.byKey(_ballKey), findsOneWidget, reason: '坍缩后仍是 42dp 球');
-        expect(_pageTapped, isFalse, reason: '点外坍缩屏障应吸收点击（模态语义，不穿透到页面）');
+        // 批次36 语义变更：屏障从 opaque（吸收点击）改 translucent Listener
+        // （命中路径放行下层）——「滑动内容坍缩」要求展开态手势能到达内容层，
+        // 代价是点击不再被吞：点页面时页面点击与坍缩同时发生（点空白处仍
+        // 只有坍缩）。论证见 _buildLandscapeDismissBarrier 文档。
+        expect(
+          _pageTapped,
+          isTrue,
+          reason: '批次36 translucent 屏障：点击应放行到页面内容（不吸收）',
+        );
       } finally {
         await _teardown(tester, player, audio);
       }
@@ -469,6 +573,180 @@ void main() {
         final rail = tester.getRect(find.byKey(_railKey));
         expect(rail.left, closeTo(800 - _kReservedRight, 0.001));
         expect(_kReservedRight, closeTo(64.0, 0.001));
+        // 批次36 几何硬让位：内容区右缘 = 屏右 − 避让值（复刻 app.dart
+        // 的 Padding 内缩——MediaQuery 注入无页面消费，几何 inset 是实际
+        // 生效路径，纵条/球落在 gutter 中不遮挡内容）
+        final probe = tester.getRect(find.byKey(const ValueKey('page_probe')));
+        expect(
+          probe.right,
+          closeTo(800 - _kReservedRight, 0.001),
+          reason: '批次36：横屏内容区应几何内缩避让宽度（消除遮挡）',
+        );
+        expect(probe.left, closeTo(0, 0.001), reason: '只内缩右侧，左缘不动');
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+  });
+
+  // ── 批次36：播放球独立化 + 展开态滑动内容坍缩 ──
+  // 机制：app.dart 内容层外层 NotificationListener<ScrollNotification>
+  // （纵向滚动 → GlassDockPlayer.contentScrollPulse 脉冲）；Dock 横屏
+  // 展开态监听脉冲即坍缩。点外坍缩屏障同期改为 translucent Listener
+  // （命中路径放行下层），展开态手势可到达内容层——「滑动内容坍缩」
+  // 由此成立。球/纵条/展开体在屏障之上且不 translucent，落在其上的
+  // 指针不进屏障路径（球区手势不误触）。
+  group('滑动内容坍缩 + 球独立（批次36）', () {
+    test('② 单测：contentScrollPulse 事件语义（单调递增计数）', () {
+      // setUp 已归位；广播入口每次调用 +1（事件语义，非布尔量）。
+      expect(GlassDockPlayer.contentScrollPulse.value, 0);
+      GlassDockPlayer.notifyContentScrolled();
+      expect(GlassDockPlayer.contentScrollPulse.value, 1);
+      GlassDockPlayer.notifyContentScrolled();
+      expect(GlassDockPlayer.contentScrollPulse.value, 2);
+    });
+
+    testWidgets('② 展开态 + 滚动脉冲 → 坍缩（球保持）', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(800, 400),
+        songs: [_localSong('s1', '第一首歌')],
+      );
+      try {
+        await tester.tap(find.byKey(_ballKey));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.byKey(_controlsKey), findsOneWidget);
+
+        // 驱动页面内容纵向滚动（等价 app.dart 广播入口被内容层触发）
+        final pulseBefore = GlassDockPlayer.contentScrollPulse.value;
+        GlassDockPlayer.notifyContentScrolled();
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(find.byKey(_controlsKey), findsNothing, reason: '页面内容滚动应坍缩展开体');
+        expect(find.byKey(_ballKey), findsOneWidget, reason: '坍缩后独立球保持');
+        expect(
+          GlassDockPlayer.contentScrollPulse.value,
+          pulseBefore + 1,
+          reason: '广播入口应发出脉冲',
+        );
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('② 展开态 + 真实拖拽页面滚动 → 坍缩且内容滚动（translucent 屏障放行）', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(800, 400),
+        songs: [_localSong('s1', '第一首歌')],
+        scrollableContent: true,
+      );
+      try {
+        expect(_scrollController!.offset, 0.0, reason: '初始滚动偏移 0');
+        await tester.tap(find.byKey(_ballKey));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.byKey(_controlsKey), findsOneWidget);
+
+        // 展开态在页面内容区（探针中心 x≈368，远在纵条/球/展开体之左）
+        // 向上拖拽：translucent 屏障放行手势 → 内容真实滚动 + 广播坍缩。
+        final pulseBefore = GlassDockPlayer.contentScrollPulse.value;
+        await tester.drag(
+          find.byKey(const ValueKey('page_probe')),
+          const Offset(0, -150),
+        );
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(
+          _scrollController!.offset,
+          greaterThan(0.0),
+          reason: '批次36 translucent 屏障：展开态手势应放行到内容层（内容真实滚动）',
+        );
+        expect(find.byKey(_controlsKey), findsNothing, reason: '滑动内容应坍缩展开体');
+        expect(find.byKey(_ballKey), findsOneWidget, reason: '坍缩后球保持');
+        expect(
+          GlassDockPlayer.contentScrollPulse.value,
+          greaterThan(pulseBefore),
+          reason: '内容滚动应经广播入口发脉冲（app.dart 复刻注入点生效）',
+        );
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('② 球区上滑拖拽不误触坍缩（球上发起的手势不算内容滚动）', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(800, 400),
+        songs: [_localSong('s1', '第一首歌')],
+      );
+      try {
+        await tester.tap(find.byKey(_ballKey));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.byKey(_controlsKey), findsOneWidget);
+
+        // 展开态下在**球上**发起上滑拖拽（累计 100px，未达 FullPlayer
+        // 长边阈值 160）：球在屏障之上且不 translucent，指针不进屏障
+        // 路径，也不产生内容滚动——不应误触坍缩。
+        final center = tester.getCenter(find.byKey(_ballKey));
+        final gesture = await tester.startGesture(center);
+        await tester.pump(const Duration(milliseconds: 16));
+        await gesture.moveBy(const Offset(0, -40));
+        await tester.pump(const Duration(milliseconds: 50));
+        for (var i = 0; i < 5; i++) {
+          await gesture.moveBy(const Offset(0, -20));
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        await gesture.up();
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(playerExpansion.value, 0.0, reason: '未越阈应回归归位');
+        expect(
+          find.byKey(_controlsKey),
+          findsOneWidget,
+          reason: '球区拖拽（未越阈）不应误触坍缩展开体',
+        );
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('② 竖屏恒展开形态（二级页）：页面滚动不坍缩（广播只影响横屏）', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(400, 800),
+        songs: [_localSong('s1', '第一首歌')],
+        showNav: false,
+        scrollableContent: true,
+      );
+      try {
+        expect(
+          find.byKey(_portraitTrackTitleKey),
+          findsOneWidget,
+          reason: '竖屏二级页仅播放器形态恒展开（批次24 语义）',
+        );
+        // 竖屏内容滚动广播：Dock 侧守卫横屏限定，恒展开胶囊不动。
+        GlassDockPlayer.notifyContentScrolled();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(
+          find.byKey(_portraitTrackTitleKey),
+          findsOneWidget,
+          reason: '竖屏恒展开语义不受滚动脉冲影响（横屏限定）',
+        );
+        // 真实拖拽同样不坍缩（走同一守卫）
+        await tester.drag(
+          find.byKey(const ValueKey('page_probe')),
+          const Offset(0, -120),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(_portraitTrackTitleKey), findsOneWidget);
+        expect(_scrollController!.offset, greaterThan(0.0));
       } finally {
         await _teardown(tester, player, audio);
       }
@@ -496,6 +774,13 @@ void main() {
       expect(GlassDockPlayer.kLandscapeBallCoverSizePad, 42.0);
       expect(GlassDockPlayer.kLandscapeRailWidthPad, 60.0);
       expect(GlassDockPlayer.kLandscapeControlsWidthPad, 320.0);
+      // 批次36 球独立化：球与纵条垂直间距双档（手机 12 / Pad 14）
+      expect(GlassDockPlayer.kLandscapeBallRailGap, 12.0);
+      expect(GlassDockPlayer.kLandscapeBallRailGapPad, 14.0);
+      expect(
+        GlassDockPlayer.kLandscapeBallRailGapPad,
+        greaterThan(GlassDockPlayer.kLandscapeBallRailGap),
+      );
       // 档位关系：Pad 档恒大于手机档（防误把两档配错）
       expect(
         GlassDockPlayer.kLandscapeBallSizePad,
@@ -517,36 +802,31 @@ void main() {
         viewport: const Size(1200, 800),
       );
       try {
-        expect(
-          find.byKey(_railKey),
-          findsOneWidget,
-          reason: 'Pad 横屏应渲染右侧纵条',
-        );
+        expect(find.byKey(_railKey), findsOneWidget, reason: 'Pad 横屏应渲染右侧纵条');
         expect(find.byKey(_portraitPlayerButtonKey), findsNothing);
 
         final rail = tester.getRect(find.byKey(_railKey));
         // 右缘间距 12（两档共用，同竖屏 Dock 底距口径）
         expect(
           rail.right,
-          closeTo(
-            1200 - GlassDockPlayer.kLandscapeRailRightMargin,
-            0.001,
-          ),
+          closeTo(1200 - GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
         );
         // 纵条宽 = Pad 档 60（导航项 48 + 水平 padding 6×2）
         expect(
           rail.width,
           closeTo(GlassDockPlayer.kLandscapeRailWidthPad, 0.001),
         );
-        // 垂直居中于右侧安全区内（测试视口无安全区 inset）
-        expect(rail.center.dy, closeTo(400, 0.5));
-        // 纵条高 = 垂直 padding 16 + 4 项×48 + 3 项距×6 + 球距 10 + 球 48
+        // 垂直居中于右侧安全区内（测试视口无安全区 inset）——批次36 起为
+        // **组合体**（纵条 + 球距 + 球）整体居中
         expect(
-          rail.height,
-          closeTo(16 + 4 * 48 + 3 * 6 + 10 + 48, 0.001),
+          (rail.top + tester.getRect(find.byKey(_ballKey)).bottom) / 2,
+          closeTo(400, 0.5),
         );
+        // 纵条高 = 垂直 padding 16 + 4 项×48 + 3 项距×6（球独立后胶囊内
+        // 只剩导航项，无球、无球间距）
+        expect(rail.height, closeTo(16 + 4 * 48 + 3 * 6, 0.001));
 
-        // 播放球 = Pad 档 48dp，位于纵条下部
+        // 播放球 = Pad 档 48dp（批次36：独立悬浮元素，纵条下方同列）
         final ball = tester.getRect(find.byKey(_ballKey));
         expect(
           ball.width,
@@ -557,9 +837,11 @@ void main() {
           closeTo(GlassDockPlayer.kLandscapeBallSizePad, 0.001),
         );
         expect(ball.center.dx, closeTo(rail.center.dx, 0.5));
-        // 球贴纵条底部内缘 8dp（容器垂直 padding，两档共用；Pad 档的
-        // 10dp 球间距在导航项与球之间，见下方项径/球顶关系断言）
-        expect(ball.bottom, closeTo(rail.bottom - 8, 0.5));
+        // 独立化几何断言：球心不在纵条矩形内
+        expect(rail.contains(ball.center), isFalse);
+        // 球与纵条间距 = Pad 档 14（公开常量 kLandscapeBallRailGapPad；
+        // 手机档 12）
+        expect(ball.top - rail.bottom, closeTo(_kBallRailGapPad, 0.001));
         // 导航项径 = Pad 档足额 48dp（默认 4 项，高度预算充足）
         final discover = tester.getRect(
           find.byKey(const ValueKey('${_navItemKeyPrefix}discover')),
@@ -571,11 +853,12 @@ void main() {
           find.byKey(const ValueKey('${_navItemKeyPrefix}library')),
         );
         expect(library.top - discover.bottom, closeTo(6, 0.001));
-        // 球间距 = Pad 档 10（末项 search 底 → 球顶；手机档为 8）
+        // 末项 search 底 → 球顶 = 胶囊垂直 padding 8 + 球距 14 = 22
+        // （批次35 为胶囊内球距 10 一项，批次36 球独立后拆成两段）
         final search = tester.getRect(
           find.byKey(const ValueKey('${_navItemKeyPrefix}search')),
         );
-        expect(ball.top - search.bottom, closeTo(10, 0.001));
+        expect(ball.top - search.bottom, closeTo(8 + 14, 0.001));
         // 纵排同列
         expect(discover.center.dx, closeTo(library.center.dx, 0.001));
       } finally {
@@ -635,7 +918,9 @@ void main() {
       }
     });
 
-    testWidgets('⑦ Pad 横屏右侧避让：padding.right = Pad 档派生值且与 Dock 同源', (tester) async {
+    testWidgets('⑦ Pad 横屏右侧避让：padding.right = Pad 档派生值且与 Dock 同源', (
+      tester,
+    ) async {
       final (:player, :audio) = await _pumpApp(
         tester,
         viewport: const Size(1200, 800),
@@ -666,6 +951,13 @@ void main() {
         // 避让量与纵条足迹一致：纵条左缘 = 屏右 − 避让量
         final rail = tester.getRect(find.byKey(_railKey));
         expect(rail.left, closeTo(1200 - _kReservedRightPad, 0.001));
+        // 批次36 几何硬让位（Pad 档同口径）：内容区右缘 = 屏右 − 72
+        final probe = tester.getRect(find.byKey(const ValueKey('page_probe')));
+        expect(
+          probe.right,
+          closeTo(1200 - _kReservedRightPad, 0.001),
+          reason: 'Pad 横屏内容区应几何内缩 Pad 档避让宽度',
+        );
       } finally {
         await _teardown(tester, player, audio);
       }
@@ -675,56 +967,73 @@ void main() {
   // 手机横屏档回归锁（批次35 Pad 分档后）：800×400 / 800×599 宿主数值
   // 必须逐字节停在手机档——防分档逻辑误伤手机横屏。
   group('手机横屏档回归锁（批次35 Pad 分档后不变）', () {
-    testWidgets('⑧ 手机横屏 800×400：纵条 52 / 球 42 / 项径 44 / 项距 4 / 球距 8 / 展开 270 / 避让 64', (tester) async {
-      final (:player, :audio) = await _pumpApp(
-        tester,
-        viewport: const Size(800, 400),
-        songs: [_localSong('s1', '第一首歌')],
-      );
-      try {
-        final rail = tester.getRect(find.byKey(_railKey));
-        expect(rail.width, closeTo(GlassDockPlayer.kLandscapeRailWidth, 0.001));
-        expect(
-          rail.right,
-          closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
+    testWidgets(
+      '⑧ 手机横屏 800×400：纵条 52 / 球 42 / 项径 44 / 项距 4 / 球距 12 / 展开 270 / 避让 64',
+      (tester) async {
+        final (:player, :audio) = await _pumpApp(
+          tester,
+          viewport: const Size(800, 400),
+          songs: [_localSong('s1', '第一首歌')],
         );
-        // 纵条高 = 16 + 4×44 + 3×4 + 8 + 42
-        expect(rail.height, closeTo(16 + 4 * 44 + 3 * 4 + 8 + 42, 0.001));
+        try {
+          final rail = tester.getRect(find.byKey(_railKey));
+          expect(
+            rail.width,
+            closeTo(GlassDockPlayer.kLandscapeRailWidth, 0.001),
+          );
+          expect(
+            rail.right,
+            closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
+          );
+          // 纵条高 = 16 + 4×44 + 3×4（批次36：球独立后胶囊内只剩导航项；
+          // 批次35 为 +8+42）
+          expect(rail.height, closeTo(16 + 4 * 44 + 3 * 4, 0.001));
 
-        final ball = tester.getRect(find.byKey(_ballKey));
-        expect(ball.width, closeTo(GlassDockPlayer.kLandscapeBallSize, 0.001));
-        expect(ball.height, closeTo(GlassDockPlayer.kLandscapeBallSize, 0.001));
-        // 球贴纵条底部内缘 8dp（手机档球间距）
-        expect(ball.bottom, closeTo(rail.bottom - 8, 0.5));
+          final ball = tester.getRect(find.byKey(_ballKey));
+          expect(
+            ball.width,
+            closeTo(GlassDockPlayer.kLandscapeBallSize, 0.001),
+          );
+          expect(
+            ball.height,
+            closeTo(GlassDockPlayer.kLandscapeBallSize, 0.001),
+          );
+          // 球独立悬浮在纵条下方：间距 = 手机档 12（公开常量）
+          expect(ball.top - rail.bottom, closeTo(_kBallRailGap, 0.001));
+          // 独立化：球心不在纵条矩形内
+          expect(rail.contains(ball.center), isFalse);
 
-        // 项径足额 44 / 项距 4（手机档）
-        final discover = tester.getRect(
-          find.byKey(const ValueKey('${_navItemKeyPrefix}discover')),
-        );
-        expect(discover.width, closeTo(44, 0.001));
-        final library = tester.getRect(
-          find.byKey(const ValueKey('${_navItemKeyPrefix}library')),
-        );
-        expect(library.top - discover.bottom, closeTo(4, 0.001));
+          // 项径足额 44 / 项距 4（手机档）
+          final discover = tester.getRect(
+            find.byKey(const ValueKey('${_navItemKeyPrefix}discover')),
+          );
+          expect(discover.width, closeTo(44, 0.001));
+          final library = tester.getRect(
+            find.byKey(const ValueKey('${_navItemKeyPrefix}library')),
+          );
+          expect(library.top - discover.bottom, closeTo(4, 0.001));
 
-        // 避让 = 手机档 64（与 Dock 侧同源派生）
-        expect(_pagePaddingRight, closeTo(_kReservedRight, 0.001));
-        expect(_kReservedRight, closeTo(64.0, 0.001));
+          // 避让 = 手机档 64（与 Dock 侧同源派生）
+          expect(_pagePaddingRight, closeTo(_kReservedRight, 0.001));
+          expect(_kReservedRight, closeTo(64.0, 0.001));
 
-        // 展开宽度 = 手机档 270
-        await tester.tap(find.byKey(_ballKey));
-        await tester.pumpAndSettle();
-        await tester.pump(const Duration(milliseconds: 300));
-        expect(
-          tester.getRect(find.byKey(_controlsKey)).width,
-          closeTo(GlassDockPlayer.kLandscapeControlsWidth, 0.001),
-        );
-      } finally {
-        await _teardown(tester, player, audio);
-      }
-    });
+          // 展开宽度 = 手机档 270
+          await tester.tap(find.byKey(_ballKey));
+          await tester.pumpAndSettle();
+          await tester.pump(const Duration(milliseconds: 300));
+          expect(
+            tester.getRect(find.byKey(_controlsKey)).width,
+            closeTo(GlassDockPlayer.kLandscapeControlsWidth, 0.001),
+          );
+        } finally {
+          await _teardown(tester, player, audio);
+        }
+      },
+    );
 
-    testWidgets('⑧ 边界：最短边 599（800×599）走手机档、600（1000×600）走 Pad 档', (tester) async {
+    testWidgets('⑧ 边界：最短边 599（800×599）走手机档、600（1000×600）走 Pad 档', (
+      tester,
+    ) async {
       // 最短边 599 < 600：手机横屏档（纵条 52 / 避让 64）
       final (:player, :audio) = await _pumpApp(
         tester,
@@ -867,7 +1176,7 @@ void main() {
       }
     });
 
-    testWidgets('⑤ 横屏仅播放器形态（二级页）：右纵条仅播放球、初始坍缩', (tester) async {
+    testWidgets('⑤ 横屏仅播放器形态（二级页）：无纵条、仅独立球居中、初始坍缩', (tester) async {
       final (:player, :audio) = await _pumpApp(
         tester,
         viewport: const Size(800, 400),
@@ -875,7 +1184,8 @@ void main() {
         showNav: false,
       );
       try {
-        expect(find.byKey(_railKey), findsOneWidget);
+        // 批次36：无导航形态不渲染纵条（球独立后胶囊内只剩球没有意义）
+        expect(find.byKey(_railKey), findsNothing);
         // 无导航项（showNav: false）
         expect(
           find.byKey(const ValueKey('${_navItemKeyPrefix}discover')),
@@ -884,9 +1194,14 @@ void main() {
         // 横屏形态定义：播放球初始坍缩（点击展开 / 点外坍缩）
         expect(find.byKey(_controlsKey), findsNothing);
         expect(find.byKey(_ballKey), findsOneWidget);
-        // 纵条只剩球：高度 = 垂直 padding 16 + 球 42
-        final rail = tester.getRect(find.byKey(_railKey));
-        expect(rail.height, closeTo(16 + 42, 0.001));
+        // 独立球单独垂直居中（组合体只剩球）
+        final ball = tester.getRect(find.byKey(_ballKey));
+        expect(ball.center.dy, closeTo(200, 0.5));
+        // 球右缘仍在避让带内（与一级形态同列：右距 12 + 居中偏移 5）
+        expect(
+          ball.right,
+          closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin - 5, 0.001),
+        );
         // 点击可展开（与一级形态同语义）
         await tester.tap(find.byKey(_ballKey));
         await tester.pumpAndSettle();
@@ -1037,6 +1352,193 @@ void main() {
           await tester.pump(const Duration(milliseconds: 16));
         }
         expect(activePlayerRoute, isNotNull, reason: '横屏长边口径 160 达标应 push 播放页');
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+  });
+
+  // ── 批次36：悬浮 Dock 靠左 / 靠右（用户口径「支持设置选择悬浮 dock 在
+  // 左在右（在哪哪边内容就要避让）」）──
+  // 默认 right 必须与改造前逐字节一致；切 left 后纵条/球/展开体整体镜像，
+  // 避让只注入配置侧（未配置侧为 0），竖屏底部横条与底部 72 不受影响。
+  group('悬浮 Dock 靠左/靠右（批次36）', () {
+    testWidgets('① 默认 right：纵条贴右、padding.right=64、padding.left=0', (
+      tester,
+    ) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(800, 400),
+      );
+      try {
+        expect(kLandscapeDockSide.value, LandscapeDockSide.right);
+        final rail = tester.getRect(find.byKey(_railKey));
+        expect(
+          rail.right,
+          closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
+          reason: '默认配置纵条贴右（改造前行为）',
+        );
+        expect(rail.left, closeTo(800 - _kReservedRight, 0.001));
+        expect(_pagePaddingRight, closeTo(_kReservedRight, 0.001));
+        expect(
+          _pagePaddingLeft,
+          closeTo(0.0, 0.001),
+          reason: '未配置方向（左侧）不得注入避让，不做双侧注入',
+        );
+        // 内容几何硬让位仍在右侧（探针右缘 = 屏右 − 64、左缘 0）
+        final probe = tester.getRect(find.byKey(const ValueKey('page_probe')));
+        expect(probe.right, closeTo(800 - _kReservedRight, 0.001));
+        expect(probe.left, closeTo(0.0, 0.001));
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('② 切 left：纵条贴左、padding.left=64、padding.right=0，球同列镜像', (
+      tester,
+    ) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(800, 400),
+      );
+      try {
+        // 复刻设置页切换：只改全局 ValueNotifier，不重建宿主、不重启。
+        kLandscapeDockSide.value = LandscapeDockSide.left;
+        await tester.pump();
+        await tester.pump();
+
+        final rail = tester.getRect(find.byKey(_railKey));
+        expect(
+          rail.left,
+          closeTo(GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
+          reason: '靠左配置：纵条贴左（同一边距 12，镜像复用）',
+        );
+        expect(rail.top, greaterThanOrEqualTo(0.0));
+        expect(
+          rail.width,
+          closeTo(GlassDockPlayer.kLandscapeRailWidth, 0.001),
+          reason: '手机横屏档纵条宽不变',
+        );
+        expect(_pagePaddingLeft, closeTo(_kReservedRight, 0.001));
+        expect(
+          _pagePaddingRight,
+          closeTo(0.0, 0.001),
+          reason: '靠左配置下右侧必须为 0（不得双侧注入）',
+        );
+
+        // 球与纵条同列：球心对齐纵条中线（贴左边距 12 + 居中偏移 5）
+        final ball = tester.getRect(find.byKey(_ballKey));
+        expect(ball.center.dx, closeTo(rail.center.dx, 0.5));
+        expect(
+          ball.left,
+          closeTo(
+            GlassDockPlayer.kLandscapeRailRightMargin +
+                (GlassDockPlayer.kLandscapeRailWidth -
+                        GlassDockPlayer.kLandscapeBallSize) /
+                    2,
+            0.001,
+          ),
+        );
+        // 组合体仍整体垂直居中（换边不改纵向几何）
+        expect((rail.top + ball.bottom) / 2, closeTo(200, 0.5));
+
+        // 几何硬让位换到左侧：内容左缘 = 屏左 + 64、右缘 = 屏右
+        final probe = tester.getRect(find.byKey(const ValueKey('page_probe')));
+        expect(probe.left, closeTo(_kReservedRight, 0.001));
+        expect(probe.right, closeTo(800.0, 0.001));
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('③ 靠左配置下展开体向右（内侧）伸出：左缘贴球体右缘', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(800, 400),
+        songs: [_localSong('s1', '第一首歌')],
+      );
+      try {
+        kLandscapeDockSide.value = LandscapeDockSide.left;
+        await tester.pump();
+        await tester.pump();
+        final railBefore = tester.getRect(find.byKey(_railKey));
+
+        await tester.tap(find.byKey(_ballKey));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        final controls = tester.getRect(find.byKey(_controlsKey));
+        final ball = tester.getRect(find.byKey(_ballKey));
+        expect(
+          controls.width,
+          closeTo(GlassDockPlayer.kLandscapeControlsWidth, 0.001),
+        );
+        // 向内侧（右）伸出：展开体左缘贴球体右缘
+        expect(
+          controls.left,
+          closeTo(ball.right, 0.001),
+          reason: '靠左配置：展开体应从球体向右伸出（镜像方向）',
+        );
+        expect(controls.center.dy, closeTo(ball.center.dy, 0.001));
+        // 不推挤纵条
+        expect(tester.getRect(find.byKey(_railKey)), railBefore);
+        // 点外坍缩屏障语义不变
+        expect(find.byKey(_barrierKey), findsOneWidget);
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('④ 竖屏不受配置影响：仍底部横条 + 底部 72 避让、侧向为 0', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(400, 800),
+        songs: [_localSong('s1', '第一首歌')],
+      );
+      try {
+        // 即便配置为靠左，竖屏形态也不参与（设置只作用于横屏）
+        kLandscapeDockSide.value = LandscapeDockSide.left;
+        await tester.pump();
+        await tester.pump();
+
+        expect(find.byKey(_railKey), findsNothing, reason: '竖屏无纵条');
+        expect(find.byKey(_ballKey), findsNothing);
+        final button = tester.getRect(find.byKey(_portraitPlayerButtonKey));
+        expect(button.bottom, closeTo(800 - 12, 0.001));
+        expect(_pagePaddingBottom, closeTo(_kReservedBottom, 0.001));
+        expect(_pagePaddingLeft, closeTo(0.0, 0.001));
+        expect(_pagePaddingRight, closeTo(0.0, 0.001));
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('⑤ Pad 档靠左（1200×800）：纵条 60 贴左、padding.left=72', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(1200, 800),
+      );
+      try {
+        kLandscapeDockSide.value = LandscapeDockSide.left;
+        await tester.pump();
+        await tester.pump();
+
+        final rail = tester.getRect(find.byKey(_railKey));
+        expect(
+          rail.width,
+          closeTo(GlassDockPlayer.kLandscapeRailWidthPad, 0.001),
+          reason: 'Pad 档纵条宽仍为 60',
+        );
+        expect(
+          rail.left,
+          closeTo(GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
+        );
+        expect(_pagePaddingLeft, closeTo(_kReservedRightPad, 0.001));
+        expect(_kReservedRightPad, closeTo(72.0, 0.001));
+        expect(_pagePaddingRight, closeTo(0.0, 0.001));
+        final probe = tester.getRect(find.byKey(const ValueKey('page_probe')));
+        expect(probe.left, closeTo(_kReservedRightPad, 0.001));
+        expect(probe.right, closeTo(1200.0, 0.001));
       } finally {
         await _teardown(tester, player, audio);
       }

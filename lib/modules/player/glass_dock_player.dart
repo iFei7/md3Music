@@ -1,6 +1,7 @@
 import 'dart:math' show max;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart' show kTouchSlop;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
@@ -10,6 +11,7 @@ import '../../core/widgets/liquid_glass_container.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../providers/player_provider.dart';
 import '../../providers/tab_config_provider.dart';
+import '../../utils/landscape_dock_side.dart';
 import '../../widgets/player_artwork_image.dart';
 import '../../widgets/playing_spectrum_indicator.dart';
 import 'full_player_route.dart';
@@ -133,34 +135,66 @@ _DockTab _dockTabFor(String id) =>
 /// - **隐藏**：完整播放页展开（playerExpansion > 0.5）时整体移除，不产帧；
 ///   Dock 自身上滑拖拽期间豁免（拖拽会把 expansion 推过 0.5，此时 Dock
 ///   必须保持在树中维持手势事件流，视觉上由 Opacity(1-exp) 淡出）。
-/// - **横屏右纵条（批次35，纯方向判定）**：`MediaQuery.orientationOf` 为
-///   横屏时 Dock 从底部横条切换为**右侧纵向悬浮条**（用户口径「横屏设备
-///   高度小，尽可能减少页面纵向遮挡」）：垂直居中于右侧安全区
-///   （SafeArea right/top/bottom），与页面右缘间距同竖屏 Dock 底距口径
-///   （12dp）。纵条内部纵向排列：
+/// - **横屏纵条 + 独立播放球（批次35 纵条化，批次36 球独立化）**：
+///   **贴边方向可配置（批次36）**——设置 → 播放 → 屏幕与显示 →
+///   「悬浮 Dock 位置」可选靠左 / 靠右，默认靠右（= 改造前行为）。
+///   纵条与球按 [kLandscapeDockSide] 贴左或贴右（单一布局代码 + 方向
+///   映射，不复制两套），展开体恒从球体向**内侧**伸出，页面避让由
+///   app.dart 按同方向注入 `padding.left` 或 `padding.right`（未配置侧
+///   为 0，不做双侧避让）；竖屏底部横条与该设置无关。
+///   `MediaQuery.orientationOf` 为横屏时 Dock 从底部横条切换为**右侧
+///   纵向悬浮条**（用户口径「横屏设备高度小，尽可能减少页面纵向遮挡」）。
+///   **批次36（用户口径「悬浮播放器球独立，与竖屏时一致，展开播放器时，
+///   滑动内容坍缩」）起播放球与导航纵条分离为两个独立悬浮元素**：
 ///   · 上部：导航项**纵排**（复用竖屏 [_DockNavItem] 配方，44dp 圆形；
 ///     横屏导航恒展开——纵排不占横向预算，无坍缩态，不参与竖屏单展开
 ///     闭环；项径随横屏矮视口高度预算自适应，见 [_landscapeNavItemSize]）；
-///   · 下部：播放球 42dp（[kLandscapeBallSize]，GlassCircleButton 同口径，
-///     进度环 + 圆形封面缩略图，与竖屏播放球同源配方）。
+///     玻璃胶囊内**不再嵌播放球**（球独立后纵条只剩导航项）；
+///   · 下部：独立播放球 42dp（[kLandscapeBallSize]，GlassCircleButton
+///     同口径，进度环 + 圆形封面缩略图 + 播放态指示，与竖屏播放球同源
+///     配方）——悬浮在纵条**下方**、与纵条同右距同列（球心对齐纵条中线，
+///     两者作为一个组合体整体垂直居中，垂直间距
+///     [kLandscapeBallRailGap]）。无导航形态（二级页仅播放器 / 可见
+///     tab 为空）不渲染纵条，球单独垂直居中。
+///   **避让口径（批次36）**：纵条与球同右距同列、落在同一右侧避让带内
+///   （app.dart 注入 `MediaQuery.padding.right += 纵条宽 + 右距`，与竖屏
+///   底部注入 `_kDockReservedBottom` 完全同模式，常量一处定义两处消费，
+///   见 [kLandscapeRailWidth] / [kLandscapeRailRightMargin]）——**独立球
+///   不额外增加避让值**（它不在内容区之上，而与纵条共享避让带）；展开体
+///   为瞬时悬浮层，同样不占避让。**批次36 几何硬让位**：页面侧暂无消费
+///   `padding.right` 的滚动容器（注入只改 MediaQuery，各页滚动容器只读
+///   `.bottom`），app.dart 在横屏下额外把内容区几何内缩同一宽度
+///   （Padding），纵条/球落在内缩出的 gutter 带中不再遮挡内容。
 ///   播放球点击 → 控件**横向展开**（宽度动画 42 → [kLandscapeControlsWidth]
 ///   270dp，260ms easeOutCubic）：展开体 = 封面小图（外周进度环）+ 标题/
 ///   歌手 + 上一曲/播放暂停/下一曲（复用竖屏胶囊控件与 PlayerProvider
-///   交互语义，横向排布），**从球体向左伸出**、悬浮覆盖在纵条/页面右下
-///   之上，不推挤导航项；**再点球 或 点展开体外部**（整屏点外坍缩屏障，
-///   纵条层在其之上命中测试优先，导航项/球体/展开体均不被误吞）→ 坍缩
-///   回 42dp 球。横屏播放球保留竖屏同款上滑拖拽（展开 FullPlayer，松手
-///   三阈值按**长边口径**，见 [_onPlayerDragEnd]）。
+///   交互语义，横向排布），**从球体向左伸出**、悬浮覆盖在页面右下
+///   之上，不推挤导航项。
+///   **坍缩路径（批次36 扩展，原有两条不变）**：①再点球；②点展开体
+///   外部；③**滑动页面内容**——展开态下用户滑动/滚动页面内容 → 控件
+///   自动坍缩（球保持）。③的信号机制见 [contentScrollPulse]：app.dart
+///   在主布局/二级路由内容外层挂 `NotificationListener<ScrollNotification>`，
+///   纵向滚动时广播脉冲，本 Dock 展开态收到即坍缩。为使「滑动内容」成立，
+///   点外坍缩屏障从批次35 的 opaque GestureDetector（吸收整屏触摸、
+///   展开态内容无法滚动）改为 **translucent Listener**（命中路径放行
+///   下层）：页面滚动控件照常赢下手势竞技场、内容真实滚动，屏障仍收
+///   同一指针流据此坍缩；点空白处照旧坍缩（点可交互元素时元素点击与
+///   坍缩同时发生——语义变更论证见 [_buildLandscapeDismissBarrier]）。
+///   球/纵条/展开体在 Stack 中位于屏障之上且均不 translucent，落在它们
+///   上面的指针根本进不到屏障路径——「球上发起的滚动手势不算内容滚动」
+///   「展开态点球/导航项行为不变」由结构保证。横屏播放球保留竖屏同款
+///   上滑拖拽（展开 FullPlayer，松手三阈值按**长边口径**，见
+///   [_onPlayerDragEnd]）。
 ///   页面右侧避让由 app.dart 注入
 ///   `MediaQuery.padding.right += 纵条宽 + 右距`（与竖屏底部注入
 ///   `_kDockReservedBottom` 完全同模式），常量一处定义两处消费（见
 ///   [kLandscapeRailWidth] / [kLandscapeRailRightMargin]）。
-/// - **Pad 横屏分档（批次35，最短边口径）**：横屏内再按视口**最短边**
-///   分档——[GlassDockPlayer.isPadLandscape]（横屏 + 最短边 ≥
-///   [kLandscapePadBreakpoint] 600）命中 Pad 档，纵条几何整体上浮一档
-///   （球 42→48、项径足额/上限 44→48、项间距 4→6、球间距 8→10、
-///   纵条宽 52→60、展开宽 270→320，见 Pad 档常量）；手机横屏档
-///   （最短边 < 600，含全部手机横屏形态）数值逐字节不变。
+/// - **Pad 横屏分档（批次35，最短边口径；批次36 球距换档）**：横屏内再按
+///   视口**最短边**分档——[GlassDockPlayer.isPadLandscape]（横屏 + 最短边
+///   ≥ [kLandscapePadBreakpoint] 600）命中 Pad 档，纵条/球几何整体上浮一档
+///   （球 42→48、项径足额/上限 44→48、项间距 4→6、
+///   纵条宽 52→60、展开宽 270→320、球与纵条间距 12→14，见 Pad 档常量）；
+///   手机横屏档（最短边 < 600，含全部手机横屏形态）数值逐字节不变。
 ///   app.dart 两处避让注入（一级页 / 二级页）按同一判定选档——
 ///   壳与内容判据同源，防「Pad 壳装手机内容」错位。
 class GlassDockPlayer extends StatefulWidget {
@@ -209,7 +243,10 @@ class GlassDockPlayer extends StatefulWidget {
   /// 项径压缩时容器宽不变——SizedBox 锁定，球体 42dp 恒可容纳）。
   static const double kLandscapeRailWidth = 52.0;
 
-  /// 横屏纵条与页面右缘间距（与竖屏 Dock 底距 12dp 同口径）。
+  /// 横屏纵条与**贴边侧**屏幕边缘的间距（与竖屏 Dock 底距 12dp 同口径）。
+  ///
+  /// 批次36 起 Dock 可配置贴左/贴右：本常量是「到贴边侧」的距离，贴左时
+  /// 镜像为左间距（同一数值、单一常量，不做左右两套常量）。
   static const double kLandscapeRailRightMargin = 12.0;
 
   /// 横屏展开体（玻璃容器）宽度：270dp = 内容 260（封面含环 39 + 间距 8
@@ -246,6 +283,19 @@ class GlassDockPlayer extends StatefulWidget {
   /// AnimatedSize 动画目标宽度（48 → 320）。
   static const double kLandscapeControlsWidthPad = 320.0;
 
+  /// 横屏独立播放球与导航纵条的垂直间距（手机横屏档，批次36）。
+  ///
+  /// 批次36 起播放球与纵条**分离**为两个独立悬浮元素（球独立化，用户
+  /// 口径「悬浮播放器球独立」）：纵条胶囊内只剩导航项，播放球悬浮在
+  /// 纵条**下方**、同右距同列（球心对齐纵条中线，共享同一右侧避让带，
+  /// 不额外增加避让值），本常量即两者的垂直间距。球不再嵌在胶囊内，
+  /// 间距取 12（略大于原胶囊内「导航与球间距」8，从视觉上区隔两个
+  /// 独立元素）；组合体（纵条 + 本间距 + 球）整体垂直居中。
+  static const double kLandscapeBallRailGap = 12.0;
+
+  /// Pad 档横屏独立播放球与导航纵条的垂直间距（手机档 12 上浮一档）。
+  static const double kLandscapeBallRailGapPad = 14.0;
+
   /// Pad 横屏分档判定（批次35）：横屏 + 视口最短边 ≥
   /// [kLandscapePadBreakpoint]。
   ///
@@ -255,6 +305,32 @@ class GlassDockPlayer extends StatefulWidget {
   static bool isPadLandscape(BuildContext context) =>
       MediaQuery.orientationOf(context) == Orientation.landscape &&
       MediaQuery.sizeOf(context).shortestSide >= kLandscapePadBreakpoint;
+
+  // ── 页面内容纵向滚动脉冲广播（批次36，「展开态滑动内容坍缩」信号）──
+
+  /// 页面内容纵向滚动脉冲（批次36）：单调递增计数，每次页面内容发生纵向
+  /// 滚动 +1（事件语义，非布尔量）。
+  ///
+  /// **发布方**：app.dart 在主布局内容 / 二级路由（MaterialApp builder 的
+  /// Navigator 外层）挂 `NotificationListener<ScrollNotification>`，捕获纵向
+  /// `ScrollUpdateNotification` 时调 [notifyContentScrolled]。
+  /// **订阅方**：本 Dock 横屏展开态（[_onContentScrollPulse]），收到脉冲即
+  /// 坍缩展开体（球保持）——用户口径「展开播放器时，滑动内容坍缩」。
+  ///
+  /// **选型论证（为什么不用各页已有的 `_contentScrolled`）**：那些是
+  /// [ContentScrollSignal] 泵入的**页面私有** `ValueNotifier<bool>`，Dock
+  /// 拿不到引用（且不改页面文件是本任务约束）；其口径「已离开顶部」在
+  /// 回顶时复位，无法表达「滚动发生」的瞬时事件。计数器脉冲天然事件化、
+  /// 与页面完全解耦，一处广播多处订阅（后续顶栏收窄等需求可复用）。
+  ///
+  /// **「球区手势不算内容滚动」由结构保证**：Dock 自身（球 / 纵条 / 展开体）
+  /// 是内容层的 Stack 兄弟层，其手势不产生 ScrollNotification、也不经过
+  /// 内容层外层的 listener——无需额外过滤，见 [_buildLandscapeDock] 分层。
+  static final ValueNotifier<int> contentScrollPulse = ValueNotifier<int>(0);
+
+  /// 页面内容发生纵向滚动时的广播入口（app.dart 侧调用，批次36）。
+  static void notifyContentScrolled() =>
+      contentScrollPulse.value = contentScrollPulse.value + 1;
 
   @override
   State<GlassDockPlayer> createState() => _GlassDockPlayerState();
@@ -296,8 +372,13 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
 
   // ── 横屏右纵条私有几何（批次35）：由 [GlassDockPlayer] 公开常量派生 ──
 
-  /// 展开体右缘（距屏右）= 球体左缘 = 右距 + (纵条宽 − 球径)/2 + 球径。
-  /// 展开体悬浮覆盖在纵条左缘之上（纵条层后渲染，玻璃盖住展开体右端）。
+  /// 展开体**靠球侧**边缘距贴边侧屏缘的距离 = 球体靠球侧边缘
+  /// = 边距 + (纵条宽 − 球径)/2 + 球径。
+  ///
+  /// 贴右（默认）时即「右缘距屏右」；批次36 支持贴左，同一数值镜像为
+  /// 「左缘距屏左」——展开体始终从球体向**内侧**伸出，方向由宿主换算，
+  /// 不需要左右两套几何。展开体悬浮覆盖在纵条内侧边缘之上（纵条层后
+  /// 渲染，玻璃盖住展开体靠球端）。
   static const double _kLandscapeControlsRight =
       GlassDockPlayer.kLandscapeRailRightMargin +
       (GlassDockPlayer.kLandscapeRailWidth -
@@ -305,8 +386,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
           2 +
       GlassDockPlayer.kLandscapeBallSize;
 
-  /// Pad 档展开体右缘（距屏右）= 球体左缘（Pad 档几何，推导公式同
-  /// [_kLandscapeControlsRight]；手机档逐字节不变）。
+  /// Pad 档展开体**靠球侧**边缘距贴边侧屏缘的距离（Pad 档几何，推导公式同
+  /// [_kLandscapeControlsRight]；手机档逐字节不变，贴左时同样镜像复用）。
   static const double _kLandscapeControlsRightPad =
       GlassDockPlayer.kLandscapeRailRightMargin +
       (GlassDockPlayer.kLandscapeRailWidthPad -
@@ -317,14 +398,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   /// 横屏纵条内导航项之间的纵向间距（手机横屏档）。
   static const double _kLandscapeNavItemGap = 4.0;
 
-  /// 横屏纵条内导航部分与播放球之间的间距（同竖屏 Row 内 8dp 口径）。
-  static const double _kLandscapeNavBallGap = 8.0;
-
   /// Pad 档导航项之间的纵向间距（手机档 4 上浮一档）。
   static const double _kLandscapeNavItemGapPad = 6.0;
-
-  /// Pad 档导航部分与播放球之间的间距（手机档 8 上浮一档）。
-  static const double _kLandscapeNavBallGapPad = 10.0;
 
   /// 横屏纵条容器水平 padding（手机横屏档 4；纵条宽 = 项径足额 + 2×本值）。
   static const double _kLandscapeRailPaddingH = 4.0;
@@ -390,6 +465,19 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   /// 横屏复位改在 [didChangeDependencies] 首帧前一次性完成。
   bool _landscapeInitDone = false;
 
+  // ── 横屏展开态「点外坍缩 / 滑动坍缩」屏障手势状态（批次36）──
+  //
+  // 屏障是 translucent Listener（不参与手势竞技场、不收 recognizer），
+  // 只跟踪「首个按下的指针」：移动超 slop 判拖拽（= 滑动内容）、抬起未超
+  // 判点击（= 点外部）。多指针时忽略次级指针（保持单指针语义简单）。
+  // 详见 [_buildLandscapeDismissBarrier]。
+
+  /// 屏障上首个按下的全局位置（null = 无按下中的指针）。
+  Offset? _barrierDownPosition;
+
+  /// 本次按下是否已判定为拖拽（超 slop，已坍缩；抬起时不再重复触发）。
+  bool _barrierGestureIsDrag = false;
+
   @override
   void initState() {
     super.initState();
@@ -402,6 +490,12 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     // onNavExpandedChanged 回调完成。两个展开态不得同时存在，否则总宽
     // 超出屏宽。
     widget.navExpanded.addListener(_onNavExpandedChanged);
+    // 页面内容纵向滚动脉冲（批次36）：展开态收到即坍缩展开体（横屏限定，
+    // 竖屏仅播放器形态的「恒展开」语义不受影响）。
+    GlassDockPlayer.contentScrollPulse.addListener(_onContentScrollPulse);
+    // 批次36：横屏悬浮 Dock 贴边方向（左/右）——设置页写全局 ValueNotifier
+    // 后即时重建（左右 Positioned 约束互换，展开态等交互状态保留）。
+    kLandscapeDockSide.addListener(_onDockSideChanged);
     // 预热「左右滑切歌」开关内存缓存（设置页修改经 ValueNotifier 即时生效）
     // ignore: discarded_futures
     SettingsRepository().getDockSwipeToSwitchTrack();
@@ -450,10 +544,40 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   @override
   void dispose() {
     widget.navExpanded.removeListener(_onNavExpandedChanged);
+    GlassDockPlayer.contentScrollPulse.removeListener(_onContentScrollPulse);
+    kLandscapeDockSide.removeListener(_onDockSideChanged);
     _switchSettle.dispose();
     _switchDx.dispose();
     _dragReturnSettle.dispose();
     super.dispose();
+  }
+
+  /// 页面内容纵向滚动脉冲回调（批次36，「展开态滑动内容坍缩」）：
+  /// 横屏 + 展开态收到脉冲 → 坍缩展开体（球保持）。
+  ///
+  /// 竖屏不响应：竖屏仅播放器形态（二级页）是**恒展开**语义（批次24），
+  /// 滚动不参与其状态；竖屏一级页的展开/收起仍走既有单展开闭环。
+  /// 折叠态与旋转中的守卫：未展开时纯 no-op（脉冲 ~60fps 高频，回调
+  /// 必须极廉价，不 setState）。
+  void _onContentScrollPulse() {
+    if (!mounted || !_controlsExpanded) return;
+    if (MediaQuery.orientationOf(context) != Orientation.landscape) return;
+    setState(() => _controlsExpanded = false);
+  }
+
+  /// 横屏展开体坍缩（点外 / 滑动内容共用入口，批次36）：只改状态，
+  /// 动画由 AnimatedSize 既有 260ms 参数收敛。不发声反馈——滚动坍缩是
+  /// 滚动的副作用，点外坍缩沿用批次35 的无反馈口径。
+  void _collapseLandscapeControls() {
+    if (!_controlsExpanded) return;
+    setState(() => _controlsExpanded = false);
+  }
+
+  /// 悬浮 Dock 贴边方向变化（批次36，设置页 → [kLandscapeDockSide]）：
+  /// 仅重建布局（左右 Positioned 约束互换），不改展开态 / 导航态——
+  /// 所有几何都在布局期按当前方向重新推导，状态无方向语义，无需重置。
+  void _onDockSideChanged() {
+    if (mounted) setState(() {});
   }
 
   /// 反向闭环：导航展开 ⇒ 播放器工具强制收起（维持单展开不变量）。
@@ -578,26 +702,35 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     );
   }
 
-  // ── 横屏右纵条（批次35）──
+  // ── 横屏右纵条 + 独立播放球（批次35 纵条化 / 批次36 球独立化）──
 
-  /// 横屏形态：右侧纵向悬浮条（导航项纵排 + 播放球）+ 播放球横向展开。
+  /// 横屏形态：**独立播放球** + 导航纵条（球与纵条分离）+ 播放球横向
+  /// 展开。贴边方向由 [kLandscapeDockSide] 决定（批次36，默认右）——
+  /// 本方法只有一份布局，各层用 `edgeStart/edgeEnd` 把「距贴边侧的距离」
+  /// 映射成 left / right 约束，几何在贴左时自动镜像。
   ///
-  /// 三层 Stack（后渲染者命中测试优先）：
-  /// 1. **点外坍缩屏障**（仅展开态）：整屏吸收页面点击；纵条层与展开体层
-  ///    均在其之上，纵条上的导航项点击不被误吞（展开体只占球左侧区域）；
-  /// 2. **展开体层**：右缘贴球体左缘（悬浮覆盖在纵条/页面右下之上，不
-  ///    推挤导航项），AnimatedSize 右缘锚定向左生长（球径 → 展开宽，
-  ///    手机档 42→270dp / Pad 档 48→320dp）；
-  /// 3. **纵条层**：SafeArea(right/top/bottom) + 右缘间距 12（同竖屏
-  ///    Dock 底距口径）+ 玻璃胶囊纵条（导航项纵排 + 播放球）。
+  /// 四层 Stack（后渲染者命中测试优先）：
+  /// 1. **点外坍缩屏障**（仅展开态，批次36 改 translucent Listener）：命中
+  ///    路径放行下层（页面滚动/点击不被吸收），自身据此坍缩；见
+  ///    [_buildLandscapeDismissBarrier]；
+  /// 2. **展开体层**：靠球侧边缘贴球体内侧边缘（悬浮覆盖在页面之上，
+  ///    不推挤纵条），AnimatedSize 以该边缘锚定向内侧生长（球径 → 展开
+  ///    宽，手机档 42→270dp / Pad 档 48→320dp；贴左时向左缘锚定、向右
+  ///    生长）；
+  /// 3. **独立播放球层**（批次36）：与纵条分离的独立悬浮元素，Positioned
+  ///    定位在纵条下方（间距 [GlassDockPlayer.kLandscapeBallRailGap]）、
+  ///    同右距同列（球心对齐纵条中线，共享同一右侧避让带）；
+  /// 4. **导航纵条层**（仅存在可见导航项时渲染）：玻璃胶囊内只剩导航项
+  ///    纵排（球独立后不再嵌球）；Positioned(top/right) 显式定位。
   ///
-  /// 球体垂直中心由纵条几何推算（纵条在安全区内垂直居中、球贴纵条底部
-  /// 内缘「导航与球间距」档位值），展开体层据此与球体同高对齐——横屏
-  /// 展开体从球体向左伸出。
+  /// **组合体垂直居中（批次36）**：纵条 + 球距 + 球作为一个组合体整体在
+  /// 安全区内垂直居中（球独立后纵条上移、球落在纵条下方）；无导航形态
+  /// （二级页仅播放器 / 可见 tab 为空）不渲染纵条，球单独居中。展开体层
+  /// 与球体同垂直中心（top = 球心 − 球径/2）——横屏展开体从球体向左伸出。
   ///
   /// **Pad 横屏分档（批次35）**：入口处按 [GlassDockPlayer.isPadLandscape]
-  /// （横屏 + 最短边 ≥ 600）选档——Pad 档球径/项径/间距/纵条宽/展开宽
-  /// 整体上浮一档；手机横屏档（最短边 < 600）选档结果与改造前逐字节
+  /// （横屏 + 最短边 ≥ 600）选档——Pad 档球径/项径/间距/纵条宽/展开宽/
+  /// 球距整体上浮一档；手机横屏档（最短边 < 600）选档结果与改造前逐字节
   /// 一致。判定与 app.dart 避让注入同源（防「Pad 壳装手机内容」错位）。
   Widget _buildLandscapeDock(
     PlayerProvider player,
@@ -609,33 +742,40 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     final padding = MediaQuery.paddingOf(context);
     final viewport = MediaQuery.sizeOf(context);
     // Pad 横屏分档（批次35）：横屏内按视口最短边再分档——最短边 ≥ 600
-    // 命中 Pad 档（球/项径/间距/纵条宽/展开宽整体上浮一档）；手机横屏
+    // 命中 Pad 档（球/项径/间距/纵条宽/展开宽/球距整体上浮一档）；手机横屏
     // （最短边 < 600，含全部手机横屏形态）走手机档，数值逐字节不变。
     // 判定与 app.dart 避让注入同源（GlassDockPlayer.isPadLandscape）。
     final isPad = GlassDockPlayer.isPadLandscape(context);
-    final ballSize =
-        isPad
-            ? GlassDockPlayer.kLandscapeBallSizePad
-            : GlassDockPlayer.kLandscapeBallSize;
-    final ballCoverSize =
-        isPad
-            ? GlassDockPlayer.kLandscapeBallCoverSizePad
-            : GlassDockPlayer.kLandscapeBallCoverSize;
-    final railWidth =
-        isPad
-            ? GlassDockPlayer.kLandscapeRailWidthPad
-            : GlassDockPlayer.kLandscapeRailWidth;
-    final railPaddingH =
-        isPad ? _kLandscapeRailPaddingHPad : _kLandscapeRailPaddingH;
-    final controlsWidth =
-        isPad
-            ? GlassDockPlayer.kLandscapeControlsWidthPad
-            : GlassDockPlayer.kLandscapeControlsWidth;
-    final navItemGap =
-        isPad ? _kLandscapeNavItemGapPad : _kLandscapeNavItemGap;
-    final navBallGap = isPad ? _kLandscapeNavBallGapPad : _kLandscapeNavBallGap;
-    final controlsRight =
-        isPad ? _kLandscapeControlsRightPad : _kLandscapeControlsRight;
+    final ballSize = isPad
+        ? GlassDockPlayer.kLandscapeBallSizePad
+        : GlassDockPlayer.kLandscapeBallSize;
+    final ballCoverSize = isPad
+        ? GlassDockPlayer.kLandscapeBallCoverSizePad
+        : GlassDockPlayer.kLandscapeBallCoverSize;
+    final railWidth = isPad
+        ? GlassDockPlayer.kLandscapeRailWidthPad
+        : GlassDockPlayer.kLandscapeRailWidth;
+    final railPaddingH = isPad
+        ? _kLandscapeRailPaddingHPad
+        : _kLandscapeRailPaddingH;
+    final controlsWidth = isPad
+        ? GlassDockPlayer.kLandscapeControlsWidthPad
+        : GlassDockPlayer.kLandscapeControlsWidth;
+    final navItemGap = isPad ? _kLandscapeNavItemGapPad : _kLandscapeNavItemGap;
+    // 球与纵条的垂直间距（批次36 公开常量，手机档 12 / Pad 档 14）：
+    // 球独立后取代原胶囊内「导航与球间距」私有常量（已废止）。
+    final ballRailGap = isPad
+        ? GlassDockPlayer.kLandscapeBallRailGapPad
+        : GlassDockPlayer.kLandscapeBallRailGap;
+    final controlsEdge = isPad
+        ? _kLandscapeControlsRightPad
+        : _kLandscapeControlsRight;
+    // 批次36：悬浮 Dock 贴边方向（默认右 = 改造前行为逐字节一致）。
+    // 左右镜像不复制布局：所有层共用同一份构建代码，只把「距贴边侧的
+    // 距离」按方向映射成 left / right 约束（非贴边侧传 null 不约束）。
+    final dockLeft = kLandscapeDockSide.value == LandscapeDockSide.left;
+    double? edgeStart(double inset) => dockLeft ? inset : null;
+    double? edgeEnd(double inset) => dockLeft ? null : inset;
     final allTabs = tabConfig.visibleTabs;
     // 项径自适应（横屏矮视口高度预算，见 [_landscapeNavItemSize]）。
     final navItemSize = _landscapeNavItemSize(
@@ -644,48 +784,51 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
       padding,
       isPad,
     );
-    // 导航区高（项数 × 项径 + 项间距 + 导航与球间距）：无导航（二级页
-    // 仅播放器形态，或可见 tab 为空）时为 0，且不占球间距。
-    final navSectionHeight = !widget.showNav || allTabs.isEmpty
-        ? 0.0
-        : allTabs.length * navItemSize +
-              (allTabs.length - 1) * navItemGap +
-              navBallGap;
-    // 纵条高 = 垂直 padding(16) + 导航区 + 球(档位径)。
-    final railHeight = 16 + navSectionHeight + ballSize;
-    // 球体垂直中心：安全区内垂直居中的纵条内，球贴导航区下方——
-    // offset = 上 padding(8) + 导航区 + 球径/2。
-    // 必须按**实际渲染结构**（上 padding → 导航区 → 球）推算：旧公式
-    // 「railHeight − 球间距 − 球径/2」把上下 padding(16) 全前置，仅当
-    // 球间距恰为 8（手机档）时巧合相等；Pad 档球间距 10 会偏差
-    // (10 − 8) = 2px，展开体与球体错位（批次35 Pad 分档修复点；
-    // 手机档 / 无导航形态数值不变）。
-    final ballCenterY =
+    // 批次36：纵条只剩导航项（球独立）——无导航（二级页仅播放器形态，
+    // 或可见 tab 为空）时整个纵条不渲染。
+    final hasRail = widget.showNav && allTabs.isNotEmpty;
+    // 导航区高（项数 × 项径 + 项间距；不再含球与球间距）。
+    final navSectionHeight = hasRail
+        ? allTabs.length * navItemSize + (allTabs.length - 1) * navItemGap
+        : 0.0;
+    // 纵条高 = 垂直 padding(16) + 导航区（胶囊内无球）。
+    final railHeight = hasRail ? 16 + navSectionHeight : 0.0;
+    // 组合体（纵条 + 球距 + 球）整体垂直居中：球独立后纵条随组合体上移，
+    // 球落在纵条下方同一避让带内；无纵条形态组合体只剩球，单独居中。
+    final groupHeight = railHeight + (hasRail ? ballRailGap : 0.0) + ballSize;
+    final groupTop =
         padding.top +
-        (viewport.height - padding.top - padding.bottom - railHeight) / 2 +
-        8 +
-        navSectionHeight +
-        ballSize / 2;
+        (viewport.height - padding.top - padding.bottom - groupHeight) / 2;
+    final ballTop = groupTop + (hasRail ? railHeight + ballRailGap : 0.0);
+    final ballCenterY = ballTop + ballSize / 2;
+    // 球层距**贴边侧**屏缘（含该侧系统安全区）：球心对齐纵条中线（同列
+    // 共享避让带）= 该侧 padding + 边距 + (纵条宽 − 球径)/2。
+    // 批次36 起各层 Positioned 均显式叠加贴边侧 padding（系统安全区）：
+    // 批次35 的展开体层漏加，安全区 inset > 0 的设备上展开体会压住球体
+    // padding dp——此处一并修正；贴左时镜像为 padding.left，同一公式。
+    final edgePadding = dockLeft ? padding.left : padding.right;
+    final ballEdge =
+        edgePadding +
+        GlassDockPlayer.kLandscapeRailRightMargin +
+        (railWidth - ballSize) / 2;
+    final railEdge = edgePadding + GlassDockPlayer.kLandscapeRailRightMargin;
     return Stack(
       children: [
-        // 1) 点外坍缩屏障（仅展开态）
+        // 1) 点外坍缩 / 滑动坍缩屏障（仅展开态；translucent 放行下层手势）
         if (_controlsExpanded)
-          Positioned.fill(
-            child: GestureDetector(
-              key: const ValueKey('glass_dock_landscape_dismiss_barrier'),
-              behavior: HitTestBehavior.opaque,
-              onTap: () => setState(() => _controlsExpanded = false),
-            ),
-          ),
-        // 2) 展开体层（右缘贴球体左缘，与球体同垂直中心）
+          Positioned.fill(child: _buildLandscapeDismissBarrier()),
+        // 2) 展开体层（靠球侧边缘贴球体内侧边缘，与球体同垂直中心）
         Positioned(
-          right: controlsRight,
+          left: edgeStart(padding.left + controlsEdge),
+          right: edgeEnd(padding.right + controlsEdge),
           top: ballCenterY - ballSize / 2,
           child: AnimatedSize(
             duration: _kMorphDuration,
             curve: Curves.easeOutCubic,
-            // 右缘锚定：从球体向左生长，不顶出纵条（同竖屏播放器部分）。
-            alignment: Alignment.centerRight,
+            // 锚定靠球侧边缘：贴右时右缘固定、向左生长；贴左时左缘固定、
+            // 向右生长——两个方向都从球体向**内侧**伸出，不顶出纵条
+            // （同竖屏播放器部分）。
+            alignment: dockLeft ? Alignment.centerLeft : Alignment.centerRight,
             child: _controlsExpanded
                 ? _buildLandscapeControlsBody(
                     player,
@@ -697,68 +840,112 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
                 : SizedBox(width: 0, height: ballSize),
           ),
         ),
-        // 3) 纵条层
-        Positioned.fill(
-          child: SafeArea(
-            top: true,
-            right: true,
-            bottom: true,
-            left: false,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Padding(
-                padding: const EdgeInsets.only(
-                  right: GlassDockPlayer.kLandscapeRailRightMargin,
-                ),
-                child: LiquidGlassContainer(
-                  key: const ValueKey('glass_dock_landscape_rail'),
-                  shape: GlassShape.pill,
-                  padding: EdgeInsets.symmetric(
-                    horizontal: railPaddingH,
-                    vertical: 8,
-                  ),
-                  child: SizedBox(
-                    width: railWidth - railPaddingH * 2,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        if (widget.showNav && allTabs.isNotEmpty) ...[
-                          _buildLandscapeNavPart(
-                            allTabs,
-                            navItemSize,
-                            navItemGap,
-                          ),
-                          SizedBox(height: navBallGap),
-                        ],
-                        _buildLandscapePlayerBall(
-                          player,
-                          song,
-                          isPlaying,
-                          duration,
-                          ballSize: ballSize,
-                          ballCoverSize: ballCoverSize,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+        // 3) 独立播放球层（批次36：与纵条分离，Positioned 显式定位）
+        Positioned(
+          left: edgeStart(ballEdge),
+          right: edgeEnd(ballEdge),
+          top: ballTop,
+          child: _buildLandscapePlayerBall(
+            player,
+            song,
+            isPlaying,
+            duration,
+            ballSize: ballSize,
+            ballCoverSize: ballCoverSize,
+          ),
+        ),
+        // 4) 导航纵条层（仅可见导航项存在时渲染；胶囊内只剩导航项纵排）
+        if (hasRail)
+          Positioned(
+            top: groupTop,
+            left: edgeStart(railEdge),
+            right: edgeEnd(railEdge),
+            child: LiquidGlassContainer(
+              key: const ValueKey('glass_dock_landscape_rail'),
+              shape: GlassShape.pill,
+              padding: EdgeInsets.symmetric(
+                horizontal: railPaddingH,
+                vertical: 8,
+              ),
+              child: SizedBox(
+                width: railWidth - railPaddingH * 2,
+                child: _buildLandscapeNavPart(allTabs, navItemSize, navItemGap),
               ),
             ),
           ),
-        ),
       ],
     );
   }
 
+  /// 横屏展开态「点外坍缩 / 滑动内容坍缩」屏障（批次36 重写）。
+  ///
+  /// **为什么从批次35 的 `GestureDetector(opaque)` 改为
+  /// `Listener(translucent)`**：opaque 屏障把整屏触摸全部吸收，展开态下
+  /// 页面内容**无法滚动**——用户口径「展开播放器时，滑动内容坍缩」要求
+  /// 滑动内容时控件坍缩，前提是手势能到达内容层。translucent 下屏障只把
+  /// 自身加入命中路径（不阻断下层命中测试）：页面滚动控件照常赢下手势
+  /// 竞技场、内容真实滚动；同时屏障的 [Listener] 仍收到同一指针流
+  /// （Listener 不注册 recognizer、不参与竞技场），据此坍缩。
+  ///
+  /// 手势判定（原始指针流，不抢内容手势）：
+  /// - 按下记全局位置（只跟踪首个指针，忽略次级指针）；
+  /// - 移动超过 [kTouchSlop] → 判为拖拽（= 滑动内容）→ 坍缩；
+  /// - 抬起且未超 slop → 判为点击（= 点展开体外部）→ 坍缩；
+  /// - 取消 → 只清状态不坍缩（手势被系统仲裁掉，无用户意图）。
+  ///
+  /// **语义变更（批次36 论证后接受）**：点击不再被屏障「吞掉」——点页面
+  /// 可交互元素时，元素点击与坍缩**同时**发生（批次35 旧语义需点两次：
+  /// 第一次只坍缩、元素不响应）；点空白处仍只有坍缩。这与「滑动内容
+  /// 坍缩」的用户意图同向：与页面内容的任何交互都放行并收起播放控件。
+  /// 坍缩的补充分量（页面滚动广播）见 [GlassDockPlayer.contentScrollPulse]
+  /// ——程序化滚动（非手势）也走那条路径坍缩。
+  ///
+  /// 球 / 纵条 / 展开体在本层之上且均不 translucent，落在它们上面的指针
+  /// 根本不进入本屏障的命中路径——「球上发起的滚动手势不算内容滚动」
+  /// 「展开态点球 / 导航项行为不变」由结构保证。
+  Widget _buildLandscapeDismissBarrier() {
+    return Listener(
+      key: const ValueKey('glass_dock_landscape_dismiss_barrier'),
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
+        // 只跟踪首个按下的指针；次级指针（双指）忽略。
+        if (_barrierDownPosition != null) return;
+        _barrierDownPosition = event.position;
+        _barrierGestureIsDrag = false;
+      },
+      onPointerMove: (event) {
+        final down = _barrierDownPosition;
+        if (down == null || _barrierGestureIsDrag) return;
+        if ((event.position - down).distance > kTouchSlop) {
+          // 超 slop = 滑动内容（页面滚动控件已赢下竞技场、内容在滚）→ 坍缩。
+          _barrierGestureIsDrag = true;
+          _collapseLandscapeControls();
+        }
+      },
+      onPointerUp: (event) {
+        final down = _barrierDownPosition;
+        _barrierDownPosition = null;
+        // 未超 slop 的抬起 = 点击（点展开体外部）→ 坍缩；拖拽已在 move
+        // 中坍缩过，不重复。
+        if (down == null || _barrierGestureIsDrag) return;
+        _collapseLandscapeControls();
+      },
+      onPointerCancel: (event) {
+        // 手势被系统仲裁掉（来电 / 竞争）：清状态，不坍缩。
+        _barrierDownPosition = null;
+        _barrierGestureIsDrag = false;
+      },
+    );
+  }
+
   /// 横屏导航项径自适应：足额 44dp（手机档）；项数多时按「纵条可用高度」
-  /// 逐档压缩，保证横屏矮视口下纵条不溢出。
-  /// 可用高 = 视口高 − 上下安全区 − 纵条垂直 padding(16) − 导航与球间距
+  /// 逐档压缩，保证横屏矮视口下组合体（纵条 + 球距 + 球）不溢出。
+  /// 可用高 = 视口高 − 上下安全区 − 纵条垂直 padding(16) − 球与纵条间距
   ///  − 球径；剩余预算在各项 + 间距间均分，下限 28dp。
   ///
-  /// 【Pad 分档点】（批次35落地）：[isPad]（= 宿主
+  /// 【Pad 分档点】（批次35落地，批次36 球距换档）：[isPad]（= 宿主
   /// [GlassDockPlayer.isPadLandscape] 判定结果，最短边 ≥ 600）时足额档 /
-  /// 上限上浮一档（44→48），项间距 / 球间距 / 球径同步换 Pad 档常量——
+  /// 上限上浮一档（44→48），项间距 / 球距 / 球径同步换 Pad 档常量——
   /// Pad 横屏可视高度更充裕（~600-800），足额 48dp 不溢出且更舒展；
   /// 手机横屏档（isPad = false）公式与数值逐字节不变。
   double _landscapeNavItemSize(
@@ -767,22 +954,26 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     EdgeInsets padding,
     bool isPad,
   ) {
-    final fullSize =
-        isPad ? _kLandscapeNavItemFullSizePad : _kLandscapeNavItemFullSize;
+    final fullSize = isPad
+        ? _kLandscapeNavItemFullSizePad
+        : _kLandscapeNavItemFullSize;
     final gap = isPad ? _kLandscapeNavItemGapPad : _kLandscapeNavItemGap;
-    final ballSize =
-        isPad
-            ? GlassDockPlayer.kLandscapeBallSizePad
-            : GlassDockPlayer.kLandscapeBallSize;
-    final navBallGap =
-        isPad ? _kLandscapeNavBallGapPad : _kLandscapeNavBallGap;
+    final ballSize = isPad
+        ? GlassDockPlayer.kLandscapeBallSizePad
+        : GlassDockPlayer.kLandscapeBallSize;
+    // 球独立后（批次36）：球距用公开常量 kLandscapeBallRailGap(12/14)，
+    // 替代原胶囊内「导航与球间距」私有常量（8/10，已废止）——组合体必须
+    // 在视口内完整居中，预算口径与实际渲染结构同源。
+    final ballRailGap = isPad
+        ? GlassDockPlayer.kLandscapeBallRailGapPad
+        : GlassDockPlayer.kLandscapeBallRailGap;
     if (count <= 0) return fullSize;
     final budget =
         viewport.height -
         padding.top -
         padding.bottom -
         16 -
-        navBallGap -
+        ballRailGap -
         ballSize;
     final perItem = (budget - (count - 1) * gap) / count;
     return perItem.clamp(_kLandscapeNavItemMinSize, fullSize);
@@ -793,8 +984,8 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   /// 横屏导航恒展开（纵排不占横向预算，无坍缩态），不参与竖屏单展开闭环。
   ///
   /// [itemGap] 由宿主按 Pad 分档传入（手机档 4 / Pad 档 6）——必须与
-  /// [_buildLandscapeDock] 的 navPartHeight 预算同源，否则「预算按 6、
-  /// 渲染按 4」会让球体垂直中心推算偏移、展开体与球体错位。
+  /// [_buildLandscapeDock] 的导航区高（= 项径预算同源推算）一致，否则
+  /// 「预算按 6、渲染按 4」会让组合体垂直居中偏移、展开体与球体错位。
   Widget _buildLandscapeNavPart(
     List<TabItem> tabs,
     double itemSize,
@@ -826,9 +1017,14 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   }
 
   /// 横屏播放球：42dp（手机档）/ 48dp（Pad 档）玻璃球（与竖屏播放球
-  /// 同源配方：外周进度环 + 中央圆形封面缩略图 / 音符占位），点击横向
-  /// 展开/坍缩；保留竖屏同款上滑拖拽（拖拽展开 FullPlayer，松手三阈值
-  /// 长边口径见 [_onPlayerDragEnd]）。
+  /// 同源配方：外周进度环 + 中央圆形封面缩略图 / 音符占位 + 播放态
+  /// 指示），点击横向展开/坍缩；保留竖屏同款上滑拖拽（拖拽展开
+  /// FullPlayer，松手三阈值长边口径见 [_onPlayerDragEnd]）。
+  ///
+  /// **批次36 球独立化**：本球由宿主以 Positioned 定位为**独立悬浮元素**
+  /// （纵条下方、同右距同列共享避让带），不再嵌在纵条玻璃胶囊内——与
+  /// 竖屏播放球的交互语义（点击展开 / 独立可点 / 上滑拖拽）保持一致，
+  /// 即用户口径「悬浮播放器球独立，与竖屏时一致」。
   ///
   /// [ballSize] / [ballCoverSize] 由宿主按 Pad 分档传入（批次35）。
   Widget _buildLandscapePlayerBall(

@@ -25,12 +25,30 @@ import '../../modules/player/full_player_route.dart';
 ///   [DraggablePlayerRoute]（按类型排除）；`/settings` 与
 ///   `/dlna_remote` 是按名字排除的命名路由。
 ///
+/// 批次 36（transitive 排除）：设置页内 push 出来的子页（均衡器 /
+/// 声音 / 关于 / 登录 / 签到 / 用户协议等，均为匿名
+/// [MaterialPageRoute]）此前会命中二级条件而误显悬浮 Dock。现补充
+/// 传递排除语义——「从已被排除的页面（或其在排除链上的后代）进去
+/// 的整条路由链」全部不显示悬浮 Dock：
+/// - 压栈（didPush）时若新路由的 `previousRoute` 已被排除（直接
+///   排除或本身就在排除链中），新路由也标记为排除；
+/// - 由于 Flutter 路由栈严格嵌套，逐级传递即可覆盖任意深度
+///   （设置 → 登录 → 内嵌 webview）；
+/// - 出栈（didPop/didRemove/didReplace）时同步清理记录，既防内存
+///   泄漏，也保证排除链不污染后续无关路由（pop 回一级页后再
+///   push 歌单/专辑详情仍正常显示 Dock）。
+///
 /// 只暴露一个布尔查询给 UI 层，build 侧据此渲染悬浮播放器 / 注入 Dock
 /// 避让 padding。
 class SecondaryDockController extends ChangeNotifier {
   SecondaryDockController();
 
   final List<Route<dynamic>> _stack = [];
+
+  /// 批次 36：因上游被排除而「传递排除」的路由集合（设置页子孙链）。
+  /// 与 [_stack] 同步增删，pop/remove/replace/dispose 时清理，不长留存
+  /// 失效 Route 引用。
+  final Set<Route<dynamic>> _transitivelyExcluded = {};
 
   bool _visible = false;
 
@@ -50,6 +68,8 @@ class SecondaryDockController extends ChangeNotifier {
     if (route == null) return;
     final i = _stack.lastIndexOf(route);
     if (i >= 0) _stack.removeAt(i);
+    // 批次 36：同步清理传递排除记录，防内存泄漏与失效引用误判
+    _transitivelyExcluded.remove(route);
   }
 
   void _sync() {
@@ -62,7 +82,9 @@ class SecondaryDockController extends ChangeNotifier {
     top ??= _stack.isNotEmpty ? _stack.last : null;
 
     final isSecondary = _stack.length >= 2;
-    final next = isSecondary && !_isExcluded(top);
+    // 批次 36：栈顶自身被排除，或其处于排除链（上游被排除）中，
+    // 均不显示悬浮 Dock
+    final next = isSecondary && !_isChainExcluded(top);
     if (next != _visible) {
       _visible = next;
       notifyListeners();
@@ -76,11 +98,26 @@ class SecondaryDockController extends ChangeNotifier {
     return _excludedRouteNames.contains(route.settings.name);
   }
 
+  /// 批次 36：排除链判定——[route] 自身被直接排除（按名/按类型），
+  /// 或其压栈时因上游被排除而记入 [_transitivelyExcluded]。
+  /// [route] 为 null（无上游）时返回 false，交由 isSecondary 兜底。
+  bool _isChainExcluded(Route<dynamic>? route) {
+    if (route == null) return false;
+    return _isExcluded(route) || _transitivelyExcluded.contains(route);
+  }
+
   /// push：先补录 `previousRoute`（栈底可能从未回调过 didPush，见类
   /// 文档），再录 [route]，保证「一级 → push 二级」得到栈深 2。
+  ///
+  /// 批次 36：若 `previousRoute` 已在排除链中（直接排除或其本身
+  /// 传递排除），新路由整条链继承排除态（设置 → 登录 → webview
+  /// 逐级传递，覆盖任意深度）。
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     _record(previousRoute);
     _record(route);
+    if (_isChainExcluded(previousRoute)) {
+      _transitivelyExcluded.add(route);
+    }
     _sync();
   }
 
@@ -104,8 +141,13 @@ class SecondaryDockController extends ChangeNotifier {
       if (i >= 0) {
         if (newRoute != null) {
           _stack[i] = newRoute;
+          // 批次 36：替换时传递排除态——旧路由在排除链中，新路由继承
+          if (_transitivelyExcluded.remove(oldRoute)) {
+            _transitivelyExcluded.add(newRoute);
+          }
         } else {
           _stack.removeAt(i);
+          _transitivelyExcluded.remove(oldRoute);
         }
       } else {
         _record(newRoute);
@@ -117,6 +159,7 @@ class SecondaryDockController extends ChangeNotifier {
   @override
   void dispose() {
     _stack.clear();
+    _transitivelyExcluded.clear();
     super.dispose();
   }
 }

@@ -23,6 +23,7 @@ import 'modules/update/update_check_service.dart';
 import 'modules/onboarding/user_agreement_page.dart';
 import 'services/kugou_api/kugou_api_client.dart';
 import 'services/kugou_server.dart';
+import 'utils/landscape_dock_side.dart';
 import 'utils/landscape_immersive.dart';
 import 'widgets/md3_lyric_preferences.dart';
 
@@ -147,6 +148,9 @@ Future<(bool, bool, bool)> runBootstrap() async {
     _restoreLyricPushPref(),
     // 恢复全屏播放器横屏沉浸开关（全局变量，播放器同步读取）
     _restoreLandscapeImmersivePref(),
+    // 恢复横屏悬浮 Dock 贴边方向（批次36）：必须在 runApp 前完成——首帧
+    // 布局即按该值决定纵条/球贴边与页面避让注入方向，避免首帧闪一下右侧。
+    _restoreLandscapeDockSidePref(),
   ]);
   markStartup('local_preferences_ready');
 
@@ -269,6 +273,17 @@ Future<void> _restoreLandscapeImmersivePref() async {
   try {
     kLandscapeImmersiveEnabled = await SettingsRepository()
         .getLandscapeImmersiveEnabled();
+  } catch (_) {}
+}
+
+/// 恢复「横屏悬浮 Dock 贴边方向」（批次36，默认右侧）到全局 ValueNotifier。
+///
+/// 必须在 runApp 前完成：MainLayout 首帧即读该值决定纵条/球贴边与避让注入
+/// 方向；读取失败保持默认 right（= 改造前行为，不引入首帧异常）。
+Future<void> _restoreLandscapeDockSidePref() async {
+  try {
+    kLandscapeDockSide.value = await SettingsRepository()
+        .getLandscapeDockSide();
   } catch (_) {}
 }
 
