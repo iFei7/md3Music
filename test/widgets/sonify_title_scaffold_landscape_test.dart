@@ -3,9 +3,9 @@
 /// 设计意图（用户原话）：「所有含顶栏的页面：上滑时顶部不隐藏，做收窄
 /// 处理，即高度变窄，顶栏按钮标题等保留。」
 ///
-/// 收窄形态（批次 36 定值，见 scaffold 常量族）：
-/// - 标题区高度 52dp（8+36+8）→ 38dp（6+26+6）；
-/// - 大标题字号 20sp（行高 36）→ 14.5sp（行高 26）；
+/// 收窄形态（批次 37 定值，批次 36 再降一档，见 scaffold 常量族）：
+/// - 标题区高度 52dp（8+36+8）→ 32dp（5+22+5）；
+/// - 大标题字号 20sp（行高 36）→ 13sp（行高 22）；
 /// - 右上头像（36dp）、actions 钮、渐变模糊带（状态栏 + 54dp）全部
 ///   保留且保持原尺寸/原位置（只收标题区）；
 /// - 动画 180ms easeOut（kSonifyTopBarCompactDuration），回顶恢复。
@@ -58,14 +58,14 @@ const _landscapeMQ = MediaQueryData(size: Size(800, 600));
 const _portraitMQ = MediaQueryData(size: Size(400, 800));
 
 /// 收窄两态锚点（与 scaffold 私有常量同口径，测试侧显式钉死防漂移）：
-/// 展开态 = 顶距 8 + 行高 36 + 底距 8（标题区 52）；紧凑态 = 6 + 26 + 6
-/// （标题区 38）。字号 20sp → 14.5sp。
+/// 展开态 = 顶距 8 + 行高 36 + 底距 8（标题区 52）；紧凑态 = 5 + 22 + 5
+/// （标题区 32，批次 37）。字号 20sp → 13sp。
 const _expandedTop = 8.0;
 const _expandedLineHeight = 36.0;
-const _compactTop = 6.0;
-const _compactLineHeight = 26.0;
+const _compactTop = 5.0;
+const _compactLineHeight = 22.0;
 const _expandedFontSize = 20.0;
-const _compactFontSize = 14.5;
+const _compactFontSize = 13.0;
 
 /// 固定悬浮大标题的屏幕矩形（可见标题 = 树中最后一个同文本 widget）。
 Rect _titleRect(WidgetTester tester, String title) =>
@@ -122,7 +122,7 @@ double _bandOpacity(WidgetTester tester) => tester
 
 void main() {
   group('批次36 横屏收窄顶栏（SonifyTitleScaffold）', () {
-    testWidgets('①横屏 offset>0：标题区收窄（38dp/14.5sp/顶距6），头像/actions/模糊带全保留',
+    testWidgets('①横屏 offset>0：标题区收窄（32dp/13sp/顶距5），头像/actions/模糊带全保留',
         (tester) async {
       final (widget, controller) = _host(
         title: '发现',
@@ -151,7 +151,7 @@ void main() {
       expect(midFontSize, lessThan(_expandedFontSize), reason: '已开始收窄');
       expect(midFontSize, greaterThan(_compactFontSize), reason: '尚未收到位');
 
-      // 200ms 后收敛：紧凑态 = 顶距 6 + 行高 26（14.5sp），标题区 38dp
+      // 200ms 后收敛：紧凑态 = 顶距 5 + 行高 22（13sp），标题区 32dp
       await tester.pump(const Duration(milliseconds: 150));
       expect(_titleFontSize(tester, '发现'), _compactFontSize);
       expect(_titleRect(tester, '发现').topLeft, const Offset(20, _compactTop));
@@ -172,7 +172,7 @@ void main() {
       expect(find.byIcon(Icons.person).hitTestable(), findsOneWidget);
 
       // 占位 item 同步收窄：业务 item 0 盒顶从「52 − offset」上移到
-      // 「38 − offset」——滚动态内容区增高 14dp（「减少遮挡」）。
+      // 「32 − offset」——滚动态内容区增高 20dp（「减少遮挡」）。
       // 取 item 盒（SizedBox 100）而非其内 ListTile 文本——文本距盒顶
       // 有 ListTile 内部 16px 内边距，不能代表内容区起点。
       final itemBox = find
@@ -180,8 +180,8 @@ void main() {
           .first;
       expect(
         tester.getTopLeft(itemBox).dy,
-        closeTo(38 - 10, 0.5),
-        reason: '占位收窄后 item 0 盒顶 = 紧凑标题区 38 − offset 10',
+        closeTo(32 - 10, 0.5),
+        reason: '占位收窄后 item 0 盒顶 = 紧凑标题区 32 − offset 10',
       );
     });
 

@@ -12,6 +12,7 @@ import 'package:md3music/data/repositories/history_repository.dart';
 import 'package:md3music/modules/player/apple_music_lyrics_view.dart';
 import 'package:md3music/modules/player/comments_view.dart';
 import 'package:md3music/modules/player/full_player.dart';
+import 'package:md3music/modules/player/full_player_route.dart';
 import 'package:md3music/modules/player/lyrics_view.dart';
 import 'package:md3music/providers/comment_display_provider.dart';
 import 'package:md3music/providers/device_provider.dart';
@@ -23,6 +24,7 @@ import 'package:md3music/providers/theme_provider.dart';
 import 'package:md3music/services/kugou_api/kugou_models.dart';
 import 'package:md3music/widgets/md3e_transport_row.dart';
 import 'package:md3music/widgets/player_artwork_image.dart';
+import 'package:md3music/widgets/player_seek_bar.dart';
 import 'package:md3music/widgets/player_playlist_view.dart';
 import 'package:md3music/widgets/player_tab_strip.dart';
 import 'package:md3music/widgets/playback_status_feedback.dart';
@@ -106,10 +108,18 @@ Widget _host(PlayerProvider player, KugouProvider kugou, Widget page) =>
     );
 
 /// 在指定视口装配并渲染 FullPlayer，回调内执行断言；finally 统一清理。
+///
+/// [viaRoute]（批次37）：不直接渲染 FullPlayer，而是经 [fullPlayerRoute]
+/// push 到根 Navigator——用于验证「点击打开 / 上滑展开」两条真实打开路径。
+/// [dragMode] 仅在 viaRoute 下生效：dragOriginTop 模式 push（路由跳过自动
+/// 入场动画、由手势接管）并在 push 后调 [DraggablePlayerRoute.settleToFull]，
+/// 模拟「悬浮播放器上滑松手展开」全链路。
 Future<void> _withPlayer(
   WidgetTester tester, {
   required Size viewport,
   double textScale = 1.0,
+  bool viaRoute = false,
+  bool dragMode = false,
   required Future<void> Function(WidgetTester tester) body,
 }) async {
   final originalPhysicalSize = tester.view.physicalSize;
@@ -126,6 +136,7 @@ Future<void> _withPlayer(
   AudioServiceLoader.setTestOverride(() async => audio);
   final kugou = _StubKugouProvider();
   PlayerProvider? player;
+  DraggablePlayerRoute<void>? pushedRoute;
   try {
     await tester.runAsync(() async {
       final activePlayer = PlayerProvider();
@@ -147,11 +158,34 @@ Future<void> _withPlayer(
             data: MediaQuery.of(
               context,
             ).copyWith(textScaler: TextScaler.linear(textScale)),
-            child: const FullPlayer(),
+            child: viaRoute
+                ? _RouteLauncher(
+                    onLaunch: (ctx) {
+                      pushedRoute = fullPlayerRoute(
+                        ctx,
+                        dragOriginTop: dragMode ? 200.0 : null,
+                        screenHeight: dragMode ? viewport.height : null,
+                      );
+                      return Navigator.of(ctx, rootNavigator: true)
+                          .push(pushedRoute!);
+                    },
+                  )
+                : const FullPlayer(),
           ),
         ),
       ),
     );
+    if (viaRoute) {
+      // 点击触发 push（tap 模式：路由自动播放入场动画；drag 模式：didPush
+      // 跳过动画、controller 停在 0，随后 settleToFull 模拟松手展开）
+      await tester.tap(find.text('OPEN_PLAYER'));
+      await tester.pump();
+      if (dragMode) {
+        pushedRoute!.settleToFull();
+      }
+      await tester.pumpAndSettle(const Duration(milliseconds: 100));
+      await tester.pump();
+    }
     await tester.pumpAndSettle(const Duration(milliseconds: 100));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
@@ -165,6 +199,8 @@ Future<void> _withPlayer(
     );
     await tester.pump();
   } finally {
+    // 路由测试会同步 playerExpansion（settle 终态短路置 1），清零避免跨用例残留
+    playerExpansion.value = 0.0;
     await tester.pumpWidget(const SizedBox.shrink());
     player?.dispose();
     kugou.dispose();
@@ -177,14 +213,33 @@ Future<void> _withPlayer(
   }
 }
 
+/// 路由宿主页（批次37）：提供 Navigator 上下文，点击后 push 播放页路由。
+class _RouteLauncher extends StatelessWidget {
+  const _RouteLauncher({required this.onLaunch});
+
+  final Future<dynamic> Function(BuildContext context) onLaunch;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: TextButton(
+          onPressed: () => onLaunch(context),
+          child: const Text('OPEN_PLAYER'),
+        ),
+      ),
+    );
+  }
+}
+
 /// 左栏封面图：播放页内 PlayerArtworkImage 可能有多份（右栏播放列表缩略图），
-/// 取中心 x 位于屏幕左 40%（分栏左栏 flex 4）的那一份。
+/// 取中心 x 位于屏幕左半（批次37 分栏 flex 5/5，右栏从 50% 起）的那一份。
 Finder _leftCoverArtwork(WidgetTester tester, Size viewport) {
   final matches = tester
       .widgetList<PlayerArtworkImage>(find.byType(PlayerArtworkImage))
       .where((w) {
         final rect = tester.getRect(find.byWidget(w));
-        return rect.center.dx < viewport.width * 0.4;
+        return rect.center.dx < viewport.width * 0.5;
       })
       .toList();
   expect(matches, isNotEmpty, reason: '左栏应渲染封面图');
@@ -222,31 +277,44 @@ Finder _leftColumn(WidgetTester tester, Size viewport) {
   fail('未找到同时包含封面与标题的左栏 Padding');
 }
 
-/// 与实现同源的封面边长公式（_buildSplitArtworkColumn）：
-/// medium = min(可用宽, 可用高-72).clamp(120, 300)；
-/// expanded = (可用宽-32).clamp(0, 380) 再受可用高度约束（无 120 下限）。
-double _expectedArtworkSize(
-  Rect column, {
+/// 与实现同源的封面边长公式（批次37 _buildSplitArtworkColumn）：
+/// 封面在 Expanded 内吃掉左栏扣掉固定块（标题+播控）后的剩余高度，
+/// 边长 = min(可用宽 - widthInset, cap, 剩余高)，medium 另有 120 下限。
+/// [fixedBlockHeight] 用实测几何推得（标题 top 与播控 bottom 之间 + 上间距 10），
+/// 避免在测试里复刻字体度量。
+double _expectedArtworkSize({
+  required Rect column,
+  required double fixedBlockHeight,
   required bool expanded,
 }) {
   const g = 16.0;
   final cap = expanded ? 380.0 : 300.0;
   final minSize = expanded ? 0.0 : 120.0;
   final widthInset = expanded ? 32.0 : 0.0;
-  final maxWidth = column.width - g; // 左 padding g，无右 padding
-  final availableHeight = column.height - 2 * g - 72; // 标题块预留 72
-  var size = (maxWidth - widthInset)
-      .clamp(0.0, cap)
-      .clamp(0.0, availableHeight.clamp(0.0, double.infinity));
+  final widthBudget = column.width - g - widthInset;
+  final heightBudget = column.height - 2 * 12 - fixedBlockHeight;
+  var size = widthBudget.clamp(0.0, cap).clamp(
+    0.0,
+    heightBudget.clamp(0.0, double.infinity),
+  );
   if (minSize > 0) size = size.clamp(minSize, cap);
   return size;
+}
+
+/// 实测左栏固定块高度（封面之下：间距 10 + 标题块 + 间距 8 + 播控块）。
+/// 传输行 bottom 即播控块底（= 左栏内容区底部），由传输行/标题实测几何反推，
+/// 不含左栏自身上下 padding 12。
+double _measuredFixedBlockHeight(WidgetTester tester) {
+  final titleTop = tester.getRect(find.text('LANDSCAPE SPLIT TARGET')).top;
+  final transportBottom = tester.getRect(find.byType(MD3ETransportRow)).bottom;
+  return transportBottom - titleTop + 10;
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('批次36 横屏双栏分栏（medium：600≤宽<900）', () {
-    testWidgets('800x400：Row 左右分栏，左栏封面+标题，右栏 Tab+控件，返回钮最外层左上', (
+  group('批次37 横屏分栏（medium：600≤宽<900）', () {
+    testWidgets('800x400：左栏封面+标题+播控，右栏 Tab+tabstrip，播控在封面下方', (
       tester,
     ) async {
       const viewport = Size(800, 400);
@@ -256,12 +324,13 @@ void main() {
         body: (tester) async {
           expect(tester.takeException(), isNull);
 
-          // ── 右栏（flex 6）：TabBarView + 传输控件 + 底部导航条 ──
+          // ── 右栏（flex 5）：TabBarView 全高 + 底部 tab 导航条 ──
           final tabBarView = find.byType(TabBarView);
           expect(tabBarView, findsOneWidget);
           final tabRect = tester.getRect(tabBarView);
           expect(tabRect.center.dx, greaterThan(viewport.width / 2));
-          expect(tabRect.width, closeTo(viewport.width * 0.6, 1));
+          // 批次37：播控移到左栏后右栏收窄为 flex 5（原 4/6 的 60%）
+          expect(tabRect.width, closeTo(viewport.width * 0.5, 1));
           expect(
             find.descendant(
               of: tabBarView,
@@ -269,25 +338,42 @@ void main() {
             ),
             findsOneWidget,
           );
-          final transport = find.byType(MD3ETransportRow);
-          expect(transport, findsOneWidget);
+          // tab 导航条仍在右栏（播控移走后右栏底部只留 tabstrip）
+          final tabStrip = find.byType(PlayerTabStrip);
+          expect(tabStrip, findsOneWidget);
           expect(
-            tester.getRect(transport).center.dx,
+            tester.getRect(tabStrip).center.dx,
             greaterThan(viewport.width / 2),
           );
-          expect(find.byType(PlaybackStatusFeedback), findsOneWidget);
 
-          // ── 左栏（flex 4）：封面 + 标题，均在屏幕左 40% ──
+          // ── 左栏（flex 5）：封面 + 标题 + 播控（进度条 + 三键传输行） ──
           final cover = _leftCoverArtwork(tester, viewport);
           final coverRect = tester.getRect(cover);
-          expect(coverRect.center.dx, lessThan(viewport.width * 0.4));
+          expect(coverRect.center.dx, lessThan(viewport.width * 0.5));
           final title = find.text('LANDSCAPE SPLIT TARGET');
           expect(title, findsOneWidget);
-          // 标题左缘与封面左缘对齐（移植自默认分支 26a043f）
+          // 标题左缘与封面左缘对齐
           expect(
             tester.getRect(title).left,
             closeTo(coverRect.left, 0.5),
           );
+
+          // ── 批次37 核心：播控/进度条在封面下方（几何断言） ──
+          final seekBar = find.byType(PlayerSeekBar);
+          expect(seekBar, findsOneWidget);
+          final transport = find.byType(MD3ETransportRow);
+          expect(transport, findsOneWidget);
+          final seekRect = tester.getRect(seekBar);
+          final transportRect = tester.getRect(transport);
+          expect(seekRect.top, greaterThan(coverRect.bottom),
+              reason: '进度条应位于封面下方');
+          expect(transportRect.top, greaterThan(coverRect.bottom),
+              reason: '传输行应位于封面下方');
+          // 播控在左栏（批次36 时在右栏）
+          expect(transportRect.center.dx, lessThan(viewport.width / 2));
+          // 纵向顺序：进度条 → 传输行（进度条在下、传输行最下）
+          expect(transportRect.bottom, greaterThan(seekRect.bottom));
+          expect(find.byType(PlaybackStatusFeedback), findsOneWidget);
 
           // ── 返回按钮在最外层 Column：屏幕最左上角，且在左栏封面之上 ──
           final backButton = find.ancestor(
@@ -300,12 +386,12 @@ void main() {
           expect(backRect.top, lessThanOrEqualTo(16));
           expect(
             backRect.bottom,
-            lessThanOrEqualTo(tester.getRect(cover).top),
+            lessThanOrEqualTo(coverRect.top),
             reason: '返回钮应位于左栏封面上方（顶栏占整行）',
           );
 
           // 无溢出：关键控件在视口内
-          for (final target in <Finder>[transport, tabBarView]) {
+          for (final target in <Finder>[transport, tabBarView, seekBar]) {
             final bounds = tester.getRect(target);
             expect(bounds.left, greaterThanOrEqualTo(0));
             expect(bounds.right, lessThanOrEqualTo(viewport.width));
@@ -315,7 +401,7 @@ void main() {
       );
     });
 
-    testWidgets('封面尺寸 clamp：高度受限取可用高度（800x400）', (tester) async {
+    testWidgets('封面尺寸：高度受限吃满 Expanded 剩余高（800x400）', (tester) async {
       const viewport = Size(800, 400);
       await _withPlayer(
         tester,
@@ -324,22 +410,39 @@ void main() {
           final box = _artworkBox(tester, viewport);
           final size = tester.getSize(box);
           final column = tester.getRect(_leftColumn(tester, viewport));
+          final coverRect = tester.getRect(_leftCoverArtwork(tester, viewport));
+          final titleRect = tester.getRect(
+            find.text('LANDSCAPE SPLIT TARGET'),
+          );
+          // 高度受限：封面撑满 Expanded（顶边贴左栏内容区顶），标题紧随封面
+          expect(
+            coverRect.top,
+            closeTo(column.top + 12, 0.5),
+            reason: '高度受限时封面应吃满 Expanded（顶边贴内容区顶）',
+          );
+          expect(
+            titleRect.top,
+            closeTo(coverRect.bottom + 10, 0.5),
+            reason: '标题应紧随封面（间距 10）',
+          );
+          // 且确实由高度约束主导（未触 300 上限、未触宽度预算）
+          expect(size.width, closeTo(size.height, 0.5), reason: '正方形');
+          expect(size.width, lessThan(300.0), reason: '未触 300 上限');
+          expect(size.width, lessThan(column.width - 16),
+              reason: '未触宽度预算');
+          // 封面落在钳制区间内
+          expect(size.width, greaterThanOrEqualTo(120));
           final expected = _expectedArtworkSize(
-            column,
+            column: column,
+            fixedBlockHeight: _measuredFixedBlockHeight(tester),
             expanded: false,
           );
-          expect(size.width, closeTo(expected, 0.5));
-          expect(size.height, closeTo(expected, 0.5), reason: '封面为正方形');
-          // 高度受限区间：等于可用高度（colH - 2g - 72 标题预留），
-          // 且落在 [120, 300] 钳制区间内
-          expect(expected, closeTo(column.height - 104, 0.5));
-          expect(size.width, greaterThanOrEqualTo(120));
-          expect(size.width, lessThanOrEqualTo(300));
+          expect(size.width, closeTo(expected, 1.5));
         },
       );
     });
 
-    testWidgets('封面尺寸 clamp：宽度受限取可用宽度（600x900，未触 300 上限）', (
+    testWidgets('封面尺寸：宽度受限取可用宽度（600x900，未触 300 上限）', (
       tester,
     ) async {
       const viewport = Size(600, 900);
@@ -350,18 +453,16 @@ void main() {
           final box = _artworkBox(tester, viewport);
           final size = tester.getSize(box);
           final column = tester.getRect(_leftColumn(tester, viewport));
-          final expected = _expectedArtworkSize(column, expanded: false);
-          expect(size.width, closeTo(expected, 0.5));
-          expect(size.height, closeTo(expected, 0.5));
-          // 宽度受限区间：等于左栏可用宽度（colW-16）
-          expect(expected, closeTo(column.width - 16, 0.5));
+          // 宽度受限：封面边长 = 左栏可用宽（列宽 - 左 padding 16），高度充裕
+          expect(size.width, closeTo(column.width - 16, 0.5));
+          expect(size.height, closeTo(size.width, 0.5));
           expect(size.width, lessThan(300), reason: '未触 300 上限');
           expect(size.width, greaterThan(120), reason: '未触 120 下限');
         },
       );
     });
 
-    testWidgets('封面尺寸 clamp：触顶 300 上限（899x900）', (tester) async {
+    testWidgets('封面尺寸：触顶 300 上限（899x900）', (tester) async {
       const viewport = Size(899, 900);
       await _withPlayer(
         tester,
@@ -383,12 +484,16 @@ void main() {
         textScale: 1.3,
         body: (tester) async {
           expect(tester.takeException(), isNull);
+          // 批次37：传输行在左栏封面下方
           final transport = find.byType(MD3ETransportRow);
           expect(transport, findsOneWidget);
           final bounds = tester.getRect(transport);
           expect(bounds.left, greaterThanOrEqualTo(0));
           expect(bounds.right, lessThanOrEqualTo(viewport.width));
           expect(bounds.bottom, lessThanOrEqualTo(viewport.height));
+          final coverRect = tester.getRect(_leftCoverArtwork(tester, viewport));
+          expect(bounds.top, greaterThan(coverRect.bottom),
+              reason: '1.3 倍字下播控仍在封面下方');
           // 横屏传输键紧凑化（sideButtonSize/playButtonSize 56）保留
           expect(
             tester.getSize(find.byType(MD3ETransportRow)).height,
@@ -399,8 +504,8 @@ void main() {
     });
   });
 
-  group('批次36 横屏双栏分栏（expanded：宽≥900）', () {
-    testWidgets('封面尺寸 clamp：1000x500 高度先触顶（宽预算内缩 32 仍生效）', (
+  group('批次37 横屏分栏（expanded：宽≥900）', () {
+    testWidgets('封面尺寸：1000x500 高度受限吃满 Expanded（宽预算内缩 32 仍生效）', (
       tester,
     ) async {
       const viewport = Size(1000, 500);
@@ -411,26 +516,27 @@ void main() {
           final box = _artworkBox(tester, viewport);
           final size = tester.getSize(box);
           final column = tester.getRect(_leftColumn(tester, viewport));
-          final expected = _expectedArtworkSize(column, expanded: true);
-          expect(size.width, closeTo(expected, 0.5));
-          expect(size.height, closeTo(expected, 0.5));
-          // 批次36 修正：两条预算同时参与，500 高时 height 预算（colH-104）先触顶，
-          // width 预算（colW-48 = 左栏宽 - 内边距 16 - 内缩 32）并非本次约束。
-          final widthBudget = column.width - 48;
-          final heightBudget = column.height - 104;
-          expect(widthBudget, greaterThan(heightBudget), reason: '本视口由高度决定');
-          expect(size.width, closeTo(heightBudget, 0.5));
+          final coverRect = tester.getRect(_leftCoverArtwork(tester, viewport));
+          // 批次37：左栏 flex 5（宽 500），宽度预算 = 500-16-32 = 452，
+          // 钳制上限 380 后仍大于高度预算 → 本视口由高度决定
+          final widthBudget = 380.0; // (500-16-32)=452 再被 cap 380 钳制
           expect(size.width, lessThan(widthBudget), reason: '宽度预算未被触顶');
-          // 与 medium 的差异：宽度先内缩 32 再钳制，上限 380（宽度侧不越界）
-          expect(widthBudget, lessThanOrEqualTo(380));
-          // 仍为 4/6 分栏
+          // 高度受限：封面撑满 Expanded（顶边贴左栏内容区顶）
+          expect(coverRect.top, closeTo(column.top + 12, 0.5));
+          final titleTop = tester
+              .getRect(find.text('LANDSCAPE SPLIT TARGET'))
+              .top;
+          expect(titleTop, closeTo(coverRect.bottom + 10, 0.5));
+          expect(size.width, closeTo(size.height, 0.5), reason: '正方形');
+          expect(size.width, greaterThanOrEqualTo(120));
+          // 右栏 flex 5（批次37 原 4/6 的 60%）
           final tabRect = tester.getRect(find.byType(TabBarView));
-          expect(tabRect.width, closeTo(viewport.width * 0.6, 1));
+          expect(tabRect.width, closeTo(viewport.width * 0.5, 1));
         },
       );
     });
 
-    testWidgets('封面尺寸 clamp：宽受限取宽度预算（1000x900，内缩 32、未触 380）', (
+    testWidgets('封面尺寸：触顶 380 上限（1000x900，左栏 flex5 宽预算 452>380）', (
       tester,
     ) async {
       const viewport = Size(1000, 900);
@@ -440,19 +546,14 @@ void main() {
         body: (tester) async {
           final box = _artworkBox(tester, viewport);
           final size = tester.getSize(box);
-          final column = tester.getRect(_leftColumn(tester, viewport));
-          final expected = _expectedArtworkSize(column, expanded: true);
-          expect(size.width, closeTo(expected, 0.5));
-          expect(size.height, closeTo(expected, 0.5));
-          // 足够高：宽度预算（内缩 32）成为唯一约束
-          expect(expected, closeTo(column.width - 48, 0.5));
-          expect(size.width, lessThan(380), reason: '未触 380 上限');
-          expect(size.width, greaterThan(120));
+          // 批次37：左栏 flex 5 → 宽预算 500-48=452，被 cap 380 钳制触顶
+          expect(size.width, closeTo(380, 0.5));
+          expect(size.height, closeTo(380, 0.5));
         },
       );
     });
 
-    testWidgets('封面尺寸 clamp：触顶 380 上限（1400x900）', (tester) async {
+    testWidgets('封面尺寸：触顶 380 上限（1400x900）', (tester) async {
       const viewport = Size(1400, 900);
       await _withPlayer(
         tester,
@@ -467,7 +568,7 @@ void main() {
     });
   });
 
-  group('批次36 isWideLayout 与竖屏零影响', () {
+  group('批次37 isWideLayout 与竖屏零影响', () {
     testWidgets('横屏 isWideLayout=true：无封面 tab，歌词/评论进右栏 tab', (
       tester,
     ) async {
@@ -510,7 +611,7 @@ void main() {
           );
           expect(
             tester.getRect(cover).center.dx,
-            lessThan(viewport.width * 0.4),
+            lessThan(viewport.width * 0.5),
           );
 
           // 右栏 tab 顺序 = [播放列表, 歌词, 评论]：左滑到歌词 tab。
@@ -606,6 +707,123 @@ void main() {
           expect(bounds.bottom, lessThanOrEqualTo(viewport.height));
         },
       );
+    });
+  });
+
+  group('批次37 两条打开路径终态一致（普通 push vs dragOriginTop settle）', () {
+    /// 提取当前播放页关键布局几何（封面盒 rect / 进度条 rect / 传输行 rect）。
+    Map<String, Rect> _layoutSnapshot(WidgetTester tester, Size viewport) {
+      final coverRect = tester.getRect(_artworkBox(tester, viewport));
+      final seekRect = tester.getRect(find.byType(PlayerSeekBar));
+      final transportRect = tester.getRect(find.byType(MD3ETransportRow));
+      return {
+        'cover': coverRect,
+        'seek': seekRect,
+        'transport': transportRect,
+      };
+    }
+
+    testWidgets('800x400：点击打开与上滑展开（settle 后）封面/播控逐像素一致', (
+      tester,
+    ) async {
+      const viewport = Size(800, 400);
+      late Map<String, Rect> tapLayout;
+      await _withPlayer(
+        tester,
+        viewport: viewport,
+        viaRoute: true,
+        body: (tester) async {
+          expect(tester.takeException(), isNull);
+          tapLayout = _layoutSnapshot(tester, viewport);
+          // 点击路径 settle 后为裸 child（批次37 终态短路），布局必须就绪
+          expect(tapLayout['cover']!.width, greaterThan(120));
+        },
+      );
+      late Map<String, Rect> dragLayout;
+      await _withPlayer(
+        tester,
+        viewport: viewport,
+        viaRoute: true,
+        dragMode: true,
+        body: (tester) async {
+          expect(tester.takeException(), isNull);
+          dragLayout = _layoutSnapshot(tester, viewport);
+        },
+      );
+      // 逐像素相等：同一横屏视口下，两条路径（tap 模式 settle 后 vs
+      // dragOriginTop 模式 settleToFull 后）的封面边长与播控位置完全一致
+      expect(dragLayout['cover'], tapLayout['cover'],
+          reason: '两条打开路径的封面 rect 应逐像素一致');
+      expect(dragLayout['seek'], tapLayout['seek'],
+          reason: '两条打开路径的进度条 rect 应逐像素一致');
+      expect(dragLayout['transport'], tapLayout['transport'],
+          reason: '两条打开路径的传输行 rect 应逐像素一致');
+    });
+
+    testWidgets('dragOriginTop settle 后：播控/进度条在封面下方（几何断言）', (
+      tester,
+    ) async {
+      const viewport = Size(800, 400);
+      await _withPlayer(
+        tester,
+        viewport: viewport,
+        viaRoute: true,
+        dragMode: true,
+        body: (tester) async {
+          expect(tester.takeException(), isNull);
+          final coverRect = tester.getRect(_artworkBox(tester, viewport));
+          final seekRect = tester.getRect(find.byType(PlayerSeekBar));
+          final transportRect = tester.getRect(find.byType(MD3ETransportRow));
+          expect(
+            seekRect.top,
+            greaterThan(coverRect.bottom),
+            reason: '上滑展开 settle 后进度条应位于封面下方',
+          );
+          expect(
+            transportRect.top,
+            greaterThan(coverRect.bottom),
+            reason: '上滑展开 settle 后传输行应位于封面下方',
+          );
+          // 播控在左栏
+          expect(transportRect.center.dx, lessThan(viewport.width / 2));
+        },
+      );
+    });
+
+    testWidgets('竖屏 400x800 对照：两路径一致且仍走 compact 单列（drag 路径）', (
+      tester,
+    ) async {
+      const viewport = Size(400, 800);
+      late Rect tapTransport;
+      await _withPlayer(
+        tester,
+        viewport: viewport,
+        viaRoute: true,
+        body: (tester) async {
+          expect(tester.takeException(), isNull);
+          // tap 路径竖屏走 compact：TabBarView 全宽（无分栏）
+          final tabRect = tester.getRect(find.byType(TabBarView));
+          expect(tabRect.width, closeTo(viewport.width, 1));
+          tapTransport = tester.getRect(find.byType(MD3ETransportRow));
+        },
+      );
+      late Rect dragTransport;
+      await _withPlayer(
+        tester,
+        viewport: viewport,
+        viaRoute: true,
+        dragMode: true,
+        body: (tester) async {
+          expect(tester.takeException(), isNull);
+          final tabRect = tester.getRect(find.byType(TabBarView));
+          expect(tabRect.width, closeTo(viewport.width, 1),
+              reason: 'drag 路径竖屏同样走 compact 单列');
+          dragTransport = tester.getRect(find.byType(MD3ETransportRow));
+        },
+      );
+      // 竖屏两条路径播控行逐像素一致（compact 未受批次37 分栏改造影响）
+      expect(dragTransport, tapTransport,
+          reason: '竖屏两条打开路径的传输行 rect 应逐像素一致');
     });
   });
 }

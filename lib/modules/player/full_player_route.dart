@@ -405,6 +405,21 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
               );
           final origin = topBarDragTotal ?? dragOriginTop!;
           final pos = controller.isAnimating ? _easedPosition(raw) : raw;
+          // 批次37 终态短路：settle 完成后（pos ≥ 1）不再包 Transform/Opacity，
+          // 直接返回裸 child——与普通 push 路径的终态（同样裸 child，见下方
+          // tap 分支）**逐字节等价**。此前 pos=1 时仍包
+          // Transform.translate(Offset(0,0)) + Opacity(1.0)，理论上布局恒等，
+          // 但与 tap 路径的包装层不一致，是「上滑展开后封面与点击打开不一致」
+          // 排查中唯一无法静态排除的差异源；短路后两条路径展开完成的渲染树
+          // 完全相同，任何残留下间态约束/图层差异都被结构性排除。
+          if (pos >= 1.0) {
+            if (playerExpansion.value != 1.0) {
+              scheduleMicrotask(() {
+                playerExpansion.value = 1.0;
+              });
+            }
+            return child;
+          }
           final dy = origin * (1 - pos);
           final opacity =
               (pos * origin / playerExpandDistanceThreshold(height))
@@ -437,6 +452,16 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
         final progress = controller.isAnimating
             ? Curves.easeOutQuint.transform(raw).clamp(0.0, 1.0)
             : raw;
+        // 批次37 终态短路：与上方 drag 分支同款——入场动画完成后直接返回裸
+        // child，保证「点击打开」与「上滑展开」两条路径的终态渲染树逐字节等价。
+        if (progress >= 1.0) {
+          if (playerExpansion.value != 1.0) {
+            scheduleMicrotask(() {
+              playerExpansion.value = 1.0;
+            });
+          }
+          return child;
+        }
         // 同步到全局 playerExpansion，让 MiniPlayer 同步淡入淡出（含过冲）。
         // 改为微任务调度：避开 build 阶段直接写 ValueNotifier 触发监听者
         // setState() during build 断言。

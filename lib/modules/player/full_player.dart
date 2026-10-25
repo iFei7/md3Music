@@ -1455,8 +1455,10 @@ class _FullPlayerState extends State<FullPlayer>
 
   /// 手机横屏分栏布局（medium：600 ≤ 宽度 < 900，[ResponsiveLayout] 宽度断点）。
   ///
-  /// 方案 P1-P 落地（批次36）：左栏封面+标题（flex 4），右栏 Tab+控件（flex 6）。
-  /// 移植自默认分支 origin/rust-local-force `_buildLandscapeLayout`（提交 26a043f：
+  /// 批次37：左栏 = 封面+标题+播控（flex 5），右栏 = Tab+tabstrip（flex 5）。
+  /// 批次36 版本（左栏封面+标题 flex 4 / 右栏 Tab+控件 flex 6）按用户要求调整：
+  /// 播控按钮/进度条移到封面下方、整体高度收窄（顶栏 compact 40dp、封面吃满
+  /// 剩余高度）。移植自默认分支 origin/rust-local-force（提交 26a043f：
   /// 返回按钮移至最外层 Column、真正位于屏幕最左上角；刘海内嵌等距 padding）。
   /// 与默认分支的差异（lite 现状裁剪，详见 [_buildSplitLayout] 内注释）：
   /// - lite 无频谱圆盘封面（_isDiscCover）与车机 dockMode，封面恒左锚定；
@@ -1473,7 +1475,8 @@ class _FullPlayerState extends State<FullPlayer>
     playerProvider,
     currentSong,
     colorScheme,
-    // medium 封面边长：min(可用宽, 可用高-72) 后钳制 [120, 300]
+    // medium 封面边长：min(可用宽, Expanded 剩余高) 后钳制 [120, 300]（批次37：
+    // 高度预算由 Column 动态分配，不再手扣标题预留 72）
     artworkCap: 300.0,
     artworkMinSize: 120.0,
     widthInset: 0.0,
@@ -1496,13 +1499,18 @@ class _FullPlayerState extends State<FullPlayer>
     widthInset: 32.0,
   );
 
-  /// 分栏布局共用骨架（medium/expanded 共用，差异仅在封面尺寸参数）。
+  /// 分栏布局共用骨架（批次37：medium/expanded 共用，差异仅在封面尺寸参数）。
   ///
-  /// 结构（移植自默认分支提交 26a043f）：最外层 Column 的顶部栏占据整行——
-  /// 返回按钮真正位于屏幕最左上角；其下 Expanded(Row) 左右分栏：
-  /// 左栏 flex 4 = 封面 + 标题，右栏 flex 6 = TabBarView + 底部控件。
-  /// 横屏沉浸（landscape_immersive）下同样工作：SafeArea(bottom: false) 与
-  /// 竖屏 compact 同款，底部留白改由右栏控件内的 bottomPadding 消费。
+  /// 批次37 结构（用户要求：播控按钮/进度条移到封面下方、整体高度收窄）：
+  /// - 最外层 Column 的顶部栏占据整行（返回按钮真正位于屏幕最左上角），并
+  ///   以 compact 参数收窄到 40dp（竖屏顶栏 56dp 不变）；
+  /// - 其下 Expanded(Row) 左右分栏（flex 5/5）：左栏 = 封面（Expanded 自动
+  ///   吃满剩余高度，尽量大）+ 标题 + 进度条 + 三键传输行；右栏只剩
+  ///   TabBarView（歌词/评论/队列）+ 底部 tab 导航条。批次36 的 4/6 分栏把
+  ///   播控压在右栏底部，横屏矮视口下右栏内容区被播控挤压；播控移到左栏后
+  ///   右栏 tab 内容全高，左右各半视觉均衡。
+  /// - 横屏沉浸（landscape_immersive）下同样工作：SafeArea(bottom: false) 与
+  ///   竖屏 compact 同款，底部留白由右栏 tabstrip 的 bottomPadding 消费。
   Widget _buildSplitLayout(
     PlayerProvider playerProvider,
     dynamic currentSong,
@@ -1512,24 +1520,25 @@ class _FullPlayerState extends State<FullPlayer>
     required double widthInset,
   }) {
     // 横屏 edgeToEdge 模式：底部需要额外 padding 避免被导航栏遮挡
-    // （竖屏 compact 同款处理，留白 8 而非 16：底部控件更矮）
+    // （竖屏 compact 同款处理，留白 8 而非 16：底部 tabstrip 更矮）
     final bottomPadding = MediaQuery.of(context).viewPadding.bottom + 8;
 
     return SafeArea(
       bottom: false,
       child: Column(
         children: [
-          // 顶部栏放在最外层，占据整行：返回按钮真正在屏幕最左上角（提交 26a043f）
+          // 顶部栏放在最外层，占据整行：返回按钮真正在屏幕最左上角（提交 26a043f）。
+          // compact：横屏收窄（vertical 0 + 图标键密度 compact），竖屏不受影响。
           _ZenFade(
             animation: _zenAnimation,
-            child: _buildTopBar(playerProvider),
+            child: _buildTopBar(playerProvider, compact: true),
           ),
           Expanded(
             child: Row(
               children: [
-                // ── 左栏：封面 + 歌曲信息（flex 4） ──
+                // ── 左栏：封面 + 标题 + 播控（进度条 + 三键传输行），flex 5 ──
                 Expanded(
-                  flex: 4,
+                  flex: 5,
                   child: _buildSplitArtworkColumn(
                     playerProvider,
                     currentSong,
@@ -1539,9 +1548,9 @@ class _FullPlayerState extends State<FullPlayer>
                     widthInset: widthInset,
                   ),
                 ),
-                // ── 右栏：Tab 内容 + 底部控件（flex 6） ──
+                // ── 右栏：Tab 内容 + 底部 tab 导航条（flex 5） ──
                 Expanded(
-                  flex: 6,
+                  flex: 5,
                   child: _buildSplitTabColumn(
                     playerProvider,
                     currentSong,
@@ -1557,11 +1566,19 @@ class _FullPlayerState extends State<FullPlayer>
     );
   }
 
-  /// 分栏左栏：封面 + 标题视作一个整体，以统一间距 g 贴合左栏。
-  /// 方角封面左锚定（文字左缘 = 封面左缘，右侧余量归歌词面板）；纵向居中令上下留白相等。
-  /// 异形屏内嵌「算入」等距而非叠加（移植自默认分支，提交 26a043f）：
-  /// 内层左 padding = clamp(g - 刘海, 0, g)，叠加外层 SafeArea 已让出的刘海后
-  /// 物理左间距 = max(g, 刘海)，不再右推封面。
+  /// 分栏左栏（批次37）：封面 + 标题 + 播控块（进度条 + 三键传输行）自上而下。
+  ///
+  /// - 封面放 Expanded 内的 LayoutBuilder：Column 先量下方固定块（标题/播控），
+  ///   剩余高度全部给封面——「尽量大」无需手算预留，字体缩放（1.3 倍字）时
+  ///   固定块变高、封面自动让位，不会溢出；
+  /// - 封面边长 = min(可用宽 - widthInset, artworkCap, 剩余高)，medium 的
+  ///   120 下限在 min 之后生效（默认分支口径：极端矮视口下宁可溢出也不出现
+  ///   <120 的绿豆封面）；
+  /// - 方角封面左锚定；标题与播控占满左栏宽（封面高度受限小于栏宽时不再绑死
+  ///   封面盒宽，长歌名/进度条可用全栏宽度），文字左缘仍与封面左缘对齐；
+  /// - 异形屏内嵌「算入」等距而非叠加（移植自默认分支，提交 26a043f）：
+  ///   内层左 padding = clamp(g - 刘海, 0, g)，叠加外层 SafeArea 已让出的
+  ///   刘海后物理左间距 = max(g, 刘海)，不再右推封面。
   Widget _buildSplitArtworkColumn(
     PlayerProvider playerProvider,
     dynamic currentSong,
@@ -1575,102 +1592,141 @@ class _FullPlayerState extends State<FullPlayer>
         const g = 16.0;
         final cutoutLeft = MediaQuery.viewPaddingOf(context).left;
         return Padding(
-          padding: EdgeInsets.only(
-            left: (g - cutoutLeft).clamp(0.0, g),
-            top: g,
-            bottom: g,
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              // 正方形封面同时受可用宽/高约束（预留标题块高度 72），避免高度
-              // 不足时上下被裁切。medium：min(宽, 高-72).clamp(120, 300)；
-              // expanded：宽再内缩 32 后钳制 [0, 380]（无 120 下限）。
-              final size = (constraints.maxWidth - widthInset)
-                  .clamp(0.0, artworkCap)
-                  .clamp(
-                    0.0,
-                    (constraints.maxHeight - 72).clamp(
-                      0.0,
-                      double.infinity,
-                    ),
-                  );
-              // medium 的 120 下限在 min 之后生效（默认分支口径）：极端矮视口下
-              // 宁可溢出也不出现 <120 的绿豆封面。
-              final boxSize = artworkMinSize > 0
-                  ? size.clamp(artworkMinSize, artworkCap)
-                  : size;
-              return Align(
-                alignment: Alignment.centerLeft,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 封面：固定正方形容器（布局盒边长 = boxSize，测试直接断言）
-                    SizedBox(
-                      width: boxSize,
-                      height: boxSize,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        // 横屏封面仅注册竖向拖拽时，静止点击会被唯一的
-                        // VerticalDragGestureRecognizer 通过 arena sweep 认领，
-                        // 走进 _onTopBarDrag* 的微拖拽收起路径（曾表现为「点击封面闪回」）。
-                        // 加一个 no-op onTap，让静止点击被 TapGestureRecognizer 赢下
-                        // 手势竞技场（与竖屏封面一致）；拖动仍由竖向拖拽识别器接管。
-                        // （移植自默认分支，提交 26a043f）
-                        onTap: () {
-                          _consumeZenPressTap();
-                        },
-                        onVerticalDragStart: _onTopBarDragStart,
-                        onVerticalDragUpdate: _onTopBarDragUpdate,
-                        onVerticalDragEnd: _onTopBarDragEnd,
-                        onVerticalDragCancel: _onTopBarDragCancel,
-                        child: _wrapArtworkZenPress(
-                          // 局部 Selector（P1-2）：播放/暂停只重建缩放层，
-                          // 封面子树经 child 复用不重建（与竖屏封面 idiom 一致）
-                          child: Selector<PlayerProvider, bool>(
-                            selector: (_, player) => player.isPlaying,
-                            builder: (context, isPlaying, child) =>
-                                AnimatedScale(
-                                  scale: isPlaying ? 1.0 : 0.97,
-                                  duration: const Duration(milliseconds: 300),
-                                  curve: Curves.easeOutCubic,
-                                  child: child,
-                                ),
-                            child: _buildCrossfadeArtworkWrapper(
-                              currentSong,
-                              colorScheme,
-                              iconSize: 48,
-                              isPlaying: playerProvider.isPlaying,
+          padding: const EdgeInsets.only(
+            top: 12,
+            bottom: 12,
+          ).copyWith(left: (g - cutoutLeft).clamp(0.0, g)),
+          child: Column(
+            children: [
+              // 封面：Expanded 吃掉固定块之外的剩余高度（批次37「尽量大」）
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final size = (constraints.maxWidth - widthInset)
+                        .clamp(0.0, artworkCap)
+                        .clamp(
+                          0.0,
+                          constraints.maxHeight.clamp(
+                            0.0,
+                            double.infinity,
+                          ),
+                        );
+                    // medium 的 120 下限在 min 之后生效（默认分支口径）：极端
+                    // 矮视口下宁可溢出也不出现 <120 的绿豆封面。
+                    final boxSize = artworkMinSize > 0
+                        ? size.clamp(artworkMinSize, artworkCap)
+                        : size;
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      // 封面：固定正方形容器（布局盒边长 = boxSize，测试直接断言）
+                      child: SizedBox(
+                        width: boxSize,
+                        height: boxSize,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          // 横屏封面仅注册竖向拖拽时，静止点击会被唯一的
+                          // VerticalDragGestureRecognizer 通过 arena sweep 认领，
+                          // 走进 _onTopBarDrag* 的微拖拽收起路径（曾表现为「点击封面闪回」）。
+                          // 加一个 no-op onTap，让静止点击被 TapGestureRecognizer 赢下
+                          // 手势竞技场（与竖屏封面一致）；拖动仍由竖向拖拽识别器接管。
+                          // （移植自默认分支，提交 26a043f）
+                          onTap: () {
+                            _consumeZenPressTap();
+                          },
+                          onVerticalDragStart: _onTopBarDragStart,
+                          onVerticalDragUpdate: _onTopBarDragUpdate,
+                          onVerticalDragEnd: _onTopBarDragEnd,
+                          onVerticalDragCancel: _onTopBarDragCancel,
+                          child: _wrapArtworkZenPress(
+                            // 局部 Selector（P1-2）：播放/暂停只重建缩放层，
+                            // 封面子树经 child 复用不重建（与竖屏封面 idiom 一致）
+                            child: Selector<PlayerProvider, bool>(
+                              selector: (_, player) => player.isPlaying,
+                              builder: (context, isPlaying, child) =>
+                                  AnimatedScale(
+                                    scale: isPlaying ? 1.0 : 0.97,
+                                    duration: const Duration(milliseconds: 300),
+                                    curve: Curves.easeOutCubic,
+                                    child: child,
+                                  ),
+                              child: _buildCrossfadeArtworkWrapper(
+                                currentSong,
+                                colorScheme,
+                                iconSize: 48,
+                                isPlaying: playerProvider.isPlaying,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    // 歌名 / 艺人·专辑：固定在封面正下方，标题块宽度 = 封面布局盒
-                    // boxSize，左边缘与封面左缘对齐（移植自默认分支，提交 26a043f）。
-                    // dense：左栏宽度只有约 40%，标题降一号字避免频繁换行。
-                    SizedBox(
-                      width: boxSize,
-                      child: _buildTitleBlock(
-                        playerProvider,
-                        currentSong,
-                        colorScheme,
-                        alignment: CrossAxisAlignment.stretch,
-                        dense: true,
-                      ),
-                    ),
-                  ],
+                    );
+                  },
                 ),
-              );
-            },
+              ),
+              const SizedBox(height: 10),
+              // 歌名 / 艺人·专辑：封面正下方，左缘与封面左缘对齐（标题块占满
+              // 左栏宽）。dense：左栏只有约一半屏宽，标题降一号字避免频繁换行。
+              _buildTitleBlock(
+                playerProvider,
+                currentSong,
+                colorScheme,
+                alignment: CrossAxisAlignment.stretch,
+                dense: true,
+              ),
+              const SizedBox(height: 8),
+              // 播控块（批次37）：进度条 + 三键传输行，移到封面下方（原批次36
+              // 放右栏底部）
+              _buildSplitControls(playerProvider, colorScheme),
+            ],
           ),
         );
       },
     );
   }
 
-  /// 分栏右栏：TabBarView（播放列表 / 歌词 / 评论）+ 底部控件。
+  /// 分栏左栏播控块（批次37）：进度条 + 三键传输行，位于标题下方。
+  ///
+  /// 从批次36 右栏底部的 [_buildControls] 拆出（传输行走 isExpanded 紧凑口径）：
+  /// - 播放状态提示（PlaybackStatusFeedback）常驻块首（无提示时 0 高）；
+  /// - **不挂**竖屏的「歌词自动跟随时收起播控」逻辑（_lyricsControlsVisible）：
+  ///   横屏播控在左栏、歌词在右栏 tab，互不遮挡；若跟随态收起播控，腾出的
+  ///   高度全归封面 Expanded，封面会突然放大再缩小，产生明显布局跳动。
+  Widget _buildSplitControls(
+    PlayerProvider playerProvider,
+    ColorScheme colorScheme,
+  ) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const PlaybackStatusFeedback(),
+        // P0/P1-2 同 _buildControls：进度条监听 positionNotifier（高频 200ms）
+        // + provider（时长等低频），时长在 builder 内直读防滞留旧值。
+        ListenableBuilder(
+          listenable: Listenable.merge([
+            playerProvider.positionNotifier,
+            playerProvider,
+          ]),
+          builder: (context, _) => _buildProgressBar(
+            playerProvider,
+            playerProvider.position,
+            playerProvider.duration ?? Duration.zero,
+            colorScheme,
+          ),
+        ),
+        const SizedBox(height: 8),
+        _buildMainControls(
+          playerProvider,
+          colorScheme,
+          isExpanded: true,
+        ),
+      ],
+    );
+  }
+
+  /// 分栏右栏（批次37）：TabBarView（播放列表 / 歌词 / 评论）+ 底部 tab 导航条。
+  ///
+  /// 批次36 版本把播控（进度条/传输行/tabstrip）压在右栏底部；批次37 播控移到
+  /// 左栏封面下方后，右栏只剩 tab 内容（全高）+ 导航条。
   ///
   /// 宽屏（[_tabLayout].hasCover == false）无封面 tab：封面常驻左栏、歌名固定
   /// 其下，歌词/评论/播放列表均进右栏 tab（见 `player_tab_layout.dart` 的
@@ -1683,7 +1739,7 @@ class _FullPlayerState extends State<FullPlayer>
   }) {
     return Column(
       children: [
-        // 内容区（播放列表 / 歌词 / 评论）
+        // 内容区（播放列表 / 歌词 / 评论）：播控移走后吃满右栏剩余高度
         Expanded(
           child: TabBarView(
             controller: _tabController,
@@ -1766,27 +1822,27 @@ class _FullPlayerState extends State<FullPlayer>
             ],
           ),
         ),
-        // 控制区：底部 padding 包含导航栏高度
+        // 底部 tab 导航条：底部 padding 包含导航栏高度（批次37：播控已移到
+        // 左栏，右栏底部只留 tab 切换条）
         _ZenFade(
           animation: _zenAnimation,
           child: Padding(
             padding: EdgeInsets.only(bottom: _zenMode ? 8 : bottomPadding),
-            child: _buildControls(
-              playerProvider,
-              colorScheme,
-              isExpanded: true,
-            ),
+            child: _buildTabStrip(colorScheme),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildTopBar(PlayerProvider playerProvider) {
+  Widget _buildTopBar(PlayerProvider playerProvider, {bool compact = false}) {
     // 顶部栏：返回 + 音质 + 睡眠药丸 + 更多菜单。
     // 「歌曲信息 / 播放速度」等原先散落在顶栏与底部胶囊的入口统一收进更多菜单，
     // 顶栏尾部从 4 个元素回到 2 个。
-    // 整个顶栏支持向下拖拽原路返回（点击按钮仍由子元素处理，竞技场自动区分）
+    // 整个顶栏支持向下拖拽原路返回（点击按钮仍由子元素处理，竞技场自动区分）。
+    // compact（批次37）：横屏分栏模式下顶栏收窄——上下留白 4→0、两端图标键
+    // 视觉密度 compact（48→40），整栏 56→40，把省出的高度还给封面。
+    // 默认 false：竖屏 compact 调用处不传参，行为逐字节不变。
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onVerticalDragStart: _onTopBarDragStart,
@@ -1794,11 +1850,12 @@ class _FullPlayerState extends State<FullPlayer>
       onVerticalDragEnd: _onTopBarDragEnd,
       onVerticalDragCancel: _onTopBarDragCancel,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: EdgeInsets.symmetric(horizontal: 8, vertical: compact ? 0 : 4),
         child: Row(
           children: [
             IconButton(
               icon: const Icon(Icons.keyboard_arrow_down),
+              visualDensity: compact ? VisualDensity.compact : null,
               onPressed: _collapseByButton,
             ),
             const Spacer(),
@@ -1830,6 +1887,7 @@ class _FullPlayerState extends State<FullPlayer>
             ),
             IconButton(
               icon: const Icon(Icons.more_horiz),
+              visualDensity: compact ? VisualDensity.compact : null,
               onPressed: () => _showMoreMenu(context),
             ),
           ],

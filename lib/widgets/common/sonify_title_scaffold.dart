@@ -36,12 +36,12 @@ import '../../core/theme/app_theme.dart';
 /// 栏体背景改随「骨架滚动 **或** 外部信号」二者取或浮现，与
 /// [actionsVisible] 同一套外置信号机制。
 ///
-/// **横屏「收窄顶栏」（批次 36，取代批次 35 的「上滑隐藏」）**：
+/// **横屏「收窄顶栏」（批次 36 起，紧凑态参数批次 37 再降一档）**：
 /// 横屏设备高度小，为尽可能减少页面纵向遮挡，横屏 + 内容滚动（离开
 /// 顶部）时顶栏**不隐藏**，改为**收窄**：标题区从展开态收窄为紧凑态
-/// ——标题区高度 52dp（8+36+8）→ 38dp（6+26+6）、大标题字号
-/// 20sp → 14.5sp（行高 36 → 26dp），列表首项占位高度同步收缩
-/// （内容区随之增高 14dp）；右上头像（36dp）、actions 钮、渐变
+/// ——标题区高度 52dp（8+36+8）→ 32dp（5+22+5）、大标题字号
+/// 20sp → 13sp（行高 36 → 22dp），列表首项占位高度同步收缩
+/// （内容区随之增高 20dp）；右上头像（36dp）、actions 钮、渐变
 /// 模糊带（状态栏 + 54dp）**全部保留且保持原尺寸/原位置**（只收标题
 /// 区，交互锚点不缩）。回顶（offset ≤ 0）恢复展开态；两态间以
 /// [kSonifyTopBarCompactDuration]（180ms easeOut）插值（与
@@ -302,7 +302,7 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
   /// [_kTitleTopPad] + 20sp largeTitle 行高 36（随字体缩放）+ 底部
   /// 留白，首帧即精确可用（原实现首帧为 0、次帧才生效）。恒取展开态
   /// 口径——兜底只需保证 maxScrollExtent > 0，横屏紧凑态由占位 item
-  /// 自身动画收紧（38dp），兜底保留 52dp 余量不影响可滚性（外层
+  /// 自身动画收紧（32dp，批次 37），兜底保留 52dp 余量不影响可滚性（外层
   /// 橡皮筋上限略增 14dp，与既有「最大橡皮筋一个标题区高度」同族）。
   double _titleZone(MediaQueryData media) =>
       _kTitleTopPad +
@@ -327,8 +327,8 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
 /// [topBarCompact] 且宿主为横屏时，整栏**不滑出**——渐变模糊带
 /// （[_TopBar]）与右上头像 / actions 保持原尺寸原位置（交互锚点不缩），
 /// 仅固定悬浮大标题（[_PinnedLargeTitle]）在展开/紧凑两态间以 180ms
-/// easeOut 插值：标题区 52dp（8+36+8）→ 38dp（6+26+6）、字号 20sp →
-/// 14.5sp（行高 36 → 26dp）；信号回落即恢复展开态。竖屏（或未注入
+/// easeOut 插值：标题区 52dp（8+36+8）→ 32dp（5+22+5，批次 37）、
+/// 字号 20sp → 13sp（行高 36 → 22dp）；信号回落即恢复展开态。竖屏（或未注入
 /// 信号）时本参数被方向判定忽略，返回原 Stack 结构（[_buildStack]），
 /// 与批次 36 之前逐字节一致（回归锁
 /// test/widgets/sonify_title_scaffold_test.dart）。
@@ -429,8 +429,8 @@ class SonifyTitleOverlay extends StatelessWidget {
 ///
 /// **两态几何（批次 36）**：高度解析式计算，不再实测回填（原
 /// [_MeasureSize] 机制）——展开态 = 状态栏 + 8 + 36（20sp largeTitle
-/// 行高，随 textScaler 缩放）+ 底部留白；紧凑态 = 状态栏 + 6 + 26
-/// （14.5sp 行高）+ 6。竖屏（[compact] 为 null）恒展开态、不挂动画
+/// 行高，随 textScaler 缩放）+ 底部留白；紧凑态 = 状态栏 + 5 + 22
+/// （13sp 行高）+ 5（批次 37）。竖屏（[compact] 为 null）恒展开态、不挂动画
 /// 壳，与批次 36 前同构同尺寸；横屏（[compact] 非空）随收窄信号在
 /// 两态间 180ms easeOut 插值收缩——占位与悬浮标题同步收紧，滚动态
 /// 业务内容起点随之上移 14dp（内容区增高 = 用户要的「减少遮挡」）。
@@ -456,7 +456,7 @@ class _TitlePlaceholderItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 两态标题区高度（不含状态栏）：
-    // 展开 = 8 + 36 + bottomPadding（52 @ ts=1）；紧凑 = 6 + 26 + 6（38）。
+    // 展开 = 8 + 36 + bottomPadding（52 @ ts=1）；紧凑 = 5 + 22 + 5（32）。
     final expandedZone = _kTitleTopPad +
         textScaler.scale(_kTitleFontSize) *
             (_kTitleLineHeight / _kTitleFontSize) +
@@ -495,7 +495,8 @@ class _TitlePlaceholderItem extends StatelessWidget {
 ///
 /// **横屏收窄两态（批次 36）**：[compact] 非空（横屏收窄路径）时，
 /// 标题在展开/紧凑两态间以 [kSonifyTopBarCompactDuration]（180ms
-/// easeOut）插值：字号 20sp → 14.5sp、行高 36 → 26dp、顶距 8 → 6dp。
+/// easeOut）插值：字号 20sp → 13sp、行高 36 → 22dp、顶距 8 → 5dp
+/// （批次 37，批次 36 的 6/26/14.5 再降一档）。
 /// 竖屏（[compact] 为 null）走原静态路径，Positioned(top: sb+8) +
 /// 20sp 原样，不挂任何动画壳（回归锁逐字节不动）。
 ///
@@ -504,7 +505,7 @@ class _TitlePlaceholderItem extends StatelessWidget {
 /// `top: 状态栏 + 6dp` 为常量锚点，展开态差的 2dp 顶距由内部
 /// [Transform.translate] 补足（t=0 时 dy=2 → 视觉顶距恰为 8dp）。
 /// 字号缩放不产生溢出：文本 maxLines 1 + ellipsis 横向截断、行高由
-/// style height 精确给定（26dp < 36dp），无需 OverflowBox/ClipRect。
+/// style height 精确给定（22dp < 36dp），无需 OverflowBox/ClipRect。
 class _PinnedLargeTitle extends StatelessWidget {
   const _PinnedLargeTitle({
     required this.title,
@@ -563,7 +564,7 @@ class _PinnedLargeTitle extends StatelessWidget {
                 title,
                 style: SonifyTextStyles.largeTitle.copyWith(
                   fontSize: fontSize,
-                  // 行高随字号同拍插值（36 → 26dp）：height 为倍数，
+                  // 行高随字号同拍插值（36 → 22dp）：height 为倍数，
                   // 换算成当前字号下的行高 dp
                   height: (_kTitleLineHeight +
                           (_kCompactTitleLineHeight - _kTitleLineHeight) * t) /
@@ -816,19 +817,21 @@ const double _kTitleTopPad = 8;
 const double _kTitleFontSize = 20;
 const double _kTitleLineHeight = 36;
 
-/// 大标题紧凑态几何（批次 36 横屏收窄态）：
-/// - 顶距 8 → **6dp**、底距（titleBottomPadding）→ **6dp**；
-/// - 字号 20sp → **14.5sp**、行高 36 → **26dp**（height = 26/14.5
-///   ≈ 1.793，与 largeTitle 的 1.8 同族比例）；
-/// - 标题区 52 → **38dp**（6 + 26 + 6，落在任务约定的 36-40dp 区间）。
-/// 定值依据：紧凑态仍需与栏体（54dp）内 36dp 头像/42dp actions 圆钮
-/// 同带共存——26dp 行高 + 上下各 6dp 后标题区底缘 = 状态栏 + 32dp，
-/// 仍完全落在渐变模糊带（状态栏 + 54dp）内，标题不被裁切；同时较展开
-/// 态净省 14dp 纵向遮挡（52 − 38），满足横屏「减少遮挡」诉求。
-const double _kCompactTitleTopPad = 6;
-const double _kCompactTitleBottomPad = 6;
-const double _kCompactTitleFontSize = 14.5;
-const double _kCompactTitleLineHeight = 26;
+/// 大标题紧凑态几何（批次 37 横屏收窄态，批次 36 的 38dp 再降一档）：
+/// - 顶距 8 → **5dp**、底距（titleBottomPadding）→ **5dp**；
+/// - 字号 20sp → **13sp**、行高 36 → **22dp**（height = 22/13 ≈ 1.692，
+///   与 largeTitle 的 1.8 同族比例带内，视觉不挤）；
+/// - 标题区 52 → **32dp**（5 + 22 + 5）。
+/// 定值依据：13sp 与列表条目主行字号同档（紧凑态标题退化为「页签」
+/// 角色而非阅读主体）；行高 22dp + 上下各 5dp 后标题区底缘 = 状态栏 +
+/// 27dp，仍完全落在渐变模糊带（状态栏 + 54dp）内，标题不被裁切；
+/// 较展开态净省 20dp 纵向遮挡（52 − 32）、较批次 36 紧凑态再省 6dp
+/// ——横屏设备高度小，用户反馈 38dp 仍偏高，32dp 为「与栏体内容
+/// （54dp 带）仍留 22dp 呼吸、且 13sp 单行不触底」的下探极限。
+const double _kCompactTitleTopPad = 5;
+const double _kCompactTitleBottomPad = 5;
+const double _kCompactTitleFontSize = 13;
+const double _kCompactTitleLineHeight = 22;
 
 /// 横屏「收窄顶栏」动画时长（批次 36）：150-200ms 区间取 180ms、
 /// easeOut。与 [SonifyMotion.barFade]（120ms，透明度淡入）同族但更长
