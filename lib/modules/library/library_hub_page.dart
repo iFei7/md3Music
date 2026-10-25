@@ -588,62 +588,76 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
       barBackgroundVisible: _contentScrolled,
       itemBuilder: (context, index) {
         final media = MediaQuery.of(context);
-        // 固定高度 = 视口 − 状态栏 − 标题区（8+36+8，与占位 item 同口径）
-        final height = media.size.height - media.padding.top - 52;
+        // 批次 38「顶栏透明度对齐主页」：固定高 item 顶入标题区之下
+        // （Transform.translate 上提 52dp，高度相应 +52），内层列表经
+        // [M3EPullToRefreshIndicator.edgeOffset] 下压 52dp 保持内容起点
+        // 不变——静置时渲染结果与改前逐像素一致；差异在滚动：原结构
+        // 内层列表视口顶缘钉在标题区下缘（状态栏 + 52），滚动内容到顶
+        // 即被裁掉、**从不经过顶栏栏带之下**（栏带模糊的是静态背景，
+        // 观感像一条实色带，用户反馈「音乐库顶栏透明度低」）；顶入后
+        // 内层滚动内容与主页一样从栏带下方滚过，磨砂材质有内容可模糊，
+        // 观感与主页拉齐。下拉刷新指示器位置不变（edgeOffset 垫在
+        // 标题区下缘，与改前同点位出现）。
+        final height = media.size.height - media.padding.top;
         return ContentScrollSignal(
           signal: _contentScrolled,
-          child: SizedBox(
-            height: height,
-            child: M3EPullToRefreshIndicator(
-              onRefresh: _refresh,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.paddingOf(context).bottom,
+          child: Transform.translate(
+            offset: const Offset(0, -52),
+            child: SizedBox(
+              height: height,
+              child: M3EPullToRefreshIndicator(
+                edgeOffset: 52,
+                onRefresh: _refresh,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.paddingOf(context).bottom,
+                  ),
+                  children: [
+                    _buildEntryCards(songCount: library.songs.length),
+                    _Section(
+                      title: '最近播放',
+                      // 整个标题行可点（「显示全部」退化为视觉文案）
+                      onHeaderTap: () =>
+                          _push(context, const PlayHistoryPage()),
+                      onShowAll: () => _push(context, const PlayHistoryPage()),
+                      child: _history.isEmpty
+                          ? const _SectionEmptyText('暂无播放记录')
+                          : _RecentPlayList(
+                              // 只显示最近 3 条，全部历史进播放历史页
+                              songs: _history.take(3).toList(),
+                            ),
+                    ),
+                    _Section(
+                      title: '我创建的歌单',
+                      trailing: _buildManageButton(_kGroupCreated),
+                      managing: _managingGroup == _kGroupCreated,
+                      onManageDone: _exitManage,
+                      onManageCancel: _exitManage,
+                      onHideSelected: _hideSelected,
+                      selectedCount: _selectedKeys.length,
+                      child: _buildPlaylistSectionBody(
+                        _createdPlaylists,
+                        emptyText: '暂无创建的歌单',
+                        group: _kGroupCreated,
+                      ),
+                    ),
+                    _Section(
+                      title: '我收藏的歌单',
+                      trailing: _buildManageButton(_kGroupCollected),
+                      managing: _managingGroup == _kGroupCollected,
+                      onManageDone: _exitManage,
+                      onManageCancel: _exitManage,
+                      onHideSelected: _hideSelected,
+                      selectedCount: _selectedKeys.length,
+                      child: _buildPlaylistSectionBody(
+                        _collectedPlaylists,
+                        emptyText: '暂无收藏的歌单',
+                        group: _kGroupCollected,
+                      ),
+                    ),
+                  ],
                 ),
-                children: [
-                  _buildEntryCards(songCount: library.songs.length),
-                  _Section(
-                    title: '最近播放',
-                    // 整个标题行可点（「显示全部」退化为视觉文案）
-                    onHeaderTap: () => _push(context, const PlayHistoryPage()),
-                    onShowAll: () => _push(context, const PlayHistoryPage()),
-                    child: _history.isEmpty
-                        ? const _SectionEmptyText('暂无播放记录')
-                        : _RecentPlayList(
-                            // 只显示最近 3 条，全部历史进播放历史页
-                            songs: _history.take(3).toList(),
-                          ),
-                  ),
-                  _Section(
-                    title: '我创建的歌单',
-                    trailing: _buildManageButton(_kGroupCreated),
-                    managing: _managingGroup == _kGroupCreated,
-                    onManageDone: _exitManage,
-                    onManageCancel: _exitManage,
-                    onHideSelected: _hideSelected,
-                    selectedCount: _selectedKeys.length,
-                    child: _buildPlaylistSectionBody(
-                      _createdPlaylists,
-                      emptyText: '暂无创建的歌单',
-                      group: _kGroupCreated,
-                    ),
-                  ),
-                  _Section(
-                    title: '我收藏的歌单',
-                    trailing: _buildManageButton(_kGroupCollected),
-                    managing: _managingGroup == _kGroupCollected,
-                    onManageDone: _exitManage,
-                    onManageCancel: _exitManage,
-                    onHideSelected: _hideSelected,
-                    selectedCount: _selectedKeys.length,
-                    child: _buildPlaylistSectionBody(
-                      _collectedPlaylists,
-                      emptyText: '暂无收藏的歌单',
-                      group: _kGroupCollected,
-                    ),
-                  ),
-                ],
               ),
             ),
           ),

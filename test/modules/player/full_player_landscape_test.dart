@@ -233,7 +233,8 @@ class _RouteLauncher extends StatelessWidget {
 }
 
 /// 左栏封面图：播放页内 PlayerArtworkImage 可能有多份（右栏播放列表缩略图），
-/// 取中心 x 位于屏幕左半（批次37 分栏 flex 5/5，右栏从 50% 起）的那一份。
+/// 取中心 x 位于屏幕左半（批次38 分栏 flex 4/6，右栏从 40% 起；阈值放宽到
+/// 50% 仍能无歧义命中左栏那份）的那一份。
 Finder _leftCoverArtwork(WidgetTester tester, Size viewport) {
   final matches = tester
       .widgetList<PlayerArtworkImage>(find.byType(PlayerArtworkImage))
@@ -313,7 +314,7 @@ double _measuredFixedBlockHeight(WidgetTester tester) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('批次37 横屏分栏（medium：600≤宽<900）', () {
+  group('批次38 横屏分栏（medium：600≤宽<900）', () {
     testWidgets('800x400：左栏封面+标题+播控，右栏 Tab+tabstrip，播控在封面下方', (
       tester,
     ) async {
@@ -324,13 +325,13 @@ void main() {
         body: (tester) async {
           expect(tester.takeException(), isNull);
 
-          // ── 右栏（flex 5）：TabBarView 全高 + 底部 tab 导航条 ──
+          // ── 右栏（批次38 flex 6）：TabBarView 全高 + 底部 tab 导航条 ──
           final tabBarView = find.byType(TabBarView);
           expect(tabBarView, findsOneWidget);
           final tabRect = tester.getRect(tabBarView);
-          expect(tabRect.center.dx, greaterThan(viewport.width / 2));
-          // 批次37：播控移到左栏后右栏收窄为 flex 5（原 4/6 的 60%）
-          expect(tabRect.width, closeTo(viewport.width * 0.5, 1));
+          expect(tabRect.center.dx, greaterThan(viewport.width * 0.5));
+          // 批次38：分栏比例恢复 4/6，右栏占约 60% 屏宽
+          expect(tabRect.width, closeTo(viewport.width * 0.6, 1));
           expect(
             find.descendant(
               of: tabBarView,
@@ -343,10 +344,10 @@ void main() {
           expect(tabStrip, findsOneWidget);
           expect(
             tester.getRect(tabStrip).center.dx,
-            greaterThan(viewport.width / 2),
+            greaterThan(viewport.width * 0.5),
           );
 
-          // ── 左栏（flex 5）：封面 + 标题 + 播控（进度条 + 三键传输行） ──
+          // ── 左栏（批次38 flex 4）：封面 + 标题 + 播控（进度条 + 三键传输行） ──
           final cover = _leftCoverArtwork(tester, viewport);
           final coverRect = tester.getRect(cover);
           expect(coverRect.center.dx, lessThan(viewport.width * 0.5));
@@ -370,10 +371,22 @@ void main() {
           expect(transportRect.top, greaterThan(coverRect.bottom),
               reason: '传输行应位于封面下方');
           // 播控在左栏（批次36 时在右栏）
-          expect(transportRect.center.dx, lessThan(viewport.width / 2));
+          expect(transportRect.center.dx, lessThan(viewport.width * 0.4));
           // 纵向顺序：进度条 → 传输行（进度条在下、传输行最下）
           expect(transportRect.bottom, greaterThan(seekRect.bottom));
           expect(find.byType(PlaybackStatusFeedback), findsOneWidget);
+
+          // ── 批次38 核心：播控块高度压缩 ──
+          // 进度条 38→30、与传输行间距 8→4、传输键 56→48：
+          // 无状态提示时播控块高 30+4+48=82（旧 38+8+56=102）
+          expect(seekRect.height, closeTo(30, 0.5),
+              reason: '批次38 横屏进度条应压缩到 30');
+          expect(transportRect.height, closeTo(48, 0.5),
+              reason: '批次38 横屏传输键应压缩到 48');
+          expect(transportRect.top - seekRect.bottom, closeTo(4, 0.5),
+              reason: '批次38 进度条与传输行间距应收紧到 4');
+          expect(transportRect.bottom - seekRect.top, closeTo(82, 0.5),
+              reason: '播控块整体高 30+4+48=82（旧 102）');
 
           // ── 返回按钮在最外层 Column：屏幕最左上角，且在左栏封面之上 ──
           final backButton = find.ancestor(
@@ -494,17 +507,17 @@ void main() {
           final coverRect = tester.getRect(_leftCoverArtwork(tester, viewport));
           expect(bounds.top, greaterThan(coverRect.bottom),
               reason: '1.3 倍字下播控仍在封面下方');
-          // 横屏传输键紧凑化（sideButtonSize/playButtonSize 56）保留
+          // 横屏传输键紧凑化（批次38 播控压缩：sideButtonSize/playButtonSize 48）
           expect(
             tester.getSize(find.byType(MD3ETransportRow)).height,
-            lessThanOrEqualTo(56),
+            lessThanOrEqualTo(48),
           );
         },
       );
     });
   });
 
-  group('批次37 横屏分栏（expanded：宽≥900）', () {
+  group('批次38 横屏分栏（expanded：宽≥900）', () {
     testWidgets('封面尺寸：1000x500 高度受限吃满 Expanded（宽预算内缩 32 仍生效）', (
       tester,
     ) async {
@@ -517,36 +530,39 @@ void main() {
           final size = tester.getSize(box);
           final column = tester.getRect(_leftColumn(tester, viewport));
           final coverRect = tester.getRect(_leftCoverArtwork(tester, viewport));
-          // 批次37：左栏 flex 5（宽 500），宽度预算 = 500-16-32 = 452，
-          // 钳制上限 380 后仍大于高度预算 → 本视口由高度决定
-          final widthBudget = 380.0; // (500-16-32)=452 再被 cap 380 钳制
-          expect(size.width, lessThan(widthBudget), reason: '宽度预算未被触顶');
+          // 批次38：左栏 flex 4（宽 400），宽度预算 = 400-16-32 = 352，
+          // 未触 380 上限；本视口仍由高度预算决定
+          final widthBudget = 352.0; // (400-16-32)
+          expect(size.width, closeTo(size.height, 0.5), reason: '正方形');
+          expect(size.width, lessThanOrEqualTo(widthBudget),
+              reason: '宽度预算 = 352，未触 380 上限');
           // 高度受限：封面撑满 Expanded（顶边贴左栏内容区顶）
           expect(coverRect.top, closeTo(column.top + 12, 0.5));
           final titleTop = tester
               .getRect(find.text('LANDSCAPE SPLIT TARGET'))
               .top;
           expect(titleTop, closeTo(coverRect.bottom + 10, 0.5));
-          expect(size.width, closeTo(size.height, 0.5), reason: '正方形');
           expect(size.width, greaterThanOrEqualTo(120));
-          // 右栏 flex 5（批次37 原 4/6 的 60%）
+          // 右栏 flex 6（批次38 恢复 4/6：内容侧约 60% 屏宽）
           final tabRect = tester.getRect(find.byType(TabBarView));
-          expect(tabRect.width, closeTo(viewport.width * 0.5, 1));
+          expect(tabRect.width, closeTo(viewport.width * 0.6, 1));
         },
       );
     });
 
-    testWidgets('封面尺寸：触顶 380 上限（1000x900，左栏 flex5 宽预算 452>380）', (
+    testWidgets('封面尺寸：触顶 380 上限（1100x900，左栏 flex4 宽预算 392>380）', (
       tester,
     ) async {
-      const viewport = Size(1000, 900);
+      const viewport = Size(1100, 900);
       await _withPlayer(
         tester,
         viewport: viewport,
         body: (tester) async {
           final box = _artworkBox(tester, viewport);
           final size = tester.getSize(box);
-          // 批次37：左栏 flex 5 → 宽预算 500-48=452，被 cap 380 钳制触顶
+          // 批次38：左栏 flex 4（宽 440）→ 宽预算 440-16-32=392，
+          // 被 cap 380 钳制触顶（1000 宽时预算仅 352，不再触顶，故本用例
+          // 从 1000x900 改为 1100x900 以保留「380 上限生效」的覆盖）
           expect(size.width, closeTo(380, 0.5));
           expect(size.height, closeTo(380, 0.5));
         },

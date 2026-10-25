@@ -1,4 +1,3 @@
-import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
@@ -12,8 +11,6 @@ import '../../core/layout/adaptive_content_grid.dart';
 import '../../core/theme/app_dimens.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/squircle.dart';
-import '../../core/widgets/app_background.dart';
-import '../../providers/theme_provider.dart';
 import '../../providers/player_provider.dart';
 import '../../services/kugou_api/cloud_song_mapper.dart';
 import '../../services/kugou_api/kugou_api_client.dart';
@@ -240,23 +237,6 @@ class _SearchPageState extends State<SearchPage>
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final themeProvider = context.watch<ThemeProvider>();
-    final useBackgroundImage = themeProvider.useBackgroundImage;
-    // 预计算背景图 provider（与 SliverAppBar flexibleSpace 用同一 cacheWidth →
-    // ImageCache 同 key 共享解码），作为参数传入 _TabBarDelegate，
-    // 避免在 SliverPersistentHeaderDelegate.build 内 watch ThemeProvider
-    // 污染 NestedScrollView 的 sliver 链（导致 TabBarView 结果区被异常重建/覆盖）。
-    ImageProvider? tabBarBackgroundImage;
-    if (useBackgroundImage) {
-      final size = MediaQuery.sizeOf(context);
-      final cacheWidth = (size.width * MediaQuery.devicePixelRatioOf(context))
-          .round()
-          .clamp(540, 1440);
-      tabBarBackgroundImage = backgroundImageProvider(
-        themeProvider,
-        cacheWidth: cacheWidth,
-      );
-    }
 
     // 键盘 inset 单一来源（真机 bug 修复）：
     // - Tab 模式（Dock 导航宿主）：本页嵌在 ResponsiveScaffold 的 Scaffold body
@@ -272,6 +252,14 @@ class _SearchPageState extends State<SearchPage>
       // TabBarView 结果区）+ 共享顶栏 overlay 叠在页面级 Stack 中——
       // overlay 与 discover / library hub / fm 三页同组件
       // （SonifyTitleOverlay），标题/头像几何与模糊带构造级一致。
+      // 批次 38 树级图层统一：本页不再自绘任何壁纸/表面层（原
+      // flexibleSpace 壁纸栈与 _TabBarDelegate 的 surface/壁纸层移除）
+      // ——壁纸模式（scaffoldBackgroundColor 透明）下直接透出全局
+      // AppBackground，与主页/音乐库完全同构：栏带下只有「全局壁纸 +
+      // 滚动内容」一层组合，修掉此前顶栏区域壁纸三明治叠加（全局层 +
+      // flexibleSpace 层 + delegate 层）造成的「搜索页顶栏更实」；无壁纸
+      // 模式下透出 Scaffold 实色底，同样与三页一致。壁纸切片与全局层
+      // 同图同透明度同模糊（同 cacheWidth 解码），视觉逐像素等价。
       body: Stack(
         children: [
           NestedScrollView(
@@ -297,75 +285,14 @@ class _SearchPageState extends State<SearchPage>
                   // 组件同参数）。AppBar 自身若画不透明 surface，滚动后
                   // 模糊带只会模糊到这一层纯色，真机表现为「搜索页没有
                   // 模糊」，与三页不一致；恒透明后内容从带下滚过，模糊
-                  // 带模糊的才是真实内容（壁纸场景由下方 flexibleSpace
-                  // 的壁纸层铺底，无壁纸场景由页面主体背景兜底）。
+                  // 带模糊的才是真实内容。批次 38：flexibleSpace 不再铺
+                  // 壁纸层（统一透出全局 AppBackground，见 body 处注释）。
                   backgroundColor: Colors.transparent,
                   elevation: 0,
                   scrolledUnderElevation: 0,
               flexibleSpace: Stack(
-                fit: StackFit.expand,
                 clipBehavior: Clip.hardEdge,
                 children: [
-                  // 壁纸层（原 flexibleSpace 子树整体迁入 Stack 底层）：
-                  // 铺满整个 header（含工具栏区），与页面主体共用同一背景图
-                  // 解码结果（同 cacheWidth → ImageCache 同 key）
-                  if (useBackgroundImage)
-                    ClipRect(
-                      child: Builder(builder: (context) {
-                        // 与页面主体共用同一背景图解码结果（同 cacheWidth →
-                        // ImageCache 同 key），避免各自解码
-                        final size = MediaQuery.sizeOf(context);
-                        final cacheWidth = (size.width *
-                                    MediaQuery.devicePixelRatioOf(context))
-                                .round()
-                                .clamp(540, 1440);
-                        final tp = context.watch<ThemeProvider>();
-                        // 顶栏区域用全屏尺寸 + 全屏 cover 渲染背景图，再
-                        // topCenter 裁剪显示顶部：缩放比例与主体背景完全一致，
-                        // 否则窄区域内单独 cover 会放大错位
-                        return OverflowBox(
-                          alignment: Alignment.topCenter,
-                          minWidth: size.width,
-                          maxWidth: size.width,
-                          minHeight: size.height,
-                          maxHeight: size.height,
-                          child: SizedBox(
-                            width: size.width,
-                            height: size.height,
-                            // 与 AppBackground 同层结构：surface 打底 +
-                            // 模糊（backgroundBlur）+ 透明度（backgroundOpacity），
-                            // 顶栏背景跟随主体模糊/透明度改动
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                ColoredBox(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.surface,
-                                ),
-                                Opacity(
-                                  opacity: tp.backgroundOpacity,
-                                  child: ImageFiltered(
-                                    imageFilter: ui.ImageFilter.blur(
-                                      sigmaX: tp.backgroundBlur,
-                                      sigmaY: tp.backgroundBlur,
-                                    ),
-                                    child: Image(
-                                      image: backgroundImageProvider(
-                                        tp,
-                                        cacheWidth: cacheWidth,
-                                      ),
-                                      fit: BoxFit.cover,
-                                      gaplessPlayback: true,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      }),
-                    ),
                   // 搜索胶囊行（批次 9 玻璃胶囊从 title 槽迁至展开区）：
                   // 贴 header 底部 = 标题区（状态栏 + 8 + 36 + 8）正下方；
                   // 坍缩态（outer offset ≥ 52，胶囊行已滚完）整行退场，
@@ -381,7 +308,7 @@ class _SearchPageState extends State<SearchPage>
                       valueListenable: _collapsed,
                       builder: (context, collapsed, _) {
                         // 坍缩即退场：否则收缩后的 flexibleSpace 仍会把
-                        // 胶囊带到 pinned 带内（壁纸透明顶栏下与 overlay
+                        // 胶囊带到 pinned 带内（透明顶栏下与 overlay
                         // 带内的标题/头像视觉重叠）。局部重建，不波及 body。
                         if (collapsed) return const SizedBox.shrink();
                         return Padding(
@@ -401,43 +328,37 @@ class _SearchPageState extends State<SearchPage>
                 if (_hasSearched)
                   SliverPersistentHeader(
                     pinned: true,
-                    delegate: _TabBarDelegate(
-                      tabBar: TabBar(
-                        controller: _tabController,
-                        // sonify 规格（方案 §2.3）：文字 14sp Medium，
-                        // 选中 primary / 未选次级灰，指标条 3dp 圆头。
-                        labelColor: colorScheme.primary,
-                        unselectedLabelColor: SonifyColors.of(context).textSecondary,
-                        labelStyle: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        unselectedLabelStyle: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        indicatorSize: TabBarIndicatorSize.label,
-                        indicator: UnderlineTabIndicator(
-                          borderSide: BorderSide(
-                            width: 3,
-                            color: colorScheme.primary,
-                          ),
-                          borderRadius: BorderRadius.circular(1.5),
-                        ),
-                        tabs: const [
-                          Tab(text: '歌曲'),
-                          Tab(text: '专辑'),
-                          Tab(text: '歌手'),
-                          Tab(text: '歌单'),
-                          Tab(text: '云盘'),
-                          Tab(text: '歌词'),
-                        ],
+                    delegate: _TabBarDelegate(tabBar: TabBar(
+                      controller: _tabController,
+                      // sonify 规格（方案 §2.3）：文字 14sp Medium，
+                      // 选中 primary / 未选次级灰，指标条 3dp 圆头。
+                      labelColor: colorScheme.primary,
+                      unselectedLabelColor: SonifyColors.of(context).textSecondary,
+                      labelStyle: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
                       ),
-                      useBackgroundImage: useBackgroundImage,
-                      backgroundOpacity: themeProvider.backgroundOpacity,
-                      backgroundBlur: themeProvider.backgroundBlur,
-                      backgroundImage: tabBarBackgroundImage,
-                    ),
+                      unselectedLabelStyle: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      indicatorSize: TabBarIndicatorSize.label,
+                      indicator: UnderlineTabIndicator(
+                        borderSide: BorderSide(
+                          width: 3,
+                          color: colorScheme.primary,
+                        ),
+                        borderRadius: BorderRadius.circular(1.5),
+                      ),
+                      tabs: const [
+                        Tab(text: '歌曲'),
+                        Tab(text: '专辑'),
+                        Tab(text: '歌手'),
+                        Tab(text: '歌单'),
+                        Tab(text: '云盘'),
+                        Tab(text: '歌词'),
+                      ],
+                    )),
                   ),
               ];
             },
@@ -1639,24 +1560,22 @@ class _SearchAlbumCard extends StatelessWidget {
   }
 }
 
+/// 搜索结果 TabBar 的 pinned 委托（批次 38 简化）。
+///
+/// 批次 38 树级图层统一：原实现在无壁纸时铺不透明 `Container(color:
+/// surface)`、有壁纸时自绘「surface 打底 + 壁纸」全屏切片栈——两者都在
+/// 栏带底缘/下方多出页面级不透明层，是「搜索页顶栏更实」的结构差异源
+/// 之一（对比主页：栏带下只有全局背景 + 滚动内容）。现直接返回 TabBar：
+/// - 无壁纸：背后是 Scaffold 实色底（与原 surface 同色，逐像素等价）；
+/// - 有壁纸：scaffoldBackgroundColor 已被主题覆盖为透明，背后是全局
+///   AppBackground 的同图同切片（同 cacheWidth 解码），与原壁纸栈逐
+///   像素等价，且层级数与主页一致。
+/// TabBar 的 Material 祖先由 Scaffold body 提供（原 Container 亦不提供
+/// Material，行为不变）。
 class _TabBarDelegate extends SliverPersistentHeaderDelegate {
   final TabBar tabBar;
-  /// 是否启用壁纸背景（与顶部 SliverAppBar 的 flexibleSpace 联动）。
-  final bool useBackgroundImage;
-  final double backgroundOpacity;
-  final double backgroundBlur;
-  /// 预计算的背景图 [ImageProvider]（由 SearchPage.build 传入，
-  /// 与 SliverAppBar flexibleSpace 共享 ImageCache 同 key 解码结果）。
-  /// 不在 delegate.build 内 watch ThemeProvider，避免污染 sliver 链。
-  final ImageProvider? backgroundImage;
 
-  _TabBarDelegate({
-    required this.tabBar,
-    required this.useBackgroundImage,
-    required this.backgroundOpacity,
-    required this.backgroundBlur,
-    required this.backgroundImage,
-  });
+  _TabBarDelegate({required this.tabBar});
 
   @override
   double get minExtent => tabBar.preferredSize.height;
@@ -1666,11 +1585,7 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   bool shouldRebuild(covariant _TabBarDelegate oldDelegate) {
-    return tabBar != oldDelegate.tabBar ||
-        useBackgroundImage != oldDelegate.useBackgroundImage ||
-        backgroundOpacity != oldDelegate.backgroundOpacity ||
-        backgroundBlur != oldDelegate.backgroundBlur ||
-        backgroundImage != oldDelegate.backgroundImage;
+    return tabBar != oldDelegate.tabBar;
   }
 
   @override
@@ -1679,54 +1594,6 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    final colorScheme = Theme.of(context).colorScheme;
-    if (!useBackgroundImage || backgroundImage == null) {
-      return Container(color: colorScheme.surface, child: tabBar);
-    }
-    // 有壁纸：与顶部 SliverAppBar flexibleSpace 同结构（surface 打底 +
-    // 模糊 + 透明度 + 全屏 cover 背景图 topCenter 裁剪），tab 栏与
-    // 搜索框背景视觉连续。ClipRect 把 OverflowBox 溢出内容裁到本 sliver
-    // 区域，避免盖住下方 TabBarView 结果区。
-    final size = MediaQuery.sizeOf(context);
-    return ClipRect(
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: OverflowBox(
-              alignment: Alignment.topCenter,
-              minWidth: size.width,
-              maxWidth: size.width,
-              minHeight: size.height,
-              maxHeight: size.height,
-              child: SizedBox(
-                width: size.width,
-                height: size.height,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ColoredBox(color: colorScheme.surface),
-                    Opacity(
-                      opacity: backgroundOpacity,
-                      child: ImageFiltered(
-                        imageFilter: ui.ImageFilter.blur(
-                          sigmaX: backgroundBlur,
-                          sigmaY: backgroundBlur,
-                        ),
-                        child: Image(
-                          image: backgroundImage!,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          tabBar,
-        ],
-      ),
-    );
+    return tabBar;
   }
 }

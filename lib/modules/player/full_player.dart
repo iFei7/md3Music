@@ -1455,11 +1455,15 @@ class _FullPlayerState extends State<FullPlayer>
 
   /// 手机横屏分栏布局（medium：600 ≤ 宽度 < 900，[ResponsiveLayout] 宽度断点）。
   ///
-  /// 批次37：左栏 = 封面+标题+播控（flex 5），右栏 = Tab+tabstrip（flex 5）。
-  /// 批次36 版本（左栏封面+标题 flex 4 / 右栏 Tab+控件 flex 6）按用户要求调整：
-  /// 播控按钮/进度条移到封面下方、整体高度收窄（顶栏 compact 40dp、封面吃满
-  /// 剩余高度）。移植自默认分支 origin/rust-local-force（提交 26a043f：
-  /// 返回按钮移至最外层 Column、真正位于屏幕最左上角；刘海内嵌等距 padding）。
+  /// 批次38：左栏 = 封面+标题+播控（flex 4），右栏 = Tab+tabstrip（flex 6），
+  /// 分栏比例回到批次36 的 4/6（用户要求：封面侧让位、内容侧更宽）；播控块
+  /// 保留在封面下方但整体压缩（进度条 38→30、间距 8→4、传输键 56→48，
+  /// 详见 [_buildSplitControls]）。
+  /// 批次36 版本（左栏封面+标题 flex 4 / 右栏 Tab+控件 flex 6）→ 批次37 把
+  /// 播控按钮/进度条移到封面下方并改为 5/5：播控在封面下方、整体高度收窄
+  /// （顶栏 compact 40dp、封面吃满剩余高度）。移植自默认分支
+  /// origin/rust-local-force（提交 26a043f：返回按钮移至最外层 Column、
+  /// 真正位于屏幕最左上角；刘海内嵌等距 padding）。
   /// 与默认分支的差异（lite 现状裁剪，详见 [_buildSplitLayout] 内注释）：
   /// - lite 无频谱圆盘封面（_isDiscCover）与车机 dockMode，封面恒左锚定；
   /// - lite 无写真背景功能（ThemeProvider 无 useArtistPhotoBackground），故默认
@@ -1501,14 +1505,14 @@ class _FullPlayerState extends State<FullPlayer>
 
   /// 分栏布局共用骨架（批次37：medium/expanded 共用，差异仅在封面尺寸参数）。
   ///
-  /// 批次37 结构（用户要求：播控按钮/进度条移到封面下方、整体高度收窄）：
+  /// 批次38 结构（用户要求：分栏比例恢复 4/6，播控块高度压缩）：
   /// - 最外层 Column 的顶部栏占据整行（返回按钮真正位于屏幕最左上角），并
   ///   以 compact 参数收窄到 40dp（竖屏顶栏 56dp 不变）；
-  /// - 其下 Expanded(Row) 左右分栏（flex 5/5）：左栏 = 封面（Expanded 自动
-  ///   吃满剩余高度，尽量大）+ 标题 + 进度条 + 三键传输行；右栏只剩
-  ///   TabBarView（歌词/评论/队列）+ 底部 tab 导航条。批次36 的 4/6 分栏把
-  ///   播控压在右栏底部，横屏矮视口下右栏内容区被播控挤压；播控移到左栏后
-  ///   右栏 tab 内容全高，左右各半视觉均衡。
+  /// - 其下 Expanded(Row) 左右分栏（批次38 flex 4/6）：左栏 = 封面（Expanded
+  ///   自动吃满剩余高度，尽量大）+ 标题 + 进度条 + 三键传输行；右栏 =
+  ///   TabBarView（歌词/评论/队列）+ 底部 tab 导航条。批次37 曾改 5/5（播控
+  ///   移到左栏后左右各半视觉均衡），批次38 按用户要求回到批次36 的 4/6：
+  ///   封面侧让位、内容侧更宽（tab 内容区约占 60% 屏宽）。
   /// - 横屏沉浸（landscape_immersive）下同样工作：SafeArea(bottom: false) 与
   ///   竖屏 compact 同款，底部留白由右栏 tabstrip 的 bottomPadding 消费。
   Widget _buildSplitLayout(
@@ -1536,9 +1540,9 @@ class _FullPlayerState extends State<FullPlayer>
           Expanded(
             child: Row(
               children: [
-                // ── 左栏：封面 + 标题 + 播控（进度条 + 三键传输行），flex 5 ──
+                // ── 左栏：封面 + 标题 + 播控（进度条 + 三键传输行），flex 4 ──
                 Expanded(
-                  flex: 5,
+                  flex: 4,
                   child: _buildSplitArtworkColumn(
                     playerProvider,
                     currentSong,
@@ -1548,9 +1552,10 @@ class _FullPlayerState extends State<FullPlayer>
                     widthInset: widthInset,
                   ),
                 ),
-                // ── 右栏：Tab 内容 + 底部 tab 导航条（flex 5） ──
+                // ── 右栏：Tab 内容 + 底部 tab 导航条（批次38 flex 6：内容侧
+                //    更宽，占约 60% 屏宽） ──
                 Expanded(
-                  flex: 5,
+                  flex: 6,
                   child: _buildSplitTabColumn(
                     playerProvider,
                     currentSong,
@@ -1684,13 +1689,19 @@ class _FullPlayerState extends State<FullPlayer>
     );
   }
 
-  /// 分栏左栏播控块（批次37）：进度条 + 三键传输行，位于标题下方。
+  /// 分栏左栏播控块（批次37 引入，批次38 压缩高度）：进度条 + 三键传输行，
+  /// 位于标题下方。
   ///
   /// 从批次36 右栏底部的 [_buildControls] 拆出（传输行走 isExpanded 紧凑口径）：
   /// - 播放状态提示（PlaybackStatusFeedback）常驻块首（无提示时 0 高）；
   /// - **不挂**竖屏的「歌词自动跟随时收起播控」逻辑（_lyricsControlsVisible）：
   ///   横屏播控在左栏、歌词在右栏 tab，互不遮挡；若跟随态收起播控，腾出的
   ///   高度全归封面 Expanded，封面会突然放大再缩小，产生明显布局跳动。
+  /// - 批次38 高度压缩（用户要求「缩小播放控制栏高度」，播控仍在封面下方）：
+  ///   进度条 38→30（默认高含 14px 时间行，轨道区 16px 仍容得下常态 9 /
+  ///   拖动态 12 的轨道膨胀）、进度条与传输行间距 8→4、传输键 56→48
+  ///   （键间距 16→12 等比收紧）。无状态提示时块高 102→82（−20dp，约省
+  ///   1/5），腾出的高度经封面 Expanded 自动还给封面。
   Widget _buildSplitControls(
     PlayerProvider playerProvider,
     ColorScheme colorScheme,
@@ -1711,13 +1722,17 @@ class _FullPlayerState extends State<FullPlayer>
             playerProvider.position,
             playerProvider.duration ?? Duration.zero,
             colorScheme,
+            // 批次38：横屏播控压缩（默认 38 仅供竖屏 _buildControls 沿用）
+            height: 30,
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 4),
         _buildMainControls(
           playerProvider,
           colorScheme,
           isExpanded: true,
+          // 批次38：横屏播控压缩（56→48，竖屏路径不传参、仍走横竖屏口径）
+          transportSize: 48,
         ),
       ],
     );
@@ -2394,17 +2409,22 @@ class _FullPlayerState extends State<FullPlayer>
 
   /// 进度条 —— 常态一条细直线轨道（播放中才上色），按下时膨胀并浮出时间数字
   /// （详见 [PlayerSeekBar]）。
+  ///
+  /// [height]（批次38）：横屏分栏播控压缩传 30（含 14px 时间行）；默认 38，
+  /// 竖屏 _buildControls 路径不传参、行为不变。
   Widget _buildProgressBar(
     PlayerProvider playerProvider,
     Duration position,
     Duration duration,
-    ColorScheme colorScheme,
-  ) {
+    ColorScheme colorScheme, {
+    double height = 38,
+  }) {
     final song = playerProvider.currentSong;
     return PlayerSeekBar(
       position: position,
       duration: duration,
       isPlaying: playerProvider.isPlaying,
+      height: height,
       // MD3 皮肤：9px 轨道 + 末端 stop indicator
       md3Style: true,
       speed: playerProvider.speed,
@@ -2434,10 +2454,15 @@ class _FullPlayerState extends State<FullPlayer>
   /// 播放模式与收藏键已上移到标题行右端（见 [_buildArtworkView]），
   /// 传输行只承载三键：两侧不再有 Expanded 边缘键竞争宽度，容器得以放大。
   /// 倍速与投屏都在右上角的更多菜单里。
+  ///
+  /// [transportSize]（批次38）：横屏分栏播控压缩显式传 48（三键统一边长，
+  /// 键间距随之收紧到 12）；默认 null 走原有横竖屏口径（横屏 56 / 竖屏 64），
+  /// 竖屏路径不传参、行为逐字节不变。
   Widget _buildMainControls(
     PlayerProvider playerProvider,
     ColorScheme colorScheme, {
     bool isExpanded = false,
+    double? transportSize,
   }) {
     // 横屏矮视口判定（与 _buildControls / _buildArtworkView 同口径）
     final isLandscape =
@@ -2454,14 +2479,17 @@ class _FullPlayerState extends State<FullPlayer>
         // 横屏矮视口（如 800×360）高度紧张：三键收到 56/56/16，
         // 与 _buildControls 的横屏紧凑间距配合给内容区让高度
         // （图标随容器等比缩放，裸图标方案视觉依旧协调）。
+        // 批次38：分栏左栏播控再压一档——transportSize 48/48/12。
         // isPlaying 经局部 Selector（P1-2）供给：播放/暂停只重建三键行。
         Selector<PlayerProvider, bool>(
           selector: (_, player) => player.isPlaying,
           builder: (context, isPlaying, _) => MD3ETransportRow(
             isPlaying: isPlaying,
-            sideButtonSize: isLandscape ? 56.0 : 64.0,
-            playButtonSize: isLandscape ? 56.0 : 64.0,
-            spacing: isLandscape ? 16.0 : 20.0,
+            sideButtonSize: transportSize ?? (isLandscape ? 56.0 : 64.0),
+            playButtonSize: transportSize ?? (isLandscape ? 56.0 : 64.0),
+            spacing: transportSize != null
+                ? 12.0
+                : (isLandscape ? 16.0 : 20.0),
             onPrevious: () {
               AppHaptics.click();
               playerProvider.previous();

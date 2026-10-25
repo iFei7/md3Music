@@ -1,6 +1,18 @@
 /// 批次 37：五页顶栏栏带材质一致性取证测试（横屏滚动视口）。
 ///
 /// 背景（用户原话）：「音乐库和搜索到顶栏透明度是不是和其他页面不一致？」
+/// 批次 38 追加（用户坚持「音乐库、搜索页顶栏透明度依旧很低」）：新增
+/// **树级图层结构对比**——上轮只对比了 blur/tint 数值（五页全等），差异
+/// 实际在栏带之外的图层：搜索页 flexibleSpace 与 _TabBarDelegate 各自
+/// 自绘「surface 打底 + 壁纸」全屏切片栈（壁纸模式顶栏区域壁纸三明治
+/// 叠加）、无壁纸时 delegate 铺不透明 `Container(color: surface)`。本
+/// 文件新增「批次 38 树级图层清点」组：栏带区域（y 0..状态栏+54）内
+/// **alpha==1 的 [ColoredBox] 与 [ImageFiltered] 计数必须为 0**（壁纸
+/// 关/开各取证一轮）——Container(color:) 内部即 ColoredBox，壁纸栈的
+/// 唯一特征组件是 ImageFiltered，两计数归零即锁死「除共享栏带外无
+/// 页面级不透明/壁纸图层」的结构性质；头像底色是 DecoratedBox、栏带
+/// tint 是渐变 DecoratedBox、玻璃叠色 α0.12、Scaffold 底色是 Material，
+/// 均不落入计数（与主页天然一致，断言不误伤）。
 ///
 /// 取证对象：五个代表页（discover / library hub / search / favorites /
 /// settings）在**同一横屏滚动视口**（逻辑 800×480，手机横屏口径——
@@ -164,10 +176,12 @@ void main() {
   /// 宿主装配 + 多帧推进 + 滚动到滚动态（首个 Scrollable jumpTo 60，
   /// 单固定高 item 页钳制到外层橡皮筋上限 52，同样 > 0 触发栏带/收窄）
   /// + 动画收敛（收窄 180ms / 淡入 120ms）。
+  /// [wallpaper] 控制背景图开关（批次 38 图层清点两态取证）。
   Future<void> pumpScrolled(
     WidgetTester tester,
     Widget page, {
     EdgeInsets padding = EdgeInsets.zero,
+    bool wallpaper = false,
   }) async {
     final size = tester.view.physicalSize / tester.view.devicePixelRatio;
     await tester.pumpWidget(
@@ -180,7 +194,8 @@ void main() {
         child: MultiProvider(
           providers: [
             ChangeNotifierProvider<ThemeProvider>(
-              create: (_) => ThemeProvider(initialUseBackgroundImage: false),
+              create: (_) =>
+                  ThemeProvider(initialUseBackgroundImage: wallpaper),
             ),
             ChangeNotifierProvider<KugouProvider>(
               create: (_) => KugouProvider(registerDeviceOnStart: false),
@@ -388,5 +403,104 @@ void main() {
       ],
     );
     expect(reference.tintStops, [0.0, sb / (sb + 54), 1.0]);
+  });
+
+  /// 批次 38 树级图层清点：栏带区域（y 0..状态栏+54）内与三页结构对齐
+  /// 相关的两类图层计数。
+  ///
+  /// 口径：
+  /// - **通栏宽度（x 铺满 800）且 alpha==1 的 [ColoredBox]**：
+  ///   `Container(color:)` 内部即 ColoredBox——搜索页原
+  ///   `_TabBarDelegate` 的不透明 surface 层与原 flexibleSpace 壁纸栈的
+  ///   surface 打底层都是通栏层，落在此计数；「通栏」过滤把滚到带下的
+  ///   **内容**卡排除在外（内容卡带 20dp 页边距，宽度 760——内容滚过
+  ///   带下是期望行为，不是结构差异）；玻璃叠色（α0.12）、tint
+  ///   （DecoratedBox 渐变）、Scaffold 底色（Material）、头像底色
+  ///   （DecoratedBox）均不计；
+  /// - **[ImageFiltered]**：壁纸三明治栈（surface 打底 + Opacity +
+  ///   ImageFiltered(模糊壁纸)）的唯一特征组件——AppBackground 主体与
+  ///   原搜索页两处自绘壁纸栈都含它；本测试宿主无全局背景层
+  ///   （AppBackground 由 app.dart 的 navigator 底层注入），故三页清点
+  ///   值都应为 0：任何页面在栏带区域自绘壁纸栈都会立即使其计数脱离
+  ///   0（= 与主页结构分叉）。
+  ///
+  /// 断言性质：三页（discover / library hub / search）在壁纸关/开两态
+  /// 下两计数**必须全部为 0**——修复前 search 壁纸关 = 1（delegate
+  /// surface 层）、壁纸开 = 2（flexibleSpace + delegate 两道壁纸栈），
+  /// 修复后归零，与 discover / hub 同构。
+  Future<void> assertBandLayersZero(
+    WidgetTester tester,
+    String pageKey, {
+    required bool wallpaper,
+  }) async {
+    const band = Rect.fromLTWH(0, 0, 800, 54); // sb=0：状态栏 + 54dp 栏体
+    var opaqueColoredBoxes = 0;
+    for (final w in tester.widgetList<ColoredBox>(find.byType(ColoredBox))) {
+      final Rect rect;
+      try {
+        rect = tester.getRect(find.byWidget(w));
+      } catch (_) {
+        continue; // 未挂树/离屏（懒构建），不入带
+      }
+      // 通栏 = 左右铺满带宽：页面级 chrome 层特征（内容卡有页边距）
+      final fullBleed = rect.left <= 0 && rect.right >= band.right;
+      if (rect.overlaps(band) && fullBleed && w.color.a >= 1.0) {
+        opaqueColoredBoxes++;
+      }
+    }
+    var imageFiltered = 0;
+    for (final w
+        in tester.widgetList<ImageFiltered>(find.byType(ImageFiltered))) {
+      final Rect rect;
+      try {
+        rect = tester.getRect(find.byWidget(w));
+      } catch (_) {
+        continue;
+      }
+      if (rect.overlaps(band)) imageFiltered++;
+    }
+    expect(
+      opaqueColoredBoxes,
+      0,
+      reason: '$pageKey（壁纸${wallpaper ? '开' : '关'}）栏带区域内不应有 '
+          '通栏 alpha==1 的 ColoredBox 页面级不透明层（批次 38 图层清点）',
+    );
+    expect(
+      imageFiltered,
+      0,
+      reason: '$pageKey（壁纸${wallpaper ? '开' : '关'}）栏带区域内不应有 '
+          '自绘壁纸栈（ImageFiltered 特征层，批次 38 统一壁纸层）',
+    );
+  }
+
+  testWidgets('批次38 图层清点（壁纸关）：三页栏带区域零额外不透明层', (tester) async {
+    useLandscapeViewport(tester);
+    await pumpScrolled(tester, const DiscoverPage());
+    await assertBandLayersZero(tester, 'discover', wallpaper: false);
+  });
+
+  testWidgets('批次38 图层清点（壁纸关）：library hub 零额外不透明层', (tester) async {
+    useLandscapeViewport(tester);
+    await pumpScrolled(tester, const LibraryHubPage());
+    await assertBandLayersZero(tester, 'library', wallpaper: false);
+  });
+
+  testWidgets('批次38 图层清点（壁纸关）：search 零额外不透明层', (tester) async {
+    useLandscapeViewport(tester);
+    await pumpScrolled(tester, const SearchPage());
+    await assertBandLayersZero(tester, 'search', wallpaper: false);
+  });
+
+  testWidgets('批次38 图层清点（壁纸开）：三页栏带区域零自绘壁纸栈/不透明层', (tester) async {
+    useLandscapeViewport(tester);
+    final pages = <String, Widget>{
+      'discover': const DiscoverPage(),
+      'library': const LibraryHubPage(),
+      'search': const SearchPage(),
+    };
+    for (final entry in pages.entries) {
+      await pumpScrolled(tester, entry.value, wallpaper: true);
+      await assertBandLayersZero(tester, entry.key, wallpaper: true);
+    }
   });
 }
