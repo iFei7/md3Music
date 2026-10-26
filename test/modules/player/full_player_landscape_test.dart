@@ -183,10 +183,16 @@ Future<void> _withPlayer(
       if (dragMode) {
         pushedRoute!.settleToFull();
       }
-      await tester.pumpAndSettle(const Duration(milliseconds: 100));
+      // 批次 39：横屏默认落歌词 tab，歌词 AM 扫色视图自带自驱动 Ticker
+      // （逐帧内插永不收敛）——pumpAndSettle 会超时，改有界 pump 推进
+      // 路由入场/settle 动画（300ms 上限 + 余量）。
+      await tester.pump(const Duration(milliseconds: 400));
       await tester.pump();
     }
-    await tester.pumpAndSettle(const Duration(milliseconds: 100));
+    // 同上：默认歌词 tab 的自驱动 Ticker 禁用 pumpAndSettle，用有界
+    // pump 推进入场动画（入场 300ms + tap 路径淡入，400ms 覆盖）。
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
     );
@@ -332,12 +338,28 @@ void main() {
           expect(tabRect.center.dx, greaterThan(viewport.width * 0.5));
           // 批次38：分栏比例恢复 4/6，右栏占约 60% 屏宽
           expect(tabRect.width, closeTo(viewport.width * 0.6, 1));
+          // 批次 39：右栏默认落歌词 tab（用户口径「右侧栏默认歌词」），
+          // TabBarView 惰性渲染只建当前页——播放列表视图不在树
           expect(
             find.descendant(
               of: tabBarView,
               matching: find.byType(PlayerPlaylistView),
             ),
-            findsOneWidget,
+            findsNothing,
+          );
+          expect(
+            find.descendant(of: tabBarView, matching: find.byType(LyricsView))
+                    .evaluate()
+                    .length +
+                find
+                    .descendant(
+                      of: tabBarView,
+                      matching: find.byType(AppleMusicLyricsView),
+                    )
+                    .evaluate()
+                    .length,
+            1,
+            reason: '右栏默认渲染歌词视图',
           );
           // tab 导航条仍在右栏（播控移走后右栏底部只留 tabstrip）
           final tabStrip = find.byType(PlayerTabStrip);
@@ -353,10 +375,14 @@ void main() {
           expect(coverRect.center.dx, lessThan(viewport.width * 0.5));
           final title = find.text('LANDSCAPE SPLIT TARGET');
           expect(title, findsOneWidget);
-          // 标题左缘与封面左缘对齐
+          // 批次 39：封面在左栏内**水平居中**（用户口径「封面栏封面居中」
+          // ——批次 38 前为 centerLeft、标题与封面左缘对齐）；标题块仍
+          // 占满左栏（stretch），左缘 = 栏左缘 16dp，不再与封面左缘对齐
+          expect(tester.getRect(title).left, closeTo(16, 0.5));
           expect(
-            tester.getRect(title).left,
-            closeTo(coverRect.left, 0.5),
+            coverRect.center.dx,
+            closeTo(168, 1),
+            reason: '封面中心 = 左栏内容区中心（左栏 320 − 左内缩 16 → 16+152）',
           );
 
           // ── 批次37 核心：播控/进度条在封面下方（几何断言） ──
@@ -630,13 +656,11 @@ void main() {
             lessThan(viewport.width * 0.5),
           );
 
-          // 右栏 tab 顺序 = [播放列表, 歌词, 评论]：左滑到歌词 tab。
-          // 歌词 tab 的 AM 扫色视图带 Ticker 自驱动内插（播放中常驻逐帧），
-          // 不能用 pumpAndSettle（会超时），用 pump 序列推进翻页动画即可。
+          // 右栏 tab 顺序 = [播放列表, 歌词, 评论]：批次 39 起默认即歌词
+          // tab（用户口径「右侧栏默认歌词」），无需拖拽——直接断言。
+          // 歌词视图带自驱动 Ticker（播放中常驻逐帧），全程禁用
+          // pumpAndSettle。
           final tabBarView = find.byType(TabBarView);
-          await tester.drag(tabBarView, const Offset(-400, 0));
-          await tester.pump(const Duration(milliseconds: 100));
-          await tester.pump(const Duration(milliseconds: 600));
           expect(tester.takeException(), isNull);
           final lyrics = find
               .byType(AppleMusicLyricsView)

@@ -38,14 +38,12 @@ import '../../core/theme/app_theme.dart';
 ///
 /// **横屏「收窄顶栏」（批次 36 起，紧凑态参数批次 37/38 两度下调）**：
 /// 横屏设备高度小，为尽可能减少页面纵向遮挡，横屏 + 内容滚动（离开
-/// 顶部）时顶栏**不隐藏**，改为**收窄**：标题区从展开态收窄为紧凑态
-/// ——标题区高度 52dp（8+36+8）→ 32dp（5+22+5，批次 37）→ 28dp
-/// （3+22+3，批次 38）、大标题字号 20sp → 13sp（行高 36 → 22dp），
-/// 列表首项占位高度同步收缩（内容区随之增高）；右上头像（36dp）、
-/// actions 钮在批次 37 前保持原尺寸——批次 37 收紧后仍剩 46dp 视觉
-/// 高度（用户反馈「高度没变，仅缩小了标题」），**批次 38 起栏内容行
-/// （actions + 头像）整体随收窄信号 2/3 同步缩放**（42dp 圆钮 → 28dp、
-/// 36dp 头像 → 24dp、8dp 间距 → 5.3dp，等比不破形）并上提 10dp，紧凑态
+/// 顶部）时顶栏**不隐藏**，改为**收窄**（批次 39 推倒批次 38 的「整行
+/// 缩放」方案——用户原话「标题、头像、按钮不需要变小，收窄顶栏的总高；
+/// 当前总高度没变化，仅缩小了按钮大小」）：标题/头像/按钮**全部保持
+/// 原尺寸**，只压上下边距与带高——标题区 52dp（8+36+8）→ **40dp**
+/// （2+36+2），渐变模糊带栏体段 54dp → **44dp**（[_kCompactBarHeight]），
+/// 列表首项占位高度同步收缩（内容区随之增高）。
 /// 视觉内容区 = 3 + 28 + 3 = 34dp，与标题区（28dp）同档；渐变模糊带
 /// （状态栏 + 54dp）仍保留原尺寸原位置（只收内容，带不动）。回顶
 /// （offset ≤ 0）恢复展开态；两态间以
@@ -330,10 +328,9 @@ class _SonifyTitleScaffoldState extends State<SonifyTitleScaffold> {
 ///
 /// **横屏「收窄顶栏」（批次 36，取代批次 35 的「上滑隐藏」）**：注入
 /// [topBarCompact] 且宿主为横屏时，整栏**不滑出**——渐变模糊带
-/// （[_TopBar]）保持原尺寸原位置，固定悬浮大标题（[_PinnedLargeTitle]）
-/// 与栏内容行（actions + 头像，批次 38 起整体 2/3 缩放 + 上提 10dp）
-/// 在展开/紧凑两态间以 180ms easeOut 插值：标题区 52dp（8+36+8）→
-/// 28dp（3+22+3，批次 38）、字号 20sp → 13sp（行高 36 → 22dp）；信号回落即恢复展开态。竖屏（或未注入
+/// （[_TopBar]）栏体段 54 → 44dp、固定悬浮大标题（[_PinnedLargeTitle]）
+/// 顶距 8 → 2dp、内容行原尺寸不缩，在展开/紧凑两态间以 180ms easeOut
+/// 插值（批次 39）；信号回落即恢复展开态。竖屏（或未注入
 /// 信号）时本参数被方向判定忽略，返回原 Stack 结构（[_buildStack]），
 /// 与批次 36 之前逐字节一致（回归锁
 /// test/widgets/sonify_title_scaffold_test.dart）。
@@ -436,8 +433,9 @@ class SonifyTitleOverlay extends StatelessWidget {
 ///
 /// **两态几何（批次 36）**：高度解析式计算，不再实测回填（原
 /// [_MeasureSize] 机制）——展开态 = 状态栏 + 8 + 36（20sp largeTitle
-/// 行高，随 textScaler 缩放）+ 底部留白；紧凑态 = 状态栏 + 3 + 22
-/// （13sp 行高）+ 3（批次 38）。竖屏（[compact] 为 null）恒展开态、不挂动画
+/// 行高，随 textScaler 缩放）+ 底部留白；紧凑态 = 状态栏 + 2 + 36
+/// + 2 = 40（批次 39，标题字号行高原样不缩）。竖屏（[compact] 为 null）
+/// 恒展开态、不挂动画
 /// 壳，与批次 36 前同构同尺寸；横屏（[compact] 非空）随收窄信号在
 /// 两态间 180ms easeOut 插值收缩——占位与悬浮标题同步收紧，滚动态
 /// 业务内容起点随之上移 14dp（内容区增高 = 用户要的「减少遮挡」）。
@@ -469,8 +467,8 @@ class _TitlePlaceholderItem extends StatelessWidget {
             (_kTitleLineHeight / _kTitleFontSize) +
         bottomPadding;
     final compactZone = _kCompactTitleTopPad +
-        textScaler.scale(_kCompactTitleFontSize) *
-            (_kCompactTitleLineHeight / _kCompactTitleFontSize) +
+        textScaler.scale(_kTitleFontSize) *
+            (_kTitleLineHeight / _kTitleFontSize) +
         _kCompactTitleBottomPad;
     final signal = compact;
     if (signal == null) {
@@ -500,19 +498,16 @@ class _TitlePlaceholderItem extends StatelessWidget {
 /// 淡出都会让用户在滚动中"找不到标题"；可读性由顶栏渐变带（滚动即
 /// 浮现）保证，无需标题自身变化。
 ///
-/// **横屏收窄两态（批次 36）**：[compact] 非空（横屏收窄路径）时，
+/// **横屏收窄两态（批次 39）**：[compact] 非空（横屏收窄路径）时，
 /// 标题在展开/紧凑两态间以 [kSonifyTopBarCompactDuration]（180ms
-/// easeOut）插值：字号 20sp → 13sp、行高 36 → 22dp、顶距 8 → 3dp
-/// （批次 38，批次 37 的 5 再降一档）。
+/// easeOut）插值：字号/行高原样（20sp/36，不缩），顶距 8 → 2dp。
 /// 竖屏（[compact] 为 null）走原静态路径，Positioned(top: sb+8) +
 /// 20sp 原样，不挂任何动画壳（回归锁逐字节不动）。
 ///
 /// 实现说明：Positioned.top 无法随动画插值（且 Positioned 必须是
 /// Stack 直接子级、不能放进 Tween builder 里构造），故紧凑路径以
-/// `top: 状态栏 + 3dp` 为常量锚点，展开态差的 5dp 顶距由内部
-/// [Transform.translate] 补足（t=0 时 dy=5 → 视觉顶距恰为 8dp）。
-/// 字号缩放不产生溢出：文本 maxLines 1 + ellipsis 横向截断、行高由
-/// style height 精确给定（22dp < 36dp），无需 OverflowBox/ClipRect。
+/// `top: 状态栏 + 2dp` 为常量锚点，展开态差的 6dp 顶距由内部
+/// [Transform.translate] 补足（t=0 时 dy=6 → 视觉顶距恰为 8dp）。
 class _PinnedLargeTitle extends StatelessWidget {
   const _PinnedLargeTitle({
     required this.title,
@@ -550,8 +545,8 @@ class _PinnedLargeTitle extends StatelessWidget {
         ),
       );
     }
-    // 横屏收窄路径：常量锚点 6dp + Transform 补 2dp 展开差 + 字号/行高
-    // 两态插值（t: 0=展开 1=紧凑）
+    // 横屏收窄路径：常量锚点 2dp + Transform 补 6dp 展开差（批次 39：
+    // 字号/行高不再插值，标题原样）
     return Positioned(
       top: statusBarHeight + _kCompactTitleTopPad,
       left: SonifySpacing.titleMargin,
@@ -561,29 +556,25 @@ class _PinnedLargeTitle extends StatelessWidget {
         duration: kSonifyTopBarCompactDuration,
         curve: Curves.easeOut,
         builder: (context, t, child) {
-          final fontSize = _kTitleFontSize +
-              (_kCompactTitleFontSize - _kTitleFontSize) * t;
           return Transform.translate(
-            // 展开态顶距 8dp = 锚点 3 + 5；紧凑态 3dp
+            // 批次 39：字号/行高不再插值（标题保持 20sp/36 原样），
+            // 只插顶距——展开态顶距 8dp = 锚点 2 + 6，紧凑态 2dp。
             offset: Offset(0, (1 - t) * (_kTitleTopPad - _kCompactTitleTopPad)),
-            child: IgnorePointer(
-              child: Text(
-                title,
-                style: SonifyTextStyles.largeTitle.copyWith(
-                  fontSize: fontSize,
-                  // 行高随字号同拍插值（36 → 22dp）：height 为倍数，
-                  // 换算成当前字号下的行高 dp
-                  height: (_kTitleLineHeight +
-                          (_kCompactTitleLineHeight - _kTitleLineHeight) * t) /
-                      fontSize,
-                  color: cs.onSurface,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
+            child: child,
           );
         },
+        child: IgnorePointer(
+          child: Text(
+            title,
+            style: SonifyTextStyles.largeTitle.copyWith(
+              fontSize: _kTitleFontSize,
+              height: _kTitleLineHeight / _kTitleFontSize,
+              color: cs.onSurface,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
       ),
     );
   }
@@ -663,18 +654,42 @@ class _TopBar extends StatelessWidget {
   /// （默认，其余页面不变）。
   final ValueListenable<bool>? actionsVisible;
 
-  /// 批次 38：横屏收窄信号（null = 竖屏/无信号：栏内容行走原布局，
-  /// 逐字节不动；非 null = 横屏路径，内容行随布尔值在展开/紧凑两态间
-  /// 插值——整体 2/3 缩放 + 上提 10dp，见 [_kCompactBarScale] /
-  /// [_kCompactBarLift]）。渐变模糊带（blur + tint）不受本参数影响，
-  /// 两态均保持「状态栏 + 54dp」原尺寸。
+  /// 批次 39：横屏收窄信号（null = 竖屏/无信号：栏内容行走原布局，
+  /// 逐字节不动；非 null = 横屏路径——**内容行原尺寸不缩**（批次 38 的
+  /// 整行缩放被用户否定），只把栏体高度 54 → 44dp（[_kCompactBarHeight]）
+  /// 与标题顶距 8 → 2dp 两态插值，见 [build]。
   final bool? compact;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    // 带高：状态栏 + 54dp 栏体（单片模糊 + tint 覆盖全带）
-    final bandHeight = statusBarHeight + SonifySpacing.topBar;
+    final compactSignal = this.compact;
+    if (compactSignal == null) {
+      // 竖屏原路径：54dp 栏体定值，无动画壳（逐字节不动）。
+      return _buildBand(cs, barHeight: SonifySpacing.topBar);
+    }
+    // 横屏收窄路径：栏体 54 → 44dp 两态插值（180ms easeOut，与标题
+    // 顶距插值同拍）。模糊带 Positioned.fill 与内容行随栏体同步收紧
+    // ——这才是「总高度收窄」（批次 38 的 Transform.scale 是绘制级
+    // 变换，布局盒不变，用户看到「总高没变化」的根因）。
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: compactSignal ? 1 : 0),
+      duration: kSonifyTopBarCompactDuration,
+      curve: Curves.easeOut,
+      builder: (context, t, _) => _buildBand(
+        cs,
+        barHeight:
+            SonifySpacing.topBar +
+            (_kCompactBarHeight - SonifySpacing.topBar) * t,
+      ),
+    );
+  }
+
+  /// 栏体构建：[barHeight] 为插值中的栏体段高度（展开 54 / 紧凑 44）。
+  /// 带高 = 状态栏 + barHeight；tint 渐变 stops 的分母同步用 barHeight。
+  Widget _buildBand(ColorScheme cs, {required double barHeight}) {
+    // 带高：状态栏 + 栏体（单片模糊 + tint 覆盖全带）
+    final bandHeight = statusBarHeight + barHeight;
     return SizedBox(
       height: bandHeight,
       child: Stack(
@@ -751,9 +766,7 @@ class _TopBar extends StatelessWidget {
                             stops: statusBarHeight > 0
                                 ? [
                                     0.0,
-                                    statusBarHeight /
-                                        (statusBarHeight +
-                                            SonifySpacing.topBar),
+                                    statusBarHeight / (statusBarHeight + barHeight),
                                     1.0,
                                   ]
                                 : const [0.0, 1.0],
@@ -766,28 +779,25 @@ class _TopBar extends StatelessWidget {
               ),
             ),
           ),
-          // 栏体内容：状态栏占位 + 54dp 栏体（右侧动作区）
+          // 栏体内容：状态栏占位 + 栏体（右侧动作区）
           Column(
             children: [
               SizedBox(height: statusBarHeight),
               SizedBox(
-                height: SonifySpacing.topBar,
+                height: barHeight,
                 child: Stack(
                   children: [
                     // 右侧动作区：actions（滚动后淡入）+ trailing（常驻）。
-                    // 竖屏（compact == null）走原布局逐字节不动；横屏
-                    // 收窄路径（批次 38）给内容行挂动画壳：整行等比缩放
-                    // （42dp 圆钮 → 28dp、36dp 头像 → 24dp）+ 上提 10dp，
-                    // 视觉内容区收进 3 + 28 + 3 = 34dp（与标题区同档，
-                    // 修「高度没变，仅缩小了标题」）。t=0 时平移 0/缩放 1
-                    // = 与竖屏原布局逐像素一致，动画壳无展开态形变。
+                    // 批次 39：内容行原尺寸不缩（用户否定批次 38 的整行
+                    // 缩放）——收窄只来自栏体高度本身；42dp 圆钮在 44dp
+                    // 紧凑栏体内上下各余 1dp，不裁切。
                     if (trailing != null ||
                         (actions != null && actions!.isNotEmpty))
                       PositionedDirectional(
                         end: SonifySpacing.titleMargin,
                         top: 0,
                         bottom: 0,
-                        child: _buildCompactAwareActionRow(compact),
+                        child: _buildActionRow(),
                       ),
                   ],
                 ),
@@ -808,8 +818,11 @@ class _TopBar extends StatelessWidget {
   ///   （上提 [_kCompactBarLift]·t）完成两态插值，180ms easeOut 与标题
   ///   收窄同拍。缩放为绘制级（布局盒不变），命中测试经 RenderTransform
   ///   逆变换落在可视范围内，交互锚点不缩水出界。
-  Widget _buildCompactAwareActionRow(bool? compact) {
-    final row = Row(
+  /// 栏内容行（actions + trailing）构造。批次 39：横屏收窄路径不再对
+  /// 内容行做任何缩放/平移（批次 38 的 Transform.scale 方案被用户否定
+  /// ——「总高度没变化，仅缩小了按钮大小」），横竖屏共用同一行布局。
+  Widget _buildActionRow() {
+    return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         // actions 与栏体同拍：滚动即浮现。
@@ -839,22 +852,6 @@ class _TopBar extends StatelessWidget {
         ],
       ],
     );
-    if (compact == null) return row;
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0, end: compact ? 1 : 0),
-      duration: kSonifyTopBarCompactDuration,
-      curve: Curves.easeOut,
-      builder: (context, t, child) {
-        return Transform.translate(
-          offset: Offset(0, -_kCompactBarLift * t),
-          child: Transform.scale(
-            scale: 1 + (_kCompactBarScale - 1) * t,
-            child: child,
-          ),
-        );
-      },
-      child: row,
-    );
   }
 }
 
@@ -865,38 +862,21 @@ const double _kTitleTopPad = 8;
 const double _kTitleFontSize = 20;
 const double _kTitleLineHeight = 36;
 
-/// 大标题紧凑态几何（批次 38 横屏收窄态，批次 37 的 32dp 再降一档）：
-/// - 顶距 8 → **3dp**、底距（titleBottomPadding 口径）→ **3dp**；
-/// - 字号 20sp → **13sp**、行高 36 → **22dp**（height = 22/13 ≈ 1.692，
-///   与 largeTitle 的 1.8 同族比例带内，视觉不挤）；
-/// - 标题区 52 → **28dp**（3 + 22 + 3）。
-/// 定值依据（批次 38「标题/头像/圆钮大小保持一致」口径）：13sp 行高
-/// 22dp 与栏内容行紧凑态视觉高 28dp（[_kCompactBarScale]）同档，三者
-/// 上下边距统一 3dp——标题区 28dp、内容区 3+28+3=34dp，均落在渐变模糊
-/// 带（状态栏 + 54dp）内不裁切；较展开态净省 24dp 纵向遮挡（52 − 28）、
-/// 较批次 37 紧凑态再省 4dp。批次 37 的 5/5 边距被用户判定「高度没变」
-/// 根源在头像/圆钮未缩（内容行视觉高 46dp），故本批同步缩放内容行
-/// （见 [_kCompactBarScale]）而非继续压标题字号。
-const double _kCompactTitleTopPad = 3;
-const double _kCompactTitleBottomPad = 3;
-const double _kCompactTitleFontSize = 13;
-const double _kCompactTitleLineHeight = 22;
+/// 大标题紧凑态几何（批次 39 横屏收窄态，批次 38 推倒重来）：
+/// - **标题/头像/按钮全部保持原尺寸不缩小**（用户批次 39 原话「标题、
+///   头像、按钮不需要变小」——批次 38 的整行缩放与字号缩小被否定，
+///   根因是 Transform.scale 为绘制级变换、布局盒不变，用户看到的是
+///   「总高度没变化，仅缩小了按钮大小」）；
+/// - 收窄只压**上下边距**：顶距 8 → **2dp**、底距 → **2dp**；
+/// - 标题区 52 → **40dp**（2 + 36 + 2），标题字号行高原样。
+const double _kCompactTitleTopPad = 2;
+const double _kCompactTitleBottomPad = 2;
 
-/// 批次 38：横屏紧凑态栏内容行（actions + 头像）整体缩放比 = 28/42。
-/// 锚定 42dp GlassCircleButton 收缩到 28dp（与标题行高 22、紧凑内容区
-/// 3+28+3=34dp 同档），36dp 头像等比收到 24dp、20dp 图标收到 13.3dp、
-/// 8dp 间距收到 5.3dp——整行等比缩放不破形（用户原话「标题头像圆形
-/// 按钮大小要保持一致」= 同拍缩小，各元素比例不变）。展开态 t=0 时
-/// 缩放恒 1，竖屏路径不挂壳、逐字节不动。
-const double _kCompactBarScale = 28 / 42;
-
-/// 批次 38：横屏紧凑态栏内容行上提量（dp）。内容行盒被
-/// PositionedDirectional(top:0,bottom:0) 约束为 54dp 全带高（子项在其中
-/// 垂直居中，中心 = 27dp）；绕**中心**等比缩放后视觉中心仍在 27dp，上提
-/// 27 − (3+31)/2 = 10dp 把 28dp 视觉高精确送进 3..31 的紧凑内容区
-/// （3 + 28 + 3 = 34dp，与标题区 28dp 同档，底缘距带底留 23dp 呼吸）。
-/// 中心锚点不依赖子项实际高度（头像/圆钮/纯图标页均成立）。
-const double _kCompactBarLift = 10;
+/// 批次 39：横屏紧凑态栏体高度（渐变模糊带的栏体段）。54dp（展开态
+/// [SonifySpacing.topBar]）→ **44dp**：栏内容行（42dp 圆钮 / 36dp 头像）
+/// 原尺寸不缩，44 = 42 + 1 + 1 恰好容下最大元素且上下各留 1dp；
+/// 36dp 头像居中留 4/4。带总高 = 状态栏 + 44（展开态 = 状态栏 + 54）。
+const double _kCompactBarHeight = 44;
 
 /// 横屏「收窄顶栏」动画时长（批次 36）：150-200ms 区间取 180ms、
 /// easeOut。与 [SonifyMotion.barFade]（120ms，透明度淡入）同族但更长

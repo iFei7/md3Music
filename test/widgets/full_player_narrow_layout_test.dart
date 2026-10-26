@@ -183,7 +183,11 @@ void main() {
               ),
             ),
           );
-          await tester.pumpAndSettle(const Duration(milliseconds: 100));
+          // 批次 39：横屏默认落歌词 tab，歌词 AM 扫色视图自带自驱动
+          // Ticker（永不收敛）——pumpAndSettle 会超时，改有界 pump 推进
+          // 入场动画（竖屏 compact 落播放列表 tab，无 Ticker，同样兼容）。
+          await tester.pump(const Duration(milliseconds: 400));
+          await tester.pump();
 
           expect(tester.takeException(), isNull);
           expect(find.text('播放失败，请重试'), findsOneWidget);

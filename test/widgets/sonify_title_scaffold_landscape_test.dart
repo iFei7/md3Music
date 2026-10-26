@@ -1,31 +1,28 @@
 /// 批次 36：横屏「收窄顶栏」回归测试（取代批次 35 的「上滑隐藏」）。
 ///
-/// 设计意图（用户原话）：「所有含顶栏的页面：上滑时顶部不隐藏，做收窄
-/// 处理，即高度变窄，顶栏按钮标题等保留。」「横屏顶栏当前高度没变，仅
-/// 缩小了标题，标题头像圆形按钮大小要保持一致，降低横屏顶栏标题栏上下
-/// 边距。」（批次 38 补齐：栏内容行随收窄整体缩放。）
+/// 设计意图（用户批次 39 原话）：「横屏上滑标题、头像、按钮不需要变小，
+/// 收窄顶栏的总高（当前总高度没变化，仅缩小了按钮大小）。」——批次 38
+/// 的「整行等比缩放 + 字号缩小」被否定（Transform.scale 是绘制级变换，
+/// 布局盒不变，用户看到总高没变），批次 39 改为**元素全不缩、只收
+/// 几何**：
 ///
-/// 收窄形态（批次 38 定值，批次 37 再降一档，见 scaffold 常量族）：
-/// - 标题区高度 52dp（8+36+8）→ 32dp（5+22+5，批次 37）→ 28dp
-///   （3+22+3，批次 38）；
-/// - 大标题字号 20sp（行高 36）→ 13sp（行高 22）；
-/// - 右上头像（36dp）与 actions 钮（42dp）随收窄**整体等比缩放**
-///   （28/42：钮 42→28、头像 36→24）并上提 3dp，紧凑态视觉内容区
-///   3+28+3=34dp 与标题区同档；渐变模糊带（状态栏 + 54dp）保留原
-///   尺寸/原位置（只收内容，带不动）；
+/// 收窄形态（批次 39 定值，见 scaffold 常量族）：
+/// - 标题区高度 52dp（8+36+8）→ **40dp**（2+36+2）：只压上下边距，
+///   字号 20sp / 行高 36 原样；
+/// - 渐变模糊带栏体段 54dp → **44dp**（带总高 = 状态栏 + 44）；
+/// - 右上头像（36dp）、actions 钮（42dp）**原尺寸不缩**；
 /// - 动画 180ms easeOut（kSonifyTopBarCompactDuration），回顶恢复。
 ///
 /// 覆盖：
-/// ① 横屏骨架宿主 offset > 0 → 标题区收窄为紧凑态（高度/字号/顶距），
-///    头像 / actions / 模糊带全部仍在原位且内容行同步缩小，动画中间态
-///    可观测；
-/// ② 回顶（offset ≤ 0）→ 恢复展开态（52dp / 20sp / 顶距 8 / 原尺寸）；
+/// ① 横屏骨架宿主 offset > 0 → 标题区收窄（顶距 2 / 区高 40 / 字号 20
+///    不变）、模糊带总高收窄 44、头像/actions 原尺寸仍在场可命中；
+/// ② 回顶（offset ≤ 0）→ 恢复展开态（52dp / 20sp / 顶距 8 / 带 54）；
 /// ③ 竖屏 offset > 0 → 顶栏仍在原处（既有固定悬浮路径，不挂收窄壳）；
 /// ④ 单固定高 item 页面（音乐库 hub / 本地音乐形态）经既有
 ///    [ContentScrollSignal] → barBackgroundVisible 链路，外部信号驱动
 ///    横屏收窄 / 回顶恢复；
 /// ⑤ 搜索页横屏坍缩态（outer offset ≥ 52）→ overlay 收窄（不出屏）、
-///    坍缩搜索钮仍在场且同步缩小，展开态恢复。
+///    坍缩搜索钮仍在场且原尺寸，展开态恢复。
 ///
 /// 竖屏既有路径的回归锁在 test/widgets/sonify_title_scaffold_test.dart
 /// （该文件宿主已按竖屏口径钉死——flutter test 默认窗口 800×600 即
@@ -64,16 +61,14 @@ const _landscapeMQ = MediaQueryData(size: Size(800, 600));
 const _portraitMQ = MediaQueryData(size: Size(400, 800));
 
 /// 收窄两态锚点（与 scaffold 私有常量同口径，测试侧显式钉死防漂移）：
-/// 展开态 = 顶距 8 + 行高 36 + 底距 8（标题区 52）；紧凑态 = 3 + 22 + 3
-/// （标题区 28，批次 38）。字号 20sp → 13sp。栏内容行整体缩放 =
-/// 28/42（批次 38：42dp 圆钮 → 28、36dp 头像 → 24）。
+/// 展开态 = 顶距 8 + 行高 36 + 底距 8（标题区 52）；紧凑态 = 2 + 36 + 2
+/// （标题区 40，批次 39——字号不缩）。栏体段：展开 54 / 紧凑 44（批次 39）。
 const _expandedTop = 8.0;
 const _expandedLineHeight = 36.0;
-const _compactTop = 3.0;
-const _compactLineHeight = 22.0;
+const _compactTop = 2.0;
 const _expandedFontSize = 20.0;
-const _compactFontSize = 13.0;
-const _compactBarScale = 28.0 / 42.0;
+const _expandedBarHeight = 54.0;
+const _compactBarHeight = 44.0;
 
 /// 固定悬浮大标题的屏幕矩形（可见标题 = 树中最后一个同文本 widget）。
 Rect _titleRect(WidgetTester tester, String title) =>
@@ -95,6 +90,11 @@ double _bandOpacity(WidgetTester tester) => tester
           .first,
     )
     .opacity;
+
+/// 渐变模糊带总高（paint bounds）：展开 54 / 紧凑 44（批次 39 核心断言
+/// ——「收窄顶栏的总高」）。
+double _bandHeight(WidgetTester tester) =>
+    tester.getRect(find.byKey(const ValueKey('sonify_bar_blur'))).height;
 
 /// 骨架测试宿主：返回 widget + 外部 ScrollController（供滚动注入）。
 /// [landscape] 控制 MediaQuery 方向；[barBackgroundVisible] 模拟
@@ -130,7 +130,7 @@ double _bandOpacity(WidgetTester tester) => tester
 
 void main() {
   group('批次36 横屏收窄顶栏（SonifyTitleScaffold）', () {
-    testWidgets('①横屏 offset>0：标题区收窄（28dp/13sp/顶距3），内容行同步缩小、模糊带全保留',
+    testWidgets('①横屏 offset>0：总高收窄（区40/带44/顶距2），标题头像按钮原尺寸不缩',
         (tester) async {
       final (widget, controller) = _host(
         title: '发现',
@@ -140,47 +140,43 @@ void main() {
       await tester.pumpWidget(widget);
       await tester.pump();
 
-      // 初始态（回顶/展开态）：标题区 52dp 口径（顶距 8 + 行高 36）
+      // 初始态（回顶/展开态）：标题区 52dp 口径（顶距 8 + 行高 36）、带 54
       expect(_titleRect(tester, '发现').topLeft, const Offset(20, _expandedTop));
       expect(_titleRect(tester, '发现').height, _expandedLineHeight);
       expect(_titleFontSize(tester, '发现'), _expandedFontSize);
       expect(find.byKey(const ValueKey('sonify_bar_blur')), findsOneWidget);
       expect(_bandOpacity(tester), 0, reason: '回顶态渐变带未浮现');
+      expect(_bandHeight(tester), closeTo(_expandedBarHeight, 0.5));
 
       // 横屏 + 离开顶部（小 offset，保证业务 item 0 仍在场可断言）：
       // 收窄信号翻转
       controller.jumpTo(10);
       await tester.pump();
 
-      // 动画进行中（50ms / 180ms easeOut）：字号在两端值之间——是动画
-      // 不是跳变
+      // 动画进行中（50ms / 180ms easeOut）：顶距在 8 → 2 之间——是动画
+      // 不是跳变（批次 39：字号不再插值）
       await tester.pump(const Duration(milliseconds: 50));
-      final midFontSize = _titleFontSize(tester, '发现');
-      expect(midFontSize, lessThan(_expandedFontSize), reason: '已开始收窄');
-      expect(midFontSize, greaterThan(_compactFontSize), reason: '尚未收到位');
-
-      // 栏内容行同步动画（批次 38）：trailing Icon（24dp）缩放在
-      // 24 → 24×28/42=16 之间。getRect 取 paint bounds（含 Transform），
-      // getSize 是布局尺寸、不随缩放变化，不能用于断言缩放。
-      final midIconHeight =
-          tester.getRect(find.byIcon(Icons.person)).height;
-      expect(midIconHeight, lessThan(24), reason: '内容行已开始缩放');
-      expect(midIconHeight, greaterThan(24 * _compactBarScale),
-          reason: '尚未缩到位');
-
-      // 200ms 后收敛：紧凑态 = 顶距 3 + 行高 22（13sp），标题区 28dp
-      await tester.pump(const Duration(milliseconds: 150));
-      expect(_titleFontSize(tester, '发现'), _compactFontSize);
-      expect(_titleRect(tester, '发现').topLeft, const Offset(20, _compactTop));
-      expect(_titleRect(tester, '发现').height, _compactLineHeight);
-
-      // 栏内容行等比缩到位（批次 38「头像/圆钮与标题同步缩小」）：
-      // trailing Icon 24dp → 16dp
+      final midTop = _titleRect(tester, '发现').topLeft.dy;
+      expect(midTop, greaterThan(_compactTop), reason: '已开始收窄');
+      expect(midTop, lessThan(_expandedTop), reason: '尚未收到位');
       expect(
-        tester.getRect(find.byIcon(Icons.person)).height,
-        closeTo(24 * _compactBarScale, 0.5),
-        reason: '紧凑态栏内容行整体缩放 28/42',
+        _titleFontSize(tester, '发现'),
+        _expandedFontSize,
+        reason: '批次 39：标题字号不缩',
       );
+
+      // 栏内容行原尺寸（批次 39 否定批次 38 缩放）：trailing Icon 恒 24dp
+      // （无 Transform.scale——布局尺寸与 paint bounds 一致）
+      expect(tester.getRect(find.byIcon(Icons.person)).height, 24);
+
+      // 200ms 后收敛：紧凑态 = 顶距 2 + 行高 36（20sp 原样），标题区 40dp
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(_titleFontSize(tester, '发现'), _expandedFontSize);
+      expect(_titleRect(tester, '发现').topLeft, const Offset(20, _compactTop));
+      expect(_titleRect(tester, '发现').height, _expandedLineHeight);
+
+      // 核心断言（用户口径「收窄顶栏的总高」）：渐变模糊带总高 54 → 44
+      expect(_bandHeight(tester), closeTo(_compactBarHeight, 0.5));
 
       // 渐变模糊带保留：仍在树、仍在屏幕最顶、仍随滚动浮现（不出屏）
       expect(find.byKey(const ValueKey('sonify_bar_blur')), findsOneWidget);
@@ -191,13 +187,12 @@ void main() {
       );
       expect(_bandOpacity(tester), 1, reason: '滚动态渐变带继续出带');
 
-      // 右上头像 / actions 全部保留且可命中（无滑出壳、无 IgnorePointer
-      // 整栏遮蔽——收窄态栏体仍可交互）
+      // 右上头像 / actions 全部保留、原尺寸、可命中（无滑出壳、无缩放）
       expect(find.byIcon(Icons.person), findsOneWidget);
       expect(find.byIcon(Icons.person).hitTestable(), findsOneWidget);
 
       // 占位 item 同步收窄：业务 item 0 盒顶从「52 − offset」上移到
-      // 「28 − offset」——滚动态内容区增高 24dp（「减少遮挡」）。
+      // 「40 − offset」——滚动态内容区增高 12dp（「减少遮挡」）。
       // 取 item 盒（SizedBox 100）而非其内 ListTile 文本——文本距盒顶
       // 有 ListTile 内部 16px 内边距，不能代表内容区起点。
       final itemBox = find
@@ -205,12 +200,12 @@ void main() {
           .first;
       expect(
         tester.getTopLeft(itemBox).dy,
-        closeTo(28 - 10, 0.5),
-        reason: '占位收窄后 item 0 盒顶 = 紧凑标题区 28 − offset 10',
+        closeTo(40 - 10, 0.5),
+        reason: '占位收窄后 item 0 盒顶 = 紧凑标题区 40 − offset 10',
       );
     });
 
-    testWidgets('②横屏回顶（offset<=0）：恢复展开态（52dp/20sp/顶距8）', (tester) async {
+    testWidgets('②横屏回顶（offset<=0）：恢复展开态（52dp/20sp/顶距8/带54）', (tester) async {
       final (widget, controller) = _host(
         title: '发现',
         landscape: true,
@@ -223,16 +218,17 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       // 先确认已收窄
-      expect(_titleFontSize(tester, '发现'), _compactFontSize);
-      expect(_titleRect(tester, '发现').height, _compactLineHeight);
+      expect(_titleRect(tester, '发现').topLeft.dy, _compactTop);
+      expect(_bandHeight(tester), closeTo(_compactBarHeight, 0.5));
 
       controller.jumpTo(0);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
-      // 恢复展开态：顶距 8、行高 36、字号 20sp（与批次 36 前逐像素一致）
+      // 恢复展开态：顶距 8、行高 36、字号 20sp、带 54（与批次 36 前逐像素一致）
       expect(_titleFontSize(tester, '发现'), _expandedFontSize);
       expect(_titleRect(tester, '发现').topLeft, const Offset(20, _expandedTop));
       expect(_titleRect(tester, '发现').height, _expandedLineHeight);
+      expect(_bandHeight(tester), closeTo(_expandedBarHeight, 0.5));
       // 渐变带回顶消失、头像仍可命中
       expect(_bandOpacity(tester), 0);
       expect(find.byIcon(Icons.person).hitTestable(), findsOneWidget);
@@ -340,9 +336,10 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       expect(signal.value, isTrue, reason: '内层列表离开顶部，信号应翻转');
-      expect(_titleFontSize(tester, '音乐库'), _compactFontSize);
       expect(_titleRect(tester, '音乐库').topLeft, const Offset(20, _compactTop));
-      expect(_titleRect(tester, '音乐库').height, _compactLineHeight);
+      expect(_titleFontSize(tester, '音乐库'), _expandedFontSize);
+      expect(_titleRect(tester, '音乐库').height, _expandedLineHeight);
+      expect(_bandHeight(tester), closeTo(_compactBarHeight, 0.5));
       // 渐变带与头像保留（收窄而非隐藏）
       expect(find.byKey(const ValueKey('sonify_bar_blur')), findsOneWidget);
       expect(_bandOpacity(tester), 1);
@@ -429,12 +426,12 @@ void main() {
       outerScrollable.position.jumpTo(60);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
-      expect(_titleFontSize(tester, '搜索'), _compactFontSize);
+      expect(_titleFontSize(tester, '搜索'), _expandedFontSize);
       expect(_titleRect(tester, '搜索').topLeft, const Offset(20, _compactTop));
-      expect(_titleRect(tester, '搜索').height, _compactLineHeight);
+      expect(_titleRect(tester, '搜索').height, _expandedLineHeight);
+      expect(_bandHeight(tester), closeTo(_compactBarHeight, 0.5));
       // 坍缩搜索圆钮此时已在树（_collapsed 驱动 actions）且仍可命中
-      // （收窄态无滑出壳，栏体不出屏），并随收窄整体缩小：42dp → 28dp
-      // （批次 38 栏内容行同步缩放，paint bounds 口径）
+      // （收窄态无滑出壳，栏体不出屏），**原尺寸不缩**（批次 39）
       expect(find.byKey(const ValueKey('search-collapsed-icon')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('search-collapsed-icon')).hitTestable(),
@@ -444,15 +441,15 @@ void main() {
       expect(
         tester.getRect(find.byKey(const ValueKey('search-collapsed-icon')))
             .height,
-        closeTo(42 * _compactBarScale, 0.5),
-        reason: '坍缩圆钮随收窄等比缩放（批次 38）',
+        closeTo(42, 0.5),
+        reason: '坍缩圆钮原尺寸（批次 39 否定缩放）',
       );
-      // 头像与渐变模糊带保留；头像同步缩小 36 → 24（批次 38）
+      // 头像与渐变模糊带保留；头像原尺寸 36（批次 39 否定缩放）
       expect(find.byType(UserAvatarButton), findsOneWidget);
       expect(
         tester.getRect(find.byType(UserAvatarButton)).height,
-        closeTo(36 * _compactBarScale, 0.5),
-        reason: '头像随收窄等比缩放（批次 38）',
+        closeTo(36, 0.5),
+        reason: '头像原尺寸（批次 39 否定缩放）',
       );
       expect(find.byKey(const ValueKey('sonify_bar_blur')), findsOneWidget);
 

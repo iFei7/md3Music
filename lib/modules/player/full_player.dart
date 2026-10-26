@@ -600,17 +600,16 @@ class _FullPlayerState extends State<FullPlayer>
     _tabController.dispose();
     _tabLayout = next;
     // 落点口径：
-    // - 首开（首次同步）：恒落播放列表 tab（index 0），与竖屏 compact 首开
-    //   一致。默认分支首开同样会重建 controller，但落歌词 tab
-    //   （indexAfterChangeFrom(0) == lyricsIndex）；lite 不沿用该落点——
-    //   歌词 tab 的 AM 扫色视图自带 Ticker 自驱动内插，作为首开落页会与
-    //   「先看到队列」的直觉相悖，且让整页长期处于逐帧重建状态。
+    // - 首开（首次同步）：竖屏 compact（有封面 tab）恒落播放列表 tab
+    //   （index 0），与竖屏 compact 首开一致。**横屏/平板（无封面 tab）
+    //   首开落歌词 tab**（批次 39，用户原话「右侧栏默认歌词」）——右栏
+    //   打开即显示歌词，播放列表经 tabstrip 切换。
     // - 之后的结构变化（旋入横屏 / 切歌 / 设置开关）：沿用
     //   indexAfterChangeFrom——无封面 tab 时恒落歌词 tab（默认分支口径，
     //   旋转时歌词不中断）。
     final initialIndex = _tabLayoutSynced
         ? next.indexAfterChangeFrom(oldIndex)
-        : 0;
+        : (next.hasCover ? 0 : next.lyricsIndex);
     _tabController = TabController(
       length: next.length,
       vsync: this,
@@ -1622,7 +1621,10 @@ class _FullPlayerState extends State<FullPlayer>
                         ? size.clamp(artworkMinSize, artworkCap)
                         : size;
                     return Align(
-                      alignment: Alignment.centerLeft,
+                      // 批次 39：封面在左栏内**水平居中**（用户原话「封面栏
+                      // 封面居中」）——批次 36 移植默认分支时沿用其
+                      // centerLeft 对齐，用户要求居中。
+                      alignment: Alignment.center,
                       // 封面：固定正方形容器（布局盒边长 = boxSize，测试直接断言）
                       child: SizedBox(
                         width: boxSize,

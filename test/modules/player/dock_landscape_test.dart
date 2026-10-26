@@ -1176,7 +1176,7 @@ void main() {
       }
     });
 
-    testWidgets('⑤ 横屏仅播放器形态（二级页）：无纵条、仅独立球居中、初始坍缩', (tester) async {
+    testWidgets('⑤ 横屏仅播放器形态（二级页）：无纵条、仅独立球居中、纵向展开（批次39）', (tester) async {
       final (:player, :audio) = await _pumpApp(
         tester,
         viewport: const Size(800, 400),
@@ -1202,11 +1202,44 @@ void main() {
           ball.right,
           closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin - 5, 0.001),
         );
-        // 点击可展开（与一级形态同语义）
+
+        // 批次 39：点击展开 → **纵向展开面板**（用户口径「横屏二级页面
+        // 悬浮播放器纵向展开显示」），不再用一级页的横向控件条
         await tester.tap(find.byKey(_ballKey));
         await tester.pumpAndSettle();
         await tester.pump(const Duration(milliseconds: 300));
-        expect(find.byKey(_controlsKey), findsOneWidget);
+        expect(find.byKey(_controlsKey), findsNothing, reason: '二级页不用横向控件条');
+        const verticalKey = ValueKey('glass_dock_landscape_controls_vertical');
+        expect(find.byKey(verticalKey), findsOneWidget);
+        final panel = tester.getRect(find.byKey(verticalKey));
+        // 面板在球体**下方**竖向生长：顶缘 = 球底 + 间距 10
+        expect(
+          panel.top,
+          closeTo(ball.bottom + GlassDockPlayer.kLandscapeVerticalGap, 0.5),
+        );
+        // 宽度 = 手机档纵排面板 200
+        expect(
+          panel.width,
+          closeTo(GlassDockPlayer.kLandscapeVerticalControlsWidth, 0.001),
+        );
+        // 贴边：面板右缘与纵条右缘同口径（右距 12）
+        expect(
+          panel.right,
+          closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
+        );
+        // 面板内容：封面（ artwork ）+ 歌名/歌手 + 三传输钮
+        expect(find.text('第一首歌'), findsOneWidget);
+        expect(find.text('测试歌手'), findsOneWidget);
+        expect(find.byTooltip('上一曲'), findsOneWidget);
+        expect(find.byTooltip('播放'), findsOneWidget);
+        expect(find.byTooltip('下一曲'), findsOneWidget);
+        // 点外坍缩屏障出现；再点球坍缩
+        expect(find.byKey(_barrierKey), findsOneWidget);
+        await tester.tap(find.byKey(_ballKey));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.byKey(verticalKey), findsNothing, reason: '再点球应坍缩');
+        expect(find.byKey(_barrierKey), findsNothing);
       } finally {
         await _teardown(tester, player, audio);
       }

@@ -194,7 +194,13 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
           itemCount: 1,
           itemBuilder: (context, index) => ContentScrollSignal(
             signal: _contentScrolled,
-            child: _buildContent(displaySongs),
+            // 批次 39「内容过带」：单 item 顶入标题区之下（上提 52、
+            // 高度在 _buildContent 侧已 +52），内层列表滚动内容与主页
+            // 一样从顶栏磨砂带下方滚过；静置渲染逐像素不变。
+            child: Transform.translate(
+              offset: const Offset(0, -52),
+              child: _buildContent(displaySongs),
+            ),
           ),
         );
       },
@@ -208,30 +214,41 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
   /// 惰性构建（长历史不整页急建）。
   Widget _buildContent(List<Song> displaySongs) {
     final media = MediaQuery.of(context);
+    // 批次 39「顶栏透明度一致」：高度不再扣标题区 52（itemBuilder 处
+    // 统一 Transform.translate 上提 52 补偿），内容顶入栏带之下——滚动
+    // 时统计头与歌曲真正从顶栏磨砂带下方滚过（与主页同观感）；静置时
+    // 由列表 top padding 52 补偿，内容起点与改前逐像素一致。
     final height =
-        media.size.height - media.padding.top - 52 - media.viewInsets.bottom;
+        media.size.height - media.padding.top - media.viewInsets.bottom;
     Widget child;
     if (_isLoading) {
-      child = const Center(child: M3ELoadingIndicator());
-    } else if (_songs.isEmpty) {
-      child = _buildEmpty();
-    } else {
-      child = Column(
-        children: [
-          _buildHeader(displaySongs),
-          Expanded(child: _buildSongList(displaySongs)),
-        ],
+      child = const Padding(
+        padding: EdgeInsets.only(top: 52),
+        child: Center(child: M3ELoadingIndicator()),
       );
+    } else if (_songs.isEmpty) {
+      child = Padding(padding: const EdgeInsets.only(top: 52), child: _buildEmpty());
+    } else {
+      child = _buildSongList(displaySongs);
     }
     return SizedBox(height: height, child: child);
   }
 
   /// 歌曲列表（编辑态顶栏 body 与正常态列表区共用）。
+  ///
+  /// 批次 39：统计头（[_buildHeader]）并入列表首项（原为 Column 固定头
+  /// + Expanded 列表——固定头会把列表视口钉在栏带之下，内容永远过不了
+  /// 带）；top padding 52 为标题区静态补偿。
   Widget _buildSongList(List<Song> displaySongs) {
     return ListView.builder(
-      itemCount: displaySongs.length,
+      padding: EdgeInsets.only(
+        top: 52,
+        bottom: MediaQuery.paddingOf(context).bottom,
+      ),
+      itemCount: displaySongs.length + 1,
       itemBuilder: (context, index) {
-        final song = displaySongs[index];
+        if (index == 0) return _buildHeader(displaySongs);
+        final song = displaySongs[index - 1];
         return SongListItem(
           song: song,
           isSelectMode: _editMode,
@@ -241,7 +258,7 @@ class _PlayHistoryPageState extends State<PlayHistoryPage> {
           onTap: () {
             context.read<PlayerProvider>().playOnlinePlaylist(
               displaySongs,
-              index,
+              index - 1,
             );
           },
         );

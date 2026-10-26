@@ -606,11 +606,20 @@ class _LibraryHubPageState extends State<LibraryHubPage> {
             child: SizedBox(
               height: height,
               child: M3EPullToRefreshIndicator(
-                edgeOffset: 52,
                 onRefresh: _refresh,
                 child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
+                  // 批次 39 修正批次 38 的失效修法：edgeOffset 的实现是
+                  // 「Column 顶垫 SizedBox(edgeOffset) + Expanded(child)」
+                  // ——垫高后内层视口仍被钉回标题区下缘，内容依旧**从不
+                  // 经过栏带之下**（这正是用户持续反馈「透明度不一致」的
+                  // 结构根因）。改为 ListView 自身 top padding 52：视口
+                  // 顶缘随 translate 顶入栏带下（y=状态栏），静置时内容
+                  // 起点不变（padding 补偿）；滚动态内容真正从栏带下方
+                  // 滚过（与主页同观感）。代价：下拉刷新指示器出现在
+                  // 栏带之下（透过玻璃可见，与 iOS 大标题行为一致）。
                   padding: EdgeInsets.only(
+                    top: 52,
                     bottom: MediaQuery.paddingOf(context).bottom,
                   ),
                   children: [

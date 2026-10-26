@@ -37,7 +37,8 @@
 /// 真实内层滚动共用同一 `_updateFromScroll` 出口，材质取证有效。
 ///
 /// 状态栏变体：sb=0（stops 退化 [0,1] 两色）与 sb=24（状态栏锚定三段
-/// stops [0, 24/(24+54), 1]）各取证一轮，覆盖 tint 渐变的两个分支。
+/// stops [0, 24/(24+44), 1]，批次 39 横屏滚动态为紧凑带 44dp）各取证
+/// 一轮，覆盖 tint 渐变的两个分支。
 library;
 
 import 'dart:typed_data';
@@ -393,7 +394,8 @@ void main() {
           reason: 'sb=24 ${item.key} tint stops 应与 discover 一致');
     }
     // 状态栏锚定三段渐变：状态栏条全强度，自状态栏下缘线性淡出到带底
-    // 缘 α0；stops [0, sb/(sb+54), 1]。
+    // 缘 α0。批次 39：取证宿主为横屏滚动态 → 顶栏处于紧凑态，栏体段
+    // 54 → 44dp，stops [0, sb/(sb+44), 1]。
     expect(
       reference.tintColors,
       [
@@ -402,7 +404,7 @@ void main() {
         reference.surface.withValues(alpha: 0),
       ],
     );
-    expect(reference.tintStops, [0.0, sb / (sb + 54), 1.0]);
+    expect(reference.tintStops, [0.0, sb / (sb + 44), 1.0]);
   });
 
   /// 批次 38 树级图层清点：栏带区域（y 0..状态栏+54）内与三页结构对齐

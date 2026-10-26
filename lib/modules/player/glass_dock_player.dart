@@ -296,6 +296,19 @@ class GlassDockPlayer extends StatefulWidget {
   /// Pad 档横屏独立播放球与导航纵条的垂直间距（手机档 12 上浮一档）。
   static const double kLandscapeBallRailGapPad = 14.0;
 
+  /// 批次39：二级页（仅播放器形态，`showNav: false`）横屏**纵向展开**
+  /// 播放面板宽度（手机档）。用户口径「横屏二级页面悬浮播放器纵向展开
+  /// 显示」——二级页没有导航纵条，展开体不再沿用一级页的横向控件条
+  /// （270dp 横条盖在内容上），改为贴边纵排玻璃面板（封面在上、歌名/
+  /// 歌手居中、传输钮在下），从球体下方竖向生长。
+  static const double kLandscapeVerticalControlsWidth = 200.0;
+
+  /// Pad 档二级页横屏纵向展开面板宽度（手机档 200 上浮一档）。
+  static const double kLandscapeVerticalControlsWidthPad = 230.0;
+
+  /// 二级页横屏纵向展开面板与球体 / 屏幕底缘（安全区内）的垂直间距。
+  static const double kLandscapeVerticalGap = 10.0;
+
   /// Pad 横屏分档判定（批次35）：横屏 + 视口最短边 ≥
   /// [kLandscapePadBreakpoint]。
   ///
@@ -817,29 +830,60 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
         // 1) 点外坍缩 / 滑动坍缩屏障（仅展开态；translucent 放行下层手势）
         if (_controlsExpanded)
           Positioned.fill(child: _buildLandscapeDismissBarrier()),
-        // 2) 展开体层（靠球侧边缘贴球体内侧边缘，与球体同垂直中心）
-        Positioned(
-          left: edgeStart(padding.left + controlsEdge),
-          right: edgeEnd(padding.right + controlsEdge),
-          top: ballCenterY - ballSize / 2,
-          child: AnimatedSize(
-            duration: _kMorphDuration,
-            curve: Curves.easeOutCubic,
-            // 锚定靠球侧边缘：贴右时右缘固定、向左生长；贴左时左缘固定、
-            // 向右生长——两个方向都从球体向**内侧**伸出，不顶出纵条
-            // （同竖屏播放器部分）。
-            alignment: dockLeft ? Alignment.centerLeft : Alignment.centerRight,
-            child: _controlsExpanded
-                ? _buildLandscapeControlsBody(
-                    player,
-                    song,
-                    duration,
-                    ballSize: ballSize,
-                    controlsWidth: controlsWidth,
-                  )
-                : SizedBox(width: 0, height: ballSize),
+        // 2) 展开体层（批次39 分两形态）：
+        //    二级页（showNav:false，无导航纵条）→ **纵向展开**：面板贴
+        //    纵条同侧边缘、从球体下方竖向生长（top = 球底 + 间距，bottom
+        //    钉在底部安全区上方 + 间距——固定高度区域，封面 Expanded 吃
+        //    剩余高，任何视口不溢出）；
+        //    一级页（showNav:true）→ 横向控件条：靠球侧边缘贴球体内侧
+        //    边缘、与球体同垂直中心。
+        if (!widget.showNav)
+          Positioned(
+            left: edgeStart(
+              edgePadding + GlassDockPlayer.kLandscapeRailRightMargin,
+            ),
+            right: edgeEnd(
+              edgePadding + GlassDockPlayer.kLandscapeRailRightMargin,
+            ),
+            top: ballTop + ballSize + GlassDockPlayer.kLandscapeVerticalGap,
+            bottom: padding.bottom + GlassDockPlayer.kLandscapeVerticalGap,
+            child: AnimatedSize(
+              duration: _kMorphDuration,
+              curve: Curves.easeOutCubic,
+              // 纵向生长：顶缘固定在球体下方，向下展开/坍缩
+              alignment: Alignment.topCenter,
+              child: _controlsExpanded
+                  ? _buildLandscapeVerticalControlsBody(
+                      player,
+                      song,
+                      duration,
+                    )
+                  : const SizedBox(width: 0, height: 0),
+            ),
+          )
+        else
+          Positioned(
+            left: edgeStart(padding.left + controlsEdge),
+            right: edgeEnd(padding.right + controlsEdge),
+            top: ballCenterY - ballSize / 2,
+            child: AnimatedSize(
+              duration: _kMorphDuration,
+              curve: Curves.easeOutCubic,
+              // 锚定靠球侧边缘：贴右时右缘固定、向左生长；贴左时左缘固定、
+              // 向右生长——两个方向都从球体向**内侧**伸出，不顶出纵条
+              // （同竖屏播放器部分）。
+              alignment: dockLeft ? Alignment.centerLeft : Alignment.centerRight,
+              child: _controlsExpanded
+                  ? _buildLandscapeControlsBody(
+                      player,
+                      song,
+                      duration,
+                      ballSize: ballSize,
+                      controlsWidth: controlsWidth,
+                    )
+                  : SizedBox(width: 0, height: ballSize),
+            ),
           ),
-        ),
         // 3) 独立播放球层（批次36：与纵条分离，Positioned 显式定位）
         Positioned(
           left: edgeStart(ballEdge),
@@ -1192,6 +1236,125 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
               icon: Icons.skip_next,
               tooltip: '下一曲',
               onTap: song == null ? null : player.next,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 二级页（仅播放器形态）横屏**纵向展开**播放面板（批次39）。
+  ///
+  /// 形态（用户口径「横屏二级页面悬浮播放器纵向展开显示」）：贴边玻璃
+  /// 纵排面板——封面（吃剩余高、上限 140dp）在上、歌名/歌手居中、
+  /// 上一曲/播放/下一曲传输钮在下；与一级页的横向控件条
+  /// （[_buildLandscapeControlsBody]）共用交互语义：封面/歌名点击进
+  /// 播放页、传输钮走 [PlayerProvider]、点球或点外部（屏障）坍缩、
+  /// 页面滚动脉冲坍缩。定位由 [_buildLandscapeDock] 的 Positioned 顶层
+  /// 完成（top=球底+间距、bottom=底部安全区+间距），本方法只管面板
+  /// 内部——高度由父级约束固定，任何视口不溢出（极端矮视口下封面
+  /// 相应收窄，标题/按钮行高约 110dp 为硬下限）。
+  Widget _buildLandscapeVerticalControlsBody(
+    PlayerProvider player,
+    dynamic song,
+    Duration? duration,
+  ) {
+    final cs = Theme.of(context).colorScheme;
+    final isPad = GlassDockPlayer.isPadLandscape(context);
+    final panelWidth = isPad
+        ? GlassDockPlayer.kLandscapeVerticalControlsWidthPad
+        : GlassDockPlayer.kLandscapeVerticalControlsWidth;
+    return LiquidGlassContainer(
+      key: const ValueKey('glass_dock_landscape_controls_vertical'),
+      shape: GlassShape.pill,
+      padding: const EdgeInsets.all(12),
+      child: SizedBox(
+        width: panelWidth - 24,
+        child: Column(
+          children: [
+            // 封面：吃掉标题/按钮之外的剩余高（上限 140dp），点击进播放页。
+            Expanded(
+              child: Center(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final side = constraints.biggest.shortestSide.clamp(
+                      0.0,
+                      140.0,
+                    );
+                    return GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: song == null ? null : () => openFullPlayer(context),
+                      child: SizedBox(
+                        width: side,
+                        height: side,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: PlayerArtworkImage(
+                            artworkUri: song?.artworkUri as String?,
+                            fallbackFilePath: song?.localPath as String?,
+                            fit: BoxFit.cover,
+                            iconSize: 36,
+                            backgroundColor: cs.surfaceContainerHighest,
+                            iconColor: cs.onSurfaceVariant,
+                            // 面板封面比球内缩略图大，解码上限放宽到 256px。
+                            decodeCap: 256,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            // 歌名 / 歌手：居中，点击进播放页。
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: song == null ? null : () => openFullPlayer(context),
+              child: Column(
+                children: [
+                  Text(
+                    song?.displayName ?? '未在播放',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  Text(
+                    song?.artist ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            // 传输钮：与横向控件条同一 [_DockIconButton] 配方，横排居中。
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _DockIconButton(
+                  icon: Icons.skip_previous,
+                  tooltip: '上一曲',
+                  onTap: song == null ? null : player.previous,
+                ),
+                _DockIconButton(
+                  icon: player.isPlaying ? Icons.pause : Icons.play_arrow,
+                  tooltip: player.isPlaying ? '暂停' : '播放',
+                  onTap: song == null
+                      ? null
+                      : () => player.isPlaying ? player.pause() : player.resume(),
+                ),
+                _DockIconButton(
+                  icon: Icons.skip_next,
+                  tooltip: '下一曲',
+                  onTap: song == null ? null : player.next,
+                ),
+              ],
             ),
           ],
         ),
