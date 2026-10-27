@@ -34,6 +34,11 @@ ImageProvider backgroundImageProvider(
 /// 但按**全屏尺寸 + topCenter 对齐**渲染：图片缩放比例与主体背景一致，
 /// 头部区域显示背景图在自身位置处的切片，与页面主体视觉连续。
 /// 外层需自行裁剪（Sliver 区域），避免全屏溢出覆盖下方内容。
+///
+/// 批次 40 取证说明：二级详情页头部与路由过渡内嵌的主体 [AppBackground]
+/// 同图同切片，头部切片的 opaque surface 打底会把主体层在头部区域盖住，
+/// 头部可见壁纸仍恒为 1 层（渐变 tint 只叠一次），视觉等价单层——保留
+/// 头部切片（头部沉浸设计，保证头部壁纸不依赖页面主体层）。
 class WallpaperHeaderBackground extends StatelessWidget {
   const WallpaperHeaderBackground({super.key});
 
@@ -58,7 +63,17 @@ class WallpaperHeaderBackground extends StatelessWidget {
 ///
 /// 作为页面内容的底层（页面 Scaffold 背景透明时透出），并**随页面一起位移/
 /// 过渡**——路由入场动画时背景图跟着画面滑动，避免"背景固定、页面跳变"的
-/// 分离感。主页与所有二级页面统一使用（移除全局固定背景层）。
+/// 分离感。
+///
+/// 挂载点有两处（双层架构，批次 40 取证确认，任意页面可见壁纸恒 1 层）：
+/// - **tab 页**：app.dart MaterialApp.builder Stack 的全局壁纸层（tab 页
+///   不走 MaterialPageRoute，没有路由过渡内嵌层，全局层是唯一壁纸来源）；
+/// - **MaterialPageRoute 二级页**：app_theme.dart `_BgSafeFadeForwardsBuilder`
+///   给每条路由的过渡 child 内嵌一层，随页面位移入场。
+/// 过渡叠放期间新页内嵌层的 opaque surface 打底盖住下层旧页背景，且两层
+/// 同图同 cacheWidth 共享 ImageCache 同一解码结果——无双壁纸叠乘、无
+/// 双份解码内存。（批次 40 曾核对「移除全局固定背景层」的旧说法：全局层
+/// 实际保留，旧说法与实现矛盾，已随本批次修正。）
 ///
 /// 开关关闭时返回空（保持页面原样）；开关开启时优先用用户选择的图片，
 /// 无有效用户图片时回落到内置默认壁纸（始终有背景，避免"无背景"状态导致

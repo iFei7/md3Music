@@ -30,7 +30,10 @@
 ///    （1200×800）断言 Pad 档几何（纵条 60 / 球 48 / 项径 48 / 项距 6 /
 ///    球距 12→14 / 展开宽 320 / 避让 72 且与 Dock 侧同源派生）；手机横屏
 ///    宿主（800×400 / 800×599）回归锁——手机档数值逐字节不变；拖拽
-///    阈值在 Pad 大长边上的钳制行为（0.2×1440=288 → 240）。
+///    阈值在 Pad 大长边上的钳制行为（0.2×1440=288 → 240）；
+/// 10. **批次40 二级页恒展开纵向面板**：showNav:false 横屏面板常驻（无球态、
+///    无需 tap 即在场、贴配置边/宽=档位/top-bottom 锚点、点击面板进播放页、
+///    滚动脉冲与真实滚动均不坍缩、靠左镜像）；一级页形态回归锁不变。
 library;
 
 import 'package:flutter/material.dart';
@@ -63,6 +66,9 @@ const _ballKey = ValueKey('glass_dock_landscape_ball');
 const _controlsKey = ValueKey('glass_dock_landscape_controls');
 const _barrierKey = ValueKey('glass_dock_landscape_dismiss_barrier');
 const _navItemKeyPrefix = 'glass_dock_landscape_nav_';
+
+// 批次39 建立的二级页横屏纵向面板 key（批次40 起该面板恒常驻）。
+const _verticalPanelKey = ValueKey('glass_dock_landscape_controls_vertical');
 
 // 竖屏底部横条的既有 key（对照组断言口径，照抄 dock_player_collapse_test）。
 const _portraitPlayerButtonKey = ValueKey('glass_dock_player_button');
@@ -1176,7 +1182,22 @@ void main() {
       }
     });
 
-    testWidgets('⑤ 横屏仅播放器形态（二级页）：无纵条、仅独立球居中、纵向展开（批次39）', (tester) async {
+    // 批次40：原「⑤ 横屏仅播放器形态（二级页）：无纵条、仅独立球居中、
+    // 纵向展开（批次39）」用例已按恒展开语义整体迁出至下方
+    // 「二级页恒展开纵向面板（批次40）」group（球+点击展开旧口径废止）。
+  });
+
+  // ── 批次40：二级页（showNav:false）横屏恒展开纵向玻璃面板 ──
+  // 用户口径「二级页面播放器恒定展开，样式参考纵向悬浮 dock」：面板
+  // 样式即批次39 的纵向展开面板（封面在上/歌名歌手居中/传输钮在下），
+  // 但**恒常驻**——去掉「先点球再展开」步骤，不再渲染独立播放球与
+  // 展开动画；滚动脉冲坍缩与点外坍缩屏障在该形态下失效（面板常驻不能
+  // 被滚动/点击外部收起）；点击面板（封面/歌名/空白区）进完整播放页。
+  // 一级页形态（球+横向展开+滚动/点外坍缩）与竖屏底部 Dock 完全不动。
+  group('二级页恒展开纵向面板（批次40）', () {
+    testWidgets('① 恒展开：无球态、无需 tap 面板在场、贴边/宽度/top-bottom 锚点', (
+      tester,
+    ) async {
       final (:player, :audio) = await _pumpApp(
         tester,
         viewport: const Size(800, 400),
@@ -1184,62 +1205,156 @@ void main() {
         showNav: false,
       );
       try {
-        // 批次36：无导航形态不渲染纵条（球独立后胶囊内只剩球没有意义）
+        // 无导航纵条、无导航项（showNav: false，沿用批次36 口径）
         expect(find.byKey(_railKey), findsNothing);
-        // 无导航项（showNav: false）
         expect(
           find.byKey(const ValueKey('${_navItemKeyPrefix}discover')),
           findsNothing,
         );
-        // 横屏形态定义：播放球初始坍缩（点击展开 / 点外坍缩）
+        // 批次40 核心断言：恒展开——面板无需任何交互直接在场
+        expect(
+          find.byKey(_verticalPanelKey),
+          findsOneWidget,
+          reason: '批次40：纵向面板应常驻显示（无需先点球展开）',
+        );
+        // 无球态：独立播放球不再渲染（去掉「先点球再展开」步骤）
+        expect(
+          find.byKey(_ballKey),
+          findsNothing,
+          reason: '批次40：二级页不再渲染独立播放球（无坍缩成球的状态）',
+        );
+        // 不用一级页横向控件条；恒展开无常驻点外坍缩屏障
         expect(find.byKey(_controlsKey), findsNothing);
-        expect(find.byKey(_ballKey), findsOneWidget);
-        // 独立球单独垂直居中（组合体只剩球）
-        final ball = tester.getRect(find.byKey(_ballKey));
-        expect(ball.center.dy, closeTo(200, 0.5));
-        // 球右缘仍在避让带内（与一级形态同列：右距 12 + 居中偏移 5）
         expect(
-          ball.right,
-          closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin - 5, 0.001),
+          find.byKey(_barrierKey),
+          findsNothing,
+          reason: '恒展开语义下点外坍缩屏障不应存在',
         );
-
-        // 批次 39：点击展开 → **纵向展开面板**（用户口径「横屏二级页面
-        // 悬浮播放器纵向展开显示」），不再用一级页的横向控件条
-        await tester.tap(find.byKey(_ballKey));
-        await tester.pumpAndSettle();
-        await tester.pump(const Duration(milliseconds: 300));
-        expect(find.byKey(_controlsKey), findsNothing, reason: '二级页不用横向控件条');
-        const verticalKey = ValueKey('glass_dock_landscape_controls_vertical');
-        expect(find.byKey(verticalKey), findsOneWidget);
-        final panel = tester.getRect(find.byKey(verticalKey));
-        // 面板在球体**下方**竖向生长：顶缘 = 球底 + 间距 10
-        expect(
-          panel.top,
-          closeTo(ball.bottom + GlassDockPlayer.kLandscapeVerticalGap, 0.5),
-        );
-        // 宽度 = 手机档纵排面板 200
-        expect(
-          panel.width,
-          closeTo(GlassDockPlayer.kLandscapeVerticalControlsWidth, 0.001),
-        );
-        // 贴边：面板右缘与纵条右缘同口径（右距 12）
-        expect(
-          panel.right,
-          closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
-        );
-        // 面板内容：封面（ artwork ）+ 歌名/歌手 + 三传输钮
+        // 面板内容（批次39 样式原样）：封面 + 歌名/歌手 + 三传输钮
         expect(find.text('第一首歌'), findsOneWidget);
         expect(find.text('测试歌手'), findsOneWidget);
         expect(find.byTooltip('上一曲'), findsOneWidget);
         expect(find.byTooltip('播放'), findsOneWidget);
         expect(find.byTooltip('下一曲'), findsOneWidget);
-        // 点外坍缩屏障出现；再点球坍缩
-        expect(find.byKey(_barrierKey), findsOneWidget);
-        await tester.tap(find.byKey(_ballKey));
+
+        // 几何：宽度 = 手机档 200
+        final panel = tester.getRect(find.byKey(_verticalPanelKey));
+        expect(
+          panel.width,
+          closeTo(GlassDockPlayer.kLandscapeVerticalControlsWidth, 0.001),
+        );
+        // 贴配置边（默认右）：面板右缘 = 屏右 − 右距 12
+        expect(
+          panel.right,
+          closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
+        );
+        // top 锚点沿用批次39 口径：虚拟球位底缘 + 间距 10（无纵条时组合体
+        // 只剩球、垂直居中 → 球底 = (400−42)/2 + 42 = 221，+10 = 231）
+        const ballSize = GlassDockPlayer.kLandscapeBallSize;
+        final anchorTop =
+            (400 - ballSize) / 2 +
+            ballSize +
+            GlassDockPlayer.kLandscapeVerticalGap;
+        expect(panel.top, closeTo(anchorTop, 0.5));
+        // bottom 锚点 = 底部安全区 + 间距 10（测试视口安全区为 0）
+        expect(
+          panel.bottom,
+          closeTo(400 - GlassDockPlayer.kLandscapeVerticalGap, 0.5),
+        );
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('① 靠左配置：面板镜像贴左（左缘 = 左距 12，几何同源换边）', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(800, 400),
+        songs: [_localSong('s1', '第一首歌')],
+        showNav: false,
+      );
+      try {
+        kLandscapeDockSide.value = LandscapeDockSide.left;
+        await tester.pump();
+        await tester.pump();
+
+        expect(
+          find.byKey(_verticalPanelKey),
+          findsOneWidget,
+          reason: '切边后面板仍常驻',
+        );
+        final panel = tester.getRect(find.byKey(_verticalPanelKey));
+        expect(
+          panel.left,
+          closeTo(GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
+          reason: '靠左配置：面板贴左（同一边距 12，镜像复用）',
+        );
+        expect(
+          panel.width,
+          closeTo(GlassDockPlayer.kLandscapeVerticalControlsWidth, 0.001),
+        );
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('② 点击面板空白区进播放页（openFullPlayer 路由推入）', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(800, 400),
+        songs: [_localSong('s1', '第一首歌')],
+        showNav: false,
+      );
+      try {
+        expect(activePlayerRoute, isNull, reason: '前置：播放页未在栈中');
+        final panel = tester.getRect(find.byKey(_verticalPanelKey));
+        // 面板顶部玻璃 padding 空白带（容器 padding 12 内、内容 Column 之外）
+        // ——封面/歌名/传输钮之外的「空白区」点击同样进播放页
+        await tester.tapAt(Offset(panel.center.dx, panel.top + 5));
         await tester.pumpAndSettle();
         await tester.pump(const Duration(milliseconds: 300));
-        expect(find.byKey(verticalKey), findsNothing, reason: '再点球应坍缩');
-        expect(find.byKey(_barrierKey), findsNothing);
+        expect(
+          activePlayerRoute,
+          isNotNull,
+          reason: '点击面板（空白区）应打开完整播放页',
+        );
+      } finally {
+        await _teardown(tester, player, audio);
+      }
+    });
+
+    testWidgets('③ 滚动内容面板不坍缩（滚动脉冲 / 真实滚动均失效）', (tester) async {
+      final (:player, :audio) = await _pumpApp(
+        tester,
+        viewport: const Size(800, 400),
+        songs: [_localSong('s1', '第一首歌')],
+        showNav: false,
+        scrollableContent: true,
+      );
+      try {
+        expect(find.byKey(_verticalPanelKey), findsOneWidget);
+        // 程序化滚动脉冲（app.dart 注入点广播）：常驻面板不得被收起
+        GlassDockPlayer.notifyContentScrolled();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(
+          find.byKey(_verticalPanelKey),
+          findsOneWidget,
+          reason: '滚动脉冲不得坍缩常驻面板（恒展开语义）',
+        );
+        // 真实拖拽内容滚动：同样不坍缩（也无球可坍缩成）
+        await tester.drag(
+          find.byKey(const ValueKey('page_probe')),
+          const Offset(0, -120),
+        );
+        await tester.pumpAndSettle();
+        expect(_scrollController!.offset, greaterThan(0.0));
+        expect(
+          find.byKey(_verticalPanelKey),
+          findsOneWidget,
+          reason: '真实滚动内容不得坍缩常驻面板',
+        );
+        expect(find.byKey(_ballKey), findsNothing);
       } finally {
         await _teardown(tester, player, audio);
       }

@@ -39,6 +39,11 @@
 /// 状态栏变体：sb=0（stops 退化 [0,1] 两色）与 sb=24（状态栏锚定三段
 /// stops [0, 24/(24+44), 1]，批次 39 横屏滚动态为紧凑带 44dp）各取证
 /// 一轮，覆盖 tint 渐变的两个分支。
+///
+/// 批次 40 追加（用户定性反馈「顶栏透明度」= 顶栏之下背景层数盘点）：
+/// 新增**二级详情页头部图层清点**组（playlist detail 为代表）——壁纸关
+/// 零壁纸层、壁纸开头部切片唯一 + SliverAppBar 透明 + 头部 AppBackground
+/// 实例数锁死上限（宿主 1 / 真机 2，不允许第 3 个）。详见对应组注释。
 library;
 
 import 'dart:typed_data';
@@ -51,8 +56,13 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:md3music/core/theme/app_theme.dart';
+import 'package:md3music/core/widgets/app_background.dart';
+import 'package:md3music/data/models/playlist.dart';
+import 'package:md3music/data/repositories/favorite_lists_cache.dart';
+import 'package:md3music/data/models/song.dart';
 import 'package:md3music/modules/discover/discover_page.dart';
 import 'package:md3music/modules/library/library_hub_page.dart';
+import 'package:md3music/modules/playlist/playlist_page.dart';
 import 'package:md3music/modules/search/search_page.dart';
 import 'package:md3music/modules/settings/settings_page.dart';
 import 'package:md3music/modules/user/favorites_page.dart';
@@ -110,6 +120,25 @@ class _StubAdapter implements HttpClientAdapter {
       headers: const {
         Headers.contentTypeHeader: [Headers.jsonContentType],
       },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+/// 离线失败替身（批次 40 playlist 详情页用）：让页面 `_fetchSongs` 走
+/// 「缓存保留」分支（与线上断网场景同路径，配合 FavoriteListsCache 种子）。
+class _FailingAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    throw DioException.connectionError(
+      requestOptions: options,
+      reason: 'offline test adapter',
     );
   }
 
@@ -504,5 +533,185 @@ void main() {
       await pumpScrolled(tester, entry.value, wallpaper: true);
       await assertBandLayersZero(tester, entry.key, wallpaper: true);
     }
+  });
+
+  // ---------------------------------------------------------------------
+  // 批次 40：二级详情页头部图层清点（playlist detail 为代表页）。
+  //
+  // 背景（用户定性反馈）：「顶栏透明度」——盘点所有页面顶栏之下的背景层数，
+  // 找出多余叠层并统一。取证结论（临时 dump 测试，批次 40 交回前已删）：
+  // - 壁纸**关**：playlist 头部无 AppBackground / WallpaperHeaderBackground，
+  //   头部渐变为 primaryContainer 实色（α1.0），SliverAppBar 展开态透明；
+  // - 壁纸**开**：头部 flexibleSpace 内 WallpaperHeaderBackground（内嵌
+  //   AppBackground 全屏切片：opaque surface 打底 + ImageFiltered 模糊 +
+  //   Opacity(bgOpacity) 图）+ primaryContainer α0.35 渐变，SliverAppBar
+  //   透明。真机运行时另有路由过渡内嵌的 AppBackground（页面主体壁纸
+  //   来源）叠在页面 Stack 底部，其头部区域被头部切片的 opaque surface
+  //   打底完全盖住——头部可见壁纸恒 1 层、渐变只叠一次，视觉等价单层。
+  //
+  // 本组断言（宿主装配清除了路由过渡 builder，树内 AppBackground 只来自
+  // 头部切片；真机上限 = 头部 1 + 路由过渡 1 = 2，不允许第 3 个）：
+  // ① 壁纸关：树内零 AppBackground / 零 WallpaperHeaderBackground，
+  //    SliverAppBar 展开态背景透明；
+  // ② 壁纸开：头部区域内 AppBackground 实例数 = 1（宿主无路由层；真机
+  //    加路由过渡层 = 2 为允许上限）、WallpaperHeaderBackground 恰 1 个、
+  //    SliverAppBar 背景透明（非透明数 = 0）。
+  // ---------------------------------------------------------------------
+
+  /// 与批次 38 通栏口径一致：头部区域（0,0,800,280）内左右铺满、alpha==1
+  /// 的 [ColoredBox] 只允许 1 个 = AppBackground 的 surface 打底层（壁纸
+  /// 栈自身打底，封面占位等有页边距/小尺寸不落入）。
+  Future<void> assertHeadLayers(
+    WidgetTester tester,
+    String pageKey, {
+    required int opaqueColoredBoxes,
+    required int appBackgrounds,
+  }) async {
+    const head = Rect.fromLTWH(0, 0, 800, 280);
+    var coloredBoxes = 0;
+    for (final w in tester.widgetList<ColoredBox>(find.byType(ColoredBox))) {
+      final Rect rect;
+      try {
+        rect = tester.getRect(find.byWidget(w));
+      } catch (_) {
+        continue;
+      }
+      final fullBleed = rect.left <= 0 && rect.right >= head.right;
+      if (rect.overlaps(head) && fullBleed && w.color.a >= 1.0) {
+        coloredBoxes++;
+      }
+    }
+    var backgrounds = 0;
+    for (final w
+        in tester.widgetList<AppBackground>(find.byType(AppBackground))) {
+      final Rect rect;
+      try {
+        rect = tester.getRect(find.byWidget(w));
+      } catch (_) {
+        continue;
+      }
+      if (rect.overlaps(head)) backgrounds++;
+    }
+    expect(
+      coloredBoxes,
+      opaqueColoredBoxes,
+      reason: '$pageKey 头部区域通栏 alpha==1 的 ColoredBox 应为 '
+          '$opaqueColoredBoxes 个（AppBackground surface 打底，批次 40）',
+    );
+    expect(
+      backgrounds,
+      appBackgrounds,
+      reason: '$pageKey 头部区域 AppBackground 实例应为 $appBackgrounds 个'
+          '（真机上限 = 头部切片 1 + 路由过渡 1 = 2，不允许第 3 个，批次 40）',
+    );
+  }
+
+  testWidgets('批次40 playlist（壁纸关）：头部零壁纸层 + SliverAppBar 展开态透明', (tester) async {
+    // ThemeProvider._loadBackgroundImage 异步读 prefs（缺省 ?? true）会
+    // 覆盖 initialUseBackgroundImage，必须种子 prefs 才能真正关掉壁纸。
+    SharedPreferences.setMockInitialValues({'use_background_image': false});
+    const songs = [
+      Song(
+        id: 'song-0',
+        title: '歌曲0',
+        artist: '歌手0',
+        album: '专辑0',
+        duration: Duration(seconds: 200),
+        isOnline: true,
+      ),
+    ];
+    // 页面 cacheKey 优先级：subscribedListId ?? listCreateListid ?? id。
+    await FavoriteListsCache.savePlaylistSongs('test-listid', songs);
+    await FavoriteListsCache.savePlaylistSongs('test-playlist-id', songs);
+    // 离线失败替身：_fetchSongs 走「缓存保留」分支（与线上断网同路径）。
+    final client = KugouApiClient();
+    final previous = client.dio.httpClientAdapter;
+    client.dio.httpClientAdapter = _FailingAdapter();
+    addTearDown(() => client.dio.httpClientAdapter = previous);
+    useLandscapeViewport(tester);
+    await pumpScrolled(
+      tester,
+      const PlaylistPage(
+        playlist: Playlist(
+          id: 'test-playlist-id',
+          name: '测试歌单',
+          songCount: 1,
+          songs: [],
+          listCreateListid: 'test-listid',
+        ),
+        isInMyFavorites: true,
+        isUserCreated: true,
+      ),
+    );
+    expect(
+      find.byType(AppBackground),
+      findsNothing,
+      reason: 'playlist（壁纸关）不应有任何壁纸栈（AppBackground 特征组件）',
+    );
+    expect(
+      find.byType(WallpaperHeaderBackground),
+      findsNothing,
+      reason: 'playlist（壁纸关）头部不应有壁纸切片层',
+    );
+    final bar = tester.widget<SliverAppBar>(find.byType(SliverAppBar).first);
+    expect(
+      bar.backgroundColor,
+      Colors.transparent,
+      reason: 'playlist（壁纸关）SliverAppBar 展开态背景应透明'
+          '（折叠态切 surface 是既有设计，不在本断言范围）',
+    );
+    await assertHeadLayers(tester, 'playlist(壁纸关)',
+        opaqueColoredBoxes: 0, appBackgrounds: 0);
+  });
+
+  testWidgets('批次40 playlist（壁纸开）：头部壁纸切片唯一 + SliverAppBar 透明', (tester) async {
+    const songs = [
+      Song(
+        id: 'song-0',
+        title: '歌曲0',
+        artist: '歌手0',
+        album: '专辑0',
+        duration: Duration(seconds: 200),
+        isOnline: true,
+      ),
+    ];
+    await FavoriteListsCache.savePlaylistSongs('test-listid', songs);
+    await FavoriteListsCache.savePlaylistSongs('test-playlist-id', songs);
+    final client = KugouApiClient();
+    final previous = client.dio.httpClientAdapter;
+    client.dio.httpClientAdapter = _FailingAdapter();
+    addTearDown(() => client.dio.httpClientAdapter = previous);
+    useLandscapeViewport(tester);
+    await pumpScrolled(
+      tester,
+      const PlaylistPage(
+        playlist: Playlist(
+          id: 'test-playlist-id',
+          name: '测试歌单',
+          songCount: 1,
+          songs: [],
+          listCreateListid: 'test-listid',
+        ),
+        isInMyFavorites: true,
+        isUserCreated: true,
+      ),
+      wallpaper: true,
+    );
+    expect(
+      find.byType(WallpaperHeaderBackground),
+      findsOneWidget,
+      reason: 'playlist（壁纸开）头部应恰有 1 个壁纸切片层（flexibleSpace 内嵌）',
+    );
+    // 宿主清除了路由过渡 builder：树内 AppBackground 仅头部切片内嵌 1 个。
+    // 真机另有路由过渡内嵌 1 个（页面主体壁纸来源）→ 全页实例数上限 2，
+    // 头部区域可见壁纸恒 1 层（路由层被头部切片 opaque 打底盖住）。
+    await assertHeadLayers(tester, 'playlist(壁纸开)',
+        opaqueColoredBoxes: 1, appBackgrounds: 1);
+    final bar = tester.widget<SliverAppBar>(find.byType(SliverAppBar).first);
+    expect(
+      bar.backgroundColor,
+      Colors.transparent,
+      reason: 'playlist（壁纸开）SliverAppBar 背景应透明（非透明数 = 0）',
+    );
   });
 }
