@@ -31,9 +31,11 @@
 ///    球距 12→14 / 展开宽 320 / 避让 72 且与 Dock 侧同源派生）；手机横屏
 ///    宿主（800×400 / 800×599）回归锁——手机档数值逐字节不变；拖拽
 ///    阈值在 Pad 大长边上的钳制行为（0.2×1440=288 → 240）；
-/// 10. **批次40 二级页恒展开纵向面板**：showNav:false 横屏面板常驻（无球态、
-///    无需 tap 即在场、贴配置边/宽=档位/top-bottom 锚点、点击面板进播放页、
-///    滚动脉冲与真实滚动均不坍缩、靠左镜像）；一级页形态回归锁不变。
+/// 10. **批次40/41 二级页恒展开纵向胶囊播放器**：showNav:false 横屏胶囊
+///    常驻（与导航纵条同源形状：宽=纵条宽、贴配置边、垂直居中；从上到下
+///    封面/上一曲/播放暂停/下一曲，无歌名文本；无球态、无需 tap 即在场、
+///    点击进播放页、滚动脉冲与真实滚动均不坍缩、靠左镜像）；一级页形态
+///    回归锁不变。
 library;
 
 import 'package:flutter/material.dart';
@@ -1187,14 +1189,15 @@ void main() {
     // 「二级页恒展开纵向面板（批次40）」group（球+点击展开旧口径废止）。
   });
 
-  // ── 批次40：二级页（showNav:false）横屏恒展开纵向玻璃面板 ──
-  // 用户口径「二级页面播放器恒定展开，样式参考纵向悬浮 dock」：面板
-  // 样式即批次39 的纵向展开面板（封面在上/歌名歌手居中/传输钮在下），
-  // 但**恒常驻**——去掉「先点球再展开」步骤，不再渲染独立播放球与
-  // 展开动画；滚动脉冲坍缩与点外坍缩屏障在该形态下失效（面板常驻不能
-  // 被滚动/点击外部收起）；点击面板（封面/歌名/空白区）进完整播放页。
-  // 一级页形态（球+横向展开+滚动/点外坍缩）与竖屏底部 Dock 完全不动。
-  group('二级页恒展开纵向面板（批次40）', () {
+  // ── 批次41：二级页（showNav:false）横屏恒展开纵向胶囊播放器 ──
+  // 用户口径「横屏悬浮播放器完全不对，需要纵向胶囊形状，参考纵向 dock
+  // 栏，纵向悬浮播放器从上到下，封面、上一曲、播放暂停、下一曲」：
+  // 胶囊与导航纵条**同源配方**（玻璃 pill、同宽 railWidth 52/60、同边距
+  // 12、同内边距 horizontal 4/6 + vertical 8），内容从上到下 = 封面 +
+  // 三传输钮（compact IconButton 40dp），在纵条应在的位置垂直居中常驻；
+  // 批次40「恒展开」语义延续——无球态、无坍缩（滚动脉冲/点外失效），
+  // 点击胶囊进完整播放页。一级页形态与竖屏底部 Dock 完全不动。
+  group('二级页恒展开纵向胶囊（批次41）', () {
     testWidgets('① 恒展开：无球态、无需 tap 面板在场、贴边/宽度/top-bottom 锚点', (
       tester,
     ) async {
@@ -1230,37 +1233,39 @@ void main() {
           findsNothing,
           reason: '恒展开语义下点外坍缩屏障不应存在',
         );
-        // 面板内容（批次39 样式原样）：封面 + 歌名/歌手 + 三传输钮
-        expect(find.text('第一首歌'), findsOneWidget);
-        expect(find.text('测试歌手'), findsOneWidget);
+        // 胶囊内容（批次41 口径）：封面 + 三传输钮**纵排**，无歌名/歌手
+        // 文本（胶囊窄放不下，用户未要求）
+        expect(find.text('第一首歌'), findsNothing);
         expect(find.byTooltip('上一曲'), findsOneWidget);
         expect(find.byTooltip('播放'), findsOneWidget);
         expect(find.byTooltip('下一曲'), findsOneWidget);
+        // 纵排顺序（用户口径「从上到下」）：上一曲 dy < 播放 dy < 下一曲 dy
+        final prevTop = tester.getRect(find.byTooltip('上一曲')).top;
+        final playTop = tester.getRect(find.byTooltip('播放')).top;
+        final nextTop = tester.getRect(find.byTooltip('下一曲')).top;
+        expect(prevTop, lessThan(playTop));
+        expect(playTop, lessThan(nextTop));
 
-        // 几何：宽度 = 手机档 200
+        // 几何：与导航纵条同源——宽度 = 纵条宽 52（批次41 取代批次39/40
+        // 的 200 宽面板）
         final panel = tester.getRect(find.byKey(_verticalPanelKey));
         expect(
           panel.width,
-          closeTo(GlassDockPlayer.kLandscapeVerticalControlsWidth, 0.001),
+          closeTo(GlassDockPlayer.kLandscapeRailWidth, 0.001),
         );
-        // 贴配置边（默认右）：面板右缘 = 屏右 − 右距 12
+        // 贴配置边（默认右）：胶囊右缘 = 屏右 − 右距 12
         expect(
           panel.right,
           closeTo(800 - GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
         );
-        // top 锚点沿用批次39 口径：虚拟球位底缘 + 间距 10（无纵条时组合体
-        // 只剩球、垂直居中 → 球底 = (400−42)/2 + 42 = 221，+10 = 231）
-        const ballSize = GlassDockPlayer.kLandscapeBallSize;
-        final anchorTop =
-            (400 - ballSize) / 2 +
-            ballSize +
-            GlassDockPlayer.kLandscapeVerticalGap;
-        expect(panel.top, closeTo(anchorTop, 0.5));
-        // bottom 锚点 = 底部安全区 + 间距 10（测试视口安全区为 0）
-        expect(
-          panel.bottom,
-          closeTo(400 - GlassDockPlayer.kLandscapeVerticalGap, 0.5),
-        );
+        // 垂直居中（与纵条组合体同口径）：胶囊高 = 垂直内边距(8×2) +
+        // 封面(52 − 横向内边距 4×2 = 44，与导航项同宽) + 封面-按钮间距(4)
+        // + 三传输钮（compact IconButton 命中区 40×3）= 184
+        // → top = (400 − 184)/2 = 108
+        const capsuleHeight = 16.0 + 44.0 + 4.0 + 3 * 40.0;
+        expect(panel.height, closeTo(capsuleHeight, 0.5));
+        expect(panel.top, closeTo((400 - capsuleHeight) / 2, 0.5));
+        expect(panel.bottom, closeTo((400 + capsuleHeight) / 2, 0.5));
       } finally {
         await _teardown(tester, player, audio);
       }
@@ -1287,11 +1292,11 @@ void main() {
         expect(
           panel.left,
           closeTo(GlassDockPlayer.kLandscapeRailRightMargin, 0.001),
-          reason: '靠左配置：面板贴左（同一边距 12，镜像复用）',
+          reason: '靠左配置：胶囊贴左（同一边距 12，镜像复用）',
         );
         expect(
           panel.width,
-          closeTo(GlassDockPlayer.kLandscapeVerticalControlsWidth, 0.001),
+          closeTo(GlassDockPlayer.kLandscapeRailWidth, 0.001),
         );
       } finally {
         await _teardown(tester, player, audio);
@@ -1308,8 +1313,8 @@ void main() {
       try {
         expect(activePlayerRoute, isNull, reason: '前置：播放页未在栈中');
         final panel = tester.getRect(find.byKey(_verticalPanelKey));
-        // 面板顶部玻璃 padding 空白带（容器 padding 12 内、内容 Column 之外）
-        // ——封面/歌名/传输钮之外的「空白区」点击同样进播放页
+        // 胶囊顶部玻璃 padding 空白带（垂直 padding 8 内、内容 Column 之外）
+        // ——封面/传输钮之外的「空白区」点击同样进播放页
         await tester.tapAt(Offset(panel.center.dx, panel.top + 5));
         await tester.pumpAndSettle();
         await tester.pump(const Duration(milliseconds: 300));
