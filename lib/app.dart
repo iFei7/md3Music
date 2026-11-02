@@ -193,10 +193,28 @@ class MyApp extends StatelessWidget {
 /// [GlassDockPlayer.isPadLandscape] 选 Pad 档几何；本层的避让注入
 /// （见 [_AppViewState] 内二级页注入）按同一判定选档，两侧同源。
 class _SecondaryFloatingPlayer extends StatelessWidget {
-  const _SecondaryFloatingPlayer();
+  const _SecondaryFloatingPlayer({
+    required this.selectedTabId,
+    required this.onSelectTab,
+  });
+
+  /// 当前选中 tab id（主布局接线，横屏纵条导航项选中态消费）。
+  final String selectedTabId;
+
+  /// 导航项点击回调（主布局接线：横屏二级页点导航项 = 回主布局并切
+  /// tab，见 builder 注入点注释；竖屏 showNav:false 不消费）。
+  final ValueChanged<String> onSelectTab;
 
   @override
   Widget build(BuildContext context) {
+    // 批次42：横屏二级页与一级页**同构**（用户口径「横屏二级页面显示
+    // 悬浮播放器改为和一级页面一致常驻悬浮 dock 和悬浮播放器球」）——
+    // showNav 随方向换挡：横屏 true（纵条 + 球，GlassDockPlayer 内部
+    // 恒渲染），竖屏 false（仅播放器底部居中恒展开胶囊，批次24 语义
+    // 保持不变）。方向变化经 MediaQuery 传入重建，GlassDockPlayer 的
+    // didUpdateWidget 复位展开态。
+    final isLandscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
     // 本 Dock 挂在 MaterialApp.builder 的 Stack（Navigator 之上），没有
     // Overlay 祖先——播放器胶囊内的 Tooltip 需要 Overlay 才能建浮层，
     // 自带一个铺满全屏的 Overlay 承载（Positioned.fill 提供有界约束，
@@ -209,11 +227,11 @@ class _SecondaryFloatingPlayer extends StatelessWidget {
           OverlayEntry(
             builder: (_) => GlassDockPlayer(
               key: const ValueKey('secondary_dock'),
-              selectedTabId: '',
-              onSelectTab: (_) {},
+              selectedTabId: selectedTabId,
+              onSelectTab: onSelectTab,
               navExpanded: _kSecondaryNavExpandedNotifier,
               onNavExpandedChanged: (_) {},
-              showNav: false,
+              showNav: isLandscape,
             ),
           ),
         ],
@@ -226,6 +244,15 @@ class _SecondaryFloatingPlayer extends StatelessWidget {
 /// [GlassDockPlayer] 内部保证）。
 final ValueNotifier<bool> _kSecondaryNavExpandedNotifier = ValueNotifier<bool>(
   true,
+);
+
+/// 批次42：主布局当前选中 tab id。横屏二级页 Dock 的纵条导航项选中态
+/// 在 builder 层消费——二级页 Dock 挂在 MaterialApp.builder 的 Stack
+/// （Navigator 之上），拿不到 [_MainLayoutState] 私有的 _selectedIndex，
+/// 经此全局量同步（_MainLayoutState 初始化与每次切 tab 时写回，builder
+/// 侧 ListenableBuilder 监听即时重建）。
+final ValueNotifier<String> mainLayoutSelectedTabId = ValueNotifier<String>(
+  'discover',
 );
 
 class _AppView extends StatefulWidget {
@@ -422,6 +449,8 @@ class _AppViewState extends State<_AppView> {
                 listenable: Listenable.merge([
                   _secondaryDock,
                   kLandscapeDockSide,
+                  // 批次42：主布局切 tab 时同步二级页 Dock 的导航选中态。
+                  mainLayoutSelectedTabId,
                 ]),
                 builder: (context, _) {
                   // 二级路由态：整屏不透明路由盖住主布局（含完整 Dock），
@@ -520,8 +549,25 @@ class _AppViewState extends State<_AppView> {
                       // ignore: deprecated_member_use
                       MaterialUiCompatibilityBridge(child: navigator),
                       if (showSecondaryPlayer)
-                        const Positioned.fill(
-                          child: _SecondaryFloatingPlayer(),
+                        // 批次42：二级页 Dock 参数化——横屏与一级页同构
+                        // （常驻悬浮 dock 纵条 + 悬浮播放器球，showNav
+                        // 由 _SecondaryFloatingPlayer 按方向内部换挡）。
+                        // selectedTabId 取主布局经全局量同步的当前 tab；
+                        // 导航项点击 = 回主布局（弹出到根路由，二级页
+                        // Dock 随 SecondaryDockController 自动隐藏）并经
+                        // 既有 shortcutTabRequest 通道切 tab（_MainLayout
+                        // 私有状态 builder 层不可直达，复用快捷方式同款
+                        // 请求通道，见 _handleShortcutTabRequest）。
+                        Positioned.fill(
+                          child: _SecondaryFloatingPlayer(
+                            selectedTabId: mainLayoutSelectedTabId.value,
+                            onSelectTab: (tabId) {
+                              appNavigatorKey.currentState?.popUntil(
+                                (route) => route.isFirst,
+                              );
+                              shortcutTabRequest.value = tabId;
+                            },
+                          ),
                         ),
                       const DlnaCastingOverlay(),
                       // 上滑拖拽跟手覆盖层（在 Navigator 之上，拖拽期间显示预览）
@@ -1091,6 +1137,15 @@ class _MainLayoutState extends State<_MainLayout>
     WidgetsBinding.instance.addObserver(this);
     // 监听 shortcut 入口的 tab 切换请求（来自 main.dart 的 handleShortcut）
     shortcutTabRequest.addListener(_handleShortcutTabRequest);
+    // 批次42：初始化全局「当前选中 tab id」（横屏二级页 Dock 纵条导航项
+    // 选中态消费，见 mainLayoutSelectedTabId 文档）。
+    mainLayoutSelectedTabId.value =
+        context
+            .read<TabConfigProvider>()
+            .visibleTabs
+            .firstOrNull
+            ?.id ??
+        'discover';
     // 批次36：横屏悬浮 Dock 贴边方向（左/右）变化 → 重建主布局，
     // 一级页的 padding 注入与几何内缩方向即时跟随。
     kLandscapeDockSide.addListener(_handleDockSideChanged);
@@ -1191,6 +1246,8 @@ class _MainLayoutState extends State<_MainLayout>
     final index = context.read<TabConfigProvider>().visibleIndexOf(tabId);
     if (index < 0) return;
     _expandNav();
+    // 批次42：同步全局「当前选中 tab id」（横屏二级页 Dock 导航选中态）。
+    mainLayoutSelectedTabId.value = tabId;
     setState(() {
       _previousSelectedIndex = _selectedIndex;
       _selectedIndex = index;
@@ -1355,6 +1412,8 @@ class _MainLayoutState extends State<_MainLayout>
                 return;
               }
               _expandNav();
+              // 批次42：同步全局「当前选中 tab id」（横屏二级页 Dock）。
+              mainLayoutSelectedTabId.value = visibleTabs[index].id;
               setState(() {
                 _previousSelectedIndex = _selectedIndex;
                 _selectedIndex = index;
