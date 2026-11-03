@@ -618,8 +618,42 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      # 批次43 修复：TV job 与 lite job 同款签名装配——build.gradle.kts 的
+      # whenReady 会在 release 打包缺签名时直接 fail（首轮 TV job 漏配，
+      # 两个 run 的 TV 构建全挂在此处）。安全策略与 lite 完全一致：
+      # 仅认 GitHub Secrets，缺失时绿色降级跳过构建（不产未签名/冒牌包）。
+      - name: Prepare release signing (GitHub Secrets only)
+        id: signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ] \
+             || [ -z "${ANDROID_KEY_ALIAS:-}" ] || [ -z "${ANDROID_KEY_PASSWORD:-}" ]; then
+            echo "::notice::未配置签名 Secrets，按安全策略跳过 TV release 构建"
+            echo "keystore_available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+          {
+            echo "storeFile=release.keystore"
+            echo "storePassword=${ANDROID_KEYSTORE_PASSWORD}"
+            echo "keyAlias=${ANDROID_KEY_ALIAS}"
+            echo "keyPassword=${ANDROID_KEY_PASSWORD}"
+          } > android/keystore.properties
+          echo "keystore_available=true" >> "$GITHUB_OUTPUT"
+
+      # keystore 缺失时给 job 一个显式的绿色说明步骤（步骤全跳过不误判）
+      - name: Skip TV build (signing secrets not configured)
+        if: ${{ steps.signing.outputs.keystore_available != 'true' }}
+        run: echo "::notice::未配置签名 Secrets，TV 包本轮跳过（产物请见 lite 构建 job 的说明）"
+
       # TV 包（TV 盒子/电视均为 arm64，不拆 32 位）。
       - name: Flutter build APK (TV, release, arm64-v8a)
+        if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         run: |
           set -o pipefail
           flutter build apk --release --flavor standard \
@@ -629,6 +663,7 @@ jobs:
             --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_tv.log"
 
       - name: Verify TV APK (DpadFocusable symbol)
+        if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         run: |
           set -euo pipefail
           apk="build/app/outputs/flutter-apk/app-arm64-v8a-standard-release.apk"
@@ -644,6 +679,7 @@ jobs:
 
       # 产物命名对齐 lite Release 的 GraceMusic-<ver>-<stamp>-<变体>-<arch> 风格
       - name: Rename TV APK
+        if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         run: |
           set -euo pipefail
           apk_dir="build/app/outputs/flutter-apk"
@@ -669,6 +705,7 @@ jobs:
           exit 0
 
       - name: Upload TV arm64-v8a APK
+        if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: GraceMusic-tv-${{ env.TV_STAMP }}-arm64
@@ -682,6 +719,7 @@ jobs:
       # artifact 里可手动下载。资产名带独立 stamp，双 run 竞态下重复挂载
       # 也只是多一个 TV 包，无害。
       - name: Attach TV APK to release
+        if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -777,6 +815,15 @@ jobs:
       # flutter test 失败即步骤失败。
       - name: Flutter test
         run: flutter test --reporter expanded 2>&1 | tee "$RUNNER_TEMP/flutter_test.log"
+        shell: bash
+
+      # 批次43：TV 编译守卫——带 MD3_TV=true 旗标重跑 test/tv。
+      # 普通通道 kTvBuild=false，TV 恒真分支（_tvContentScope/TvMainShell/
+      # TvFullPlayer 等）不进测试内核；带旗标重跑强制完整编译 TV 分支
+      # （test/tv/tv_compile_guard_test.dart import app.dart+main.dart），
+      # compile error 在本步即红，不必等到 tv job 的 Gradle 构建才暴露。
+      - name: Flutter test (TV flag compile guard)
+        run: flutter test --dart-define=MD3_TV=true test/tv --reporter expanded 2>&1 | tee "$RUNNER_TEMP/flutter_test_tv.log"
         shell: bash
 
       # 失败时把用例名经 ::error:: 写入 check-run annotations（API 匿名可读，
