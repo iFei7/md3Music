@@ -1,14 +1,21 @@
 import 'dart:async';
 
+import 'package:dpad/dpad.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:provider/single_child_widget.dart';
 import 'package:quick_actions/quick_actions.dart';
 
+import 'core/build_flags.dart';
 import 'core/layout/responsive_layout.dart';
 import 'core/layout/secondary_dock_controller.dart';
+import 'core/layout/tv_shell.dart';
 import 'core/layout/ui_density.dart';
+import 'tv/player/tv_full_player.dart';
+import 'core/remote/tv_exit_confirm_dialog.dart';
+import 'core/remote/tv_focus_highlight.dart';
+import 'core/remote/tv_key_repeat.dart';
 import 'core/services/external_media_intent_service.dart';
 import 'core/services/fm_widget_sync.dart';
 import 'core/services/startup_auto_play.dart';
@@ -280,6 +287,14 @@ class _AppViewState extends State<_AppView> {
   // 桌面快捷方式配置：监听变更 → 重新注册 Android 长按图标快捷入口。
   ShortcutConfigProvider? _shortcutConfig;
 
+  // tv: 焦点红框的唤醒入口。播放列表「自动滚到当前曲」等程序化滚动不触发
+  // FocusManager 通知，静音后的 Ticker 不会跟随，红框会滞留旧位置（批次43，
+  // 正常构建不引用——字段被 kTvBuild 分支独占消费，AOT 树摇剔除）。
+  final GlobalKey<TvFocusHighlightState> _tvFocusFrameKey =
+      GlobalKey<TvFocusHighlightState>();
+  // tv: 退出确认菜单防重入（返回键在根路由连按不会叠出多个对话框）。
+  bool _tvExitDialogShowing = false;
+
   // 二级路由态悬浮播放器控制器（批次 24）：push 出来的整屏路由会盖住
   // 主布局（含完整 Dock），故二级态的「仅播放器 Dock」挂在 MaterialApp
   // builder 的 Stack（Navigator 之上）。设置页 / 完整播放页 / DLNA 遥控
@@ -394,6 +409,162 @@ class _AppViewState extends State<_AppView> {
     // 过期校验：提取期间背景图已更换/清除则丢弃结果
     if (context.read<ThemeProvider>().backgroundImagePath != path) return;
     context.read<ThemeProvider>().setBackgroundSeedColor(color);
+  }
+
+  // ── TV 接线（批次43，全部仅在 kTvBuild 分支调用，正常构建树摇剔除）──
+
+  /// tv: 返回键收口（简化版）。能 pop 则 pop（返回 true 表示已消费）；
+  /// 已在根路由时弹 [showTvExitConfirmDialog] 三选一菜单。
+  ///
+  /// 与上游差异：上游先经 TvPlayerBackFallback 把焦点交还播放页控制区
+  /// （依赖 tv_player_back_focus.dart，批次44+ 按需搬运），lite 暂无播放页
+  /// TV 焦点桥，直接 pop。
+  bool _handleTvBack() {
+    final navigator = appNavigatorKey.currentState;
+    if (navigator != null && navigator.canPop()) {
+      navigator.pop();
+      return true;
+    }
+    _showTvExitConfirm();
+    // 消费按键：不交回系统默认（系统默认会直接退任务，绕过确认菜单）。
+    return true;
+  }
+
+  /// tv: 根路由返回的退出确认三选一。
+  ///
+  /// - cancel：留在 App；
+  /// - background：**批次43 暂映射为忽略**（收起菜单留在 App）——后台化需
+  ///   moveTaskToBack 平台通道，批次44 再接（注释占位，见交付报告）；
+  /// - exitApp：结束任务（lite 无 Rust 本地服务与媒体会话收尾链路——那套
+  ///   逻辑在 _MainLayout._doExit，TV 下 _MainLayout 不在树里，直接
+  ///   SystemNavigator.pop 由引擎走标准 Activity.finish）。
+  Future<void> _showTvExitConfirm() async {
+    if (_tvExitDialogShowing) return;
+    final dialogContext = appNavigatorKey.currentContext;
+    if (dialogContext == null) return;
+    _tvExitDialogShowing = true;
+    try {
+      final TvExitAction action = await showTvExitConfirmDialog(dialogContext);
+      switch (action) {
+        case TvExitAction.cancel:
+        case TvExitAction.background:
+          // 批次44 接 moveTaskToBack 后台化；当前仅收起菜单。
+          break;
+        case TvExitAction.exitApp:
+          await SystemNavigator.pop();
+          break;
+      }
+    } finally {
+      _tvExitDialogShowing = false;
+    }
+  }
+
+  /// tv: TV 构建下的内容子树作用域（三层，由外到内）。
+  ///
+  /// 1. [MediaQuery]：正文缩放下限 [kTvMinTextScale]（10-foot 可读性），
+  ///    只抬下限不压上限；必须在 Builder 内取继承的 MediaQuery 再 copyWith，
+  ///    其余字段原样透传。
+  /// 2. [Dpad.wrap]：dpad 遍历引擎。onBack 收口到 [_handleTvBack]；焦点
+  ///    视觉只保留自绘 [TvFocusHighlight] 描边框（effects 传空列表，不叠加
+  ///    dpad 自带辉光，避免与描边不同步/遮细线）。
+  /// 3. [TvKeyRepeatLayer]：方向键连发层，包在 Dpad 之内、Navigator 之外。
+  ///
+  /// [TvFocusHighlight] 以 Positioned.fill 叠在最上层（IgnorePointer 不拦
+  /// 按键），替代 dpad 的 debugOverlay（整体开关、release 自动关闭）；滚动
+  /// 通知经 NotificationListener 唤醒静音中的红框 Ticker。
+  Widget _tvContentScope(BuildContext context, Widget? child) {
+    return Builder(
+      builder: (mqContext) {
+        final mq = MediaQuery.of(mqContext);
+        return MediaQuery(
+          data: mq.copyWith(
+            textScaler: mq.textScaler.clamp(
+              minScaleFactor: kTvMinTextScale,
+              maxScaleFactor: kMaxSystemTextScale,
+            ),
+          ),
+          child: Stack(
+            children: [
+              NotificationListener<ScrollNotification>(
+                onNotification: (_) {
+                  _tvFocusFrameKey.currentState?.wake();
+                  return false;
+                },
+                child: Dpad.wrap(
+                  theme: const DpadThemeData(
+                    effects: <DpadEffect>[],
+                    scrollPadding: 64,
+                  ),
+                  onBack: _handleTvBack,
+                )(
+                  mqContext,
+                  TvKeyRepeatLayer(child: child ?? const SizedBox.shrink()),
+                ),
+              ),
+              Positioned.fill(child: TvFocusHighlight(key: _tvFocusFrameKey)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// tv: 遥控媒体键兜底（播放/暂停/切歌）。播放中的媒体键正常由前台
+  /// media3 会话消费；本层覆盖「无活跃会话 / controller 未连接」时按键
+  /// 落到 Activity 窗口、进入 Flutter 按键管线的情形。带 [TvMediaKey] 日志。
+  /// 播放控制方法与上游同源（_playerProvider 复用封面取色桥接的引用）。
+  Widget _tvMediaKeyFallback(Widget child) {
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.mediaPlayPause):
+            _tvMediaTogglePlay,
+        const SingleActivator(LogicalKeyboardKey.mediaPlay): _tvMediaPlay,
+        const SingleActivator(LogicalKeyboardKey.mediaPause): _tvMediaPause,
+        const SingleActivator(LogicalKeyboardKey.mediaTrackNext): () =>
+            _tvMediaSkip(next: true),
+        const SingleActivator(LogicalKeyboardKey.mediaTrackPrevious): () =>
+            _tvMediaSkip(next: false),
+      },
+      child: child,
+    );
+  }
+
+  void _tvMediaTogglePlay() {
+    final p = _playerProvider;
+    if (p == null || p.currentSong == null) return;
+    debugPrint('[TvMediaKey] playPause isPlaying=${p.isPlaying}');
+    // ignore: discarded_futures
+    p.isPlaying ? p.pause() : p.resume();
+  }
+
+  void _tvMediaPlay() {
+    final p = _playerProvider;
+    if (p == null || p.currentSong == null) return;
+    if (p.isPlaying) return;
+    debugPrint('[TvMediaKey] play');
+    // ignore: discarded_futures
+    p.resume();
+  }
+
+  void _tvMediaPause() {
+    final p = _playerProvider;
+    if (p == null || p.currentSong == null) return;
+    if (!p.isPlaying) return;
+    debugPrint('[TvMediaKey] pause');
+    // ignore: discarded_futures
+    p.pause();
+  }
+
+  void _tvMediaSkip({required bool next}) {
+    final p = _playerProvider;
+    if (p == null || p.currentSong == null) return;
+    debugPrint('[TvMediaKey] skip ${next ? 'next' : 'previous'}');
+    // ignore: discarded_futures
+    if (next) {
+      p.next();
+    } else {
+      p.previous();
+    }
   }
 
   @override
@@ -547,7 +718,17 @@ class _AppViewState extends State<_AppView> {
                       // material_ui 主题。本桥把 ThemeData / MaterialLocalizations 提供给它们。
                       // 官方定位为过渡工具，待依赖全部迁移到 material_ui 后移除。
                       // ignore: deprecated_member_use
-                      MaterialUiCompatibilityBridge(child: navigator),
+                      MaterialUiCompatibilityBridge(
+                        // 批次43：TV 构建在 Navigator 之外叠加媒体键兜底 +
+                        // TV 内容作用域（正文缩放下限 + dpad 遍历引擎 + 连发层
+                        // + 焦点红框，见 [_tvContentScope]）。kTvBuild 为
+                        // const，正常构建走原分支，树与改动前逐字节一致。
+                        child: kTvBuild
+                            ? _tvMediaKeyFallback(
+                                _tvContentScope(context, navigator),
+                              )
+                            : navigator,
+                      ),
                       if (showSecondaryPlayer)
                         // 批次42：二级页 Dock 参数化——横屏与一级页同构
                         // （常驻悬浮 dock 纵条 + 悬浮播放器球，showNav
@@ -592,7 +773,9 @@ class _AppViewState extends State<_AppView> {
         '/search': (_) => const SearchPage(),
         '/library': (_) => const LibraryPage(),
         '/settings': (_) => const SettingsPage(),
-        '/player': (_) => const FullPlayer(),
+        // 批次43：TV 构建走三层 Z 结构播放页（Z1 环境背景/Z2 黑胶+歌词/
+        // Z3 呼出控制条），手机构建 FullPlayer 原样（const 分支树摇）。
+        '/player': (_) => kTvBuild ? const TvFullPlayer() : const FullPlayer(),
         '/personal_fm': (_) => const PersonalFmPage(),
       },
       onGenerateRoute: (settings) {
@@ -625,7 +808,13 @@ class _AppViewState extends State<_AppView> {
           );
         }
         if (settings.name == '/') {
-          return _UpFadeMainRoute<void>(builder: (_) => const _MainLayout());
+          // 批次43：TV 构建挂 TvMainShellHost（玻璃 Rail + 内容占位壳），
+          // 正常构建仍为 _MainLayout。kTvBuild 为 const，两分支各自树摇。
+          // '/player' 路由批次43 暂不动，待主控接 TvFullPlayer（批次44）。
+          return _UpFadeMainRoute<void>(
+            builder: (_) =>
+                kTvBuild ? const TvMainShellHost() : const _MainLayout(),
+          );
         }
         if (settings.name == '/playlist') {
           final playlist = settings.arguments as Playlist;
@@ -1588,46 +1777,50 @@ class _MainLayoutState extends State<_MainLayout>
     return Stack(
       children: [
         Positioned.fill(child: content),
-        if (isLandscape)
-          Positioned.fill(
-            child: GlassDockPlayer(
-              key: const ValueKey('glass_dock'),
-              selectedTabId: currentTab.id,
-              onSelectTab: _switchToTab,
-              navExpanded: _navExpanded,
-              onNavExpandedChanged: (expanded) {
-                // 双向闭环：true = 点坍缩圆或播放器工具收起时请求导航展开；
-                // false = 播放器工具胶囊展开时请求导航让位。两个方向都保证
-                // 「恰好一个展开」，无双坍缩驻留路径。
-                if (expanded) {
-                  _expandNav();
-                } else {
-                  _collapseNav();
-                }
-              },
-            ),
-          )
-        else
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: GlassDockPlayer(
-              key: const ValueKey('glass_dock'),
-              selectedTabId: currentTab.id,
-              onSelectTab: _switchToTab,
-              navExpanded: _navExpanded,
-              onNavExpandedChanged: (expanded) {
-                // 双向闭环：true = 点坍缩圆或播放器工具收起时请求导航展开；
-                // false = 播放器工具胶囊展开时请求导航让位。两个方向都保证
-                // 「恰好一个展开」，无双坍缩驻留路径。
-                if (expanded) {
-                  _expandNav();
-                } else {
-                  _collapseNav();
-                }
-              },
-            ),
+        // 批次43：TV 用自己的壳（tv_shell.dart 的玻璃 Rail），不挂手机玻璃
+        // Dock。kTvBuild 为 const，正常构建此分支逐字节保留、TV 构建 AOT
+        // 剔除（TV 下 _MainLayout 本就不在树里，此守卫是双保险）。
+        if (!kTvBuild)
+          if (isLandscape)
+            Positioned.fill(
+              child: GlassDockPlayer(
+                key: const ValueKey('glass_dock'),
+                selectedTabId: currentTab.id,
+                onSelectTab: _switchToTab,
+                navExpanded: _navExpanded,
+                onNavExpandedChanged: (expanded) {
+                  // 双向闭环：true = 点坍缩圆或播放器工具收起时请求导航展开；
+                  // false = 播放器工具胶囊展开时请求导航让位。两个方向都保证
+                  // 「恰好一个展开」，无双坍缩驻留路径。
+                  if (expanded) {
+                    _expandNav();
+                  } else {
+                    _collapseNav();
+                  }
+                },
+              ),
+            )
+          else
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: GlassDockPlayer(
+                key: const ValueKey('glass_dock'),
+                selectedTabId: currentTab.id,
+                onSelectTab: _switchToTab,
+                navExpanded: _navExpanded,
+                onNavExpandedChanged: (expanded) {
+                  // 双向闭环：true = 点坍缩圆或播放器工具收起时请求导航展开；
+                  // false = 播放器工具胶囊展开时请求导航让位。两个方向都保证
+                  // 「恰好一个展开」，无双坍缩驻留路径。
+                  if (expanded) {
+                    _expandNav();
+                  } else {
+                    _collapseNav();
+                  }
+                },
+              ),
           ),
       ],
     );

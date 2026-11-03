@@ -563,6 +563,188 @@ jobs:
           echo "✅ Release ${tag} 已发布: https://github.com/${REPO}/releases/tag/${tag}"
 
   # ============================================================
+  # TV 构建 job（批次43）：同 lite 构建参数 + --dart-define=MD3_TV=true。
+  # 批次43 MVP 不新增 flavor（沿用 standard，applicationId 不带 .tv 后缀；
+  # 后续批次可加 applicationIdSuffix = ".tv"）。不开 --obfuscate：
+  # 构建后要在 libapp.so 内检索 Dart AOT 符号 DpadFocusable 校验 TV 旗标
+  # 生效（与上游 ci.yml check_tv 同口径）。
+  # ============================================================
+  build-android-tv:
+    name: Build Android TV APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK & NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install \
+            "cmdline-tools;latest" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.7
+          cache: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # TV 包（TV 盒子/电视均为 arm64，不拆 32 位）。
+      - name: Flutter build APK (TV, release, arm64-v8a)
+        run: |
+          set -o pipefail
+          flutter build apk --release --flavor standard \
+            --target-platform android-arm64 \
+            --build-number="${{ github.run_number }}" \
+            --dart-define=MD3_TV=true \
+            --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_tv.log"
+
+      - name: Verify TV APK (DpadFocusable symbol)
+        run: |
+          set -euo pipefail
+          apk="build/app/outputs/flutter-apk/app-arm64-v8a-standard-release.apk"
+          test -f "$apk" || { echo "::error::TV APK 产物缺失"; exit 1; }
+          # TV 旗标生效校验：libapp.so 内必须检索到 dpad 引擎的 Dart 符号
+          # （未开 --obfuscate，ASCII 标识符可检索；同上游 ci.yml check_tv）。
+          if unzip -p "$apk" lib/arm64-v8a/libapp.so | grep -aq DpadFocusable; then
+            echo "TV dpad 焦点符号: OK ($apk)"
+          else
+            echo "::error::TV 包缺少 dpad 焦点符号（MD3_TV 旗标未生效）: $apk"; exit 1
+          fi
+          ls -lh "$apk"
+
+      # 产物命名对齐 lite Release 的 GraceMusic-<ver>-<stamp>-<变体>-<arch> 风格
+      - name: Rename TV APK
+        run: |
+          set -euo pipefail
+          apk_dir="build/app/outputs/flutter-apk"
+          ver="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1)"
+          stamp="$(date -u +%Y%m%d%H%M%S)"
+          mv "$apk_dir/app-arm64-v8a-standard-release.apk" \
+             "$apk_dir/GraceMusic-tv-${stamp}-arm64.apk"
+          echo "TV_STAMP=${stamp}" >> "$GITHUB_ENV"
+          echo "TV_VER=${ver}" >> "$GITHUB_ENV"
+          ls -lh "$apk_dir"/
+
+      - name: Report build diagnostics
+        if: failure()
+        run: |
+          if [[ -f "$RUNNER_TEMP/build_tv.log" ]]; then
+            {
+              echo "### build_tv.log 关键错误行"
+              grep -nE "Error detected|FAILURE: Build failed|What went wrong|error:|Error:|^e: |e: file|Task .*FAILED|Caused by|Compilation error|unresolved reference|Type mismatch|no value passed" "$RUNNER_TEMP/build_tv.log" | head -40 || true
+              echo "---- tail ----"
+              tail -c 2000 "$RUNNER_TEMP/build_tv.log"
+            } >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          fi
+          exit 0
+
+      - name: Upload TV arm64-v8a APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GraceMusic-tv-${{ env.TV_STAMP }}-arm64
+          path: build/app/outputs/flutter-apk/GraceMusic-tv-${{ env.TV_STAMP }}-arm64.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      # 批次43：把 TV APK 挂到本次提交的 lite Pre-release（release 由并行的
+      # lite 构建 job 创建，此处轮询等待；最长 25 分钟）。release 缺失（lite
+      # 构建失败 / tag run 422 竞态）时软失败不阻塞 workflow——产物仍在
+      # artifact 里可手动下载。资产名带独立 stamp，双 run 竞态下重复挂载
+      # 也只是多一个 TV 包，无害。
+      - name: Attach TV APK to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA_SHORT: ${{ github.sha }}
+          TV_STAMP: ${{ env.TV_STAMP }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${REPO}"
+          auth="Authorization: Bearer ${GITHUB_TOKEN}"
+          ver="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1)"
+          # 与 release job 同口径：tag 触发等正式 tag，push 触发等 lite 预发布
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v${ver}-lite-${SHA_SHORT::7}"
+          fi
+          apk="build/app/outputs/flutter-apk/GraceMusic-tv-${TV_STAMP}-arm64.apk"
+          test -f "$apk" || { echo "::error::TV APK 缺失: $apk"; exit 1; }
+
+          rel_id=""
+          for i in $(seq 1 50); do
+            rel_id=$(curl -sS -H "$auth" "$api/releases/tags/${tag}" \
+              | jq -r '.id // empty' || true)
+            [[ -n "$rel_id" ]] && break
+            echo "  等待 release ${tag} ... (${i}/50)"
+            sleep 30
+          done
+          if [[ -z "$rel_id" ]]; then
+            echo "::warning::release ${tag} 未出现（lite 构建未发布？），TV 包仅留在 artifact"
+            exit 0
+          fi
+
+          out="GraceMusic-v${ver}-tv-${TV_STAMP}-arm64.apk"
+          ok=""
+          for try in 1 2 3; do
+            ucode=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/octet-stream" \
+              --data-binary "@${apk}" -o /dev/null -w '%{http_code}' \
+              "https://uploads.github.com/repos/${REPO}/releases/${rel_id}/assets?name=${out}") || true
+            echo "  上传 ${out} -> HTTP ${ucode} (try ${try})"
+            if [[ "$ucode" =~ ^2 ]]; then ok=1; break; fi
+            if [[ "$ucode" == "422" ]]; then
+              aid=$(curl -sS -H "$auth" "$api/releases/${rel_id}/assets?per_page=100" \
+                | jq -r --arg n "$out" '.[] | select(.name==$n) | .id' | head -1)
+              [[ -n "$aid" ]] && curl -sS -X DELETE -H "$auth" -o /dev/null \
+                "$api/releases/assets/${aid}" || true
+            fi
+            sleep 10
+          done
+          [[ -n "$ok" ]] || { echo "::error::TV 资产上传三次均失败"; exit 22; }
+
+          # release 说明补一行 TV 下载入口（best-effort，失败不影响结果）
+          body_now="$(curl -sS -H "$auth" "$api/releases/${rel_id}" | jq -r '.body')"
+          if ! printf '%s' "$body_now" | grep -q "GraceMusic-v${ver}-tv-"; then
+            tv_line="${out} — TV 版（遥控器导航，arm64）"
+            new_body="$(printf '%s\n%s' "$body_now" "$tv_line" | jq -Rs .)"
+            curl -sS -X PATCH -H "$auth" -H "Content-Type: application/json" \
+              -d "{\"body\": ${new_body}}" -o /dev/null \
+              -w "  PATCH body -> HTTP %{http_code}\n" \
+              "$api/releases/${rel_id}" || true
+          fi
+          echo "✅ TV APK 已挂载到 ${tag}"
+
+  # ============================================================
   # Dart 单元 / Widget 测试
   # 独立 job：与 APK 构建并行，不阻塞构建与 Release —— 测试失败时
   # workflow 结论变红（回归可见），但产物照常发布，避免"因为一个测试

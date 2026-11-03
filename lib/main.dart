@@ -8,6 +8,7 @@ import 'package:quick_actions/quick_actions.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
+import 'core/build_flags.dart';
 import 'core/services/desktop_lyric_service.dart';
 import 'core/services/diagnostic_logger.dart';
 import 'modules/recognition/floating_recognition_service.dart';
@@ -183,7 +184,8 @@ Future<(bool, bool, bool)> runBootstrap() async {
 
   // 注册 Android 长按应用图标 Shortcut 回调。
   // initialize 必须在 runApp 之前调用，以便冷启动时能接收到 shortcut 触发。
-  if (!kIsWeb && Platform.isAndroid) {
+  // 批次43：TV 无快捷方式需求（遥控器无应用图标长按交互），编译期跳过。
+  if (!kTvBuild && !kIsWeb && Platform.isAndroid) {
     const quickActions = QuickActions();
     quickActions.initialize((shortcutType) {
       // 应用已就绪时直接处理；否则暂存，由 _AppView 在首帧处理
@@ -214,9 +216,12 @@ Future<(bool, bool, bool)> runBootstrap() async {
   // 启动后静默检查 GitHub Release：发现新版本仅 toast 提醒。
   // 首次启动引导 / 用户协议未确认时抑制，避免与首启流程争夺注意力。
   // 内部仅在 Android 生效、延迟 8s 后执行、12 小时内不重复请求；可在设置中关闭。
-  UpdateCheckService.instance.scheduleStartupCheck(
-    suppress: needsOnboarding || needsUserAgreement,
-  );
+  // 批次43：TV 无应用内升级需求（TV 端升级走系统应用市场/侧载，不弹 GitHub 检查）。
+  if (!kTvBuild) {
+    UpdateCheckService.instance.scheduleStartupCheck(
+      suppress: needsOnboarding || needsUserAgreement,
+    );
+  }
 
   markStartup('bootstrap_ready');
   return (needsOnboarding, needsUserAgreement, initialUseBackgroundImage);
@@ -307,6 +312,8 @@ void handleShortcut(String shortcutType) {
 Future<void> requestPermissions() async {
   // Web 平台不支持 permission_handler，跳过所有权限请求
   if (kIsWeb) return;
+  // 批次43：TV 无通知权限需求（TV 端不使用系统通知栏交互），编译期跳过。
+  if (kTvBuild) return;
   // 桌面端无 Android 专属权限，跳过（permission_handler 桌面语义不同）
   if (!Platform.isAndroid) return;
 
