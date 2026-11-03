@@ -652,11 +652,14 @@ jobs:
         run: echo "::notice::未配置签名 Secrets，TV 包本轮跳过（产物请见 lite 构建 job 的说明）"
 
       # TV 包（TV 盒子/电视均为 arm64，不拆 32 位）。
+      # ⚠️ 必须 --split-per-abi：产物名才是 app-arm64-v8a-standard-release.apk
+      # （verify/rename 两步按此名找文件；不带 split 时产物为
+      # app-standard-release.apk，首轮 9be8d97 的校验步因此「产物缺失」）。
       - name: Flutter build APK (TV, release, arm64-v8a)
         if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         run: |
           set -o pipefail
-          flutter build apk --release --flavor standard \
+          flutter build apk --release --flavor standard --split-per-abi \
             --target-platform android-arm64 \
             --build-number="${{ github.run_number }}" \
             --dart-define=MD3_TV=true \
