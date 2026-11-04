@@ -13,10 +13,13 @@ import 'core/services/desktop_lyric_service.dart';
 import 'core/services/diagnostic_logger.dart';
 import 'modules/recognition/floating_recognition_service.dart';
 import 'core/services/equalizer_service.dart';
+import 'core/services/audio_offload_config.dart';
+import 'core/services/audio_offload_guard.dart';
 import 'core/services/viper_master_service.dart';
 import 'core/services/listening_grade_service.dart';
 import 'core/services/listen_report_service.dart';
 import 'core/services/media_notification_service.dart';
+import 'core/services/player_frame_driver.dart';
 import 'core/services/wakelock_service.dart';
 import 'data/repositories/settings_repository.dart';
 import 'providers/theme_provider.dart';
@@ -134,6 +137,14 @@ Future<(bool, bool, bool)> runBootstrap() async {
   // P0: 无依赖的初始化并行执行，替代串行 await，缩短 runApp 前的阻塞时间。
   // 同时预取 SharedPreferences（onboarding / 用户协议检查复用）。
   final prefsFuture = SharedPreferences.getInstance();
+  // 批次44: 硬解播放（audio offload）配置必须在 AudioService 被构造前就绪。
+  // EqualizerService.init() 会构造 AudioService（播放器只创建一次），所以这条
+  // 不能放进下面的 Future.wait（并发启动无法保证先后），必须串行前置。
+  await _restoreAudioOffloadPref();
+  // 批次44 软解兜底：必须在 offload 配置已确定（上面一行写完 userEnabled /
+  // dspActive）之后启动，否则读不到 `AudioOffloadConfig.effective`，守卫会
+  // 直接什么都不挂。start() 自身幂等，且 effective 为 false 时不做任何事。
+  AudioOffloadGuard.instance.start();
   await Future.wait([
     // 加载 MD3 风格播放页的独立歌词偏好（从 SharedPreferences）
     Md3LyricPreferences.instance.load(),
@@ -152,6 +163,9 @@ Future<(bool, bool, bool)> runBootstrap() async {
     // 恢复横屏悬浮 Dock 贴边方向（批次36）：必须在 runApp 前完成——首帧
     // 布局即按该值决定纵条/球贴边与页面避让注入方向，避免首帧闪一下右侧。
     _restoreLandscapeDockSidePref(),
+    // 恢复省电帧率开关：帧率预算必须在首帧前应用，否则首帧按 60fps 起跑
+    // 再降档会闪一下。
+    _restoreUiLowFrameRatePref(),
   ]);
   markStartup('local_preferences_ready');
 
@@ -289,6 +303,46 @@ Future<void> _restoreLandscapeDockSidePref() async {
   try {
     kLandscapeDockSide.value = await SettingsRepository()
         .getLandscapeDockSide();
+  } catch (_) {}
+}
+
+/// 恢复「省电动画帧率」开关到全局共享帧驱动（默认 60fps）。
+///
+/// 必须在 runApp 前完成：首帧起就按目标帧率出拍，避免先 60fps 再降档的抖动。
+Future<void> _restoreUiLowFrameRatePref() async {
+  try {
+    final bool low = await SettingsRepository().getUiLowFrameRate();
+    PlayerFrameDriver.instance.setFrameRate(
+      low ? PlayerFrameDriver.kFrameRateLow : PlayerFrameDriver.kFrameRateHigh,
+    );
+  } catch (_) {}
+}
+
+/// 恢复「硬解播放（audio offload）」的会话级配置（批次44）。
+///
+/// 必须在 `AudioService`（主播放器）被构造**之前**完成：offload 偏好是
+/// `AudioPlayer` 的构造参数，而播放器在整个会话内只创建一次
+/// （`AudioService._internal()` 中的 `_mainPlayer = _createPlayer()`）。
+/// `EqualizerService.instance.init()` 内部就会构造 `AudioService`，因此本
+/// helper 只能串行前置在下面的 `Future.wait` **之前**；放进 `Future.wait`
+/// 里只是并发启动，并不保证先后（EqualizerService.init 只需两次 prefs
+/// await 就会构造播放器，会先于本 helper 完成）。
+///
+/// 同一条理由：此刻 DSP 服务的内存状态尚未恢复，均衡器开关只能按它的持久化
+/// 来源 `eq_enabled` 读取（等价于 `EqualizerService.enabled` 的判据，只是忽略
+/// 运行期才置位的 `_suspended`）。异常一律吞掉并保持默认值（=不下发 offload）。
+Future<void> _restoreAudioOffloadPref() async {
+  try {
+    final repo = SettingsRepository();
+    final prefs = await SharedPreferences.getInstance();
+    final bool userEnabled = await repo.getAudioOffloadEnabled();
+    final bool viper = await repo.getViperMasterEnabled();
+    final bool normalization = await repo.getVolumeNormalizationEnabled();
+    // 保守侧：eq_enabled 为 true 即视为音效链在用（不因 _systemEffectsDisabled
+    // / _suspended 额外放行 offload）。
+    final bool equalizer = prefs.getBool('eq_enabled') ?? false;
+    AudioOffloadConfig.userEnabled = userEnabled;
+    AudioOffloadConfig.dspActive = viper || normalization || equalizer;
   } catch (_) {}
 }
 

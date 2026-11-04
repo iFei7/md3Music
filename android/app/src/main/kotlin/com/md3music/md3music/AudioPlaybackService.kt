@@ -587,6 +587,16 @@ class AudioPlaybackService : Service() {
     @Volatile
     private var lastArtThumb: Bitmap? = null
 
+    // 批次44：暂停后空闲释放。暂停满 N 分钟（默认 10，0=永不）即退出前台并
+    // stopSelf，让系统回收进程，消掉「暂停后 FGS + 引擎 + 进程永久常驻」的资源缺口。
+    // 服务被停不影响播放能力（播放由 media3 会话承载），下一次通知下发会
+    // 由 MainActivity 的 startForegroundService 重新拉起本服务。
+    private val idleStopHandler = Handler(Looper.getMainLooper())
+    private val idleStopRunnable = Runnable { performIdleStop() }
+    private val idleStopPolicy = IdleStopPolicy()
+    // 最近一次通知下发的播放态，performIdleStop 到点后据此二次确认是否可停服
+    private var lastKnownPlaying = false
+
     // P0: 缓存通知 PendingIntent（showNotification / refreshMetadata 共用），
     // 避免蓝牙歌词高频刷新时每次重建 5+ 个 PendingIntent 对象
     private var cachedLaunchPendingIntent: PendingIntent? = null
@@ -608,6 +618,62 @@ class AudioPlaybackService : Service() {
             Intent(this, AudioPlaybackService::class.java).apply { this.action = action },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         ).also { cachedServicePendingIntents[requestCode] = it }
+    }
+
+    /// 批次44：读取「暂停后空闲释放」分钟数（0=永不）。
+    /// 原生侧每次排期都重新读 SharedPreferences，所以 Flutter 设置页改完即生效，
+    /// 不需要任何 native 通道方法。注意 key 前缀必须是 `flutter.`
+    /// （Flutter 的 shared_preferences 插件写入时统一加前缀）。
+    private fun idleStopMinutes(): Int {
+        return try {
+            val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            idleStopPolicy.normalizeMinutes(
+                prefs.getInt(
+                    "flutter.settings_keepalive_idle_stop_minutes",
+                    IdleStopPolicy.DEFAULT_MINUTES
+                )
+            )
+        } catch (_: Exception) {
+            IdleStopPolicy.DEFAULT_MINUTES
+        }
+    }
+
+    /// 批次44：按当前播放态排期空闲释放（先清旧任务再排，天然幂等）。
+    /// 播放中或用户关闭该功能（minutes<=0）时不排期。
+    private fun scheduleIdleStop() {
+        idleStopHandler.removeCallbacks(idleStopRunnable)
+        val minutes = idleStopMinutes()
+        if (!idleStopPolicy.shouldStop(lastKnownPlaying, minutes)) return
+        idleStopHandler.postDelayed(idleStopRunnable, idleStopPolicy.delayMs(minutes))
+    }
+
+    /// 批次44：取消已排期的空闲释放（恢复播放/收到媒体键时调用）。
+    private fun cancelIdleStop() {
+        idleStopHandler.removeCallbacks(idleStopRunnable)
+    }
+
+    /// 批次44：到点执行真正的释放：退出前台 + 释放 WakeLock + stopSelf。
+    ///
+    /// 这里刻意 **不** 做以下几件事：
+    /// - 不 `Process.killProcess`：主动杀自己会被多数 ROM 记成异常退出，触发
+    ///   「限制后台/后台网络」惩罚，比让系统按内存压力正常回收更差；
+    /// - 不 `engine.destroy()` / `FlutterEngineCache.remove`：引擎与缓存是播放恢复
+    ///   的基础设施，销毁会拖慢下一次拉起，且可能影响 media3 会话侧的命令派发；
+    /// - 不销毁播放器：播放由 media3 会话承载，本服务只是 FGS/保活载体。
+    ///
+    /// 到点后必须用 [lastKnownPlaying] 二次确认：若这段时间内实际已恢复播放
+    /// （例如通知下发失败导致 cancel 没跑到），宁可多留服务也不误停正在出声的服务。
+    private fun performIdleStop() {
+        if (lastKnownPlaying) return
+        Log.i(TAG, "performIdleStop: 暂停空闲超时，退出前台并 stopSelf")
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Throwable) {}
+        releaseWakeLock()
+        foregroundStarted = false
+        try {
+            stopSelf()
+        } catch (_: Throwable) {}
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -666,6 +732,9 @@ class AudioPlaybackService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                // 批次44：显式停服路径先撤掉空闲释放排期，避免残留 Runnable 在
+                // 服务已停后再次触发 stopForeground/stopSelf
+                cancelIdleStop()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 releaseWakeLock()
                 stopSelf()
@@ -797,6 +866,10 @@ class AudioPlaybackService : Service() {
     }
 
     private fun handleAction(intent: Intent?) {
+        // 批次44：先悲观取消空闲释放。媒体键可能是「播放」指令（例如暂停超时前
+        // 用户按了耳机播放键），此时绝不能停服；若实际是暂停/切歌，随后的通知
+        // 下发会重新排期。宁可多留服务，不可误停正在播放的服务。
+        cancelIdleStop()
         val action = intent?.action ?: return
         val engine = flutterEngine ?: staticFlutterEngine
         if (engine != null) {
@@ -934,6 +1007,13 @@ class AudioPlaybackService : Service() {
     ///
     /// 唤醒期间可能连续收到多个按键，这里只保留最新待执行命令，并为重试保留稳定 ID。
     private fun handleMediaButtonCommand(command: String) {
+        // 批次44：媒体键一律先撤掉空闲释放排期，并乐观认为「接下来会出声」。
+        // 该路径是异步派发（obtainFlutterEngine/createHeadlessEngineAndDispatch 都可能失败），
+        // 一旦派发失败就不会有后续通知下发来重排计时器 —— 那种情况下若仍按旧的暂停态
+        // 走完计时，会停掉正在播放的保活服务。宁可多留服务。
+        // 若实际是暂停指令，Dart 随后的 showNotification(isPlaying=false) 会重新排期，自愈。
+        cancelIdleStop()
+        lastKnownPlaying = true
         val method = when (command) {
             "play" -> "play"
             "pause", "stop" -> "pause"
@@ -1570,6 +1650,13 @@ class AudioPlaybackService : Service() {
         duration: Long,
         isFavorited: Boolean = false
     ) {
+        // 批次44：空闲释放的唯一挂载点。showNotification 是所有通知下发的收口
+        // （onStartCommand 兜底分支 + MethodChannel 的 show/updateNotification），
+        // 挂在这里可同时覆盖两条路径，不必在各个调用方重复散落。
+        // 必须在其它逻辑之前执行：后面的封面线程/startForeground 可能抛异常提前返回。
+        lastKnownPlaying = isPlaying
+        if (isPlaying) cancelIdleStop() else scheduleIdleStop()
+
         if (mediaId.isNotEmpty() && mediaId != originalMediaId) {
             originalMediaId = mediaId
             metadataGeneration++
@@ -1829,6 +1916,8 @@ class AudioPlaybackService : Service() {
         }
         // P0: 取消排期中的 setMetadata 合并刷新，防止服务销毁后仍回调
         metadataRefreshHandler.removeCallbacksAndMessages(null)
+        // 批次44：同步清掉空闲释放排期，服务销毁后不再持有 Runnable 引用
+        idleStopHandler.removeCallbacksAndMessages(null)
         releaseWakeLock()
         // lastArtBitmap 可能仍由 MediaSession 或桌面组件引用，销毁服务时不能 recycle。
         lastArtBitmap = null

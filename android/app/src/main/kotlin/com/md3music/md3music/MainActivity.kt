@@ -34,6 +34,12 @@ class MainActivity : FlutterActivity() {
     // 应用内更新：Dart 侧下载并校验 APK 后经此通道调起系统安装器
     // （authority 由 Dart 端按运行时包名拼出传入，见 InAppUpdater.install）
     private val UPDATE_CHANNEL = "app.gracemusic/update"
+    // 批次44：滑动期显示刷新率（Dart 侧 DisplayRefreshService 调用）
+    private val DISPLAY_REFRESH_CHANNEL = "com.md3music.md3music/display_refresh"
+    // 首次 requestMax 时快照的原始窗口参数，release 时原样还原。
+    // null 表示本次会话尚未 request 过（此时 release 写系统默认 0 / 0f）。
+    private var savedPreferredDisplayModeId: Int? = null
+    private var savedPreferredRefreshRate: Float? = null
     private var folderPickerResult: MethodChannel.Result? = null
     private var fontPickerResult: MethodChannel.Result? = null
     private var backgroundPickerResult: MethodChannel.Result? = null
@@ -112,10 +118,12 @@ class MainActivity : FlutterActivity() {
                 ).show()
             }
         }
-        // 高刷新率适配：主动向系统声明最高刷新率偏好，避免被 ROM 的高刷新率管理
-        // 归为「跟随应用内设置」而锁在 60Hz。Flutter 引擎从不调用
-        // Surface.setFrameRate()，系统无法得知 App 需要高刷，须在此显式声明。
-        applyOptimalRefreshRate()
+        // 批次44：启动时只开启 API 34+ 的触摸提频，不再向系统声明「恒为最高档」。
+        // 上游实现曾在这里把 preferredRefreshRate 钉到最高档以绕开 ROM 的 60Hz
+        // 锁，但那样静止时也不回落（费电），与「滑动升档、停下回落」冲突。
+        // 现在改由 Dart 侧 DisplayRefreshService 在滑动期经 display_refresh
+        // 通道 requestMax，静止 700ms 后 release。
+        applyTouchRateBoost()
         // 退出缩小动画时露出系统桌面：FlutterView 背景透明，
         // 配合 NormalTheme 的透明 windowBackground，页面缩小后透出桌面（微信同款）。
         try {
@@ -155,53 +163,79 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 回到前台（如从画中画/锁屏/切后台返回）时重新应用，
-        // 防止被系统降频后未恢复（偶现锁 60Hz 的场景之一）。
-        applyOptimalRefreshRate()
+        // 批次44：回到前台时**不再**把刷新率钉死在最高档。
+        // 上游遗留实现每次 onResume 都写 preferredRefreshRate/preferredDisplayModeId
+        // 为当前分辨率的最高档，等于屏幕永不回落（静止也高刷，白耗电），
+        // 会让「滑动期升档、停下 700ms 回落」完全失效。
+        // 档位改由 Dart 侧 DisplayRefreshService 经 display_refresh 通道按滑动
+        // 状态驱动；这里只保留 API 34+ 的触摸提频开关（系统级跟手辅助）。
+        applyTouchRateBoost()
     }
 
-    /// 向系统请求当前分辨率下可用的最高刷新率。
+    /// 批次44：只开 API 34+ 的「触摸提频」，不再固定刷新率档位。
     ///
-    /// - API 30+：设置 `preferredRefreshRate`（只改刷新率、不改分辨率，
-    ///   LTPO 屏仍可动态降频省电），为 refresh_rate 插件推荐做法。
-    /// - API 23~29：设置 `preferredDisplayModeId`（无 preferredRefreshRate 时
-    ///   只能指定完整显示模式，故保持当前分辨率匹配，避免分辨率被切换）。
-    /// - API 34+：开启触摸提频（触摸/滚动时升到高刷，更跟手）。
-    private fun applyOptimalRefreshRate() {
+    /// 历史实现在这里按当前分辨率选 refreshRate 最高的一档并写进 window
+    /// attributes（见 DISPLAY_REFRESH_CHANNEL 处的取舍说明），导致静止时
+    /// 也停在最高档；该职责已迁移到滑动期通道的 requestMax/release。
+    private fun applyTouchRateBoost() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return
         try {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-            val display = windowManager.defaultDisplay
-            val currentMode = display.mode
-            // 与当前分辨率一致、刷新率最高的显示模式
-            val best = display.supportedModes
-                .filter {
-                    it.physicalWidth == currentMode.physicalWidth &&
-                        it.physicalHeight == currentMode.physicalHeight
-                }
-                .maxByOrNull { it.refreshRate }
-                ?: return
-            val lp = window.attributes
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                lp.preferredRefreshRate = best.refreshRate
-            } else {
-                lp.preferredDisplayModeId = best.modeId
-            }
-            window.attributes = lp // 重新 setAttributes 使偏好生效
-            // frameRateBoostOnTouchEnabled 为 API 34（Android 14）引入，低于此版本
-            // 调用会抛 NoSuchMethodError（Error 而非 Exception），曾致低版本设备启动崩溃。
-            // 门槛必须用 VANILLA_ICE_CREAM(34)，不能用 UPSIDE_DOWN_CAKE(33)。
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-                try {
-                    window.frameRateBoostOnTouchEnabled = true
-                } catch (_: Throwable) {
-                    // 个别 ROM 即便到达 API 34 仍可能不支持，单独吞掉（高刷非致命）
-                }
-            }
+            window.frameRateBoostOnTouchEnabled = true
         } catch (_: Throwable) {
-            // 个别 ROM 可能不支持，忽略即可（高刷非致命）
+            // 个别 ROM 即便到达 API 34 仍可能不支持，单独吞掉（高刷非致命）
             // 用 Throwable 而非 Exception：NoSuchMethodError/LinkageError 是 Error，
             // 低版本设备调用高版本方法抛出的崩溃必须被吞掉而非上抛。
         }
+    }
+
+    /// 批次44：把显示模式切到 supportedModes 里 refreshRate 最高的一档，
+    /// 返回该档的刷新率；取不到任何模式信息时返回 0.0。
+    ///
+    /// 选档顺序：
+    /// 1. 先取全局最大 refreshRate（浮点按 0.01Hz 归并，避免 119.99/120.0 被
+    ///    当成两档）；
+    /// 2. 同一最大档内**优先当前分辨率**——不切分辨率，避免切档时闪一下并
+    ///    触发整窗重排；
+    /// 3. 没有同分辨率的最高档时，退化为最大档里分辨率最高的一个。
+    @Suppress("DEPRECATION")
+    private fun applyMaxRefreshRate(): Double {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return 0.0
+        val display = windowManager.defaultDisplay ?: return 0.0
+        val modes = display.supportedModes
+        if (modes == null || modes.isEmpty()) return 0.0
+        val currentMode = display.mode
+        val maxRefresh = modes.maxOf { it.refreshRate }
+        val atMax = modes.filter { kotlin.math.abs(it.refreshRate - maxRefresh) < 0.01f }
+        val sameResolution = atMax.firstOrNull {
+            it.physicalWidth == currentMode.physicalWidth &&
+                it.physicalHeight == currentMode.physicalHeight
+        }
+        val best = sameResolution
+            ?: atMax.maxByOrNull { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
+            ?: return 0.0
+
+        // 首次 request 时快照原始值，release 原样还原（只影响本窗口，
+        // 不写系统设置；进程被杀后窗口重建也会自动回到默认）。
+        if (savedPreferredDisplayModeId == null) {
+            savedPreferredDisplayModeId = window.attributes.preferredDisplayModeId
+            savedPreferredRefreshRate = window.attributes.preferredRefreshRate
+        }
+        val attrs = window.attributes
+        attrs.preferredDisplayModeId = best.modeId
+        attrs.preferredRefreshRate = best.refreshRate
+        window.attributes = attrs // 重新 setAttributes 才生效
+        return best.refreshRate.toDouble()
+    }
+
+    /// 批次44：把刷新率偏好还原为首次 request 前的快照。
+    /// 从未 request 过时写 0 / 0f（= 交给系统自适应）。
+    @Suppress("DEPRECATION")
+    private fun restoreRefreshRate() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val attrs = window.attributes
+        attrs.preferredDisplayModeId = savedPreferredDisplayModeId ?: 0
+        attrs.preferredRefreshRate = savedPreferredRefreshRate ?: 0f
+        window.attributes = attrs
     }
 
     /// 复用后台（headless）FlutterEngine：线控耳机「唤醒播放」被拉起时，
@@ -718,6 +752,47 @@ class MainActivity : FlutterActivity() {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
                     result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // 批次44：显示刷新率 MethodChannel。
+        // Dart 侧 DisplayRefreshService 在内容滑动中反复调 requestMax、
+        // 手指停约 700ms 后调 release，静止时回落到系统默认档省电。
+        //
+        // 取舍：API 30+ 起 preferredDisplayModeId / preferredRefreshRate 已
+        // deprecated，但 Surface#setFrameRate 需要一个能拿到的 Surface，
+        // 而 Flutter 的渲染 Surface 由引擎内部持有、插件层取不到，所以这里
+        // 仍只能用 WindowManager.LayoutParams 这组公开字段（只作用于本窗口，
+        // 不写系统设置；系统会挑选最接近的显示模式）。
+        //
+        // 不加 onPause/onDestroy 释放钩子：滑动中切后台时 Dart 侧的 700ms
+        // 定时器会自然 release；在这里抢先还原反而会和通道状态不一致
+        // （Dart 认为仍是高刷，回到前台后不会再发 request）。
+        // 两个方法都不接受参数，不引入任何可被外部触发的入口。
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            DISPLAY_REFRESH_CHANNEL
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "requestMax" -> runOnUiThread {
+                    try {
+                        result.success(applyMaxRefreshRate())
+                    } catch (e: Exception) {
+                        Log.w("DisplayRefresh", "requestMax failed: $e")
+                        // 约定返回 0：Dart 侧据此判定「不支持」并永久降级，
+                        // 不走 result.error，避免 Dart 侧多一层异常分支。
+                        result.success(0.0)
+                    }
+                }
+                "release" -> runOnUiThread {
+                    try {
+                        restoreRefreshRate()
+                    } catch (e: Exception) {
+                        Log.w("DisplayRefresh", "release failed: $e")
+                    }
+                    result.success(null)
                 }
                 else -> result.notImplemented()
             }

@@ -1,0 +1,70 @@
+package com.md3music.md3music
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * 批次44：暂停后空闲释放策略的 JVM 单测（不依赖 Android/Robolectric）。
+ */
+class IdleStopPolicyTest {
+
+    private val policy = IdleStopPolicy()
+
+    // ===== normalizeMinutes =====
+
+    @Test
+    fun normalizeMinutes_nullFallsBackToDefault() {
+        assertEquals(IdleStopPolicy.DEFAULT_MINUTES, policy.normalizeMinutes(null))
+    }
+
+    @Test
+    fun normalizeMinutes_negativeBecomesDisabled() {
+        assertEquals(0, policy.normalizeMinutes(-1))
+    }
+
+    @Test
+    fun normalizeMinutes_zeroStaysDisabled() {
+        assertEquals(0, policy.normalizeMinutes(0))
+    }
+
+    @Test
+    fun normalizeMinutes_overMaxIsClamped() {
+        assertEquals(IdleStopPolicy.MAX_MINUTES, policy.normalizeMinutes(61))
+    }
+
+    @Test
+    fun normalizeMinutes_normalValuePassesThrough() {
+        assertEquals(10, policy.normalizeMinutes(10))
+    }
+
+    // ===== delayMs =====
+
+    @Test
+    fun delayMs_disabledIsZero() {
+        assertEquals(0L, policy.delayMs(0))
+    }
+
+    @Test
+    fun delayMs_tenMinutesIsSixHundredThousandMillis() {
+        assertEquals(600_000L, policy.delayMs(10))
+    }
+
+    // ===== shouldStop =====
+
+    @Test
+    fun shouldStop_playingNeverStops() {
+        assertFalse(policy.shouldStop(playing = true, minutes = 10))
+    }
+
+    @Test
+    fun shouldStop_pausedButDisabledNeverStops() {
+        assertFalse(policy.shouldStop(playing = false, minutes = 0))
+    }
+
+    @Test
+    fun shouldStop_pausedAndEnabledStops() {
+        assertTrue(policy.shouldStop(playing = false, minutes = 10))
+    }
+}

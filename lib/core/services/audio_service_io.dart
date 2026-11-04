@@ -7,6 +7,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'diagnostic_logger.dart';
+import 'audio_offload_config.dart';
 import '../../services/kugou_api/kugou_models.dart'
     show loudnessForUrl, warmLoudnessCache;
 import 'playback_command_dispatcher.dart';
@@ -402,6 +403,21 @@ class AudioService {
     // 因此辅播放器**不请求音频焦点**：否则同一个 app 的第二次焦点请求会让
     // 主播放器收到 AUDIOFOCUS_LOSS，淡出的那一路会被 Media3 直接掐掉。
     androidApplyAudioAttributes: !aux,
+    // 硬解播放（audio offload，批次44）：只在主播放器、且用户开启、且当前
+    // 无音效链时下发。
+    // 辅播放器（交叉淡化）不下发：它是短暂淡出用途，offload 收益可忽略，
+    // 且多路 offload 同时存在会增加机型兼容风险。
+    // 注意：offload 会绕过全部 AudioProcessor（蝰蛇 / 均衡 / 音量均衡 /
+    // 淡入淡出处理），因此只有 dspActive 为 false 时才允许。
+    androidAudioOffloadPreferences: !aux && AudioOffloadConfig.effective
+        ? const AndroidAudioOffloadPreferences(
+            audioOffloadMode: AndroidAudioOffloadMode.enabled,
+            // 两项都要求设备支持：宁可退回软解，也不要出现「硬解下切歌有缝 /
+            // 变速异常」。上游默认不要求（放宽命中率），这里取保守侧。
+            isGaplessSupportRequired: true,
+            isSpeedChangeSupportRequired: true,
+          )
+        : null,
     // MD3Music fork: 辅播放器跳过 MediaSession 创建（避免系统看到两个活跃
     // 媒体会话），并与主播放器共享同一个 audioSessionId（均衡器/频谱在
     // 淡化全程对两路音频同时生效）。

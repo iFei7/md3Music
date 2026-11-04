@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/layout/page_title_alignment.dart';
 import '../../core/services/audio_service_io.dart';
+import '../../core/services/audio_offload_config.dart';
 import '../../core/services/volume_normalization_service.dart';
 import '../../core/services/background_image_loader.dart';
 import '../../core/theme/squircle.dart';
@@ -25,6 +26,7 @@ import '../../core/services/viper_master_service.dart';
 import '../../core/services/listen_report_service.dart';
 import '../../core/services/media_notification_service.dart';
 import '../../core/services/media_store_service.dart';
+import '../../core/services/player_frame_driver.dart';
 import '../../core/services/startup_auto_play.dart';
 import '../../core/services/wakelock_service.dart';
 import '../../core/services/diagnostic_exporter.dart';
@@ -164,6 +166,12 @@ class _SettingsPageState extends State<SettingsPage>
   // 交叉淡化（自动切歌时上一首渐出与下一首渐入叠加）
   bool _crossfadeEnabled = false;
   int _crossfadeSeconds = SettingsRepository.kCrossfadeDefaultSeconds;
+  // 省电动画帧率：全局共享帧驱动降到 30fps
+  bool _uiLowFrameRate = false;
+  // 暂停后释放后台服务（批次44）：false 对应 native 侧 minutes=0（永不释放）
+  bool _keepaliveIdleStopEnabled = true;
+  // 硬解播放（audio offload，批次44）：会话级，改完需重启 App 生效
+  bool _audioOffloadEnabled = false;
   // 自动混音（AutoMix）：交叉淡化开启时按节拍对齐过渡点，由 Task 12 的播放器侧实现消费
   bool _automixEnabled = false;
   // 音量均衡（响度归一）
@@ -211,6 +219,10 @@ class _SettingsPageState extends State<SettingsPage>
       duration: const Duration(milliseconds: 120),
       value: 1.0,
     );
+    // 批次44 软解兜底：AudioOffloadGuard 自动关闭 offload 后，本页开关要回弹
+    // 为关，否则会显示"开着但实际在软解"的假象。监听只改本地 UI 状态，不调
+    // 任何 native 方法（持久化由 guard 负责写入 false）。
+    AudioOffloadConfig.autoDisabledNotifier.addListener(_onOffloadAutoDisabled);
     _loadSettings();
     _loadVersion();
     _loadLyricPushSettings();
@@ -219,11 +231,21 @@ class _SettingsPageState extends State<SettingsPage>
 
   @override
   void dispose() {
+    AudioOffloadConfig.autoDisabledNotifier.removeListener(
+      _onOffloadAutoDisabled,
+    );
     _contentScrolled.dispose();
     _sectionTransition.dispose();
     _searchController.dispose();
     _updater.dispose();
     super.dispose();
+  }
+
+  /// 批次44：硬解被自动关闭（offload 初始化失败/卡死）后把开关回弹为关。
+  void _onOffloadAutoDisabled() {
+    if (AudioOffloadConfig.autoDisabledNotifier.value == null) return;
+    if (!mounted || !_audioOffloadEnabled) return;
+    setState(() => _audioOffloadEnabled = false);
   }
 
   /// 从 SettingsRepository 加载实时歌词推送协议与共用偏好。
@@ -289,6 +311,11 @@ class _SettingsPageState extends State<SettingsPage>
         .getDisableSystemAudioEffects();
     final pauseFadeEnabled = await _settingsRepository.getPauseFadeEnabled();
     final crossfadeEnabled = await _settingsRepository.getCrossfadeEnabled();
+    final uiLowFrameRate = await _settingsRepository.getUiLowFrameRate();
+    final audioOffloadEnabled = await _settingsRepository
+        .getAudioOffloadEnabled();
+    final keepaliveIdleStopMinutes = await _settingsRepository
+        .getKeepaliveIdleStopMinutes();
     final crossfadeSeconds = await _settingsRepository.getCrossfadeSeconds();
     final automixEnabled = await _settingsRepository.getAutomixEnabled();
     final volumeNormalizationEnabled = await _settingsRepository
@@ -356,6 +383,10 @@ class _SettingsPageState extends State<SettingsPage>
       _disableSystemAudioEffects = disableSystemAudioEffects;
       _pauseFadeEnabled = pauseFadeEnabled;
       _crossfadeEnabled = crossfadeEnabled;
+      _uiLowFrameRate = uiLowFrameRate;
+      // 批次44：本会话已判定 offload 失败时，即使持久化还是旧值也不显示"开"。
+      _audioOffloadEnabled = audioOffloadEnabled && !AudioOffloadConfig.runtimeFailed;
+      _keepaliveIdleStopEnabled = keepaliveIdleStopMinutes > 0;
       _crossfadeSeconds = crossfadeSeconds;
       _automixEnabled = automixEnabled;
       _volumeNormalizationEnabled = volumeNormalizationEnabled;
@@ -2294,6 +2325,53 @@ class _SettingsPageState extends State<SettingsPage>
               _pauseFadeEnabled = value;
             });
             _settingsRepository.setPauseFadeEnabled(value);
+          },
+        ),
+        // search: 帧率 动画 省电 流畅 60fps 30fps 掉帧 卡顿
+        SwitchListTile(
+          title: const Text('省电动画帧率'),
+          subtitle: const Text('降至 30fps，减少动画耗电；关闭则 60fps'),
+          value: _uiLowFrameRate,
+          onChanged: (value) {
+            HapticFeedback.lightImpact();
+            setState(() => _uiLowFrameRate = value);
+            _settingsRepository.setUiLowFrameRate(value);
+            PlayerFrameDriver.instance.setFrameRate(
+              value
+                  ? PlayerFrameDriver.kFrameRateLow
+                  : PlayerFrameDriver.kFrameRateHigh,
+            );
+          },
+        ),
+        // search: 后台 保活 常驻 释放 暂停 省电 内存 进程 通知
+        SwitchListTile(
+          title: const Text('暂停后释放后台'),
+          subtitle: const Text('暂停 10 分钟后退出后台服务，减少常驻耗电；下次播放自动重建'),
+          value: _keepaliveIdleStopEnabled,
+          onChanged: (value) {
+            HapticFeedback.lightImpact();
+            setState(() => _keepaliveIdleStopEnabled = value);
+            // 只在本地写设置，不调任何 native 方法：原生每次排期时重新读
+            // SharedPreferences，改完即生效（一次通知下发后按新值重排）。
+            _settingsRepository.setKeepaliveIdleStopMinutes(
+              value ? SettingsRepository.kKeepaliveIdleStopDefaultMinutes : 0,
+            );
+          },
+        ),
+        // search: 硬解 硬件解码 offload 省电 音效 直通 高解析
+        SwitchListTile(
+          title: const Text('硬件解码播放（实验）'),
+          subtitle: const Text(
+            '解码交给系统音频服务，熄屏播放更省电；开启后音效、均衡器、音量均衡对该曲目不再生效，且需重启 App 生效；设备不支持时会自动关闭并切换软解',
+          ),
+          value: _audioOffloadEnabled,
+          onChanged: (value) {
+            HapticFeedback.lightImpact();
+            setState(() => _audioOffloadEnabled = value);
+            // 只写持久化，不调任何 native 方法，也不改 AudioOffloadConfig 的
+            // 静态字段：该配置只在启动时读一次、播放器构造期消费，运行期改
+            // 静态字段会造出「设置页以为生效、播放器其实没变」的假象。
+            _settingsRepository.setAudioOffloadEnabled(value);
           },
         ),
         // search: 歌曲淡入淡出 交叉淡化 crossfade 渐入渐出 叠加 衔接 无缝 过渡

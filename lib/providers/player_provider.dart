@@ -24,6 +24,7 @@ import '../core/services/home_widget_service.dart';
 import '../core/services/listening_grade_service.dart';
 import '../core/services/listen_report_service.dart';
 import '../core/services/playback_duration_tracker.dart';
+import '../core/services/player_frame_driver.dart';
 import '../core/services/media_notification_service.dart';
 import '../core/services/wakelock_service.dart';
 import '../core/services/media_store_service.dart';
@@ -488,6 +489,10 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// 巡检负责发现「平台停发位置事件的无声死局」）。
   static const Duration _stallPatrolInterval = Duration(seconds: 1);
 
+  /// 后台降频周期：2s 一帧（前台 1s）。后台降频，不能关 —— 平台 stalled 时
+  /// 位置事件静默，巡检是唯一兜底；只是把唤醒频率放宽一倍。
+  static const Duration _stallPatrolIntervalBackground = Duration(seconds: 2);
+
   /// 判据 A（事件停发）阈值：平台位置事件静默超过该时长视为停发。
   /// 正常播放时 just_audio 的位置流最多 200ms 一帧，3s 静默只可能是 stalled。
   static const Duration _stallEventSilenceThreshold = Duration(seconds: 3);
@@ -628,6 +633,11 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   final Duration _audioSourceLoadTimeout;
   final Duration _playbackDiagnosticSampleInterval;
+
+  /// 后台诊断采样间隔（默认 60s，前台为 [_playbackDiagnosticSampleInterval]）。
+  /// 后台把采样间隔放宽到 60s 以降低唤醒与日志开销，但仍保留留痕能力，
+  /// 用于事后定位（例如用户反馈「后台放着放着就断了」时可回看进度采样断点）。
+  final Duration _playbackDiagnosticSampleIntervalBackground;
   final bool _isAndroidPlatform;
 
   int _issuePlaybackRequest() {
@@ -906,6 +916,7 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   PlayerProvider({
     Duration audioSourceLoadTimeout = kAudioSourceLoadDeadline,
     @visibleForTesting Duration? playbackDiagnosticSampleInterval,
+    @visibleForTesting Duration? playbackDiagnosticSampleIntervalBackground,
     @visibleForTesting Duration? stallPatrolEventSilence,
     @visibleForTesting Duration? stallPatrolPersistWindow,
     @visibleForTesting Duration? stallPatrolRecoveryWatchWindow,
@@ -915,6 +926,9 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
   }) : _audioSourceLoadTimeout = audioSourceLoadTimeout,
        _playbackDiagnosticSampleInterval =
            playbackDiagnosticSampleInterval ?? const Duration(seconds: 10),
+       _playbackDiagnosticSampleIntervalBackground =
+           playbackDiagnosticSampleIntervalBackground ??
+           const Duration(seconds: 60),
        // 批次30：stalled 巡检阈值注入（仅测试缩小，生产走常量默认值）
        _stallEventSilence =
            stallPatrolEventSilence ?? _stallEventSilenceThreshold,
@@ -2003,8 +2017,13 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     if (_playbackDiagnosticSampleTimer?.isActive ?? false) return;
+    // 后台降频：诊断采样 10s→60s。周期变化不会自动生效，需
+    // [_resyncPlaybackTimersForLifecycle] 先 cancel 再重建。
+    final interval = _isAppBackgrounded
+        ? _playbackDiagnosticSampleIntervalBackground
+        : _playbackDiagnosticSampleInterval;
     _playbackDiagnosticSampleTimer = Timer.periodic(
-      _playbackDiagnosticSampleInterval,
+      interval,
       (_) => _logPlaybackProgressSample(),
     );
   }
@@ -2044,10 +2063,32 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
     if (_stallPatrolTimer?.isActive ?? false) return;
     _resetStallPatrolEpisode();
+    // 后台降频：巡检 1s→2s，不能关 —— 平台 stalled 时位置事件静默，
+    // 巡检是唯一兜底。周期变化不会自动生效，需
+    // [_resyncPlaybackTimersForLifecycle] 先 cancel 再重建。
+    final interval = _isAppBackgrounded
+        ? _stallPatrolIntervalBackground
+        : _stallPatrolInterval;
     _stallPatrolTimer = Timer.periodic(
-      _stallPatrolInterval,
+      interval,
       (_) => _patrolPlaybackStall(),
     );
+  }
+
+  /// 前后台切换后显式重建两个后台定时器，让周期跟着 `_isAppBackgrounded` 切换。
+  ///
+  /// 为什么必须显式重建：[_updatePlaybackDiagnosticSampling] 与
+  /// [_updateStallPatrol] 都有「定时器已激活则直接 return」的早退，不先 cancel
+  /// 就改不了周期。这里直接 cancel 而不复用 [_stopStallPatrol]，是因为后者还会
+  /// [_resetStallPatrolEpisode]，而紧接着的 `_updateStallPatrol` 启动时本来就会
+  /// 重置一次——重复调用无害但语义混乱。
+  void _resyncPlaybackTimersForLifecycle() {
+    _playbackDiagnosticSampleTimer?.cancel();
+    _playbackDiagnosticSampleTimer = null;
+    _stallPatrolTimer?.cancel();
+    _stallPatrolTimer = null;
+    _updatePlaybackDiagnosticSampling(_isPlaying);
+    _updateStallPatrol(_isPlaying);
   }
 
   void _stopStallPatrol() {
@@ -6317,10 +6358,23 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
       song: _currentSong,
       outcome: state.name,
     );
+    // 共享帧驱动的生命周期闸门：只有真正不出帧的后台状态才挂起定时器。
+    // 这里刻意不复用下面的 `_isAppBackgrounded` —— 那个变量在 `inactive`
+    // 时也会置 true（用于后台网络重试策略），而 `inactive`（下拉通知栏、
+    // 来电浮层、分屏失焦）时界面仍在出帧，跟着停会让动画冻住。
+    // 两个语义不同，不要合并。
+    PlayerFrameDriver.instance.setAppSuspended(
+      state == AppLifecycleState.paused ||
+          state == AppLifecycleState.hidden ||
+          state == AppLifecycleState.detached,
+    );
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _isAppBackgrounded = true;
+      // 后台降频：巡检 1s→2s、诊断采样 10s→60s；巡检不能关（平台 stalled
+      // 时位置事件静默，它是唯一兜底）。
+      _resyncPlaybackTimersForLifecycle();
       // App 进入后台或即将被杀死，立即保存播放状态
       _saveState();
       _saveDebounce?.cancel();
@@ -6336,6 +6390,8 @@ class PlayerProvider extends ChangeNotifier with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.resumed) {
       // 回到前台：停止兜底定时器，立即重试一次失败的当前歌曲
       _isAppBackgrounded = false;
+      // 回到前台：两个定时器恢复原周期（巡检 2s→1s、采样 60s→10s）。
+      _resyncPlaybackTimersForLifecycle();
       _stopRetryFailedTimer();
       _retryFailedPlayback();
     }

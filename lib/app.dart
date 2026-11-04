@@ -16,6 +16,7 @@ import 'tv/player/tv_full_player.dart';
 import 'core/remote/tv_exit_confirm_dialog.dart';
 import 'core/remote/tv_focus_highlight.dart';
 import 'core/remote/tv_key_repeat.dart';
+import 'core/services/display_refresh_service.dart';
 import 'core/services/external_media_intent_service.dart';
 import 'core/services/fm_widget_sync.dart';
 import 'core/services/startup_auto_play.dart';
@@ -643,6 +644,14 @@ class _AppViewState extends State<_AppView> {
                       if (notification is ScrollUpdateNotification &&
                           notification.metrics.axis == Axis.vertical) {
                         GlassDockPlayer.notifyContentScrolled();
+                      }
+                      // 批次44：滑动期把显示刷新率提到设备最高档（90/120Hz），
+                      // 手指停 700ms 后回落。失败静默降级，不影响滚动。
+                      if (notification is ScrollStartNotification ||
+                          notification is ScrollUpdateNotification) {
+                        unawaited(DisplayRefreshService.instance.beginScroll());
+                      } else if (notification is ScrollEndNotification) {
+                        unawaited(DisplayRefreshService.instance.endScroll());
                       }
                       return false;
                     },

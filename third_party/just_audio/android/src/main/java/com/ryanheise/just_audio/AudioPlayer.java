@@ -762,6 +762,36 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 loudnessEnhancerSetTargetGain(call.argument("targetGain"));
                 result.success(new HashMap<String, Object>());
                 break;
+            case "setAndroidAudioOffloadPreferences": {
+                // MD3Music fork（批次44）：运行时把 offload 偏好写回 Media3。
+                // args 为 null 表示关闭 offload（软解兜底）：坏设备上 Media3 的
+                // maybeDisableOffload() 只对本次 configure 生效，下一首会重新
+                // 尝试，所以必须在运行期把偏好改成 DISABLED。
+                // 说明：onMethodCall 入口已调用 ensurePlayerInitialized()，
+                // player 必然非空；这里的判空只为防御子类/异常时序。
+                Map<?, ?> prefs = (Map<?, ?>) call.arguments;
+                AudioOffloadPreferences built = prefs == null
+                        ? new AudioOffloadPreferences.Builder()
+                            .setAudioOffloadMode(AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED)
+                            .setIsGaplessSupportRequired(false)
+                            .setIsSpeedChangeSupportRequired(false)
+                            .build()
+                        : new AudioOffloadPreferences.Builder()
+                            .setIsGaplessSupportRequired((Boolean) prefs.get("isGaplessSupportRequired"))
+                            .setIsSpeedChangeSupportRequired((Boolean) prefs.get("isSpeedChangeSupportRequired"))
+                            .setAudioOffloadMode((Integer) prefs.get("audioOffloadMode"))
+                            .build();
+                audioOffloadPreferences = built;
+                if (player != null) {
+                    player.setTrackSelectionParameters(
+                            player.getTrackSelectionParameters()
+                                    .buildUpon()
+                                    .setAudioOffloadPreferences(built)
+                                    .build());
+                }
+                result.success(null);
+                break;
+            }
             case "setNormalizationGain":
                 // MD3Music fork: 音量均衡——Dart 侧 setNormalizationGain(gainDb) 广播到
                 // 本进程全部 NormalizationGainAudioSink 实例（主/辅/后台引擎统一生效，

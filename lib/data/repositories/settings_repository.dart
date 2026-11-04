@@ -358,6 +358,66 @@ class SettingsRepository {
     await prefs.setBool(_keyPauseFadeEnabled, value);
   }
 
+  // ===== 显示性能（帧率预算）=====
+  static const String _keyUiLowFrameRate = 'settings_ui_low_frame_rate';
+
+  /// 是否把全局共享帧驱动降到 30fps（省电），默认 false = 60fps。
+  Future<bool> getUiLowFrameRate() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyUiLowFrameRate) ?? false;
+  }
+
+  Future<void> setUiLowFrameRate(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyUiLowFrameRate, value);
+  }
+
+  // ===== 后台保活（空闲释放）=====
+  static const String _keyKeepaliveIdleStopMinutes =
+      'settings_keepalive_idle_stop_minutes';
+
+  /// 暂停后释放后台服务的默认时长（分钟）。
+  static const int kKeepaliveIdleStopDefaultMinutes = 10;
+
+  /// 暂停后释放后台服务的最大时长（分钟），超出按此值处理。
+  static const int kKeepaliveIdleStopMaxMinutes = 60;
+
+  /// 暂停后多少分钟退出后台服务，默认 [kKeepaliveIdleStopDefaultMinutes]；
+  /// 0 表示永不释放（继续常驻保活）。写入前统一 clamp 到 0..60。
+  Future<int> getKeepaliveIdleStopMinutes() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value =
+        prefs.getInt(_keyKeepaliveIdleStopMinutes) ??
+        kKeepaliveIdleStopDefaultMinutes;
+    return value.clamp(0, kKeepaliveIdleStopMaxMinutes);
+  }
+
+  Future<void> setKeepaliveIdleStopMinutes(int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      _keyKeepaliveIdleStopMinutes,
+      value.clamp(0, kKeepaliveIdleStopMaxMinutes),
+    );
+  }
+
+  // ===== 硬解播放（audio offload）=====
+  static const String _keyAudioOffloadEnabled =
+      'settings_audio_offload_enabled';
+
+  /// 硬解播放（audio offload）开关，默认 false。
+  ///
+  /// 批次44：仅在 App 启动时读取一次并写入 `AudioOffloadConfig`；
+  /// 播放器构造期才消费该值，故改完需重启 App 生效。
+  Future<bool> getAudioOffloadEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyAudioOffloadEnabled) ?? false;
+  }
+
+  Future<void> setAudioOffloadEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyAudioOffloadEnabled, value);
+  }
+
   // ===== 交叉淡化（crossfade）=====
   static const String _keyCrossfadeEnabled = 'settings_crossfade_enabled';
   static const String _keyCrossfadeSeconds = 'settings_crossfade_seconds';

@@ -78,7 +78,9 @@ class AudioPlayer {
 
   final bool _androidOffloadSchedulingEnabled;
 
-  final AndroidAudioOffloadPreferences? _androidAudioOffloadPreferences;
+  /// MD3Music fork（批次44）：非 final —— 支持运行期把 offload 偏好改成
+  /// disabled（软解兜底），见 [setAndroidAudioOffloadPreferences]。
+  AndroidAudioOffloadPreferences? _androidAudioOffloadPreferences;
 
   /// This is `true` when the audio player needs to engage the native platform
   /// side of the plugin to decode or play audio, and is `false` when the native
@@ -1337,6 +1339,27 @@ class AudioPlayer {
       // ignore: avoid_print
       print('[NormalizationGain] setNormalizationGain failed: $e');
     }
+  }
+
+  /// MD3Music fork: 运行时切换 audio offload 偏好（批次44）。
+  ///
+  /// 传 null 表示关闭 offload。内部把偏好写回 Media3 的
+  /// `TrackSelectionParameters`，使**当前会话**的后续曲目不再尝试 offload，
+  /// 无需重启 App。
+  ///
+  /// 为什么不能只靠 Media3 自动回退：`DefaultAudioSink.maybeDisableOffload()`
+  /// 只是置 `offloadDisabledUntilNextConfiguration = true`，仅对本次 configure
+  /// 有效，下一首会重新尝试 offload —— 坏设备就会每首歌失败一次。
+  Future<void> setAndroidAudioOffloadPreferences(
+      AndroidAudioOffloadPreferences? preferences) async {
+    if (_disposed) return;
+    _androidAudioOffloadPreferences = preferences;
+    if (_id == null) return;
+    final channel = MethodChannel('com.ryanheise.just_audio.methods.$_id');
+    // 注意：MethodChannel 只接受 StandardMessageCodec 支持的类型，
+    // 因此这里必须转成 Map（_toMessage() 返回的是 Dart 对象）。
+    await channel.invokeMethod('setAndroidAudioOffloadPreferences',
+        preferences?._toMessage().toMap());
   }
 
   /// 读取当前曲目的「源格式」（歌曲原始位深/采样率/码率/声道，取自 TrackGroup）。
