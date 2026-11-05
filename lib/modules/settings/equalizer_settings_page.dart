@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io' show Platform;
 import 'dart:ui';
 
@@ -6,9 +7,12 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:m3e_core/m3e_core.dart';
 
+import '../../core/services/audio_offload_config.dart';
+import '../../core/services/audio_service_io.dart';
 import '../../core/services/equalizer_service.dart';
 import '../../core/utils/app_haptics.dart';
 import '../../core/utils/app_toast.dart';
+import '../../data/repositories/settings_repository.dart';
 
 /// 均衡器设置页：Material Design 3 风格，包含频率响应曲线、预设芯片、垂直频段滑块。
 ///
@@ -274,6 +278,18 @@ class _EqualizerSettingsPageState extends State<EqualizerSettingsPage> {
             onChanged: (value) {
               AppHaptics.tick();
               _eq.setEnabled(value);
+              // 批次46 反向联动：均衡器与硬解互斥（offload 不走 Android
+              // 音频会话音效），开均衡器时自动关闭硬解，避免「均衡器开着
+              // 但硬解下静默失效」。
+              if (value && AudioOffloadConfig.userEnabled) {
+                AudioOffloadConfig.userEnabled = false;
+                SettingsRepository().setAudioOffloadEnabled(false);
+                unawaited(
+                  AudioService().player.setAndroidAudioOffloadPreferences(null),
+                );
+                showToast('均衡器与硬件解码互斥，已关闭硬解，下一首生效',
+                    long: true);
+              }
             },
           ),
         ],

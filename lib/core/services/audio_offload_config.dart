@@ -95,6 +95,24 @@ class AudioOffloadConfig {
     return '软解中（设备或格式不支持硬解）';
   }
 
+  /// 硬解与音效的互斥联动（纯函数，便于单测）。批次46。
+  ///
+  /// offload 绕过全部 AudioProcessor（蝰蛇母带 / 音量均衡）与 Android
+  /// 音频会话音效（均衡器），三者与硬解互斥。开启硬解时返回需要
+  /// 自动关闭的音效名列表（顺序固定：均衡器、蝰蛇母带、音量均衡），
+  /// 空列表表示无冲突、无需联动。
+  static List<String> dspConflictsForOffload({
+    required bool viper,
+    required bool equalizer,
+    required bool normalization,
+  }) {
+    final conflicts = <String>[];
+    if (equalizer) conflicts.add('均衡器');
+    if (viper) conflicts.add('蝰蛇母带');
+    if (normalization) conflicts.add('音量均衡');
+    return conflicts;
+  }
+
   /// 自动降级原因（null = 未发生）。
   ///
   /// 用途有两个：设置页用它把开关回弹为关（"设备不支持时会自动关闭"），

@@ -280,12 +280,41 @@ class _SettingsPageState extends State<SettingsPage>
         enabled
             ? const AndroidAudioOffloadPreferences(
                 audioOffloadMode: AndroidAudioOffloadMode.enabled,
-                isGaplessSupportRequired: true,
-                isSpeedChangeSupportRequired: true,
+                // 批次46：与 _createPlayer 对齐，不要求 gapless/变速支持
+                //（要求会被 DefaultTrackSelector 整体拒掉 offload）。
+                isGaplessSupportRequired: false,
+                isSpeedChangeSupportRequired: false,
               )
             : null,
       );
     } catch (_) {}
+  }
+
+  /// 开启硬解前把三个互斥音效自动关闭（批次46）。
+  ///
+  /// offload 绕过全部 AudioProcessor（蝰蛇 / 音量均衡）与 Android 音频
+  /// 会话音效（均衡器），三者任一开着都构成冲突。返回被关闭的音效名，
+  /// 供 toast 汇总提示。持久化与运行态同步在这里一并完成。
+  Future<List<String>> _disableDspForOffload() async {
+    final conflicts = AudioOffloadConfig.dspConflictsForOffload(
+      viper: _viperMasterEnabled,
+      equalizer: EqualizerService.instance.enabled,
+      normalization: _volumeNormalizationEnabled,
+    );
+    if (conflicts.isEmpty) return const [];
+    if (EqualizerService.instance.enabled) {
+      // setEnabled 内部会持久化（'eq_enabled'）、下发原生并 notifyListeners。
+      await EqualizerService.instance.setEnabled(false);
+    }
+    if (_viperMasterEnabled) {
+      await _settingsRepository.setViperMasterEnabled(false);
+      ViperMasterService.instance.setEnabled(false);
+    }
+    if (_volumeNormalizationEnabled) {
+      await _settingsRepository.setVolumeNormalizationEnabled(false);
+      AudioService().setVolumeNormalization(enabled: false);
+    }
+    return conflicts;
   }
 
   /// 从 SettingsRepository 加载实时歌词推送协议与共用偏好。
@@ -2217,6 +2246,15 @@ class _SettingsPageState extends State<SettingsPage>
             setState(() => _viperMasterEnabled = value);
             _settingsRepository.setViperMasterEnabled(value);
             ViperMasterService.instance.setEnabled(value);
+            // 批次46 反向联动：蝰蛇与硬解互斥（offload 绕过 AudioProcessor），
+            // 开蝰蛇时自动关闭硬解，避免「音效开着但硬解下静默失效」。
+            if (value && _audioOffloadEnabled) {
+              setState(() => _audioOffloadEnabled = false);
+              AudioOffloadConfig.userEnabled = false;
+              _settingsRepository.setAudioOffloadEnabled(false);
+              unawaited(_applyAudioOffloadRuntime(false));
+              showToast('蝰蛇母带与硬件解码互斥，已关闭硬解，下一首生效', long: true);
+            }
           },
         ),
         // search: 蝰蛇母带 音源 母带音质 viper tape VPT
@@ -2241,6 +2279,15 @@ class _SettingsPageState extends State<SettingsPage>
             _settingsRepository.setVolumeNormalizationEnabled(value);
             // 开关变化即时对当前曲目重算并应用增益
             AudioService().setVolumeNormalization(enabled: value);
+            // 批次46 反向联动：音量均衡与硬解互斥（offload 绕过
+            // NormalizationGainAudioSink），开音量均衡时自动关闭硬解。
+            if (value && _audioOffloadEnabled) {
+              setState(() => _audioOffloadEnabled = false);
+              AudioOffloadConfig.userEnabled = false;
+              _settingsRepository.setAudioOffloadEnabled(false);
+              unawaited(_applyAudioOffloadRuntime(false));
+              showToast('音量均衡与硬件解码互斥，已关闭硬解，下一首生效', long: true);
+            }
           },
         ),
         // 参考响度只在均衡开启时才有意义
@@ -2408,23 +2455,40 @@ class _SettingsPageState extends State<SettingsPage>
         SwitchListTile(
           title: const Text('硬件解码播放（实验）'),
           subtitle: const Text(
-            '解码交给系统音频服务，熄屏播放更省电；开启后音效、均衡器、音量均衡对该曲目不再生效，切换后下一首生效，无需重启；设备不支持时会自动关闭并切换软解',
+            '解码交给系统音频服务，熄屏播放更省电；与音效互斥，开启时自动关闭均衡器、蝰蛇母带、音量均衡（开音效时也会自动关硬解），下一首生效无需重启；设备不支持时会自动降级软解',
           ),
           value: _audioOffloadEnabled,
-          onChanged: (value) {
+          onChanged: (value) async {
             HapticFeedback.lightImpact();
-            setState(() => _audioOffloadEnabled = value);
-            _settingsRepository.setAudioOffloadEnabled(value);
-            // 批次45 关键修复：同步静态字段，否则 AudioOffloadConfig.effective
-            // 仍读旧值，连"下次播放"都不会变。
-            AudioOffloadConfig.userEnabled = value;
-            // 立即把偏好下发给运行中的播放器（Media3 会在下一次建 AudioTrack
-            // 时按新偏好生效）。
-            unawaited(_applyAudioOffloadRuntime(value));
-            showToast(
-              value ? '硬件解码已开启，下一首生效' : '硬件解码已关闭，下一首生效',
-              long: true,
-            );
+            if (value) {
+              // 批次46：硬解与音效互斥（offload 绕过全部 AudioProcessor
+              // 与 Android 音频会话音效），开启时自动关闭已开的音效，
+              // 避免「硬解开着、音效静默失效」的矛盾状态。
+              final disabledDsp = await _disableDspForOffload();
+              if (!mounted) return;
+              setState(() {
+                _audioOffloadEnabled = true;
+                _viperMasterEnabled = false;
+                _volumeNormalizationEnabled = false;
+              });
+              AudioOffloadConfig.userEnabled = true;
+              // 音效已联动关闭，dspActive 随之清零，与 shouldEnable 一致。
+              AudioOffloadConfig.dspActive = false;
+              _settingsRepository.setAudioOffloadEnabled(true);
+              unawaited(_applyAudioOffloadRuntime(true));
+              showToast(
+                disabledDsp.isEmpty
+                    ? '硬件解码已开启，下一首生效'
+                    : '硬件解码已开启，下一首生效；已自动关闭${disabledDsp.join('、')}（与硬解互斥）',
+                long: true,
+              );
+            } else {
+              setState(() => _audioOffloadEnabled = false);
+              AudioOffloadConfig.userEnabled = false;
+              _settingsRepository.setAudioOffloadEnabled(false);
+              unawaited(_applyAudioOffloadRuntime(false));
+              showToast('硬件解码已关闭，下一首生效', long: true);
+            }
           },
         ),
         // search: 硬解 状态 offload 实际 解码方式

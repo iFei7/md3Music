@@ -102,4 +102,43 @@ void main() {
       );
     });
   });
+
+  // 批次46：硬解与音效互斥联动（纯函数）
+  group('AudioOffloadConfig.dspConflictsForOffload', () {
+    test('三项全关 → 空列表（无需联动）', () {
+      expect(
+        AudioOffloadConfig.dspConflictsForOffload(
+            viper: false, equalizer: false, normalization: false),
+        isEmpty,
+      );
+    });
+    test('仅均衡器 → 只含均衡器', () {
+      expect(
+        AudioOffloadConfig.dspConflictsForOffload(
+            viper: false, equalizer: true, normalization: false),
+        ['均衡器'],
+      );
+    });
+    test('仅蝰蛇 → 只含蝰蛇母带', () {
+      expect(
+        AudioOffloadConfig.dspConflictsForOffload(
+            viper: true, equalizer: false, normalization: false),
+        ['蝰蛇母带'],
+      );
+    });
+    test('仅音量均衡 → 只含音量均衡', () {
+      expect(
+        AudioOffloadConfig.dspConflictsForOffload(
+            viper: false, equalizer: false, normalization: true),
+        ['音量均衡'],
+      );
+    });
+    test('三项全开 → 顺序固定：均衡器、蝰蛇母带、音量均衡', () {
+      expect(
+        AudioOffloadConfig.dspConflictsForOffload(
+            viper: true, equalizer: true, normalization: true),
+        ['均衡器', '蝰蛇母带', '音量均衡'],
+      );
+    });
+  });
 }

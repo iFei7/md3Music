@@ -412,10 +412,18 @@ class AudioService {
     androidAudioOffloadPreferences: !aux && AudioOffloadConfig.effective
         ? const AndroidAudioOffloadPreferences(
             audioOffloadMode: AndroidAudioOffloadMode.enabled,
-            // 两项都要求设备支持：宁可退回软解，也不要出现「硬解下切歌有缝 /
-            // 变速异常」。上游默认不要求（放宽命中率），这里取保守侧。
-            isGaplessSupportRequired: true,
-            isSpeedChangeSupportRequired: true,
+            // 批次46：两项都不要求支持（批次44 曾取保守侧 true）。实测
+            // 晓龙865/Android14 被整体判为「不支持硬解」，根因就是这两个
+            // 要求：DefaultTrackSelector.rendererSupportsOffload 里
+            // isSpeedChangeSupportRequired 要求 HAL 参数
+            // offload_variable_rate_supported=1（多数设备没有），只要
+            // 缺失就把 offload 整个拒掉；isGaplessSupportRequired 在
+            // API<33 恒不满足（DefaultAudioOffloadSupportProvider
+            // b/191950723），MP3/AAC 普遍带 encoder padding，同样被拒。
+            // 放宽后由 Media3 按曲目/设备自动回退：需要变速或不支持
+            // gapless 时该曲目退软解，其余曲目享受 offload。
+            isGaplessSupportRequired: false,
+            isSpeedChangeSupportRequired: false,
           )
         : null,
     // MD3Music fork: 辅播放器跳过 MediaSession 创建（避免系统看到两个活跃
