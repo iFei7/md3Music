@@ -173,7 +173,7 @@ void main() {
     expect(PlayerFrameDriver.step.inMicroseconds, lessThan(18000));
   });
 
-  test('非法/中间值归一化到 30 或 60，且不会出现 0 或除零', () {
+  test('非法/中间值归一化到 auto / 30 / 60，且不会出现 0 或除零', () {
     final driver = PlayerFrameDriver.instance;
 
     // 中间值 45 → 30，59 → 60
@@ -182,13 +182,18 @@ void main() {
     driver.setFrameRate(59);
     expect(driver.frameRate, 60);
 
-    // 极端值不得产生 0 周期（否则 frameRate 会除零）
+    // 批次45：`<= 0` 归一化到 auto（跟随屏幕刷新率），不再落到 30fps 档
     driver.setFrameRate(0);
-    expect(driver.frameRate, 30);
+    expect(driver.isVsyncDriven, isTrue);
+    expect(driver.targetFrameRate, PlayerFrameDriver.kFrameRateAuto);
     expect(PlayerFrameDriver.step.inMicroseconds, greaterThan(0));
     driver.setFrameRate(-1);
-    expect(driver.frameRate, 30);
+    expect(driver.isVsyncDriven, isTrue);
+    // 极端值不得产生 0 周期（否则 frameRate 会除零）
+    expect(PlayerFrameDriver.step.inMicroseconds, greaterThan(0));
+
     driver.setFrameRate(1000);
+    expect(driver.isVsyncDriven, isFalse);
     expect(driver.frameRate, 60);
     expect(PlayerFrameDriver.step.inMicroseconds, greaterThan(0));
   });
@@ -215,5 +220,180 @@ void main() {
     } finally {
       driver.removeListener(listener);
     }
+  });
+
+  // 批次45：vsync（auto）模式。Ticker 依赖 binding 与时钟推进，只能用
+  // testWidgets + tester.pump；每个用例结束前必须「先退订（停掉 Ticker/Timer）
+  // 再复位到 60fps」，否则单例状态会泄漏到同进程内的后续测试文件。
+  group('auto 模式（vsync 驱动）', () {
+    testWidgets('pump 推进会出拍，且 step 等于实际帧间隔', (
+      WidgetTester tester,
+    ) async {
+      final driver = PlayerFrameDriver.instance;
+      var callbacks = 0;
+      void listener() => callbacks++;
+
+      driver.setFrameRate(PlayerFrameDriver.kFrameRateAuto);
+      driver.addListener(listener);
+      try {
+        expect(driver.isVsyncDriven, isTrue);
+        expect(driver.targetFrameRate, PlayerFrameDriver.kFrameRateAuto);
+
+        // 首帧只用来对齐 elapsed 起点（delta = 0 被丢弃），之后每 8ms 一拍
+        for (var i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 8));
+        }
+
+        expect(callbacks, greaterThan(0));
+        expect(driver.tickCount, greaterThan(0));
+        // 反证：step 必须跟着 vsync 走，而不是停在默认的 16ms
+        expect(
+          PlayerFrameDriver.step.inMicroseconds,
+          inInclusiveRange(7000, 9000),
+        );
+      } finally {
+        driver.removeListener(listener);
+        driver.setFrameRate(PlayerFrameDriver.kFrameRateHigh);
+      }
+    });
+
+    testWidgets('setAppSuspended(true) 会停掉 Ticker（仍标记为 vsync 驱动）', (
+      WidgetTester tester,
+    ) async {
+      final driver = PlayerFrameDriver.instance;
+      void listener() {}
+
+      driver.setFrameRate(PlayerFrameDriver.kFrameRateAuto);
+      driver.addListener(listener);
+      try {
+        for (var i = 0; i < 4; i++) {
+          await tester.pump(const Duration(milliseconds: 8));
+        }
+        expect(driver.tickCount, greaterThan(0));
+
+        driver.setAppSuspended(true);
+        // 档位不变，但驱动必须真的停掉（Ticker 在 inactive 下仍会出帧，
+        // 只有 _appSuspended 这道硬闸门能挡住）
+        expect(driver.isVsyncDriven, isTrue);
+        final int frozen = driver.tickCount;
+        for (var i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 8));
+        }
+        expect(driver.tickCount, frozen);
+      } finally {
+        driver.setAppSuspended(false);
+        driver.removeListener(listener);
+        driver.setFrameRate(PlayerFrameDriver.kFrameRateHigh);
+      }
+    });
+
+    testWidgets('从 auto 切到 30 会停 Ticker 并起 Timer', (
+      WidgetTester tester,
+    ) async {
+      final driver = PlayerFrameDriver.instance;
+      var callbacks = 0;
+      void listener() => callbacks++;
+
+      driver.setFrameRate(PlayerFrameDriver.kFrameRateAuto);
+      driver.addListener(listener);
+      try {
+        for (var i = 0; i < 4; i++) {
+          await tester.pump(const Duration(milliseconds: 8));
+        }
+        expect(driver.tickCount, greaterThan(0));
+
+        driver.setFrameRate(PlayerFrameDriver.kFrameRateLow);
+        expect(driver.isVsyncDriven, isFalse);
+        expect(driver.targetFrameRate, PlayerFrameDriver.kFrameRateLow);
+        expect(
+          PlayerFrameDriver.step.inMicroseconds,
+          inInclusiveRange(32000, 34600),
+        );
+
+        // Timer.periodic 在 fake async 中由 pump 推进时钟触发：一次 34ms 的
+        // pump 只应产生一拍（若 Ticker 没停，会因一次帧回调多出一拍）
+        final int tickBefore = driver.tickCount;
+        final int callbackBefore = callbacks;
+        await tester.pump(const Duration(milliseconds: 34));
+        expect(driver.tickCount - tickBefore, 1);
+        await tester.pump(const Duration(milliseconds: 34));
+        expect(driver.tickCount - tickBefore, 2);
+        expect(callbacks - callbackBefore, 2);
+      } finally {
+        driver.removeListener(listener);
+        driver.setFrameRate(PlayerFrameDriver.kFrameRateHigh);
+      }
+    });
+
+    testWidgets('从 30 切回 auto 会停 Timer 并起 Ticker', (
+      WidgetTester tester,
+    ) async {
+      final driver = PlayerFrameDriver.instance;
+      void listener() {}
+
+      driver.setFrameRate(PlayerFrameDriver.kFrameRateLow);
+      driver.addListener(listener);
+      try {
+        await tester.pump(const Duration(milliseconds: 34));
+        await tester.pump(const Duration(milliseconds: 34));
+        expect(driver.tickCount, greaterThan(0));
+        expect(driver.isVsyncDriven, isFalse);
+
+        driver.setFrameRate(PlayerFrameDriver.kFrameRateAuto);
+        expect(driver.isVsyncDriven, isTrue);
+        expect(driver.targetFrameRate, PlayerFrameDriver.kFrameRateAuto);
+
+        // 切回后连推两次 34ms：首帧 delta = 0 被丢弃，第二帧才是 34ms 的
+        // 一帧。总数必须恰好是 1 —— 残留的 33ms Timer 会多出一拍。
+        final int tickBefore = driver.tickCount;
+        await tester.pump(const Duration(milliseconds: 34));
+        await tester.pump(const Duration(milliseconds: 34));
+        expect(driver.tickCount - tickBefore, 1);
+        expect(
+          PlayerFrameDriver.step.inMicroseconds,
+          inInclusiveRange(33000, 35000),
+        );
+
+        // 换回 8ms 粒度后 step 立刻跟随屏幕
+        await tester.pump(const Duration(milliseconds: 8));
+        expect(
+          PlayerFrameDriver.step.inMicroseconds,
+          inInclusiveRange(7000, 9000),
+        );
+      } finally {
+        driver.removeListener(listener);
+        driver.setFrameRate(PlayerFrameDriver.kFrameRateHigh);
+      }
+    });
+
+    testWidgets('最后一个订阅者退订后 auto 模式也停止出拍', (
+      WidgetTester tester,
+    ) async {
+      final driver = PlayerFrameDriver.instance;
+      void listener() {}
+
+      driver.setFrameRate(PlayerFrameDriver.kFrameRateAuto);
+      driver.addListener(listener);
+      try {
+        for (var i = 0; i < 4; i++) {
+          await tester.pump(const Duration(milliseconds: 8));
+        }
+        expect(driver.tickCount, greaterThan(0));
+
+        driver.removeListener(listener);
+        expect(driver.hasListeners, isFalse);
+        // 档位仍是 auto，但没有订阅者 → Ticker 必须已停
+        expect(driver.isVsyncDriven, isTrue);
+
+        final int frozen = driver.tickCount;
+        for (var i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 8));
+        }
+        expect(driver.tickCount, frozen);
+      } finally {
+        driver.removeListener(listener);
+        driver.setFrameRate(PlayerFrameDriver.kFrameRateHigh);
+      }
+    });
   });
 }

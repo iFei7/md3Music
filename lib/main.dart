@@ -15,6 +15,7 @@ import 'modules/recognition/floating_recognition_service.dart';
 import 'core/services/equalizer_service.dart';
 import 'core/services/audio_offload_config.dart';
 import 'core/services/audio_offload_guard.dart';
+import 'core/services/audio_offload_status.dart';
 import 'core/services/viper_master_service.dart';
 import 'core/services/listening_grade_service.dart';
 import 'core/services/listen_report_service.dart';
@@ -145,6 +146,11 @@ Future<(bool, bool, bool)> runBootstrap() async {
   // dspActive）之后启动，否则读不到 `AudioOffloadConfig.effective`，守卫会
   // 直接什么都不挂。start() 自身幂等，且 effective 为 false 时不做任何事。
   AudioOffloadGuard.instance.start();
+  // 批次45：开始接收 Media3 的真实硬解状态（AudioTrack.isOffloadedPlayback）。
+  // 必须在播放器创建之后接线：Java 侧在起播早期建 AudioTrack 时就会推送
+  // 首条事件，注册晚了会漏掉，设置页只能显示"未知"直到下一首。start() 幂等，
+  // 重复调用（设置页也会调）不会重复注册。
+  AudioOffloadStatusService.instance.start();
   await Future.wait([
     // 加载 MD3 风格播放页的独立歌词偏好（从 SharedPreferences）
     Md3LyricPreferences.instance.load(),
@@ -306,14 +312,15 @@ Future<void> _restoreLandscapeDockSidePref() async {
   } catch (_) {}
 }
 
-/// 恢复「省电动画帧率」开关到全局共享帧驱动（默认 60fps）。
+/// 恢复「省电动画帧率」开关到全局共享帧驱动（批次45：关闭省电 = 跟随屏幕）。
 ///
 /// 必须在 runApp 前完成：首帧起就按目标帧率出拍，避免先 60fps 再降档的抖动。
+/// 关闭省电 = 跟随屏幕刷新率，120Hz 屏动画同步到 120fps。
 Future<void> _restoreUiLowFrameRatePref() async {
   try {
     final bool low = await SettingsRepository().getUiLowFrameRate();
     PlayerFrameDriver.instance.setFrameRate(
-      low ? PlayerFrameDriver.kFrameRateLow : PlayerFrameDriver.kFrameRateHigh,
+      low ? PlayerFrameDriver.kFrameRateLow : PlayerFrameDriver.kFrameRateAuto,
     );
   } catch (_) {}
 }

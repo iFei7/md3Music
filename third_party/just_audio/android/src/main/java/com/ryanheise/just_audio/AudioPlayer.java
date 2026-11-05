@@ -1,5 +1,6 @@
 package com.ryanheise.just_audio;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -110,6 +111,28 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     // （ExoPlayerImpl.updatePlaybackInfo 经 Player.Listener 回调转发到 Dart）。
     // 新增 suppression 事件转发（不改变既有行为）。
     private final BetterEventChannel suppressionEventChannel;
+
+    // MD3Music fork（批次45）：硬解（audio offload）**真实状态**回传通道。
+    //
+    // 为什么另开一个通道，而不是挂在本播放器已有的 methodChannel 上：
+    // `com.ryanheise.just_audio.methods.$id` 的 Dart 侧只有 `invokeMethod`
+    // （just_audio.dart 全文没有 `setMethodCallHandler`），Java 往它上面回传
+    // 会因无人接收而丢失。因此这里用独立通道名，Dart 侧同名注册接收端。
+    private MethodChannel offloadStatusChannel;
+
+    // MD3Music fork（批次45）：Media3 最近一次回调的真实值。
+    //
+    // `lastOffloadedPlayback` 来自 `AudioTrack.isOffloadedPlayback()`
+    // （见 DefaultAudioSink.buildAudioTrack 里的 audioOffloadListener 回调），
+    // 是硬解是否真的生效的 ground truth；`lastSleepingForOffload` 来自
+    // ExoPlayerImpl.updatePlaybackInfo 的 sleepingForOffload 变化，
+    // 为 true 说明播放器主循环已为省电停摆（offload scheduling 生效）。
+    private boolean lastOffloadedPlayback = false;
+    private boolean lastSleepingForOffload = false;
+
+    // MD3Music fork（批次45）：dispose() 之后绝不能再往通道发消息。
+    // 回调可能来自播放线程，post 到主线程时实例可能已被释放，用它兜底。
+    private volatile boolean released = false;
 
     private ProcessingState processingState;
     private long updatePosition;
@@ -249,6 +272,11 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
         methodChannel = new MethodChannel(messenger, "com.ryanheise.just_audio.methods." + id);
         methodChannel.setMethodCallHandler(this);
+        // MD3Music fork（批次45）：硬解状态回传通道。不加 id 后缀 —— 全进程只有
+        // 一处 Dart 接收端（AudioOffloadStatusService 单例），它要拿到的是
+        // 「当前主播放器」的真实状态；辅播放器（交叉淡化）同样会注册监听并上报，
+        // 但两者共用同一通道，UI 展示以最后一条事件为准（与用户听到的声音一致）。
+        offloadStatusChannel = new MethodChannel(messenger, "com.md3music.md3music/audio_offload");
         eventChannel = new BetterEventChannel(messenger, "com.ryanheise.just_audio.events." + id);
         dataEventChannel = new BetterEventChannel(messenger, "com.ryanheise.just_audio.data." + id);
         // MD3Music fork: 订阅 Media3 的原始音频焦点事件（duck/pause/gain 均由
@@ -1068,6 +1096,40 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         }
     }
 
+    /**
+     * MD3Music fork（批次45）：把硬解真实状态推给 Dart。
+     *
+     * <p>调用时机不确定（Media3 在播放线程/应用线程回调），所以统一 post 到主线程，
+     * 满足 MethodChannel 必须在平台线程调用的约束。
+     *
+     * <p>安全约束：这里是**旁路观测**，任何失败（通道为空、实例已释放、
+     * invokeMethod 抛异常）都只记一条 warn 日志，绝不向播放链路抛异常 ——
+     * 硬解状态上报不值得让播放失败。日志里只有两个布尔量，不含 URL / 曲目信息。
+     */
+    private void pushOffloadStatus() {
+        handler.post(() -> {
+            if (released) {
+                return;
+            }
+            final MethodChannel channel = offloadStatusChannel;
+            if (channel == null) {
+                return;
+            }
+            try {
+                Map<String, Object> status = new HashMap<>();
+                status.put("offloaded", lastOffloadedPlayback);
+                status.put("sleeping", lastSleepingForOffload);
+                channel.invokeMethod("audioOffloadStatus", status);
+            } catch (Throwable t) {
+                // 故意捕获 Throwable：这里连 Error（如通道已 detach）都不能冒泡。
+                android.util.Log.w(TAG, "pushOffloadStatus failed: " + t.getClass().getSimpleName());
+            }
+        });
+    }
+
+    // @SuppressLint：ExoPlayer.AudioOffloadListener / addAudioOffloadListener 标注
+    // @UnstableApi，未显式 opt-in 时 lint 会报 UnsafeOptInUsageError。
+    @SuppressLint("UnsafeOptInUsageError")
     private void ensurePlayerInitialized() {
         if (player == null) {
             // MD3Music fork: 子类化 DefaultRenderersFactory 并 override buildAudioSink()，
@@ -1091,6 +1153,25 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                             .setAudioProcessorChain(
                                     new DefaultAudioSink.DefaultAudioProcessorChain(
                                             new ViperMasterProcessor()))
+                            // MD3Music fork（批次45）：**唯一能拿到 AudioTrack 硬解真相的注入点**。
+                            //
+                            // 本仓内联的 Media3 1.4.1 里，`ExoPlayer.AudioOffloadListener`
+                            // 的 `onOffloadedPlayback` **没有被 ExoPlayerImpl 转发**（全树只有
+                            // DefaultAudioSink:1080 调用它，而 sink 的这份监听只能由
+                            // `setExperimentalAudioOffloadListener` 注入，本仓此前无人调用）。
+                            // 也就是说只调 `player.addAudioOffloadListener()` 永远收不到
+                            // offloaded 事件；必须在建 sink 时把监听交给 sink 本身。
+                            // sink 的 onOffloadedPlayback 在每次建 AudioTrack 后触发
+                            // （DefaultAudioSink.buildAudioTrack），这正是
+                            // `AudioTrack.isOffloadedPlayback()` 的真实值。
+                            .setExperimentalAudioOffloadListener(
+                                    new ExoPlayer.AudioOffloadListener() {
+                                        @Override
+                                        public void onOffloadedPlayback(boolean isOffloadedPlayback) {
+                                            lastOffloadedPlayback = isOffloadedPlayback;
+                                            pushOffloadStatus();
+                                        }
+                                    })
                             .build();
                     return NormalizationGainAudioSink.wrap(defaultSink);
                 }
@@ -1161,6 +1242,35 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     .setAudioOffloadPreferences(audioOffloadPreferences)
                     .build()
             );
+            // MD3Music fork（批次45）：注册硬解真实状态监听。
+            //
+            // 偏好下发（上面 setAudioOffloadPreferences）只说明「我们希望走 offload」，
+            // 设备是否真的建出被 offload 的 AudioTrack 由 Media3 + 系统协商决定，
+            // 只有 AudioTrack.isOffloadedPlayback() 才知道答案。两个回调给出的是
+            // 真实结果，本 App 从此可以自证而不用 adb 猜。
+            //
+            // 线程：onOffloadedPlayback 来自播放线程（DefaultAudioSink.buildAudioTrack
+            // 在内部播放线程执行），onSleepingForOffloadChanged 来自 ExoPlayerImpl
+            // 的应用线程；统一在 pushOffloadStatus 里 post 到主线程。
+            //
+            // 注意：本仓 Media3 1.4.1 的 ExoPlayerImpl 只转发
+            // onSleepingForOffloadChanged，**不转发 onOffloadedPlayback**，
+            // 所以硬解真相实际由上面 buildAudioSink 里的 sink 级监听上报。
+            // 这里仍保留 onOffloadedPlayback 是防御性冗余：若将来升级 Media3
+            // 把该回调接通，两路写的是同一对字段，结果是幂等的。
+            player.addAudioOffloadListener(new ExoPlayer.AudioOffloadListener() {
+                @Override
+                public void onOffloadedPlayback(boolean isOffloadedPlayback) {
+                    lastOffloadedPlayback = isOffloadedPlayback;
+                    pushOffloadStatus();
+                }
+
+                @Override
+                public void onSleepingForOffloadChanged(boolean isSleepingForOffload) {
+                    lastSleepingForOffload = isSleepingForOffload;
+                    pushOffloadStatus();
+                }
+            });
             setAudioSessionId(player.getAudioSessionId());
             player.addListener(this);
             // MD3Music fork（阶段6·收敛单一会话）：登记本实例，供跨实例释放非活跃会话
@@ -2202,6 +2312,9 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     public void dispose() {
+        // MD3Music fork（批次45）：先立释放标记，使已排队/后续的 offload 状态推送
+        // 直接返回 —— 释放后绝不能再 invokeMethod（通道宿主已销毁）。
+        released = true;
         if (processingState == ProcessingState.loading) {
             abortExistingConnection(true);
         }
@@ -2230,6 +2343,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         focusEventChannel.endOfStream();
         // MD3Music fork: 关闭 suppression 事件通道（新增事件转发，不影响既有通道）
         suppressionEventChannel.endOfStream();
+        // MD3Music fork（批次45）：断开硬解状态通道（配合 released 标记，双保险）
+        offloadStatusChannel = null;
         // MD3Music fork: 释放 MediaSession（与 player 关联）
         if (mediaSession != null) {
             mediaSession.release();

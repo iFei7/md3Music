@@ -13,8 +13,10 @@ import 'package:flutter/foundation.dart';
 ///
 /// 为什么是会话级：`AudioPlayer` 在整个 App 会话内只创建一次
 /// （`AudioService._internal()` 里的 `_mainPlayer = _createPlayer()`），
-/// 而 offload 偏好是构造参数 —— **改开关（用户手动开）必须重启 App 才生效**，
-/// 设置页只写持久化，不改这里的静态字段。
+/// 而 offload 偏好是构造参数 —— 批次45 起用户手动改开关不再需要重启 App：
+/// 设置页会同步本类的 [userEnabled] 并立刻通过
+/// `AudioPlayer.setAndroidAudioOffloadPreferences` 把偏好写回运行中的播放器
+/// （Media3 在下一次 `configure()` / 建 AudioTrack 时生效，即「下一首」）。
 /// 批次44 软解兜底例外：[AudioOffloadGuard] 判定坏设备后会通过
 /// `AudioPlayer.setAndroidAudioOffloadPreferences(null)` 在运行期把偏好改成
 /// disabled，并把 [runtimeFailed] 置位，使本次会话后续不再尝试 offload。
@@ -45,8 +47,10 @@ class AudioOffloadConfig {
   /// 最终是否真的下发 offload 偏好。
   ///
   /// 为 true 时该曲目走 offload，意味着 [dspActive] 所代表的音效链对其
-  /// 不生效；该值只在播放器构造时读一次，运行期修改 [userEnabled] 不会
-  /// 影响已创建的播放器（见类注释「会话级」）。
+  /// 不生效。该值在播放器构造时读一次；批次45 起设置页改开关时会同步
+  /// [userEnabled] 并把新偏好直接下发到运行中的播放器（无需重启 App），
+  /// 但**当前正在播的这首不会中途切换解码方式**——要等下一次 configure，
+  /// 也就是下一首。
   static bool get effective => shouldEnable(
     userEnabled: userEnabled,
     dspActive: dspActive,
@@ -62,6 +66,34 @@ class AudioOffloadConfig {
     bool runtimeFailed = false,
   }) =>
       userEnabled && !dspActive && !runtimeFailed;
+
+  /// 把三处状态合成一句用户可读的说明（纯函数，便于单测）。批次45。
+  ///
+  /// [offloaded] 来自 [AudioOffloadStatusService] 的
+  /// `status.value?.offloaded`：**null 表示尚未收到任何事件（未知）**，
+  /// false 表示**确认软解**——Media3 每次建 AudioTrack
+  /// （`DefaultAudioSink.buildAudioTrack`）都会回调 `onOffloadedPlayback`，
+  /// 所以只要起播过一次，「没收到事件」就不再可能，false 是可信结论。
+  ///
+  /// [sleeping] 对应 `sleepingForOffload`（播放器主循环为省电停摆），
+  /// [isPlaying] 用来区分「还没起播」与「正在起播」两种未知态，
+  /// [switchEnabled] 是设置页当前开关值（不是 [effective]：被 dspActive /
+  /// runtimeFailed 拦下时的文案由设置页另行回弹开关，这里只描述用户意愿）。
+  static String describePlaybackState({
+    required bool? offloaded,
+    required bool sleeping,
+    required bool isPlaying,
+    required bool switchEnabled,
+  }) {
+    if (!switchEnabled) return '开关已关闭，当前使用软件解码';
+    if (offloaded == null && !isPlaying) return '未播放，起播后可查看实际解码方式';
+    if (offloaded == null && isPlaying) return '正在起播，等待确认解码方式';
+    if (offloaded == true) {
+      return sleeping ? '硬解中（已进入低功耗停摆）' : '硬解中';
+    }
+    // offloaded == false：确认软解（设备或格式不支持硬解，或退回了 passthrough）。
+    return '软解中（设备或格式不支持硬解）';
+  }
 
   /// 自动降级原因（null = 未发生）。
   ///

@@ -5,6 +5,9 @@ import 'dart:ui';
 import 'package:material_ui/material_ui.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
+import 'package:just_audio/just_audio.dart' show
+    AndroidAudioOffloadMode,
+    AndroidAudioOffloadPreferences;
 import 'package:m3e_core/m3e_core.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -15,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/layout/page_title_alignment.dart';
 import '../../core/services/audio_service_io.dart';
 import '../../core/services/audio_offload_config.dart';
+import '../../core/services/audio_offload_status.dart';
 import '../../core/services/volume_normalization_service.dart';
 import '../../core/services/background_image_loader.dart';
 import '../../core/theme/squircle.dart';
@@ -223,6 +227,13 @@ class _SettingsPageState extends State<SettingsPage>
     // 为关，否则会显示"开着但实际在软解"的假象。监听只改本地 UI 状态，不调
     // 任何 native 方法（持久化由 guard 负责写入 false）。
     AudioOffloadConfig.autoDisabledNotifier.addListener(_onOffloadAutoDisabled);
+    // 批次45：订阅 Media3 回传的真实硬解状态，用于开关下方那行只读说明。
+    // start() 幂等（main.dart / 本页可能都调过），重复调用不会重复注册；
+    // 放在 initState 而不是 build：注册通道是副作用，不能进 build。
+    AudioOffloadStatusService.instance.start();
+    AudioOffloadStatusService.instance.status.addListener(
+      _onOffloadStatusChanged,
+    );
     _loadSettings();
     _loadVersion();
     _loadLyricPushSettings();
@@ -233,6 +244,11 @@ class _SettingsPageState extends State<SettingsPage>
   void dispose() {
     AudioOffloadConfig.autoDisabledNotifier.removeListener(
       _onOffloadAutoDisabled,
+    );
+    // 批次45：只摘掉本页的监听，**不**调 stop()——那是全局单例的接收端，
+    // 可能还有别处（后续页面）在用，关掉会让状态永久停更。
+    AudioOffloadStatusService.instance.status.removeListener(
+      _onOffloadStatusChanged,
     );
     _contentScrolled.dispose();
     _sectionTransition.dispose();
@@ -246,6 +262,30 @@ class _SettingsPageState extends State<SettingsPage>
     if (AudioOffloadConfig.autoDisabledNotifier.value == null) return;
     if (!mounted || !_audioOffloadEnabled) return;
     setState(() => _audioOffloadEnabled = false);
+  }
+
+  /// 批次45：真实硬解状态变化（每次建 AudioTrack / 停摆状态翻转）后刷新说明行。
+  void _onOffloadStatusChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// 批次45：把硬解偏好下发给当前播放器。
+  ///
+  /// 只写 Media3 的 `TrackSelectionParameters`，**不会**改变正在播的这首——
+  /// `DefaultAudioSink.setOffloadMode()` 仅赋值，真正生效在下一次
+  /// `configure()`（即下一首）。失败静默：offload 非致命，不能因此影响播放。
+  Future<void> _applyAudioOffloadRuntime(bool enabled) async {
+    try {
+      await AudioService().player.setAndroidAudioOffloadPreferences(
+        enabled
+            ? const AndroidAudioOffloadPreferences(
+                audioOffloadMode: AndroidAudioOffloadMode.enabled,
+                isGaplessSupportRequired: true,
+                isSpeedChangeSupportRequired: true,
+              )
+            : null,
+      );
+    } catch (_) {}
   }
 
   /// 从 SettingsRepository 加载实时歌词推送协议与共用偏好。
@@ -2235,6 +2275,11 @@ class _SettingsPageState extends State<SettingsPage>
 
   /// 「播放行为」三级子页：记忆播放 + 淡入淡出 / 交叉淡化 + 音频焦点策略。
   Widget _buildPlaybackBehaviorSubpage(ColorScheme colorScheme) {
+    // 批次45：硬解真实状态（null = 还没收到任何 Media3 事件 = 未知）+ 播放态。
+    // 播放态取 PlayerProvider（本页已在用 read/select），用 select 只在该布尔
+    // 翻转时重建，不必 watch 整个 provider。
+    final offloadStatus = AudioOffloadStatusService.instance.status.value;
+    final isPlaying = context.select<PlayerProvider, bool>((p) => p.isPlaying);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2327,19 +2372,20 @@ class _SettingsPageState extends State<SettingsPage>
             _settingsRepository.setPauseFadeEnabled(value);
           },
         ),
-        // search: 帧率 动画 省电 流畅 60fps 30fps 掉帧 卡顿
+        // search: 帧率 动画 省电 流畅 60fps 30fps 高刷 120fps 掉帧 卡顿
         SwitchListTile(
           title: const Text('省电动画帧率'),
-          subtitle: const Text('降至 30fps，减少动画耗电；关闭则 60fps'),
+          subtitle: const Text('开启降至 30fps 省电；关闭则跟随屏幕刷新率（高刷屏更顺滑）'),
           value: _uiLowFrameRate,
           onChanged: (value) {
             HapticFeedback.lightImpact();
             setState(() => _uiLowFrameRate = value);
             _settingsRepository.setUiLowFrameRate(value);
+            // 批次45：关闭省电 = 跟随屏幕刷新率（vsync 驱动），不再锁 60fps
             PlayerFrameDriver.instance.setFrameRate(
               value
                   ? PlayerFrameDriver.kFrameRateLow
-                  : PlayerFrameDriver.kFrameRateHigh,
+                  : PlayerFrameDriver.kFrameRateAuto,
             );
           },
         ),
@@ -2362,17 +2408,41 @@ class _SettingsPageState extends State<SettingsPage>
         SwitchListTile(
           title: const Text('硬件解码播放（实验）'),
           subtitle: const Text(
-            '解码交给系统音频服务，熄屏播放更省电；开启后音效、均衡器、音量均衡对该曲目不再生效，且需重启 App 生效；设备不支持时会自动关闭并切换软解',
+            '解码交给系统音频服务，熄屏播放更省电；开启后音效、均衡器、音量均衡对该曲目不再生效，切换后下一首生效，无需重启；设备不支持时会自动关闭并切换软解',
           ),
           value: _audioOffloadEnabled,
           onChanged: (value) {
             HapticFeedback.lightImpact();
             setState(() => _audioOffloadEnabled = value);
-            // 只写持久化，不调任何 native 方法，也不改 AudioOffloadConfig 的
-            // 静态字段：该配置只在启动时读一次、播放器构造期消费，运行期改
-            // 静态字段会造出「设置页以为生效、播放器其实没变」的假象。
             _settingsRepository.setAudioOffloadEnabled(value);
+            // 批次45 关键修复：同步静态字段，否则 AudioOffloadConfig.effective
+            // 仍读旧值，连"下次播放"都不会变。
+            AudioOffloadConfig.userEnabled = value;
+            // 立即把偏好下发给运行中的播放器（Media3 会在下一次建 AudioTrack
+            // 时按新偏好生效）。
+            unawaited(_applyAudioOffloadRuntime(value));
+            showToast(
+              value ? '硬件解码已开启，下一首生效' : '硬件解码已关闭，下一首生效',
+              long: true,
+            );
           },
+        ),
+        // search: 硬解 状态 offload 实际 解码方式
+        // 批次45：只读说明行，展示当前曲目**真实**的解码方式（来自 Media3
+        // 的 AudioTrack.isOffloadedPlayback），而不是"我们下发了什么偏好"。
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text(
+            AudioOffloadConfig.describePlaybackState(
+              offloaded: offloadStatus?.offloaded,
+              sleeping: offloadStatus?.sleepingForOffload ?? false,
+              isPlaying: isPlaying,
+              switchEnabled: _audioOffloadEnabled,
+            ),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
         ),
         // search: 歌曲淡入淡出 交叉淡化 crossfade 渐入渐出 叠加 衔接 无缝 过渡
         SwitchListTile(
