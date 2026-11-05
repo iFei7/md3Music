@@ -38,13 +38,26 @@ android {
     ndkVersion = "28.2.13676358"
 
     // Lite 分支：保留 flavor 声明以兼容上游 CI/脚本（125 处引用），但 3D 深度封面已下线：
-    //   standard - lite 唯一构建目标（无 ORT so、无深度模型资产）
+    //   standard - 手机版构建目标（无 ORT so、无深度模型资产）
     //   depth3d  - 已移除 3D 资产与 ONNX AAR，上游 CI 的 "无 AAR 即跳过" 门控会自动跳过它
-    // 构建：flutter build apk --release --flavor standard --split-per-abi
+    //   tv       - TV 版（批次44）：包名 .tv 后缀独立签名共存，见下方 flavor 块
+    // 手机版构建：flutter build apk --release --flavor standard --split-per-abi
+    // TV 版构建：flutter build apk --release --flavor tv --split-per-abi
     flavorDimensions += "feature"
     productFlavors {
         create("standard") {}
         create("depth3d") {}
+        // 批次44：TV 版独立包体（applicationIdSuffix .tv，与手机版并存互不覆盖）。
+        // 与上游 tv flavor 的差异（上游见 rust-local-force 分支同文件）：
+        //   1. 去掉 buildConfigField FEATURE_TV —— lite 的 Dart/Kotlin 代码不读
+        //      BuildConfig.FEATURE_TV（TV 门控由 CI 的 --dart-define=MD3_TV 承担）；
+        //   2. 去掉 externalNativeBuild cmake -DUSB_DRIVER=OFF —— lite 无 C++ 编译，
+        //      USB 独占输出驱动不存在，无需关闭。TV 桌面入口由 src/tv manifest
+        //      overlay 的 LEANBACK_LAUNCHER 提供。
+        create("tv") {
+            dimension = "feature"
+            applicationIdSuffix = ".tv"
+        }
     }
 
     compileOptions {

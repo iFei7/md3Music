@@ -817,13 +817,12 @@ class _AppViewState extends State<_AppView> {
           );
         }
         if (settings.name == '/') {
-          // 批次43：TV 构建挂 TvMainShellHost（玻璃 Rail + 内容占位壳），
-          // 正常构建仍为 _MainLayout。kTvBuild 为 const，两分支各自树摇。
-          // '/player' 路由批次43 暂不动，待主控接 TvFullPlayer（批次44）。
-          return _UpFadeMainRoute<void>(
-            builder: (_) =>
-                kTvBuild ? const TvMainShellHost() : const _MainLayout(),
-          );
+          // 批次44：TV 构建不再挂自研 TvMainShellHost（左侧 Rail + 内容占位
+          // 壳，真机不可用）——'/' 统一渲染 _MainLayout（真实 tab 页），TV
+          // 顶栏双层 chrome 由 _MainLayoutState.build 的 kTvBuild 分支在
+          // body 上方推挤式叠加（见该方法内注释）。kTvBuild 为 const，
+          // 正常构建走原分支，树与改动前逐字节一致。
+          return _UpFadeMainRoute<void>(builder: (_) => const _MainLayout());
         }
         if (settings.name == '/playlist') {
           final playlist = settings.arguments as Playlist;
@@ -1459,6 +1458,28 @@ class _MainLayoutState extends State<_MainLayout>
     if (!_navExpanded.value) _navExpanded.value = true;
   }
 
+  /// tv: 顶栏第二层 tab 的选中回调（批次44，仅 kTvBuild 分支消费）。
+  ///
+  /// 索引语义与 [TvTopChrome] 一致：`[0, visibleTabs.length)` 为真实 tab
+  /// （与 onDestinationSelected 同款切换逻辑，仅省去手机 Dock 的
+  /// _expandNav）；末尾固定追加的「设置」槽位以二级路由打开
+  /// （'/settings'，TV 返回键经 _handleTvBack 可 pop 回主页）。
+  /// 聚焦即选中语义下本回调由方向键移入触发，无需 OK 确认。
+  void _handleTvTabSelected(int index) {
+    if (isFullPlayerOnTop) return;
+    final tabConfig = context.read<TabConfigProvider>();
+    final visibleTabs = tabConfig.visibleTabs;
+    if (index >= visibleTabs.length) {
+      unawaited(Navigator.of(context).pushNamed('/settings'));
+      return;
+    }
+    mainLayoutSelectedTabId.value = visibleTabs[index].id;
+    setState(() {
+      _previousSelectedIndex = _selectedIndex;
+      _selectedIndex = index;
+    });
+  }
+
   /// 坍缩 Dock 导航（播放器工具胶囊展开时强制让位，维持单展开不变量）。
   void _collapseNav() {
     if (_navExpanded.value) _navExpanded.value = false;
@@ -1585,7 +1606,7 @@ class _MainLayoutState extends State<_MainLayout>
             // 微信风格：以左上角为锚点缩小到图标大小（0.1），
             // 同时向右下角位移（宽高各 70%）并渐隐；
             // 背景保持透明，缩小后露出系统桌面（FlutterView + windowBackground 透明）
-            return Transform.translate(
+            final Widget transformed = Transform.translate(
               offset: Offset(
                 size.width * 0.7 * offset.dx,
                 size.height * 0.7 * offset.dy,
@@ -1596,6 +1617,31 @@ class _MainLayoutState extends State<_MainLayout>
                 child: Opacity(opacity: _exitOpacity.value, child: child),
               ),
             );
+            // 批次44：TV 构建在主布局上方叠加顶栏双层 chrome。**推挤式**
+            // 叠放（Column[TvTopChrome, Expanded(主布局)]）而非 Stack 悬浮
+            // ——顶栏占据固定高度把内容整体下移，几何上不遮挡任何页面
+            // 内容（悬浮遮挡式会让各真实 tab 页的顶部内容压在玻璃后，
+            // 且页面滚动容器未读顶部 padding，无法让位）；玻璃质感由
+            // TvTopChrome 自身的 LiquidGlassSurface 呈现。kTvBuild 为
+            // const，正常构建不进此分支，树与改动前逐字节一致。
+            if (kTvBuild) {
+              return Column(
+                children: [
+                  TvTopChrome(
+                    visibleTabs: visibleTabs,
+                    selectedIndex: _selectedIndex,
+                    onTabSelected: _handleTvTabSelected,
+                  ),
+                  Expanded(
+                    child: TvContentFocusRegion(
+                      selectedIndex: _selectedIndex,
+                      child: transformed,
+                    ),
+                  ),
+                ],
+              );
+            }
+            return transformed;
           },
           child: ResponsiveScaffold(
             destinations: destinations,

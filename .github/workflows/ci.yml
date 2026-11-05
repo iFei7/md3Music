@@ -652,14 +652,16 @@ jobs:
         run: echo "::notice::未配置签名 Secrets，TV 包本轮跳过（产物请见 lite 构建 job 的说明）"
 
       # TV 包（TV 盒子/电视均为 arm64，不拆 32 位）。
-      # ⚠️ 必须 --split-per-abi：产物名才是 app-arm64-v8a-standard-release.apk
+      # ⚠️ 必须 --split-per-abi：产物名才是 app-arm64-v8a-tv-release.apk
       # （verify/rename 两步按此名找文件；不带 split 时产物为
-      # app-standard-release.apk，首轮 9be8d97 的校验步因此「产物缺失」）。
+      # app-tv-release.apk，会再次出现首轮 9be8d97 的「产物缺失」）。
+      # 批次44：--flavor tv（applicationIdSuffix .tv），独立签名包与手机版
+      # （--flavor standard，包名 .lite）并存互不覆盖。
       - name: Flutter build APK (TV, release, arm64-v8a)
         if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         run: |
           set -o pipefail
-          flutter build apk --release --flavor standard --split-per-abi \
+          flutter build apk --release --flavor tv --split-per-abi \
             --target-platform android-arm64 \
             --build-number="${{ github.run_number }}" \
             --dart-define=MD3_TV=true \
@@ -669,7 +671,7 @@ jobs:
         if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         run: |
           set -euo pipefail
-          apk="build/app/outputs/flutter-apk/app-arm64-v8a-standard-release.apk"
+          apk="build/app/outputs/flutter-apk/app-arm64-v8a-tv-release.apk"
           test -f "$apk" || { echo "::error::TV APK 产物缺失"; exit 1; }
           # TV 旗标生效校验：libapp.so 内必须检索到 dpad 引擎的 Dart 符号
           # （未开 --obfuscate，ASCII 标识符可检索；同上游 ci.yml check_tv）。
@@ -688,7 +690,7 @@ jobs:
           apk_dir="build/app/outputs/flutter-apk"
           ver="$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1)"
           stamp="$(date -u +%Y%m%d%H%M%S)"
-          mv "$apk_dir/app-arm64-v8a-standard-release.apk" \
+          mv "$apk_dir/app-arm64-v8a-tv-release.apk" \
              "$apk_dir/GraceMusic-tv-${stamp}-arm64.apk"
           echo "TV_STAMP=${stamp}" >> "$GITHUB_ENV"
           echo "TV_VER=${ver}" >> "$GITHUB_ENV"

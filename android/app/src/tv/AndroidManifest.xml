@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 批次44：TV flavor manifest overlay，仅 tv flavor 构建时与 main manifest 合并。
+     与上游 src/tv/AndroidManifest.xml 的差异：lite 主 manifest 无 USB host
+     uses-feature 声明，无需 tools:node="remove"；tv_banner.png 未随迁，
+     不声明 android:banner（TV 桌面回退用应用图标）。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- TV 设备通常无触屏：不声明则默认视为必需，TV 桌面会过滤掉本应用 -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+    <!-- 声明支持 Android TV（leanback）桌面；required="false"：侧载场景
+         兼容未通过 ATV 认证的盒子（未声明 leanback feature 也可安装） -->
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
+
+    <application tools:node="merge">
+        <!-- 向 MainActivity（主 manifest 同名组件）追加 leanback 桌面入口。
+             不重复声明 exported/launchMode 等属性，全部沿用 main manifest；
+             LEANBACK_LAUNCHER 与手机版 LAUNCHER alias 并存，TV 桌面只认前者。 -->
+        <activity
+            android:name=".MainActivity"
+            tools:node="merge">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
