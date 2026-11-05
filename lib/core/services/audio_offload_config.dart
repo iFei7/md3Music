@@ -31,8 +31,12 @@ import 'package:flutter/foundation.dart';
 class AudioOffloadConfig {
   AudioOffloadConfig._();
 
-  /// 用户开关（设置页），默认关闭。
-  static bool userEnabled = false;
+  /// 用户开关（设置页），批次48「硬解优先」起默认**开启**。
+  ///
+  /// 启动时由 main.dart 从 SettingsRepository 读回覆盖（仓库默认同为 true，
+  /// 两处必须一致）；只有读仓库失败时才会落到本默认值——此时宁可先试硬解，
+  /// 失败有 AudioOffloadGuard 兜底。显式关闭过的用户键已持久化为 false。
+  static bool userEnabled = true;
 
   /// 启动时探测到的音效链是否在用（蝰蛇 / 均衡器 / 音量均衡任一开启即为 true）。
   static bool dspActive = false;

@@ -175,7 +175,8 @@ class _SettingsPageState extends State<SettingsPage>
   // 暂停后释放后台服务（批次44）：false 对应 native 侧 minutes=0（永不释放）
   bool _keepaliveIdleStopEnabled = true;
   // 硬解播放（audio offload，批次44）：会话级，改完需重启 App 生效
-  bool _audioOffloadEnabled = false;
+  // 批次48「硬解优先」：字段默认与仓库默认（true）保持一致，避免首帧闪一下旧值。
+  bool _audioOffloadEnabled = true;
   // 自动混音（AutoMix）：交叉淡化开启时按节拍对齐过渡点，由 Task 12 的播放器侧实现消费
   bool _automixEnabled = false;
   // 音量均衡（响度归一）
@@ -2455,7 +2456,7 @@ class _SettingsPageState extends State<SettingsPage>
         SwitchListTile(
           title: const Text('硬件解码播放（实验）'),
           subtitle: const Text(
-            '解码交给系统音频服务，熄屏播放更省电；与音效互斥，开启时自动关闭均衡器、蝰蛇母带、音量均衡（开音效时也会自动关硬解），下一首生效无需重启；设备不支持时会自动降级软解',
+            '默认开启：优先尝试硬解（熄屏更省电），不支持的曲目/设备自动降级软解；与音效互斥，开启时自动关闭均衡器、蝰蛇母带、音量均衡（开音效时也会自动关硬解），下一首生效无需重启',
           ),
           value: _audioOffloadEnabled,
           onChanged: (value) async {

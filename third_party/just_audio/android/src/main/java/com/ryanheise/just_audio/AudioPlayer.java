@@ -34,9 +34,10 @@ import androidx.media3.common.Tracks;
 import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences;
 import androidx.media3.common.AudioAttributes;
-import androidx.media3.exoplayer.audio.AudioSink;
 import androidx.media3.datasource.HttpDataSource;
+import androidx.media3.exoplayer.audio.AudioSink;
 import androidx.media3.exoplayer.audio.DefaultAudioSink;
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector;
 import androidx.media3.exoplayer.NoSampleRenderer;
 import androidx.media3.exoplayer.Renderer;
 import androidx.media3.exoplayer.RenderersFactory;
@@ -1150,6 +1151,12 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     AudioSink defaultSink = new DefaultAudioSink.Builder(ctx)
                             .setEnableFloatOutput(enableFloatOutput)
                             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                            // MD3Music fork（批次47）：软解后台能耗主项——PCM 缓冲从
+                            // 「×4 / 250~750ms」放宽到「×8 / 500~2000ms」，解码线程唤醒
+                            // 间隔上限翻倍以上，后台可更久保持空闲；offload 档回落默认。
+                            // 见 AdaptiveAudioTrackBufferSizeProvider 的取舍说明。
+                            .setAudioTrackBufferSizeProvider(
+                                    new AdaptiveAudioTrackBufferSizeProvider())
                             .setAudioProcessorChain(
                                     new DefaultAudioSink.DefaultAudioProcessorChain(
                                             new ViperMasterProcessor()))
@@ -1186,6 +1193,17 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             // 结论：统一关闭 float 输出，由 ExoPlayer 默认把 24/32bit 整数 PCM 降为 16bit
             // （ToInt16PcmAudioProcessor），任何设备都能正确播放。
             drf.setEnableAudioFloatOutput(false);
+            // MD3Music fork（批次49）：音频解码器候选优先硬件/DSP 解码器。
+            // Media3 默认排序只按「格式功能支持」打分，不看 hardwareAccelerated，
+            // 同分项保持平台注册顺序——即「用厂商 DSP 解还是 CPU 软解」此前由
+            // 平台顺序决定。这里把硬件加速解码器稳定地排到前面，配合下面的
+            // enableDecoderFallback(true)，初始化失败仍会自动回退到下一个候选
+            // （含 c2.android 软解器与 P0-5 的 libflac 扩展）。
+            // 与 offload 是两条独立省电路径：offload=不解码直通 DSP；
+            // 本项=必须解码时优先让 DSP 解。
+            drf.setMediaCodecSelector(
+                    new PreferHardwareAudioDecoderSelector(MediaCodecSelector.DEFAULT));
+            drf.setEnableDecoderFallback(true);
             RenderersFactory renderersFactory = (eventHandler, videoListener, audioListener, textOutput, metadataOutput) -> {
                 Renderer[] defaultRenderers = drf.createRenderers(
                         eventHandler, videoListener, audioListener, textOutput, metadataOutput);

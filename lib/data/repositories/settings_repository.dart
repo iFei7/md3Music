@@ -410,7 +410,10 @@ class SettingsRepository {
   /// 播放器构造期才消费该值，故改完需重启 App 生效。
   Future<bool> getAudioOffloadEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_keyAudioOffloadEnabled) ?? false;
+    // 批次48「硬解优先」：默认 true——新装用户/从未碰过该开关的用户默认
+    // 先尝试硬解，失败由 AudioOffloadGuard 自动降级软解并把开关持久化为关
+    //（兜底在批次44 已建）。显式关过的用户（键已持久化为 false）不受影响。
+    return prefs.getBool(_keyAudioOffloadEnabled) ?? true;
   }
 
   Future<void> setAudioOffloadEnabled(bool value) async {
