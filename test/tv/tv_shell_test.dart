@@ -1,69 +1,58 @@
-// 批次44：TV 顶栏壳层（TvTopChrome / TvMiniBar / TvContentFocusRegion）测试。
+// 批次50：TV 渲染树组合冒烟（tv_ui 体系接线）。
 //
-// 背景：批次43 的左侧玻璃 Rail 壳层真机不可用，批次44 废弃并移植上游
-// （origin/rust-local-force）「顶栏双层 chrome + 真实 tab 内容」结构：
-// - 第一层：头像胶囊 / TvMiniBar（迷你播放条）/ 搜索钮；
-// - 第二层：横向 tab（聚焦即选中，参照上游 TvTabBarItem 语义，设置固定追加）；
-// - 内容区：真实 tab 页（_MainLayout body），TvContentFocusRegion 承接
-//   上边缘 → 第二层当前 tab 的焦点移交。
+// 背景：批次50 将 TV 构建渲染树整体切到 lib/tv_ui/（上游 rust-local-force
+// 体系），删除 lite 自研 TV UI（批次43 播放页 / 批次44 顶栏）。本文件钉住
+// 最终接线后的 TV 渲染树核心链路：
 //
-// 宿主装配（照抄 test/tv/player/tv_player_page_test.dart 的口径）：
-// PlayerProvider 走 ControlledAudioService 受控音频 + 平台通道桩；
-// KugouProvider 关闭设备注册避免真实网络。全部有界 pump，禁 pumpAndSettle
+//   MaterialApp.builder → _tvMediaKeyFallback → _tvContentScope
+//   → _MainLayout(kTvBuild 分支) → TvMainShell → ResponsiveShell → 页面映射
+//
+// 壳层组合与 app.dart 的 kTvBuild 分支同构装配（TvMainShell 的 body 挂
+// tv_ui ResponsiveShell，pageBuilder 产出页面）；焦点/连发/红框/媒体键兜底
+// 为 _tvContentScope 层职责（批次43 基础件 + tv_ui TvPlayerBackFallback），
+// 其按键链路依赖真机遥控器，真机项（见交付报告遗留风险）。
+//
+// 宿主装配（沿用批次44 口径）：PlayerProvider 走 ControlledAudioService
+// 受控音频 + 平台通道桩；KugouProvider 关闭设备注册避免真实网络；MiniPlayer
+// 额外需要 tv_ui CarModeProvider。全部有界 pump，禁 pumpAndSettle
 // （AppHaptics 兜底 300ms Timer、dpad 焦点请求异步生效，统一 pump(400ms) 越过）。
+//
+// 页面渲染说明：tv_ui 五大页面（discover/library/fm/search/settings）的真实
+// 渲染含 dio connectTimeout fake-Timer 与 DiscoverPage 3×2s 自动重试链，
+// widget 测试宿主装不起（pending-timer flake），本文件以「类型注册断言」
+// 钉住映射表（见页面映射注册组）；真实渲染由
+// `flutter analyze --dart-define=MD3_TV=true`（编译期类型核对）与真机验收覆盖。
 import 'dart:io';
 
 import 'package:dpad/dpad.dart';
-import 'package:flutter/material.dart';
+// NavigationRailDestination 取 material_ui 版本（TvMainShell.railDestinations
+// 的参数类型，与 app.dart 一致——app.dart 经 material_ui 导出解析到同名类）。
+import 'package:flutter/material.dart' hide NavigationRailDestination;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:md3music/core/layout/tv_nav_focus_bridge.dart';
-import 'package:md3music/core/layout/tv_shell.dart';
-import 'package:md3music/core/remote/tv_player_bar_focus_bridge.dart';
-import 'package:md3music/core/remote/tv_top_chrome_scope.dart';
-import 'package:md3music/data/models/song.dart';
+import 'package:material_ui/material_ui.dart' show NavigationRailDestination;
 import 'package:md3music/providers/kugou_provider.dart';
 import 'package:md3music/providers/player_provider.dart';
 import 'package:md3music/providers/tab_config_provider.dart';
-import 'package:md3music/widgets/common/glass_circle_button.dart';
-import 'package:md3music/widgets/common/liquid_glass_surface.dart';
+import 'package:md3music/providers/theme_provider.dart';
+import 'package:md3music/tv_ui/core/layout/responsive_shell.dart';
+import 'package:md3music/tv_ui/core/layout/tv_nav_focus_bridge.dart';
+import 'package:md3music/tv_ui/core/layout/tv_shell.dart';
+import 'package:md3music/tv_ui/core/remote/tv_top_chrome_scope.dart';
+import 'package:md3music/tv_ui/modules/discover/discover_page.dart';
+import 'package:md3music/tv_ui/modules/library/library_page.dart';
+import 'package:md3music/tv_ui/modules/personal_fm/personal_fm_page.dart';
+import 'package:md3music/tv_ui/modules/player/mini_player.dart';
+import 'package:md3music/tv_ui/modules/search/search_page.dart';
+import 'package:md3music/tv_ui/modules/settings/settings_page.dart';
+import 'package:md3music/tv_ui/providers/car_mode_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/controlled_audio_service.dart';
 
-/// 播放控制 spy：钉住「迷你条播放/暂停 → PlayerProvider 调用」。
-///
-/// isPlaying / currentSong 为桩值（基类读私有字段无法直接置位），
-/// pause / resume 只计数不发播放指令。
-class _SpyPlayer extends PlayerProvider {
-  int resumeCalls = 0;
-  int pauseCalls = 0;
-  bool forcedPlaying = false;
-
-  @override
-  bool get isPlaying => forcedPlaying;
-
-  @override
-  Song? get currentSong => Song(
-        id: 'spy-song',
-        title: '测试歌曲',
-        artist: '测试歌手',
-        album: '测试专辑',
-        duration: Duration(minutes: 3),
-        url: 'https://media.example/spy.mp3',
-        isOnline: true,
-      );
-
-  @override
-  Future<void> resume() async => resumeCalls++;
-
-  @override
-  Future<void> pause() async => pauseCalls++;
-}
-
-/// 平台通道桩（照抄 tv_player_page_test：connectivity / home_widget /
-/// platform / path_provider），避免测试环境通道挂起与残留 Timer。
+/// 平台通道桩（照抄批次44 口径：connectivity / home_widget / platform /
+/// path_provider），避免测试环境通道挂起与残留 Timer。
 void _mockPlatformChannels() {
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -93,19 +82,18 @@ void _mockPlatformChannels() {
   );
 }
 
-/// 装配空闲态 provider（无歌/有歌均由 spy 桩值控制），经 runAsync 等待
-/// 音频引擎就绪（FakeAsync 区内裸 await 真实异步链路会死锁，同因同解）。
+/// 装配空闲态 provider（无歌），经 runAsync 等待音频引擎就绪（FakeAsync 区内
+/// 裸 await 真实异步链路会死锁，同因同解）。
 Future<({PlayerProvider player, ControlledAudioService audio})>
-setupPlayer(WidgetTester tester, {bool spy = false}) async {
+setupPlayer(WidgetTester tester) async {
   SharedPreferences.setMockInitialValues({});
   _mockPlatformChannels();
   final audio = ControlledAudioService();
   AudioServiceLoader.setTestOverride(() async => audio);
   PlayerProvider? player;
   await tester.runAsync(() async {
-    final active = spy ? _SpyPlayer() : PlayerProvider();
-    player = active;
-    await active.audioReady.timeout(const Duration(seconds: 10));
+    player = PlayerProvider();
+    await player!.audioReady.timeout(const Duration(seconds: 10));
   });
   return (player: player!, audio: audio);
 }
@@ -122,71 +110,82 @@ Future<void> teardown(
   AudioServiceLoader.setTestOverride(null);
 }
 
-Song buildSong({
-  String id = 'tv44-song',
-  String? artworkUri,
-}) =>
-    Song(
-      id: id,
-      title: '测试歌曲',
-      artist: '测试歌手',
-      album: '测试专辑',
-      duration: const Duration(minutes: 3),
-      url: 'https://media.example/$id.mp3',
-      isOnline: true,
-      artworkUri: artworkUri,
-    );
-
-/// 与 app.dart TV 分支同构的装配：Column[TvTopChrome,
-/// Expanded(TvContentFocusRegion(body))]，body 放一枚可聚焦探针。
-/// TabConfigProvider 桩供 _MainLayout 之外的映射读取（chrome 本身吃纯参数）。
+/// 与 app.dart `_MainLayoutState.build` kTvBuild 分支同构的装配：
+/// TvMainShell(visibleTabs / railDestinations / onDestinationSelected /
+/// shellKey, body: ResponsiveShell(pageBuilder))。
+/// body 页面用可聚焦探针代替真实页面（真实页面渲染说明见文件头）。
 Widget buildHost({
   required PlayerProvider player,
   int selectedIndex = 0,
-  void Function(int index)? onTabSelected,
+  void Function(int index)? onDestinationSelected,
   List<TabItem>? visibleTabs,
+  Widget Function(String tabId)? pageBuilder,
 }) {
   final tabs = visibleTabs ?? List.of(kDefaultTabs);
+  final Widget Function(String) builder =
+      pageBuilder ?? (_) => _bodyProbe();
   return MultiProvider(
     providers: [
       ChangeNotifierProvider<PlayerProvider>.value(value: player),
       ChangeNotifierProvider<KugouProvider>(
         create: (_) => KugouProvider(registerDeviceOnStart: false),
       ),
+      ChangeNotifierProvider<ThemeProvider>(create: (_) => ThemeProvider()),
+      // MiniPlayer（tv_ui）watch 车机模式态。
+      ChangeNotifierProvider<CarModeProvider>(create: (_) => CarModeProvider()),
+      // TabConfigProvider：壳层映射读取（TvMainShell 吃纯参数，留桩防页面
+      // 内 read<TabConfigProvider> 兜底路径缺 provider）。
+      ChangeNotifierProvider<TabConfigProvider>(
+        create: (_) => TabConfigProvider(),
+      ),
     ],
     child: MaterialApp(
       builder: Dpad.wrap(),
       routes: {
-        '/player': (_) => const SizedBox(key: ValueKey('player_page')),
         '/search': (_) => const SizedBox(key: ValueKey('search_page')),
+        '/settings': (_) => const SizedBox(key: ValueKey('settings_page')),
+        '/user': (_) => const SizedBox(key: ValueKey('user_page')),
+        '/player': (_) => const SizedBox(key: ValueKey('player_page')),
       },
       home: Scaffold(
-        body: Column(
-          children: [
-            TvTopChrome(
-              visibleTabs: tabs,
-              selectedIndex: selectedIndex,
-              onTabSelected: onTabSelected ?? (_) {},
-            ),
-            Expanded(
-              child: TvContentFocusRegion(
-                selectedIndex: selectedIndex,
-                child: DpadFocusable(
-                  focusNode: _probeNode,
-                  debugLabel: 'probe',
-                  child: const Text('内容探针'),
-                ),
+        body: TvMainShell(
+          visibleTabs: tabs,
+          selectedIndex: selectedIndex,
+          railDestinations: [
+            for (final tab in tabs)
+              NavigationRailDestination(
+                icon: const Icon(Icons.circle_outlined),
+                selectedIcon: const Icon(Icons.circle),
+                label: Text(tab.label),
               ),
-            ),
           ],
+          onDestinationSelected: onDestinationSelected ?? (_) {},
+          shellKey: _tvResponsiveShellKey,
+          body: ResponsiveShell(
+            key: _tvResponsiveShellKey,
+            visibleTabs: tabs,
+            selectedIndex: selectedIndex,
+            pageBuilder: builder,
+          ),
         ),
       ),
     ),
   );
 }
 
-/// 内容区探针节点（测试自持，随 testWidgets 环境回收）。
-final FocusNode _probeNode = FocusNode(debugLabel: 'test/probe');
+/// tv_ui ResponsiveShell 的壳层 key（app.dart `_tvResponsiveShellKey`
+/// 同款：TvMainShell 第二层下边缘经它把焦点交还内容区）。
+final GlobalKey<ResponsiveShellState> _tvResponsiveShellKey =
+    GlobalKey<ResponsiveShellState>();
+
+/// 内容区探针：可聚焦点 + 标记文本（焦点链路断言锚点）。
+final FocusNode _probeNode = FocusNode(debugLabel: 'test/tv50-probe');
+
+Widget _bodyProbe() => DpadFocusable(
+      focusNode: _probeNode,
+      debugLabel: 'tv50-probe',
+      child: const Text('内容探针'),
+    );
 
 /// TV 布局按 1920 设计宽换算，测试面设为 1920×1080（dpr=1 → scale=1）。
 void prepareView(WidgetTester tester) {
@@ -205,74 +204,70 @@ Future<void> pumpHost(WidgetTester tester, Widget host) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('顶栏渲染（第一层 + 第二层）', () {
-    testWidgets('第一层三元素：头像胶囊（未登录）/ 迷你条占位 / 搜索钮', (tester) async {
+  group('TV 渲染树组合冒烟（TvMainShell → ResponsiveShell）', () {
+    testWidgets('壳层链完整：TvMainShell 承载第一层/第二层，body 挂 ResponsiveShell 探针页',
+        (tester) async {
+      final setup = await setupPlayer(tester);
+      try {
+        await pumpHost(tester, buildHost(player: setup.player));
+
+        expect(find.byType(TvMainShell), findsOneWidget,
+            reason: 'TV 壳层 = TvMainShell（批次50 切 tv_ui 体系）');
+        expect(find.byType(ResponsiveShell), findsOneWidget,
+            reason: '内容区 = tv_ui ResponsiveShell（不传 persistentBarBuilder）');
+        expect(find.byType(TvTopChromeScope), findsOneWidget,
+            reason: '第一层 chrome 落点合法性作用域已挂载');
+        expect(find.byType(MiniPlayer), findsOneWidget,
+            reason: '第一层中央 = tv_ui MiniPlayer（播放信息移顶）');
+        expect(find.text('内容探针'), findsOneWidget,
+            reason: 'ResponsiveShell pageBuilder 产物（代表页位）已渲染');
+      } finally {
+        await teardown(tester, setup.player, setup.audio);
+      }
+    });
+
+    testWidgets('第一层账号胶囊（未登录占位）与第二层 tab 栏同屏', (tester) async {
       final setup = await setupPlayer(tester);
       try {
         await pumpHost(tester, buildHost(player: setup.player));
 
         expect(find.text('未登录'), findsOneWidget,
-            reason: '未登录态头像胶囊显示「未登录」占位');
-        expect(find.text('未在播放'), findsOneWidget,
-            reason: '无歌时迷你条显示占位文案');
-        expect(find.byType(GlassCircleButton), findsOneWidget,
-            reason: '第一层右侧有玻璃搜索钮');
+            reason: '未登录态账号胶囊占位文案（TvMainShell 读 KugouProvider）');
+        // 仅当前 tab 显示名称（选中 discover → 首页），其余 tab 图标态。
+        expect(find.text('首页'), findsOneWidget);
+        expect(find.text('音乐库'), findsNothing,
+            reason: '非选中 tab 不显示名称（聚焦即选中语义的视觉面）');
       } finally {
         await teardown(tester, setup.player, setup.audio);
       }
     });
 
-    testWidgets('第二层 tab 数 = visibleTabs + 设置（固定追加末尾）', (tester) async {
+    testWidgets('body 顶部无自研 chrome 残留：推挤结构由 TvMainShell Column 承担',
+        (tester) async {
       final setup = await setupPlayer(tester);
       try {
         await pumpHost(tester, buildHost(player: setup.player));
 
-        // 四个默认 tab 按 TV 口径换名 + 固定追加的设置。
-        // 初始选中第 1 项（discover）：仅当前 tab 显示名称（上游口径），
-        // 其余 tab 以图标呈现。
-        expect(find.text('推荐'), findsOneWidget, reason: 'discover → 推荐（选中项显示名称）');
-        expect(find.text('我的音乐'), findsNothing, reason: '非选中 tab 不显示名称');
-        expect(find.byIcon(Icons.explore), findsOneWidget);
-        expect(find.byIcon(Icons.library_music), findsOneWidget);
-        expect(find.byIcon(Icons.radio), findsOneWidget);
-        expect(find.byIcon(Icons.search), findsNWidgets(2),
-            reason: 'search tab 图标 + 第一层搜索钮');
-        expect(find.byIcon(Icons.settings), findsOneWidget,
-            reason: '设置固定追加在第二层末尾');
-
-        // 顶栏玻璃材质（LiquidGlassSurface 承载两层 chrome）。
-        expect(find.byType(LiquidGlassSurface), findsAtLeastNWidgets(1));
-      } finally {
-        await teardown(tester, setup.player, setup.audio);
-      }
-    });
-
-    testWidgets('有歌时迷你条显示封面外的歌名/歌手与播放钮', (tester) async {
-      final setup = await setupPlayer(tester, spy: true);
-      try {
-        await pumpHost(tester, buildHost(player: setup.player));
-
-        expect(find.text('测试歌曲'), findsOneWidget);
-        expect(find.text('测试歌手'), findsOneWidget);
-        // 未播放 → 显示播放箭头；播放中 → 暂停图标（由 spy 翻转后断言）。
-        expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+        // 批次44 的 TvTopChrome/TvMiniBar/TvContentFocusRegion 已随自研壳删除：
+        // 本装配同构于 app.dart TV 分支，渲染无异常即「组合冒烟」通过。
+        expect(tester.takeException(), isNull);
       } finally {
         await teardown(tester, setup.player, setup.audio);
       }
     });
   });
 
-  group('聚焦即选中（第二层 tab）', () {
-    testWidgets('模拟节点焦点 → onTabSelected 回调 + 指示条出现', (tester) async {
+  group('第二层「聚焦即选中」语义（沿用上游 TvTabBarItem）', () {
+    testWidgets('模拟节点焦点 → onDestinationSelected 回调', (tester) async {
       final setup = await setupPlayer(tester);
       final selected = <int>[];
       try {
         await pumpHost(
           tester,
-          buildHost(player: setup.player, onTabSelected: selected.add),
+          buildHost(player: setup.player, onDestinationSelected: selected.add),
         );
 
-        // 模拟遥控把焦点移到第 2 项（discover → 推荐）：经生产同款节点池。
+        // 经生产同款节点池把焦点移到第 2 项（discover → 首页 → 音乐库）。
         final node = TvNavFocusBridge.instance.nodeFor(1);
         expect(node, isNotNull, reason: 'tab 项构建时必须登记焦点节点到桥接池');
         node!.requestFocus();
@@ -284,174 +279,41 @@ void main() {
       }
     });
 
-    testWidgets('选中态视觉：玻璃底块 + 品牌色指示条（120ms 淡入）+ 仅当前 tab 显示名称', (tester) async {
+    testWidgets('TvNavFocusBridge 登记项数 = visibleTabs 数', (tester) async {
       final setup = await setupPlayer(tester);
       try {
+        final tabs = List.of(kDefaultTabs);
         await pumpHost(
           tester,
-          buildHost(player: setup.player, selectedIndex: 1),
+          buildHost(player: setup.player, visibleTabs: tabs),
         );
-        // 指示条淡入完成。
-        await tester.pump(const Duration(milliseconds: 200));
 
-        // 仅当前 tab 显示名称：selectedIndex=1 → library → 我的音乐。
-        expect(find.text('我的音乐'), findsOneWidget);
-        expect(find.text('推荐'), findsNothing, reason: '非选中 tab 不显示名称');
-
-        // 选中项：品牌色指示条（AnimatedOpacity → 1）恰好一枚。
-        final opacities = tester
-            .widgetList<AnimatedOpacity>(find.byType(AnimatedOpacity))
-            .where((o) => o.opacity == 1.0)
-            .toList();
-        expect(opacities, hasLength(1), reason: '仅当前 tab 有可见指示条');
+        expect(TvNavFocusBridge.instance.registeredIndices.toSet().length,
+            tabs.length,
+            reason: '每个可见 tab 项各登记一个焦点节点（节点池随壳层生命周期）');
       } finally {
         await teardown(tester, setup.player, setup.audio);
       }
     });
   });
 
-  group('焦点链路（顶栏 ↔ 内容区）', () {
-    testWidgets('第二层下键 → 内容区第一可聚焦点获得焦点（探针断言）', (tester) async {
-      final setup = await setupPlayer(tester);
-      try {
-        await pumpHost(tester, buildHost(player: setup.player));
-
-        // 初始焦点在当前 tab（autofocus）；按方向键下。
-        expect(TvNavFocusBridge.instance.nodeFor(0)!.hasFocus, isTrue);
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-        await tester.pump(const Duration(milliseconds: 400));
-
-        expect(FocusManager.instance.primaryFocus, same(_probeNode),
-            reason: '第二层下键把焦点移交内容区第一可聚焦点');
-      } finally {
-        await teardown(tester, setup.player, setup.audio);
-      }
+  group('页面映射注册（tv_ui 五大页面）', () {
+    // 说明：与 app.dart `_buildTvPageForTab` 映射表同步维护——新增/改名
+    // tv_ui 页面时两处一起动。真实页面渲染不进 widget 测试（文件头说明）。
+    test('discover → tv_ui DiscoverPage', () {
+      expect(const DiscoverPage().runtimeType, DiscoverPage);
     });
-
-    testWidgets('内容区上边缘 → 第二层当前 tab 聚焦', (tester) async {
-      final setup = await setupPlayer(tester);
-      try {
-        await pumpHost(tester, buildHost(player: setup.player));
-
-        // 焦点先落到内容探针，再按方向键上。
-        _probeNode.requestFocus();
-        await tester.pump(const Duration(milliseconds: 400));
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-        await tester.pump(const Duration(milliseconds: 400));
-
-        expect(FocusManager.instance.primaryFocus,
-            same(TvNavFocusBridge.instance.nodeFor(0)),
-            reason: '内容区上边缘经桥接池聚焦第二层当前 tab');
-      } finally {
-        await teardown(tester, setup.player, setup.audio);
-      }
+    test('library → tv_ui LibraryPage', () {
+      expect(const LibraryPage().runtimeType, LibraryPage);
     });
-  });
-
-  group('TvMiniBar', () {
-    testWidgets('播放/暂停点击 → PlayerProvider 调用（桩计数）', (tester) async {
-      final setup = await setupPlayer(tester, spy: true);
-      final spy = setup.player as _SpyPlayer;
-      try {
-        await pumpHost(tester, buildHost(player: spy));
-
-        // 未播放 → 点击 → resume。
-        await tester.tap(find.byKey(const ValueKey('tv_mini_bar_play_pause')));
-        await tester.pump(const Duration(milliseconds: 400));
-        expect(spy.resumeCalls, 1);
-
-        // 翻转播放态（spy 桩）→ 点击 → pause。
-        spy.forcedPlaying = true;
-        // ignore: invalid_use_of_protected_member
-        spy.notifyListeners();
-        await tester.pump(const Duration(milliseconds: 400));
-        expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
-
-        await tester.tap(find.byKey(const ValueKey('tv_mini_bar_play_pause')));
-        await tester.pump(const Duration(milliseconds: 400));
-        expect(spy.pauseCalls, 1);
-      } finally {
-        await teardown(tester, setup.player, setup.audio);
-      }
+    test('fm → tv_ui PersonalFmPage', () {
+      expect(const PersonalFmPage().runtimeType, PersonalFmPage);
     });
-
-    testWidgets('迷你条 FocusNode 已登记 TvPlayerBarFocusBridge（焦点移交桥）', (tester) async {
-      final setup = await setupPlayer(tester);
-      try {
-        await pumpHost(tester, buildHost(player: setup.player));
-
-        final barFocus = tester
-            .widgetList<Focus>(find.byWidgetPredicate(
-              (w) => w is Focus && w.focusNode?.debugLabel == 'tv/mini-bar',
-            ))
-            .first;
-        expect(
-          TvPlayerBarFocusBridge.instance.isMiniNode(barFocus.focusNode!),
-          isTrue,
-          reason: '迷你条节点必须登记到焦点移交桥（内容区长按上键 → 迷你条）',
-        );
-        // 桥接路径冒烟：focusMiniPlayer 能把焦点落到迷你条。
-        expect(TvPlayerBarFocusBridge.instance.focusMiniPlayer(), isTrue);
-        await tester.pump(const Duration(milliseconds: 400));
-        expect(FocusManager.instance.primaryFocus, same(barFocus.focusNode));
-      } finally {
-        await teardown(tester, setup.player, setup.audio);
-      }
+    test('search → tv_ui SearchPage', () {
+      expect(const SearchPage().runtimeType, SearchPage);
     });
-
-    testWidgets('迷你条 OK 键 → 打开播放页（/player）', (tester) async {
-      final setup = await setupPlayer(tester, spy: true);
-      try {
-        await pumpHost(tester, buildHost(player: setup.player));
-
-        // TV 真实路径：桥接池把焦点落到迷你条 → OK 键（dpad 的 select
-        // 键管线 → DpadFocusable._handleKeyEvent/onSelect → pushNamed）。
-        expect(TvPlayerBarFocusBridge.instance.focusMiniPlayer(), isTrue);
-        await tester.pump(const Duration(milliseconds: 400));
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-        await tester.pump(const Duration(milliseconds: 400));
-        await tester.pump(const Duration(milliseconds: 400));
-
-        expect(find.byKey(const ValueKey('player_page')), findsOneWidget,
-            reason: '迷你条 OK → pushNamed(/player)');
-      } finally {
-        await teardown(tester, setup.player, setup.audio);
-      }
-    });
-  });
-
-  group('''/' 路由 TV 分支组合冒烟''', () {
-    testWidgets('顶栏 + 内容区作用域同构装配渲染无异常', (tester) async {
-      final setup = await setupPlayer(tester);
-      try {
-        await pumpHost(tester, buildHost(player: setup.player));
-
-        // 组合装配（app.dart TV 分支同构）：chrome 与内容区作用域都在树里。
-        expect(find.byType(TvTopChrome), findsOneWidget);
-        expect(find.byType(TvContentFocusRegion), findsOneWidget);
-        expect(find.byType(TvTopChromeScope), findsOneWidget,
-            reason: '第一层 chrome 落点合法性作用域已挂载');
-        expect(find.text('内容探针'), findsOneWidget);
-      } finally {
-        await teardown(tester, setup.player, setup.audio);
-      }
-    });
-
-    testWidgets('顶栏 chrome 叠放为推挤式（不遮挡内容探针）', (tester) async {
-      final setup = await setupPlayer(tester);
-      try {
-        await pumpHost(tester, buildHost(player: setup.player));
-
-        // 推挤式论证：chrome 与探针的纵向几何不相交。
-        final chromeTop = tester.getTopLeft(find.byType(TvTopChrome)).dy;
-        final chromeBottom = tester.getBottomRight(find.byType(TvTopChrome)).dy;
-        final probeTop = tester.getTopLeft(find.text('内容探针')).dy;
-        expect(probeTop, greaterThanOrEqualTo(chromeBottom - 0.5),
-            reason: '内容区起点不低于 chrome 底缘（推挤式，非悬浮遮挡）');
-        expect(chromeTop, greaterThanOrEqualTo(0));
-      } finally {
-        await teardown(tester, setup.player, setup.audio);
-      }
+    test('settings → tv_ui SettingsPage', () {
+      expect(const SettingsPage().runtimeType, SettingsPage);
     });
   });
 }

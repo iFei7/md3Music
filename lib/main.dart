@@ -12,6 +12,7 @@ import 'core/build_flags.dart';
 import 'core/services/desktop_lyric_service.dart';
 import 'core/services/diagnostic_logger.dart';
 import 'modules/recognition/floating_recognition_service.dart';
+import 'core/remote/tv_focus_debug.dart';
 import 'core/services/equalizer_service.dart';
 import 'core/services/audio_offload_config.dart';
 import 'core/services/audio_offload_guard.dart';
@@ -180,6 +181,14 @@ Future<(bool, bool, bool)> runBootstrap() async {
   DesktopLyricService.instance.registerNativeCallbacks();
   // 注册悬浮窗识曲原生回调（PCM 段回传 / MediaProjection 授权结果 / 悬浮窗按钮动作）
   FloatingRecognitionService.instance.registerNativeCallbacks();
+
+  // 批次50：TV 焦点诊断播种（对齐上游 main.dart TV 播种处）。lite 无
+  // Lyricon 蓝牙歌词屏（精简移除），上游「非 TV 才初始化 Lyricon」分支
+  // 无对应物；TV 分支安装焦点诊断日志（仅 debug 构建实际生效，release
+  // 随 kDebugMode 树摇剔除），kTvBuild 为 const，正常构建直接跳过。
+  if (kTvBuild) {
+    TvFocusDebug.install();
+  }
 
   // 启动听歌等级：本地听歌时长累计 + 自动上报（内部按平台/登录态自行处理）
   ListeningGradeService.instance.init();

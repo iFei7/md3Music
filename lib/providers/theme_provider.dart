@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:material_color_utilities/material_color_utilities.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/layout/ui_density.dart';
 import '../core/theme/app_theme.dart';
 
 class ThemeProvider extends ChangeNotifier {
@@ -70,6 +71,19 @@ class ThemeProvider extends ChangeNotifier {
   bool get useTextShadow => _useTextShadow;
   double get textShadowBlur => _textShadowBlur;
   Color? get backgroundSeedColor => _backgroundSeedColor;
+
+  /// 「显示大小」档位（批次50，上游语义对齐）。
+  ///
+  /// 上游（rust-local-force）该值是可持久化用户设置：SharedPreferences 键
+  /// `ui_display_scale`，默认 `defaultDisplayScaleForPlatform` 恒为 1.0，
+  /// 由设置页滑块调整，app.dart builder 经 [DisplayScaleScope] 应用，
+  /// 另有桌面歌词服务等消费点。lite 的全局「显示大小」设置已移除
+  /// （app.dart builder 中 DisplayScaleScope 恒为 [kDefaultDisplayScale]
+  /// 1.0，见其注释），无持久化键可读。
+  /// 此 getter 为搬入 lib/tv_ui/ 的上游 TV UI（按上游体系编写、读
+  /// `ThemeProvider.displayScale`）提供同名读取点：恒返 1.0，与上游
+  /// 默认档语义一致——TV 命名空间消费；桌面「显示大小」可调语义 lite 无。
+  double get displayScale => kDefaultDisplayScale;
 
   /// 文字阴影是否实际生效：开关本身开启 **且** 已启用自定义背景图片。
   /// 未启用背景图时纯色主题自带足够对比度，阴影只会让文字发虚，故不生效。

@@ -1,7 +1,7 @@
 name: md3music
 description: "Grace Music - Music player with Material Design 3"
 publish_to: 'none'
-version: 5.9.38+85
+version: 5.9.39+86
 
 environment:
   sdk: ^3.12.0
@@ -13,6 +13,13 @@ environment:
 dependency_overrides:
   shared_preferences_android: 2.4.28
   shared_preferences_foundation: 2.5.7
+  # 批次50：钉住 material_ui 1.7.0（与上游 rust-local-force 同款 override）：
+  # 1.8.0 新导出 RoundedPolygon/CornerRounding（src/shapes/），与 m3e_core
+  # 1.1.4 自带的同名符号冲突（"'RoundedPolygon' is imported from both ..."
+  # 编译错误）。dependencies 约束 ^1.3.0 本身允许 1.7.0，此钉只为禁止 pub
+  # 自动升到 1.8+；material_ui 修复合并后可移除。TV 版 UI（lib/tv_ui/）
+  # 按上游 1.7.0 API 编写。
+  material_ui: 1.7.0
 
 dependencies:
   flutter:
@@ -69,6 +76,37 @@ dependencies:
   # 的 TV 构建实际编入；正常构建 kTvBuild 恒为 false，TV 代码全部 const 分支
   # 被 AOT 树摇剔除，本包只进依赖图不进产物。
   dpad: ^3.0.0
+
+  # 批次50：TV 版 UI（lib/tv_ui/，上游 rust-local-force 全量闭包）所需依赖，
+  # 版本/写法与上游 pubspec 对齐；手机构建不引用（kTvBuild 树摇），只进依赖图。
+  sqflite: 2.3.3+1
+  # 听歌统计本地库：Windows/Linux 桌面 FFI 实现（移动端仍走 sqflite 平台实现）
+  sqflite_common_ffi: ^2.3.3
+  # MV 播放页（上游 tv_ui 闭包内 mv_player_page 等）
+  video_player: ^2.9.2
+  chewie: ^1.8.5
+  video_player_win: ^3.2.2
+  # MV 弹幕层（上游 tv_ui 闭包内 widgets/danmaku/）
+  canvas_danmaku: ^0.3.3
+  # 榜单/搜索 Web 预览（上游 tv_ui 闭包内 sheet_square_page 等）
+  webview_flutter: ^4.10.0
+  # 3D 封面 Windows 侧推理：纯 Dart ONNX Runtime 绑定（vendored 自 onnxruntime_plus
+  # 1.5.0 的 lib/src，**不是 plugin**，不会给 Android 注入 onnxruntime so）
+  ort_dart:
+    path: third_party/ort_dart
+  just_audio_windows:
+    path: third_party/just_audio_windows
+  # 3D 封面 Windows 侧的 PNG 编解码 + 双线性缩放（纯 Dart、MIT，唯一依赖 archive）
+  image: ^4.12.0
+  # 拼音检索排序（上游 tv_ui 闭包内 utils/playlist_song_sort）
+  pinyin: ^3.3.0
+  # 桌面端文件选择（自定义字体导入 / 背景图加载，上游 tv_ui 闭包内 services）
+  file_selector: ^1.1.0
+  # M3 Expressive 组件库（上游 tv_ui 闭包内 m3e_undo_pill_host 等）
+  m3_expressive: ^1.0.0
+  # 酷狗登录 cookie 管理（上游 kugou_api 体系，tv_ui 副本引用）
+  dio_cookie_manager: ^3.1.1
+  cookie_jar: ^4.0.8
 
 dev_dependencies:
   flutter_test:

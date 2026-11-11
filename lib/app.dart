@@ -10,12 +10,32 @@ import 'package:quick_actions/quick_actions.dart';
 import 'core/build_flags.dart';
 import 'core/layout/responsive_layout.dart';
 import 'core/layout/secondary_dock_controller.dart';
-import 'core/layout/tv_shell.dart';
 import 'core/layout/ui_density.dart';
-import 'tv/player/tv_full_player.dart';
 import 'core/remote/tv_exit_confirm_dialog.dart';
 import 'core/remote/tv_focus_highlight.dart';
 import 'core/remote/tv_key_repeat.dart';
+// 批次50：TV 版 UI 体系（lib/tv_ui/，上游 rust-local-force 全量闭包）接线。
+// 以下 import 仅被 kTvBuild 分支消费；kTvBuild 为 const，手机构建 AOT 树摇
+// 剔除整段 TV 渲染树，import 本身只进依赖图不进产物。批次50 起自研 TV UI
+// （core/layout/tv_shell.dart 批次44 顶栏 + lib/tv/ 批次43 播放页）删除，
+// TV 构建渲染树整体走 tv_ui。
+import 'package:md3music/tv_ui/core/layout/responsive_shell.dart';
+import 'package:md3music/tv_ui/core/layout/tv_shell.dart' show TvMainShell;
+import 'package:md3music/tv_ui/core/remote/tv_ime_guard.dart' show TvImeGuard;
+import 'package:md3music/tv_ui/core/remote/tv_ime_proxy_bridge.dart'
+    show TvImeProxyBridge;
+import 'package:md3music/tv_ui/core/remote/tv_player_back_focus.dart'
+    show TvPlayerBackFallback;
+import 'package:md3music/tv_ui/modules/discover/discover_page.dart'
+    as tv_discover;
+import 'package:md3music/tv_ui/modules/library/library_page.dart' as tv_library;
+import 'package:md3music/tv_ui/modules/personal_fm/personal_fm_page.dart'
+    as tv_fm;
+import 'package:md3music/tv_ui/modules/player/full_player.dart' as tv_player;
+import 'package:md3music/tv_ui/modules/search/search_page.dart' as tv_search;
+import 'package:md3music/tv_ui/modules/settings/settings_page.dart'
+    as tv_settings;
+import 'package:md3music/tv_ui/providers/remote_control_provider.dart';
 import 'core/services/display_refresh_service.dart';
 import 'core/services/external_media_intent_service.dart';
 import 'core/services/fm_widget_sync.dart';
@@ -159,6 +179,11 @@ class MyApp extends StatelessWidget {
           ),
         ),
         ChangeNotifierProvider(create: (_) => DeviceProvider()),
+        // TV 构建：遥控器模式总开关（批次50 接线，对齐上游 MultiProvider
+        // 位置）。正常构建不编入（kTvBuild=false 时整段树摇剔除）。
+        if (kTvBuild) ...[
+          ChangeNotifierProvider(create: (_) => RemoteControlProvider()),
+        ],
         ChangeNotifierProvider(create: (_) => GridColumnsProvider()),
         ChangeNotifierProvider(create: (_) => PlayerProvider()),
         ChangeNotifierProvider(create: (_) => LibraryProvider()),
@@ -412,15 +437,21 @@ class _AppViewState extends State<_AppView> {
     context.read<ThemeProvider>().setBackgroundSeedColor(color);
   }
 
-  // ── TV 接线（批次43，全部仅在 kTvBuild 分支调用，正常构建树摇剔除）──
+  // ── TV 接线（批次43 建链，批次50 渲染树切 tv_ui 体系；全部仅在
+  // kTvBuild 分支调用，正常构建树摇剔除）──
 
-  /// tv: 返回键收口（简化版）。能 pop 则 pop（返回 true 表示已消费）；
-  /// 已在根路由时弹 [showTvExitConfirmDialog] 三选一菜单。
+  /// tv: 返回键收口。能 pop 则 pop（返回 true 表示已消费）；已在根路由时
+  /// 弹 [showTvExitConfirmDialog] 三选一菜单。
   ///
-  /// 与上游差异：上游先经 TvPlayerBackFallback 把焦点交还播放页控制区
-  /// （依赖 tv_player_back_focus.dart，批次44+ 按需搬运），lite 暂无播放页
-  /// TV 焦点桥，直接 pop。
+  /// **pop 之前先询问播放页**（批次50 对齐上游，组件取 tv_ui
+  /// [TvPlayerBackFallback]）：播放页内的 TvPlayerBackInterceptor 靠
+  /// 「焦点节点 → ancestors 向上」收按键，焦点一旦丢回路由自己的
+  /// FocusScope，它就收不到了，返回键会直接把播放页 pop 掉——用户看到的
+  /// 是「焦点在列表上按返回键，播放页直接关了」。这里先让播放页把焦点
+  /// 交还播放键并消费这次返回（tv_ui FullPlayer 自带拦截器装配）；它没救
+  /// （不在播放页 / 焦点已在控制区）才真正 pop。
   bool _handleTvBack() {
+    if (TvPlayerBackFallback.instance.requestPlayFocus()) return true;
     final navigator = appNavigatorKey.currentState;
     if (navigator != null && navigator.canPop()) {
       navigator.pop();
@@ -460,53 +491,70 @@ class _AppViewState extends State<_AppView> {
     }
   }
 
-  /// tv: TV 构建下的内容子树作用域（三层，由外到内）。
+  /// tv: TV 构建下的内容子树作用域（批次50 对齐上游完整实现，仅 kTvBuild
+  /// 分支调用，正常构建树摇剔除）。由外到内四层：
   ///
-  /// 1. [MediaQuery]：正文缩放下限 [kTvMinTextScale]（10-foot 可读性），
+  /// 1. [TvImeProxyBridge]：输入法会话桥（组件取 tv_ui）。把「输入框是否
+  ///    持焦」(kTextInputFocused) 转发给原生代理 View (TvImeProxyView)，让
+  ///    低内存 Android TV 肯给本窗口绑定输入法会话——否则遥控器按键一个都
+  ///    到不了软键盘，无法选字。lite 无原生代理端时 invokeMethod 失败被
+  ///    catchError 静默吞掉（增强失败即退回原行为），无害。
+  /// 2. [MediaQuery]：正文缩放下限 [kTvMinTextScale]（10-foot 可读性），
   ///    只抬下限不压上限；必须在 Builder 内取继承的 MediaQuery 再 copyWith，
   ///    其余字段原样透传。
-  /// 2. [Dpad.wrap]：dpad 遍历引擎。onBack 收口到 [_handleTvBack]；焦点
+  /// 3. [Dpad.wrap]：dpad 遍历引擎。onBack 收口到 [_handleTvBack]；焦点
   ///    视觉只保留自绘 [TvFocusHighlight] 描边框（effects 传空列表，不叠加
   ///    dpad 自带辉光，避免与描边不同步/遮细线）。
-  /// 3. [TvKeyRepeatLayer]：方向键连发层，包在 Dpad 之内、Navigator 之外。
+  /// 4. [TvImeGuard]（tv_ui）+ [TvKeyRepeatLayer]：输入法保活守卫包在
+  ///    Dpad 之内、连发层之外——输入框持焦时把四方向键就地吃掉，防止
+  ///    dpad「单行输入框上下键=移出字段」的逃逸把 TextField 挤失焦、连带
+  ///    收起系统输入法（退出输入框靠 BACK）；连发层再往内。
   ///
   /// [TvFocusHighlight] 以 Positioned.fill 叠在最上层（IgnorePointer 不拦
   /// 按键），替代 dpad 的 debugOverlay（整体开关、release 自动关闭）；滚动
   /// 通知经 NotificationListener 唤醒静音中的红框 Ticker。
   Widget _tvContentScope(BuildContext context, Widget? child) {
-    return Builder(
-      builder: (mqContext) {
-        final mq = MediaQuery.of(mqContext);
-        return MediaQuery(
-          data: mq.copyWith(
-            textScaler: mq.textScaler.clamp(
-              minScaleFactor: kTvMinTextScale,
-              maxScaleFactor: kMaxSystemTextScale,
-            ),
-          ),
-          child: Stack(
-            children: [
-              NotificationListener<ScrollNotification>(
-                onNotification: (_) {
-                  _tvFocusFrameKey.currentState?.wake();
-                  return false;
-                },
-                child: Dpad.wrap(
-                  theme: const DpadThemeData(
-                    effects: <DpadEffect>[],
-                    scrollPadding: 64,
-                  ),
-                  onBack: _handleTvBack,
-                )(
-                  mqContext,
-                  TvKeyRepeatLayer(child: child ?? const SizedBox.shrink()),
-                ),
+    return TvImeProxyBridge(
+      child: Builder(
+        builder: (mqContext) {
+          final mq = MediaQuery.of(mqContext);
+          return MediaQuery(
+            data: mq.copyWith(
+              textScaler: mq.textScaler.clamp(
+                minScaleFactor: kTvMinTextScale,
+                maxScaleFactor: kMaxSystemTextScale,
               ),
-              Positioned.fill(child: TvFocusHighlight(key: _tvFocusFrameKey)),
-            ],
-          ),
-        );
-      },
+            ),
+            child: Stack(
+              children: [
+                NotificationListener<ScrollNotification>(
+                  onNotification: (_) {
+                    _tvFocusFrameKey.currentState?.wake();
+                    return false;
+                  },
+                  child: Dpad.wrap(
+                    theme: const DpadThemeData(
+                      effects: <DpadEffect>[],
+                      scrollPadding: 64,
+                    ),
+                    onBack: _handleTvBack,
+                  )(
+                    mqContext,
+                    TvImeGuard(
+                      child: TvKeyRepeatLayer(
+                        child: child ?? const SizedBox.shrink(),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: TvFocusHighlight(key: _tvFocusFrameKey),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -628,7 +676,16 @@ class _AppViewState extends State<_AppView> {
                   // 二级路由态：整屏不透明路由盖住主布局（含完整 Dock），
                   // 在 Navigator 之上单独挂「仅播放器」Dock（恒展开、无导航）。
                   // 设置页 / 完整播放页 / DLNA 遥控页被排除，不挂。
-                  final showSecondaryPlayer = _secondaryDock.visible;
+                  // 批次50：TV 强制禁用悬浮二级播放器——上游播种
+                  // kSecondaryPlayerEnabled=false（main.dart TV 门控）的
+                  // lite 等价物。lite 无该全局开关与持久化键（批次24 的
+                  // SecondaryDockController 按路由栈深度推导可见性，TV 壳
+                  // 层路由同样会入栈），不引入无消费者的 ValueNotifier，
+                  // 直接以 kTvBuild 编译期钉死可见性：TV 构建恒 false
+                  // （AOT 剔除整段 Dock 渲染），手机构建不受影响，语义与
+                  // 上游「只门控播种值、不回写 prefs」的最终效果一致。
+                  final showSecondaryPlayer =
+                      _secondaryDock.visible && !kTvBuild;
                   Widget navigator = child!;
                   // 批次36：页面内容纵向滚动广播（「展开态滑动内容坍缩」
                   // 的信号源，用户口径「展开播放器时，滑动内容坍缩」）。
@@ -782,9 +839,13 @@ class _AppViewState extends State<_AppView> {
         '/search': (_) => const SearchPage(),
         '/library': (_) => const LibraryPage(),
         '/settings': (_) => const SettingsPage(),
-        // 批次43：TV 构建走三层 Z 结构播放页（Z1 环境背景/Z2 黑胶+歌词/
-        // Z3 呼出控制条），手机构建 FullPlayer 原样（const 分支树摇）。
-        '/player': (_) => kTvBuild ? const TvFullPlayer() : const FullPlayer(),
+        // 批次50：TV 构建走 tv_ui 体系播放页（上游 FullPlayer 全量：双栏
+        // 10-foot 布局 + dpad 焦点链 + TvPlayerBackInterceptor），手机构建
+        // FullPlayer 原样（const 分支树摇）。TV 播放页主入口是顶栏 MiniPlayer
+        // 的 OK 键（tv_ui full_player_route.openFullPlayer，自带防重复入栈
+        // 与可拖拽路由），本命名路由保留给既有 '/player' 调用点。
+        '/player': (_) =>
+            kTvBuild ? const tv_player.FullPlayer() : const FullPlayer(),
         '/personal_fm': (_) => const PersonalFmPage(),
       },
       onGenerateRoute: (settings) {
@@ -817,10 +878,10 @@ class _AppViewState extends State<_AppView> {
           );
         }
         if (settings.name == '/') {
-          // 批次44：TV 构建不再挂自研 TvMainShellHost（左侧 Rail + 内容占位
-          // 壳，真机不可用）——'/' 统一渲染 _MainLayout（真实 tab 页），TV
-          // 顶栏双层 chrome 由 _MainLayoutState.build 的 kTvBuild 分支在
-          // body 上方推挤式叠加（见该方法内注释）。kTvBuild 为 const，
+          // 批次50：TV 构建渲染树整体切 tv_ui 体系——'/' 统一渲染
+          // _MainLayout，其 build 的 kTvBuild 分支返回 TvMainShell
+          // （tv_ui 顶栏双层壳层）+ tv_ui ResponsiveShell 内容区（见
+          // [_MainLayoutState] 内 TV 段注释）。kTvBuild 为 const，
           // 正常构建走原分支，树与改动前逐字节一致。
           return _UpFadeMainRoute<void>(builder: (_) => const _MainLayout());
         }
@@ -1004,6 +1065,13 @@ class _MainLayoutState extends State<_MainLayout>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
   int _previousSelectedIndex = 0;
+
+  // tv: tv_ui ResponsiveShell 的壳层 key（批次50，仅 kTvBuild 分支消费，
+  // 正常构建树摇剔除）。TvMainShell 第二层下边缘经它调 focusActiveTabContent
+  // 把焦点交还内容区；同一 key 同时挂在 body 的 ResponsiveShell 上
+  // （上游 _responsiveShellKey 同款复用）。
+  final GlobalKey<ResponsiveShellState> _tvResponsiveShellKey =
+      GlobalKey<ResponsiveShellState>();
 
   /// Dock 导航展开态（单展开不变量的一半）：nav 与 player 恰好一个展开。
   /// 唯一驱动是用户点击（点坍缩圆 / 切 tab 展开；播放器工具胶囊展开时让位
@@ -1458,26 +1526,141 @@ class _MainLayoutState extends State<_MainLayout>
     if (!_navExpanded.value) _navExpanded.value = true;
   }
 
-  /// tv: 顶栏第二层 tab 的选中回调（批次44，仅 kTvBuild 分支消费）。
+  // ── TV 渲染树（批次50，tv_ui 体系接线；全部仅 kTvBuild 分支消费，
+  // 正常构建树摇剔除；手机分支零改动）──
+
+  /// tv: TV 构建的 rail 目标（对齐上游 `_buildRailDestination` 产出形态）。
   ///
-  /// 索引语义与 [TvTopChrome] 一致：`[0, visibleTabs.length)` 为真实 tab
-  /// （与 onDestinationSelected 同款切换逻辑，仅省去手机 Dock 的
-  /// _expandNav）；末尾固定追加的「设置」槽位以二级路由打开
-  /// （'/settings'，TV 返回键经 _handleTvBack 可 pop 回主页）。
-  /// 聚焦即选中语义下本回调由方向键移入触发，无需 OK 确认。
-  void _handleTvTabSelected(int index) {
-    if (isFullPlayerOnTop) return;
-    final tabConfig = context.read<TabConfigProvider>();
-    final visibleTabs = tabConfig.visibleTabs;
-    if (index >= visibleTabs.length) {
-      unawaited(Navigator.of(context).pushNamed('/settings'));
-      return;
+  /// TvMainShell 第二层 tab 项只消费 icon/selectedIcon（label 直接取
+  /// visibleTabs[i].label，见 tv_ui tv_shell.dart `_buildTabItem`）。图标
+  /// 映射与手机 `_buildDestination` 同源，避免壳层间图标分叉。
+  NavigationRailDestination _buildTvRailDestination(TabItem tab) {
+    final IconData outlined;
+    final IconData filled;
+    switch (tab.id) {
+      case 'discover':
+        outlined = Icons.home_outlined;
+        filled = Icons.home;
+        break;
+      case 'library':
+        outlined = Icons.library_music_outlined;
+        filled = Icons.library_music;
+        break;
+      case 'favorites':
+        outlined = Icons.favorite_outline;
+        filled = Icons.favorite;
+        break;
+      case 'fm':
+        outlined = Icons.radio_outlined;
+        filled = Icons.radio;
+        break;
+      case 'search':
+        outlined = Icons.search_outlined;
+        filled = Icons.search;
+        break;
+      case 'recognition':
+        outlined = Icons.mic_none_outlined;
+        filled = Icons.mic;
+        break;
+      case 'audiobook':
+        outlined = Icons.auto_stories_outlined;
+        filled = Icons.auto_stories;
+        break;
+      case 'settings':
+        outlined = Icons.settings_outlined;
+        filled = Icons.settings;
+        break;
+      case 'playlists':
+        outlined = Icons.queue_music_outlined;
+        filled = Icons.queue_music;
+        break;
+      case 'albums':
+        outlined = Icons.album_outlined;
+        filled = Icons.album;
+        break;
+      case 'artists':
+        outlined = Icons.people_outlined;
+        filled = Icons.people;
+        break;
+      case 'recent':
+        outlined = Icons.history_outlined;
+        filled = Icons.history;
+        break;
+      case 'folders':
+        outlined = Icons.folder_outlined;
+        filled = Icons.folder;
+        break;
+      case 'scan':
+        outlined = Icons.radar_outlined;
+        filled = Icons.radar;
+        break;
+      case 'local_favorites':
+        outlined = Icons.favorite_outline;
+        filled = Icons.favorite;
+        break;
+      default:
+        outlined = Icons.circle_outlined;
+        filled = Icons.circle;
     }
-    mainLayoutSelectedTabId.value = visibleTabs[index].id;
-    setState(() {
-      _previousSelectedIndex = _selectedIndex;
-      _selectedIndex = index;
-    });
+    return NavigationRailDestination(
+      icon: Icon(outlined),
+      selectedIcon: Icon(filled),
+      label: Text(tab.label),
+    );
+  }
+
+  /// tv: TV 构建的 tab → 页面映射。
+  ///
+  /// 五大主 tab 落 tv_ui 页面（上游 tv_ui 体系自洽：dpad 焦点 / 10-foot
+  /// 布局 / 骨架屏全量）；其余可选 tab（收藏 / 识曲 / 听书 / 最近播放 /
+  /// 音乐库子页）暂无 tv_ui 对应页，回落 lite 既有页面（[_buildPageForTab]，
+  /// 其内部已包 ContentEntrance 入场动画）。
+  Widget _buildTvPageForTab(String tabId) {
+    switch (tabId) {
+      case 'discover':
+        return const tv_discover.DiscoverPage();
+      case 'library':
+        return const tv_library.LibraryPage();
+      case 'fm':
+        return const tv_fm.PersonalFmPage();
+      case 'search':
+        return const tv_search.SearchPage();
+      case 'settings':
+        return const tv_settings.SettingsPage();
+      default:
+        return _buildPageForTab(tabId);
+    }
+  }
+
+  /// tv: TV 构建的 body（上游 `_buildBody` kTvBuild 分支同构）。
+  ///
+  /// Column[本地 API 故障横幅, Expanded(ResponsiveShell)]。不传
+  /// persistentBarBuilder——底部常驻条已随 MiniPlayer 移顶退场
+  /// （tv_ui tv_shell.dart），每 tab 再挂一条会与顶栏重复，并触发
+  /// residentRect 多点并发结算；onSecondaryRouteChanged / onPageRouteEvent
+  /// 上游用于底栏形态交棒，lite 无底栏形态体系，不传（null）。
+  Widget _buildTvBody(BuildContext context, List<TabItem> visibleTabs) {
+    return Column(
+      children: [
+        // 本地 API 服务器启动失败提示：在线内容全部不可用，但页面本身仍能
+        // 渲染成空列表/骨架，横幅显式摆到内容区顶部（与手机 _buildBody
+        // 同一条通道）。
+        ValueListenableBuilder<bool>(
+          valueListenable: KugouApiClient.localServerAvailable,
+          builder: (context, available, _) => available
+              ? const SizedBox.shrink()
+              : LocalServerDownBanner(onRetry: KugouApiServer.start),
+        ),
+        Expanded(
+          child: ResponsiveShell(
+            key: _tvResponsiveShellKey,
+            visibleTabs: visibleTabs,
+            selectedIndex: _selectedIndex,
+            pageBuilder: _buildTvPageForTab,
+          ),
+        ),
+      ],
+    );
   }
 
   /// 坍缩 Dock 导航（播放器工具胶囊展开时强制让位，维持单展开不变量）。
@@ -1617,33 +1800,38 @@ class _MainLayoutState extends State<_MainLayout>
                 child: Opacity(opacity: _exitOpacity.value, child: child),
               ),
             );
-            // 批次44：TV 构建在主布局上方叠加顶栏双层 chrome。**推挤式**
-            // 叠放（Column[TvTopChrome, Expanded(主布局)]）而非 Stack 悬浮
-            // ——顶栏占据固定高度把内容整体下移，几何上不遮挡任何页面
-            // 内容（悬浮遮挡式会让各真实 tab 页的顶部内容压在玻璃后，
-            // 且页面滚动容器未读顶部 padding，无法让位）；玻璃质感由
-            // TvTopChrome 自身的 LiquidGlassSurface 呈现。kTvBuild 为
-            // const，正常构建不进此分支，树与改动前逐字节一致。
-            if (kTvBuild) {
-              return Column(
-                children: [
-                  TvTopChrome(
-                    visibleTabs: visibleTabs,
-                    selectedIndex: _selectedIndex,
-                    onTabSelected: _handleTvTabSelected,
-                  ),
-                  Expanded(
-                    child: TvContentFocusRegion(
-                      selectedIndex: _selectedIndex,
-                      child: transformed,
-                    ),
-                  ),
-                ],
-              );
-            }
+            // 退出缩放动画包裹整棵壳层（TV 分支同上游：壳层是 AnimatedBuilder
+            // 的 child，转场时一并缩小淡出）。
             return transformed;
           },
-          child: ResponsiveScaffold(
+          // 壳层选择（批次50，对齐上游 build 的 isDesktopLayout/kTvBuild 链）：
+          // TV 构建渲染树整体切 tv_ui 体系——壳层 = TvMainShell（tv_ui 顶栏
+          // 双层：第一层账号胶囊 / MiniPlayer / 搜索钮，第二层横向 tab
+          // 「聚焦即选中」），body = tv_ui ResponsiveShell（不传
+          // persistentBarBuilder，见 [_buildTvBody] 注释）；退出动画照常作用
+          // 在整棵壳层上。kTvBuild 为 const，手机构建走原 ResponsiveScaffold
+          // 分支，树与改动前逐字节一致。
+          child: kTvBuild
+              ? TvMainShell(
+                  visibleTabs: visibleTabs,
+                  selectedIndex: _selectedIndex,
+                  railDestinations: visibleTabs
+                      .map(_buildTvRailDestination)
+                      .toList(),
+                  onDestinationSelected: (index) {
+                    // 守卫同手机分支：FullPlayer 在栈顶时（展开进度 > 0.5）
+                    // 忽略 tab 切换，避免与播放页转场叠加导致状态混乱。
+                    if (isFullPlayerOnTop) return;
+                    mainLayoutSelectedTabId.value = visibleTabs[index].id;
+                    setState(() {
+                      _previousSelectedIndex = _selectedIndex;
+                      _selectedIndex = index;
+                    });
+                  },
+                  shellKey: _tvResponsiveShellKey,
+                  body: _buildTvBody(context, visibleTabs),
+                )
+              : ResponsiveScaffold(
             destinations: destinations,
             selectedIndex: _selectedIndex,
             // 底部 NavigationBar 由悬浮玻璃 Dock 取代（hideNavigation 只隐藏
