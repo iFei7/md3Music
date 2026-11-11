@@ -75,7 +75,14 @@ jobs:
 
       # Flutter 构建
       - name: Flutter pub get
-        run: flutter pub get
+        # 批次50 诊断：pub get 失败（exit 66）时 tail 打进日志与 ::error 注解
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee "$RUNNER_TEMP/pub_get.log" || {
+            echo "::error::flutter pub get failed, tail of pub_get.log:"
+            tail -c 3000 "$RUNNER_TEMP/pub_get.log"
+            exit 1
+          }
 
       - name: Flutter analyze
         id: analyze
@@ -616,7 +623,14 @@ jobs:
             gradle-${{ runner.os }}-
 
       - name: Flutter pub get
-        run: flutter pub get
+        # 批次50 诊断：pub get 失败（exit 66）时 tail 打进日志与 ::error 注解
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee "$RUNNER_TEMP/pub_get.log" || {
+            echo "::error::flutter pub get failed, tail of pub_get.log:"
+            tail -c 3000 "$RUNNER_TEMP/pub_get.log"
+            exit 1
+          }
 
       # 批次43 修复：TV job 与 lite job 同款签名装配——build.gradle.kts 的
       # whenReady 会在 release 打包缺签名时直接 fail（首轮 TV job 漏配，
@@ -811,7 +825,14 @@ jobs:
           cache: true
 
       - name: Flutter pub get
-        run: flutter pub get
+        # 批次50 诊断：pub get 失败（exit 66）时 tail 打进日志与 ::error 注解
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee "$RUNNER_TEMP/pub_get.log" || {
+            echo "::error::flutter pub get failed, tail of pub_get.log:"
+            tail -c 3000 "$RUNNER_TEMP/pub_get.log"
+            exit 1
+          }
 
       # expanded reporter：失败用例带 文件:行号，便于注解与本地复现
       # ⚠️ 必须显式 shell: bash：Actions 默认 bash -e 不开 pipefail，
