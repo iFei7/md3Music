@@ -675,6 +675,12 @@ jobs:
       # app-tv-release.apk，会再次出现首轮 9be8d97 的「产物缺失」）。
       # 批次44：--flavor tv（applicationIdSuffix .tv），独立签名包与手机版
       # （--flavor standard，包名 .lite）并存互不覆盖。
+      # 批次51 后段：Flutter 多入口——TV 构建编译根改为 lib/main_tv.dart
+      # （`-t lib/main_tv.dart`）。该文件不 import app.dart / 任何手机页面，
+      # 手机 UI（10.1 万行）从 TV 编译根不可达（import 闭包级断开），修复
+      # 前段「main.dart kTvBuild 分支」树摇落空（TV APK 只降混淆的 2MB）；
+      # 手机构建 job（--flavor standard/depth3d）不带 -t，仍以 main.dart
+      # 为编译根，不受影响。
       - name: Flutter build APK (TV, release, arm64-v8a)
         if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         run: |
@@ -684,6 +690,7 @@ jobs:
           # （见 Verify 步与 lib/tv_ui/core/tv_build_probe.dart），不再依赖
           # 混淆后会消失的 DpadFocusable ASCII 符号。
           flutter build apk --release --flavor tv --split-per-abi \
+            -t lib/main_tv.dart \
             --target-platform android-arm64 \
             --build-number="${{ github.run_number }}" \
             --obfuscate --split-debug-info=build/symbols_tv \
@@ -873,8 +880,10 @@ jobs:
       # 批次43：TV 编译守卫——带 MD3_TV=true 旗标重跑 test/tv。
       # 普通通道 kTvBuild=false，TV 恒真分支（_tvContentScope/TvMainShell/
       # TvFullPlayer 等）不进测试内核；带旗标重跑强制完整编译 TV 分支
-      # （test/tv/tv_compile_guard_test.dart import app.dart+main.dart），
-      # compile error 在本步即红，不必等到 tv job 的 Gradle 构建才暴露。
+      # （批次51 后段起 TV 编译根为 lib/main_tv.dart，
+      # tv_compile_guard_test.dart import main.dart+main_tv.dart+tv_app.dart
+      # 全量拉入编译核对），compile error 在本步即红，不必等到 tv job 的
+      # Gradle 构建才暴露。
       - name: Flutter test (TV flag compile guard)
         run: flutter test --dart-define=MD3_TV=true test/tv --reporter expanded 2>&1 | tee "$RUNNER_TEMP/flutter_test_tv.log"
         shell: bash
