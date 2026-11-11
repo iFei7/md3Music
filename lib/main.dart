@@ -29,6 +29,7 @@ import 'modules/update/update_check_service.dart';
 import 'modules/onboarding/user_agreement_page.dart';
 import 'services/kugou_api/kugou_api_client.dart';
 import 'services/kugou_server.dart';
+import 'tv_ui/app/tv_app.dart';
 import 'utils/landscape_dock_side.dart';
 import 'utils/landscape_immersive.dart';
 import 'widgets/md3_lyric_preferences.dart';
@@ -61,16 +62,32 @@ Future<void> _main() async {
     initialUseBackgroundImage,
   ) = await runBootstrap();
 
-  runApp(
-    MyApp(
-      showOnboarding: needsOnboarding,
-      showUserAgreement: needsUserAgreement,
-      initialUseBackgroundImage: initialUseBackgroundImage,
-    ),
-  );
+  // 批次51：TV 构建纯 TV 入口——kTvBuild 分支直接 runApp TvApp
+  // （lib/tv_ui/app/tv_app.dart，自带 MaterialApp + providers + 路由表 +
+  // builder 焦点包装），其后手机装配完全不执行。
+  //
+  // **可达性双向断开**（用户决策①②）：
+  // - TV 构建（kTvBuild=true）：else 分支（MyApp + 手机 10 万行 Dart 页面
+  //   闭包）不可达，AOT 编译期整段剔除；
+  // - 手机构建（kTvBuild=false）：TV 分支（TvApp + tv_ui 20 万行）不可达，
+  //   AOT 整段剔除——本 import 只进依赖图不进产物。
+  // 用 if/else 而非「TV 分支内 return」：保证另一分支在两个构建目标下都
+  // 是编译期死代码（早退形式下 TV 构建的 fallback 直通代码仍可达）。
+  if (kTvBuild) {
+    runApp(const TvApp());
+  } else {
+    runApp(
+      MyApp(
+        showOnboarding: needsOnboarding,
+        showUserAgreement: needsUserAgreement,
+        initialUseBackgroundImage: initialUseBackgroundImage,
+      ),
+    );
+  }
 
   // P0: 权限请求推迟到首帧渲染后执行，避免冷启动期间的系统权限弹窗
   // 阻塞首屏绘制（部分设备上 permission_handler 可能耗时/弹窗）。
+  // （requestPermissions 内部自带 kTvBuild 编译期守卫，TV 构建直接跳过。）
   WidgetsBinding.instance.addPostFrameCallback((_) {
     // 权限请求包裹 try/catch：在部分设备/早期阶段 permission_handler 可能抛
     // "Unable to detect current Android Activity"，不能让它中断流程。

@@ -572,9 +572,13 @@ jobs:
   # ============================================================
   # TV 构建 job（批次43）：同 lite 构建参数 + --dart-define=MD3_TV=true。
   # 批次43 MVP 不新增 flavor（沿用 standard，applicationId 不带 .tv 后缀；
-  # 后续批次可加 applicationIdSuffix = ".tv"）。不开 --obfuscate：
-  # 构建后要在 libapp.so 内检索 Dart AOT 符号 DpadFocusable 校验 TV 旗标
-  # 生效（与上游 ci.yml check_tv 同口径）。
+  # 后续批次可加 applicationIdSuffix = ".tv"）。
+  # 批次51：开启 --obfuscate --split-debug-info（对齐 lite，TV APK 预期减
+  # ~2MB）。原「libapp.so 检索 DpadFocusable 符号」校验在混淆下失效（类名
+  # 已混淆不可检索），改用 TV 旗标字符串探针 lib/tv_ui/core/tv_build_probe.dart：
+  # 探针常量仅在 MD3_TV=true 构建下非空，且被恒可达的 TvMainShell.build
+  # 写入 Semantics.label——混淆不剥字符串常量，故 libapp.so 内可 grep 到
+  # 'MD3_TV_ACTIVE_probe_b50' 即证明 --dart-define=MD3_TV 确实生效。
   # ============================================================
   build-android-tv:
     name: Build Android TV APK
@@ -675,24 +679,33 @@ jobs:
         if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         run: |
           set -o pipefail
+          # 批次51：加 --obfuscate --split-debug-info=build/symbols_tv（对齐
+          # lite 构建参数，TV APK 预期减 ~2MB）。旗标生效校验改用字符串探针
+          # （见 Verify 步与 lib/tv_ui/core/tv_build_probe.dart），不再依赖
+          # 混淆后会消失的 DpadFocusable ASCII 符号。
           flutter build apk --release --flavor tv --split-per-abi \
             --target-platform android-arm64 \
             --build-number="${{ github.run_number }}" \
+            --obfuscate --split-debug-info=build/symbols_tv \
             --dart-define=MD3_TV=true \
             --dart-define=APP_VERSION=ci-${{ github.sha }} 2>&1 | tee "$RUNNER_TEMP/build_tv.log"
 
-      - name: Verify TV APK (DpadFocusable symbol)
+      - name: Verify TV APK (MD3_TV probe string)
         if: ${{ steps.signing.outputs.keystore_available == 'true' }}
         run: |
           set -euo pipefail
           apk="build/app/outputs/flutter-apk/app-arm64-v8a-tv-release.apk"
           test -f "$apk" || { echo "::error::TV APK 产物缺失"; exit 1; }
-          # TV 旗标生效校验：libapp.so 内必须检索到 dpad 引擎的 Dart 符号
-          # （未开 --obfuscate，ASCII 标识符可检索；同上游 ci.yml check_tv）。
-          if unzip -p "$apk" lib/arm64-v8a/libapp.so | grep -aq DpadFocusable; then
-            echo "TV dpad 焦点符号: OK ($apk)"
+          # 批次51：TV 旗标生效校验改用探针字符串。lib/tv_ui/core/tv_build_probe.dart
+          # 的 kTvBuildProbe 仅在 MD3_TV=true 下为 'MD3_TV_ACTIVE_probe_b50'，
+          # 由恒可达的 TvMainShell.build 写入 Semantics.label 进入 AOT 产物；
+          # --obfuscate 混淆类名但不剥字符串常量，故明文可检索。原
+          # DpadFocusable 符号检查已删（混淆后 ASCII 标识符不可检索，无效）。
+          count="$(unzip -p "$apk" lib/arm64-v8a/libapp.so | grep -c 'MD3_TV_ACTIVE_probe_b50' || true)"
+          if [ "${count}" -ge 1 ]; then
+            echo "TV 旗标探针字符串: OK (${count} 处, $apk)"
           else
-            echo "::error::TV 包缺少 dpad 焦点符号（MD3_TV 旗标未生效）: $apk"; exit 1
+            echo "::error::TV 包缺少旗标探针字符串 MD3_TV_ACTIVE_probe_b50（MD3_TV 旗标未生效或探针被剔除）: $apk"; exit 1
           fi
           ls -lh "$apk"
 
@@ -731,6 +744,20 @@ jobs:
           path: build/app/outputs/flutter-apk/GraceMusic-tv-${{ env.TV_STAMP }}-arm64.apk
           if-no-files-found: error
           retention-days: 7
+
+      # 批次51：TV 构建 --obfuscate 的 Dart 符号表（对齐 lite job 的
+      # Upload Dart obfuscation symbols 步）：崩溃栈还原（flutter symbolize）
+      # 专用，与本次构建的 libapp.so 一一对应。仅随 artifact 留档、不挂
+      # release 资产（安全审计口径：split-debug-info 产物含还原符号，不当
+      # 公开 release 资产分发），artifact 名对齐 TV 产物 GraceMusic-tv-<stamp> 风格。
+      - name: Upload TV Dart obfuscation symbols
+        if: ${{ steps.signing.outputs.keystore_available == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: GraceMusic-tv-symbols-${{ env.TV_STAMP }}
+          path: build/symbols_tv/
+          if-no-files-found: ignore
+          retention-days: 30
 
       # 批次43：把 TV APK 挂到本次提交的 lite Pre-release（release 由并行的
       # lite 构建 job 创建，此处轮询等待；最长 25 分钟）。release 缺失（lite

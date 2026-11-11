@@ -6,6 +6,8 @@ import 'package:md3music/providers/kugou_provider.dart';
 import 'package:md3music/providers/tab_config_provider.dart';
 import 'package:md3music/providers/theme_provider.dart';
 import 'package:md3music/core/build_flags.dart';
+// 批次51：TV 旗标探针常量（--obfuscate 下 CI 校验 MD3_TV 生效用）。
+import 'package:md3music/tv_ui/core/tv_build_probe.dart';
 import 'package:md3music/tv_ui/core/remote/tv_top_chrome_scope.dart';
 import 'package:md3music/tv_ui/core/utils/app_haptics.dart';
 import 'package:md3music/tv_ui/core/layout/responsive_shell.dart';
@@ -101,12 +103,21 @@ class _TvMainShellState extends State<TvMainShell> {
   Widget build(BuildContext context) {
     if (widget.hidden) return widget.body;
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
-    return Column(
-      children: [
-        _buildTopLayer(colorScheme),
-        _buildTabLayer(colorScheme),
-        Expanded(child: widget.body),
-      ],
+    // 批次51：TV 旗标探针引用点（恒可达——TV 主壳层每帧 build 都执行）。
+    // kTvBuildProbe 仅在 MD3_TV=true 构建下为非空串，写入 Semantics.label
+    // 保证该字符串常量随可达代码进入 AOT snapshot（混淆不剥字符串常量），
+    // CI 据 libapp.so 内可 grep 到 'MD3_TV_ACTIVE_probe_b50' 判定旗标生效。
+    // 非 TV 构建 const 折叠为空串 → label=null，Semantics 无附加语义；
+    // 禁改 assert/debugPrint 承载（release 分别被剔除/折叠为 no-op）。
+    return Semantics(
+      label: kTvBuildProbe.isEmpty ? null : kTvBuildProbe,
+      child: Column(
+        children: [
+          _buildTopLayer(colorScheme),
+          _buildTabLayer(colorScheme),
+          Expanded(child: widget.body),
+        ],
+      ),
     );
   }
 
