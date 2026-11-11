@@ -80,7 +80,7 @@ jobs:
           set -o pipefail
           flutter pub get 2>&1 | tee "$RUNNER_TEMP/pub_get.log" || {
             echo "::error::flutter pub get failed, tail of pub_get.log:"
-            tail -c 3000 "$RUNNER_TEMP/pub_get.log"
+            tail -c 2500 "$RUNNER_TEMP/pub_get.log" | tr "\n" "|" | tr -d "\r" | cut -c1-1800 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           }
 
@@ -628,7 +628,7 @@ jobs:
           set -o pipefail
           flutter pub get 2>&1 | tee "$RUNNER_TEMP/pub_get.log" || {
             echo "::error::flutter pub get failed, tail of pub_get.log:"
-            tail -c 3000 "$RUNNER_TEMP/pub_get.log"
+            tail -c 2500 "$RUNNER_TEMP/pub_get.log" | tr "\n" "|" | tr -d "\r" | cut -c1-1800 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           }
 
@@ -830,7 +830,7 @@ jobs:
           set -o pipefail
           flutter pub get 2>&1 | tee "$RUNNER_TEMP/pub_get.log" || {
             echo "::error::flutter pub get failed, tail of pub_get.log:"
-            tail -c 3000 "$RUNNER_TEMP/pub_get.log"
+            tail -c 2500 "$RUNNER_TEMP/pub_get.log" | tr "\n" "|" | tr -d "\r" | cut -c1-1800 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           }
 
