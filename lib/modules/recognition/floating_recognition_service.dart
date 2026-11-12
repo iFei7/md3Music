@@ -4,7 +4,10 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../../main.dart';
+// 批次51：main_tv.dart TV 启动会调用本服务（registerNativeCallbacks），
+// 严禁经 main.dart 取共享符号（会连带 app.dart 手机 UI），
+// appNavigatorKey 改经 bootstrap_common。
+import '../../bootstrap_common.dart' show appNavigatorKey;
 import '../../services/kugou_api/kugou_api_client.dart';
 import 'recognition_utils.dart';
 
@@ -44,10 +47,10 @@ class FloatingRecognitionService {
     'com.md3music.md3music/media_store',
   );
 
-  /// 每段录制时长（秒，与原生侧 SEGMENT_BYTES 一致：8000Hz×2字节×8s）
-  static const int _segmentDuration = 8;
-  /// 最大总录制时长（秒），56s = 7 轮
-  static const int _maxTotalDuration = 56;
+  /// 每段录制时长（秒，与原生侧 SEGMENT_BYTES 一致：8000Hz×2字节×6s）
+  static const int _segmentDuration = 6;
+  /// 最大总录制时长（秒），60s = 10 轮
+  static const int _maxTotalDuration = 60;
 
   bool _isActive = false;
   bool get isActive => _isActive;
@@ -185,7 +188,8 @@ class FloatingRecognitionService {
       maxAmplitude = computeMaxAmplitude(pcm);
       debugPrint('[FloatingRecognition] 第 $_attemptCount 段 maxAmplitude=$maxAmplitude');
       normalizedPcm = maxAmplitude >= kSilenceAmplitudeThreshold
-          ? normalizeGain(pcm, maxAmplitude)
+          // 降级前处理放 Isolate：大 PCM 逐采样循环不阻塞主 isolate
+          ? await normalizeGainAsync(pcm, maxAmplitude)
           : pcm;
     }
 

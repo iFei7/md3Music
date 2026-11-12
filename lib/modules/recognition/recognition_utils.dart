@@ -1,3 +1,5 @@
+import 'dart:isolate';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
@@ -81,6 +83,14 @@ int computeMaxAmplitude(Uint8List pcm) {
   return maxAmplitude;
 }
 
+/// 将 PCM 数据从 fromHz 降采样到 toHz（Isolate 版，降级路径用）。
+/// 大 PCM 逐采样循环不阻塞主 isolate；实现复用 [downsamplePcm]。
+/// 闭包仅捕获 Uint8List 与 int，均为可发送对象。
+Future<Uint8List> downsamplePcmAsync(Uint8List input, int fromHz, int toHz) {
+  if (input.isEmpty || fromHz == toHz) return Future.value(input);
+  return Isolate.run(() => downsamplePcm(input, fromHz, toHz));
+}
+
 /// 将 PCM 数据从 fromHz 降采样到 toHz。
 /// 使用均值抗混叠滤波器（anti-aliasing filter），防止高于 toHz/2 的频率混叠。
 Uint8List downsamplePcm(Uint8List input, int fromHz, int toHz) {
@@ -119,6 +129,20 @@ Uint8List downsamplePcm(Uint8List input, int fromHz, int toHz) {
   }
 
   return output;
+}
+
+/// 增益归一化（Isolate 版，降级路径用）。
+/// 大 PCM 逐采样循环不阻塞主 isolate；实现复用 [normalizeGain]。
+/// 闭包仅捕获 Uint8List 与 int，均为可发送对象。
+Future<Uint8List> normalizeGainAsync(
+  Uint8List input,
+  int currentMaxAmplitude, {
+  int targetAmplitude = 25000,
+}) {
+  if (input.isEmpty || input.length < 2) return Future.value(input);
+  return Isolate.run(
+    () => normalizeGain(input, currentMaxAmplitude, targetAmplitude: targetAmplitude),
+  );
 }
 
 /// 增益归一化：去除 DC 偏移并放大到目标振幅，提升指纹识别率。

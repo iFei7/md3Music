@@ -50,7 +50,7 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
   static const int _targetSampleRate = 8000;
 
   /// 每段录制时长（秒）
-  static const int _segmentDuration = 8;
+  static const int _segmentDuration = 6;
 
   /// 最大总录制时长（秒），56s = 7 轮（每轮 8s）
   static const int _maxTotalDuration = 56;
@@ -270,13 +270,14 @@ class _SongRecognitionPageState extends State<SongRecognitionPage>
         debugPrint(
           '[SongRecognition] fileBytes=${fileBytes.length}, rawPcm=${rawPcm.length} (${_recordSampleRate}Hz)',
         );
-        pcmData = downsamplePcm(rawPcm, _recordSampleRate, _targetSampleRate);
+        // 降级前处理放 Isolate：44.1kHz 大 PCM 逐采样循环不阻塞 UI isolate
+        pcmData = await downsamplePcmAsync(rawPcm, _recordSampleRate, _targetSampleRate);
         debugPrint(
           '[SongRecognition] dart pcm fallback: ${pcmData.length} bytes (${_targetSampleRate}Hz)',
         );
         maxAmplitude = computeMaxAmplitude(pcmData);
         if (maxAmplitude >= kSilenceAmplitudeThreshold) {
-          pcmData = normalizeGain(pcmData, maxAmplitude);
+          pcmData = await normalizeGainAsync(pcmData, maxAmplitude);
         }
       }
 
