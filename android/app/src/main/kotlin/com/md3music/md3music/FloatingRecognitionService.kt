@@ -1,6 +1,5 @@
 package com.md3music.md3music
 
-import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.app.Notification
 import android.app.NotificationChannel
@@ -9,10 +8,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioAttributes
@@ -35,6 +34,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -43,6 +43,8 @@ import androidx.core.app.NotificationCompat
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
  * 悬浮窗听歌识曲服务。
@@ -50,10 +52,14 @@ import org.json.JSONObject
  * 悬浮窗按钮点击「识别」→ 回调 Dart 发起 MediaProjection 授权（MainActivity）→
  * 授权成功后本服务用 AudioPlaybackCapture 采集系统音频（8000Hz/16bit/mono），
  * 每 8s 一段把 PCM 回调 Dart → Dart 复用酷狗指纹识曲链路识别 → 命中后回传
- * 结果在此悬浮窗显示歌名/歌手 + 播放按钮。
+ * 结果在此悬浮窗显示封面/歌名/歌手 + 播放按钮。
  *
  * 采集循环由 Dart 侧控制：每段完成后本服务阻塞等待 `continueCapture` /
  * `stopCapture`，避免原生侧自行决定重试次数。
+ *
+ * 视觉：透明玻璃材质（API 31+ FLAG_BLUR_BEHIND 跨窗口模糊 + 莫奈取色半透明底，
+ * 不支持时降级纯半透明底），折叠态为应用图标玻璃圆钮，聆听/识别中带波纹扩散，
+ * 结果态为胶囊玻璃面板。
  */
 class FloatingRecognitionService : Service() {
 
@@ -73,9 +79,23 @@ class FloatingRecognitionService : Service() {
         const val EXTRA_THEME_COLORS = "themeColors"
         const val DART_CHANNEL = "com.md3music.md3music/floating_recognition"
 
-        // 采集参数：8000Hz / 16bit / mono，8s = 128KB
+        // 采集参数：8000Hz / 16bit / mono，6s = 96KB（首响延迟：8s→6s）
         const val SAMPLE_RATE = 8000
-        const val SEGMENT_BYTES = SAMPLE_RATE * 2 * 8
+        const val SEGMENT_BYTES = SAMPLE_RATE * 2 * 6
+
+        // 静音段提前中断（与 Dart 侧 kSilenceAmplitudeThreshold=30 同口径，
+        // 16-bit PCM 峰值振幅）：连续 2s 峰值 <30 即提前结束当前段。
+        // 至少采集满 2s 后才开始累计判定，避免把起播瞬间静音误判。
+        private const val SILENCE_AMPLITUDE_THRESHOLD = 30
+        private const val SILENCE_WINDOW_BYTES = SAMPLE_RATE * 2 * 2   // 连续静音 2s
+        private const val SILENCE_GRACE_BYTES = SAMPLE_RATE * 2 * 2    // 段首豁免 2s
+
+        // 玻璃材质：blurBehindRadius 建议 24~32dp
+        private const val BLUR_RADIUS_DP = 28
+        // 波纹扩散：1200~1600ms 循环，取 1400ms
+        private const val RIPPLE_DURATION_MS = 1400L
+        // 识别中图标呼吸缩放：0.94 ↔ 1.06，单程 700ms（全程 1400ms）
+        private const val BREATHE_DURATION_MS = 700L
 
         // 状态
         const val STATE_IDLE = 0
@@ -97,9 +117,16 @@ class FloatingRecognitionService : Service() {
 
     private var windowManager: WindowManager? = null
     private var rootView: LinearLayout? = null
-    private var micButton: View? = null
-    private var musicNoteIconView: MusicNoteIconView? = null
+
+    // 折叠态：玻璃圆钮 + 波纹层 + 应用图标
+    private var micWrap: FrameLayout? = null
+    private var micButton: FrameLayout? = null
+    private var appIcon: ImageView? = null
+    private var rippleView: RippleRingView? = null
+
+    // 结果态：胶囊玻璃面板（封面 + 歌名/歌手 + 播放/关闭）
     private var resultPanel: LinearLayout? = null
+    private var coverImage: ImageView? = null
     private var songNameText: TextView? = null
     private var artistText: TextView? = null
     private var params: WindowManager.LayoutParams? = null
@@ -134,8 +161,9 @@ class FloatingRecognitionService : Service() {
     private var stopRequested = false
     private var continueAllowed = false
 
-    // 识别中音符图标旋转动画
-    private var spinAnimator: ObjectAnimator? = null
+    // 聆听/识别中动效：波纹扩散 + 图标呼吸缩放（替代原音符旋转）
+    private var rippleAnimator: ValueAnimator? = null
+    private var breatheAnimator: ValueAnimator? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile
     private var captureReleased = false
@@ -188,35 +216,40 @@ class FloatingRecognitionService : Service() {
         return START_STICKY
     }
 
-    // ===================== 悬浮窗 UI（MD3E 设计语言） =====================
+    // ===================== 悬浮窗 UI（MD3E 玻璃设计语言） =====================
     //
-    // 色板参考 MD3E 深色主题 token：
-    //   surfaceContainer      #1D1B20（面板背景）
-    //   surfaceContainerHigh  #26242B（按钮空闲底）
-    //   onSurface             #E6E0E9 / onSurfaceVariant #CAC4D0
-    //   primary               #D0BCFF（聆听中）/ onPrimary #381E72
-    //   tertiary              #EFB8C8（识别中）/ onTertiary #492532
-    //   primaryContainer      #EADDFF（结果）/ onPrimaryContainer #21005D
-    // 形状：按钮全圆，面板 24dp 大圆角（MD3E expressive）
-    // 动效：聆听中 spring 脉冲缩放，结果面板淡入上滑
+    // 玻璃材质：半透明莫奈取色底（API 31+ 叠加 FLAG_BLUR_BEHIND 跨窗口模糊）+ 1dp
+    // 主题主色 α60% 细描边 + 7dp elevation 投影。玻璃底色全部从 Dart 推送的 11 色
+    // token（setThemeColors）派生 α 变体，按亮度自适应深/浅玻璃，不写死与主题无关的固定色。
+    // 折叠态：64dp 圆形玻璃钮，内部为应用 launcher 图标（monochrome 资源 + tint）。
+    // 聆听/识别中：外圈波纹扩散（主题主色 α 渐隐），识别中加图标呼吸缩放。
+    // 结果态：24dp 圆角胶囊玻璃面板（封面 + 歌名/歌手 + 播放/关闭）。
+    // 关闭区：玻璃底，拖入反馈为淡红底 + 红描边。
 
     // 主题色：默认 MD3E 深色 token，Dart 侧推送设置页莫奈/动态取色（setThemeColors）后覆盖。
-    // 悬浮窗 UI 全部使用以下字段，保证配色与 App 主题一致。
+    // 悬浮窗 UI 全部使用以下字段派生玻璃配色，保证与 App 主题一致。
     private var cBtnIdleBg = 0xFF26242B.toInt()
     private var cOnSurface = 0xFFE6E0E9.toInt()
     private var cOnSurfaceVariant = 0xFFCAC4D0.toInt()
-    private var cListeningBg = 0xFFD0BCFF.toInt()
-    private var cListeningIcon = 0xFF381E72.toInt()
-    private var cRecognizingBg = 0xFFEFB8C8.toInt()
-    private var cRecognizingIcon = 0xFF492532.toInt()
-    private var cResultBg = 0xFFEADDFF.toInt()
-    private var cResultIcon = 0xFF21005D.toInt()
-    private var cPanelBg = 0xF21D1B20.toInt()
-    private var cPanelStroke = 0x4049454F.toInt()
+    private var cListeningBg = 0xFFD0BCFF.toInt()   // token: primary
+    private var cListeningIcon = 0xFF381E72.toInt() // token: onPrimary
+    private var cRecognizingBg = 0xFFEFB8C8.toInt()   // token: tertiary
+    private var cRecognizingIcon = 0xFF492532.toInt() // token: onTertiary
+    private var cResultBg = 0xFFEADDFF.toInt()           // token: primaryContainer
+    private var cResultIcon = 0xFF21005D.toInt()         // token: onPrimaryContainer
+    private var cPanelBg = 0xFF1D1B20.toInt()          // token: surfaceContainer
+    private var cPanelStroke = 0x4049454F.toInt()      // token: outlineVariant（保留字段，兼容旧契约）
 
-    // 面板/播放按钮背景引用：setThemeColors 时刷新
-    private var panelBgGd: GradientDrawable? = null
+    // 关闭区危险反馈：MD3E error token（仅关闭区使用，垃圾桶图标保持红色）
+    private val cErrorIcon = 0xFFFFB4AB.toInt()
+    private val cErrorDeep = 0xFFB3261E.toInt()
+
+    // 面板/按钮背景引用：setThemeColors 时刷新
+    private var micBtnGd: GradientDrawable? = null
+    private var panelGd: GradientDrawable? = null
+    private var coverBgGd: GradientDrawable? = null
     private var playBtnBgGd: GradientDrawable? = null
+    private var closeZoneGd: GradientDrawable? = null
 
     private fun createFloatingView() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -227,54 +260,92 @@ class FloatingRecognitionService : Service() {
         }
         val root = rootView as LinearLayout
 
-        // 折叠态：圆形麦克风按钮（Canvas 绘制音符图标）
-        micButton = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
+        // 折叠态容器：波纹层 + 64dp 玻璃圆钮（波纹在钮外圈扩散）
+        micWrap = FrameLayout(this).apply {
+            val s = dp(96)
+            layoutParams = LinearLayout.LayoutParams(s, s)
+        }
+        val wrap = micWrap as FrameLayout
+
+        rippleView = RippleRingView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(96), dp(96))
+            visibility = View.GONE
+        }
+        wrap.addView(rippleView)
+
+        micButton = FrameLayout(this).apply {
             val size = dp(64)
-            layoutParams = LinearLayout.LayoutParams(size, size)
+            layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(cBtnIdleBg)
-            }
-            // 悬浮窗级投影（API 21+）：深色半透明
-            elevation = dp(6).toFloat()
+                setColor(glassColor(cBtnIdleBg))
+                setStroke(dp(1), primaryStroke())
+            }.also { micBtnGd = it }
+            elevation = dp(7).toFloat()
         }
-        val btn = micButton as LinearLayout
-        musicNoteIconView = MusicNoteIconView(this).apply {
-            setIconColor(cOnSurface)
-            layoutParams = LinearLayout.LayoutParams(dp(30), dp(34))
-        }
-        btn.addView(musicNoteIconView)
-        root.addView(micButton)
+        val btn = micButton as FrameLayout
 
-        // 结果态：MD3E 大圆角 surfaceContainer 面板
+        appIcon = ImageView(this).apply {
+            // 应用 launcher 图标（monochrome 资源：纯黑图案+全透明背景），
+            // tint 按玻璃底亮度取黑/白保证可见
+            setImageResource(R.drawable.ic_launcher_monochrome)
+            setColorFilter(idleIconTint())
+            layoutParams = FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER)
+        }
+        btn.addView(appIcon)
+        wrap.addView(btn)
+        root.addView(micWrap)
+
+        // 结果态：24dp 圆角胶囊玻璃面板（封面 + 歌名/歌手 + 播放/关闭圆钮）
         resultPanel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             visibility = View.GONE
             alpha = 0f
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dp(24).toFloat()
-                setColor(cPanelBg)
-                setStroke(dp(1), cPanelStroke)
-            }.also { panelBgGd = it }
-            setPadding(dp(20), dp(16), dp(20), dp(14))
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.topMargin = dp(10)
-            layoutParams = lp
+                setColor(glassColor(cPanelBg))
+                setStroke(dp(1), primaryStroke())
+            }.also { panelGd = it }
+            setPadding(dp(14), dp(10), dp(12), dp(10))
+            elevation = dp(7).toFloat()
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(10) }
         }
         val panel = resultPanel as LinearLayout
 
+        // 歌曲封面：imgurl 异步加载，无 url / 加载失败时用应用图标占位
+        coverImage = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(10).toFloat()
+                setColor(glassColor(cBtnIdleBg))
+            }.also { coverBgGd = it }
+            clipToOutline = true
+            visibility = View.GONE
+        }
+        panel.addView(coverImage)
+
         // 歌名/歌手：点击文字直接播放（不触发 rootView 的收起/拖动逻辑）
+        val textCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(dp(12), 0, dp(6), 0) }
+        }
         songNameText = TextView(this).apply {
             setTextColor(cOnSurface)
             textSize = sp(14f)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
-            gravity = Gravity.CENTER
+            maxWidth = dp(160)
+            gravity = Gravity.CENTER_VERTICAL
             setOnClickListener { sendToDart("onFloatingAction", "play") }
         }
         artistText = TextView(this).apply {
@@ -282,26 +353,30 @@ class FloatingRecognitionService : Service() {
             textSize = sp(12f)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
-            gravity = Gravity.CENTER
+            maxWidth = dp(160)
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(3), 0, 0)
             setOnClickListener { sendToDart("onFloatingAction", "play") }
         }
-        panel.addView(songNameText)
-        panel.addView(artistText)
+        textCol.addView(songNameText)
+        textCol.addView(artistText)
+        panel.addView(textCol)
 
+        // 播放/关闭：44dp 玻璃圆钮
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(0, dp(10), 0, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(dp(10), 0, 0, 0) }
         }
-        // 播放：primaryContainer 圆形按钮；关闭：透明 + onSurfaceVariant 图标
-        val playBtn = makeCircleIconButton(android.R.drawable.ic_media_play, cResultBg, cResultIcon) {
+        val playBtn = makeCircleIconButton(android.R.drawable.ic_media_play, glassColor(cResultBg), cResultIcon) {
             sendToDart("onFloatingAction", "play")
         }
         (playBtn.background as? GradientDrawable)?.let { playBtnBgGd = it }
         val closeBtn = makeCircleIconButton(
             android.R.drawable.ic_menu_close_clear_cancel,
-            Color.TRANSPARENT,
+            glassColor(cBtnIdleBg),
             cOnSurfaceVariant
         ) {
             dismissResult()
@@ -334,12 +409,13 @@ class FloatingRecognitionService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = dp(120)
+            applyGlassBlur(this)
         }
 
         windowManager?.addView(rootView, params)
     }
 
-    /// MD3E 圆形图标按钮（全圆形状，可配置底色/图标色/尺寸）
+    /// MD3E 圆形图标按钮（全圆玻璃形状，可配置底色/图标色/尺寸）
     private fun makeCircleIconButton(
         resId: Int,
         bgColor: Int,
@@ -358,10 +434,48 @@ class FloatingRecognitionService : Service() {
         }
     }
 
+    // ===================== 玻璃材质 helper =====================
+
+    /// 玻璃底色：保留 token RGB，α 按亮度自适应——深色玻璃 70%（0xB3）/ 浅色玻璃 60%（0x99）。
+    /// 必须由 Dart 推送的主题 token 派生，不写死与主题无关的固定色。
+    private fun glassColor(base: Int, alpha: Int = if (isDarkColor(base)) 0xB3 else 0x99): Int =
+        (alpha shl 24) or (base and 0x00FFFFFF)
+
+    /// 主题主色（token: primary → cListeningBg）α60% 细描边
+    private fun primaryStroke(): Int = (0x99 shl 24) or (cListeningBg and 0x00FFFFFF)
+
+    /// 玻璃底亮度判断（0~255 加权亮度）
+    private fun isDarkColor(c: Int): Boolean {
+        val r = (c shr 16) and 0xFF
+        val g = (c shr 8) and 0xFF
+        val b = c and 0xFF
+        return (0.299 * r + 0.587 * g + 0.114 * b) < 128.0
+    }
+
+    /// 折叠钮图标 tint：按玻璃底亮度取黑/白（玻璃底为 surface token 派生半透明）
+    private fun idleIconTint(): Int =
+        if (isDarkColor(glassColor(cBtnIdleBg))) Color.WHITE else Color.BLACK
+
+    /// 玻璃材质：API 31+ 且系统跨窗口模糊开启时启用 FLAG_BLUR_BEHIND + blurBehindRadius；
+    /// 不支持（低端机/省电模式/厂商禁用/SDK<31）时降级为纯半透明玻璃底，
+    /// 不崩溃、不黑块。
+    private fun applyGlassBlur(lp: WindowManager.LayoutParams) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val wm = windowManager
+            if (wm != null && wm.isCrossWindowBlurEnabled) {
+                lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+                lp.blurBehindRadius = dp(BLUR_RADIUS_DP)
+                return
+            }
+        }
+        lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_BLUR_BEHIND.inv()
+    }
+
     // ===================== 底部拖拽关闭区域 =====================
 
     /// 屏幕底部"拖到这里关闭"提示条（独立 overlay，点击穿透）。
-    /// 红色大垃圾桶图标居中；拖动悬浮窗过程中显示；拖入区域背景高亮，松手即关闭服务。
+    /// 玻璃底 + 红色垃圾桶图标居中；拖动悬浮窗过程中显示；
+    /// 拖入区域收敛为「淡红底 + 红描边」玻璃语言，松手即关闭服务。
     private fun createCloseZone() {
         val wm = windowManager ?: return
         val zone = LinearLayout(this).apply {
@@ -369,20 +483,23 @@ class FloatingRecognitionService : Service() {
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                setColor(0xE61D1B20.toInt())
+                // 玻璃深底 α85%，保证提示可读
+                setColor(glassColor(cPanelBg, 0xD9))
+                setStroke(dp(1), primaryStroke())
                 // 顶部大圆角，底部贴边
                 cornerRadii = floatArrayOf(
                     dp(24).toFloat(), dp(24).toFloat(),
                     dp(24).toFloat(), dp(24).toFloat(),
                     0f, 0f, 0f, 0f
                 )
-            }
+            }.also { closeZoneGd = it }
             setPadding(0, dp(8), 0, 0)
+            elevation = dp(6).toFloat()
         }
         closeZoneIcon = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_menu_delete)
             // 常驻 error 红（MD3E 深色主题 error #FFB4AB）
-            setColorFilter(0xFFFFB4AB.toInt())
+            setColorFilter(cErrorIcon)
             val s = dp(40)
             layoutParams = LinearLayout.LayoutParams(s, s)
         }
@@ -407,6 +524,7 @@ class FloatingRecognitionService : Service() {
             gravity = Gravity.BOTTOM
             x = 0
             y = 0
+            applyGlassBlur(this)
         }
         wm.addView(zone, closeZoneParams)
         zone.visibility = View.GONE
@@ -433,19 +551,26 @@ class FloatingRecognitionService : Service() {
     private fun setCloseZoneHighlight(on: Boolean) {
         if (isOverCloseZone == on) return
         isOverCloseZone = on
-        val gd = closeZoneView?.background as? GradientDrawable ?: return
-        // 拖入：背景 error 红高亮；移出：恢复深色
-        gd.setColor(if (on) 0xE6B3261E.toInt() else 0xE61D1B20.toInt())
+        val gd = closeZoneGd ?: return
         if (on) {
+            // 拖入：淡红底 + 红描边（红色收敛为玻璃语言）
+            gd.setColor(0x66B3261E.toInt())
+            gd.setStroke(dp(2), cErrorDeep)
             // 拖入关闭区域：轻微震动提示即将删除
             vibrate(40, 120)
+        } else {
+            restoreCloseZoneGlass(gd)
         }
     }
 
     private fun resetCloseZoneHighlight() {
         isOverCloseZone = false
-        val gd = closeZoneView?.background as? GradientDrawable ?: return
-        gd.setColor(0xE61D1B20.toInt())
+        restoreCloseZoneGlass(closeZoneGd)
+    }
+
+    private fun restoreCloseZoneGlass(gd: GradientDrawable?) {
+        gd?.setColor(glassColor(cPanelBg, 0xD9))
+        gd?.setStroke(dp(1), primaryStroke())
     }
 
     /// 震动反馈（API 26+ 用振幅，低版本回退 vibrate）。
@@ -663,16 +788,35 @@ class FloatingRecognitionService : Service() {
         }
     }
 
-    /// 采集线程：每 8s 一段回调 Dart，然后阻塞等待 continue/stop
+    /// 采集线程：每 6s 一段回调 Dart，然后阻塞等待 continue/stop。
+    /// 实时振幅统计：采集满 2s 后若连续 2s 峰值振幅低于阈值（静音环境），
+    /// 提前结束当前段（段字节数可 <SEGMENT_BYTES），把实际字节透传 Dart；
+    /// 提前中断仅跳过「继续采集」，仍走同一等待 Dart 判定的路径。
     private fun captureLoop() {
         val recorder = audioRecord ?: return
         val buf = ByteArray(SEGMENT_BYTES)
         stopRequested = false
         while (!stopRequested) {
             var offset = 0
+            var silentBytes = 0
+            var earlySilenceStop = false
             while (offset < buf.size && !stopRequested) {
                 val n = recorder.read(buf, offset, buf.size - offset)
                 if (n > 0) {
+                    // 静音提前中断：段首豁免 2s，之后连续 2s 静音则提前收段
+                    if (offset >= SILENCE_GRACE_BYTES) {
+                        val peak = bufferPeakAmplitude(buf, offset, n)
+                        if (peak < SILENCE_AMPLITUDE_THRESHOLD) {
+                            silentBytes += n
+                            if (silentBytes >= SILENCE_WINDOW_BYTES) {
+                                Log.i(TAG, "captureLoop: early silence stop at offset=$offset (peak<$SILENCE_AMPLITUDE_THRESHOLD for ${silentBytes / 16}ms)")
+                                earlySilenceStop = true
+                                break
+                            }
+                        } else {
+                            silentBytes = 0
+                        }
+                    }
                     offset += n
                 } else if (n < 0) {
                     Log.e(TAG, "captureLoop: read error n=$n at offset=$offset")
@@ -680,15 +824,16 @@ class FloatingRecognitionService : Service() {
                 }
             }
             if (stopRequested) break
-            if (offset < buf.size) {
+            if (!earlySilenceStop && offset < buf.size) {
                 Log.e(TAG, "captureLoop: short read offset=$offset (expected ${buf.size}), stopping")
                 break
             }
 
-            // 一段（8s）采集完成，交给 Dart 识别
-            Log.i(TAG, "captureLoop: segment ready, sending onSegmentCaptured")
+            // 一段采集完成（满段或静音提前中断），交给 Dart 识别
+            Log.i(TAG, "captureLoop: segment ready, sending onSegmentCaptured bytes=$offset")
             setState(STATE_RECOGNIZING)
-            sendToDart("onSegmentCaptured", buf)
+            // 提前中断段按实际字节透传（Dart 端前处理与 audioMatch 均按实际字节处理）
+            sendToDart("onSegmentCaptured", if (offset == buf.size) buf else buf.copyOf(offset))
 
             // 等待 Dart 决定：continueCapture 继续 / stopCapture 停止
             synchronized(captureLock) {
@@ -705,6 +850,21 @@ class FloatingRecognitionService : Service() {
         }
         Log.i(TAG, "captureLoop: exit, releasing")
         releaseCapture()
+    }
+
+    /// 16-bit 小端 PCM 逐采样峰值振幅（max(abs(sample))），与 Dart 侧
+    /// computeMaxAmplitude / kSilenceAmplitudeThreshold 同口径。
+    private fun bufferPeakAmplitude(buf: ByteArray, offset: Int, len: Int): Int {
+        var peak = 0
+        var i = offset
+        val end = offset + len - 1
+        while (i < end) {
+            val sample = ((buf[i].toInt() and 0xFF) or ((buf[i + 1].toInt() and 0xFF) shl 8)).toShort()
+            val abs = kotlin.math.abs(sample.toInt())
+            if (abs > peak) peak = abs
+            i += 2
+        }
+        return peak
     }
 
     @Synchronized
@@ -745,7 +905,7 @@ class FloatingRecognitionService : Service() {
         }
     }
 
-    /// Dart 识别命中：显示歌名/歌手 + 播放按钮
+    /// Dart 识别命中：显示封面/歌名/歌手 + 播放按钮
     /// 在 onStartCommand（主线程）同步更新状态：setState 立即写 state 字段，
     /// 避免与 releaseCapture 的 IDLE 重置竞态（若走 post 可能先 RESULT 后 IDLE）
     private fun showResult(resultJson: String) {
@@ -756,16 +916,50 @@ class FloatingRecognitionService : Service() {
             songNameText?.text = name
             artistText?.text = artist
             artistText?.visibility = if (artist.isEmpty()) View.GONE else View.VISIBLE
+            loadCover(obj.optString("imgurl", ""))
             setState(STATE_RESULT)
         } catch (_: Exception) {}
     }
+
+    /// 异步加载歌曲封面（imgurl 已有），失败/无 url 时用应用图标占位
+    private fun loadCover(url: String) {
+        if (url.isEmpty()) {
+            coverUrl = ""
+            coverImage?.visibility = View.GONE
+            return
+        }
+        coverUrl = url
+        val img = coverImage ?: return
+        img.visibility = View.VISIBLE
+        // 占位：应用图标（按玻璃底亮度 tint）
+        img.setImageResource(R.drawable.ic_launcher_monochrome)
+        img.setColorFilter(idleIconTint())
+        Thread {
+            val bmp = try {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.connectTimeout = 4000
+                conn.readTimeout = 6000
+                conn.inputStream.use { BitmapFactory.decodeStream(it) }
+            } catch (_: Exception) {
+                null
+            }
+            mainHandler.post {
+                if (coverUrl == url && bmp != null) {
+                    coverImage?.setImageBitmap(bmp)
+                    coverImage?.setColorFilter(null)
+                }
+            }
+        }.start()
+    }
+
+    private var coverUrl: String? = null
 
     /// Dart 状态提示（未识别/失败等），Toast 展示
     private fun showStatus(status: String) {
         if (status.isNotEmpty()) toast(status)
     }
 
-    /// 接收 Dart 推送的主题色（设置页莫奈/动态取色），刷新悬浮窗配色
+    /// 接收 Dart 推送的主题色（设置页莫奈/动态取色），刷新悬浮窗玻璃配色
     /// 注意：Dart int（64 位）经 MethodChannel 到 Android 解码为 Long，
     /// 这里用 Number 接收并 toInt()，避免 Long→Integer ClassCastException
     private fun setThemeColors(intent: Intent) {
@@ -783,15 +977,44 @@ class FloatingRecognitionService : Service() {
         map["surfaceContainer"]?.toInt()?.let { cPanelBg = it }
         map["outlineVariant"]?.toInt()?.let { cPanelStroke = it }
         mainHandler.post {
-            // 刷新面板/按钮静态配色
-            panelBgGd?.setColor(cPanelBg)
-            panelBgGd?.setStroke(dp(1), cPanelStroke)
-            playBtnBgGd?.setColor(cResultBg)
+            // 刷新玻璃底/描边/文本静态配色（按钮动态配色由 updateUi 按状态刷新）
+            micBtnGd?.setColor(glassColor(stateGlassBase()))
+            micBtnGd?.setStroke(dp(1), primaryStroke())
+            panelGd?.setColor(glassColor(cPanelBg))
+            panelGd?.setStroke(dp(1), primaryStroke())
+            coverBgGd?.setColor(glassColor(cBtnIdleBg))
+            playBtnBgGd?.setColor(glassColor(cResultBg))
             songNameText?.setTextColor(cOnSurface)
             artistText?.setTextColor(cOnSurfaceVariant)
+            restoreCloseZoneGlass(closeZoneGd)
+            closeZoneIcon?.setColorFilter(cErrorIcon)
+            rippleView?.setRingColor(stateRippleColor())
+            appIcon?.setColorFilter(stateIconTint())
             // 刷新按钮/图标动态配色
             updateUi()
         }
+    }
+
+    /// 当前状态的玻璃底 token 来源
+    private fun stateGlassBase(): Int = when (state) {
+        STATE_LISTENING -> cListeningBg
+        STATE_RECOGNIZING -> cRecognizingBg
+        STATE_RESULT -> cResultBg
+        else -> cBtnIdleBg
+    }
+
+    /// 当前状态波纹颜色（聆听: primary / 识别: tertiary）
+    private fun stateRippleColor(): Int = when (state) {
+        STATE_RECOGNIZING -> cRecognizingBg
+        else -> cListeningBg
+    }
+
+    /// 当前状态图标 tint（主题 onXxx token 保证与玻璃底对比度）
+    private fun stateIconTint(): Int = when (state) {
+        STATE_LISTENING -> cListeningIcon
+        STATE_RECOGNIZING -> cRecognizingIcon
+        STATE_RESULT -> cResultIcon
+        else -> idleIconTint()
     }
 
     private fun setState(newState: Int) {
@@ -801,39 +1024,42 @@ class FloatingRecognitionService : Service() {
     }
 
     private fun updateUi() {
-        val btn = micButton ?: return
         val panel = resultPanel ?: return
-        val gd = btn.background as? GradientDrawable ?: return
-        val icon = musicNoteIconView ?: return
+        val gd = micBtnGd ?: return
+        val icon = appIcon ?: return
         when (state) {
             STATE_IDLE -> {
-                gd.setColor(cBtnIdleBg)
-                icon.setIconColor(cOnSurface)
+                gd.setColor(glassColor(cBtnIdleBg))
+                gd.setStroke(dp(1), primaryStroke())
+                icon.setColorFilter(idleIconTint())
                 panel.visibility = View.GONE
-                stopSpin()
+                stopListeningFx()
             }
             STATE_LISTENING -> {
-                gd.setColor(cListeningBg)
-                icon.setIconColor(cListeningIcon)
+                gd.setColor(glassColor(cListeningBg))
+                gd.setStroke(dp(1), primaryStroke())
+                icon.setColorFilter(cListeningIcon)
                 panel.visibility = View.GONE
-                startSpin()
+                startListeningFx(breathing = false)
             }
             STATE_RECOGNIZING -> {
-                gd.setColor(cRecognizingBg)
-                icon.setIconColor(cRecognizingIcon)
+                gd.setColor(glassColor(cRecognizingBg))
+                gd.setStroke(dp(1), primaryStroke())
+                icon.setColorFilter(cRecognizingIcon)
                 panel.visibility = View.GONE
-                stopSpin()
+                startListeningFx(breathing = true)
             }
             STATE_RESULT -> {
-                gd.setColor(cResultBg)
-                icon.setIconColor(cResultIcon)
+                gd.setColor(glassColor(cResultBg))
+                gd.setStroke(dp(1), primaryStroke())
+                icon.setColorFilter(cResultIcon)
                 showResultPanel()
-                stopSpin()
+                stopListeningFx()
             }
         }
     }
 
-    /// 结果面板 MD3E 淡入上滑动效
+    /// 结果面板玻璃淡入上滑动效（MD3E expressive，260ms 保留）
     private fun showResultPanel() {
         val panel = resultPanel ?: return
         panel.visibility = View.VISIBLE
@@ -847,24 +1073,44 @@ class FloatingRecognitionService : Service() {
             .start()
     }
 
-    /// 聆听中：音符图标匀速旋转（识别中不停）
-    private fun startSpin() {
-        stopSpin()
-        val icon = musicNoteIconView ?: return
-        icon.pivotX = icon.width / 2f
-        icon.pivotY = icon.height / 2f
-        spinAnimator = ObjectAnimator.ofFloat(icon, "rotation", 0f, 360f).apply {
-            duration = 1200
+    /// 聆听/识别中：外圈波纹扩散（主题主色 α 渐隐，1400ms 循环）；
+    /// 识别中额外加图标 0.94 ↔ 1.06 呼吸缩放。
+    private fun startListeningFx(breathing: Boolean) {
+        stopListeningFx()
+        val ripple = rippleView ?: return
+        ripple.setRingColor(stateRippleColor())
+        ripple.visibility = View.VISIBLE
+        rippleAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = RIPPLE_DURATION_MS
             repeatCount = ValueAnimator.INFINITE
             interpolator = LinearInterpolator()
+            addUpdateListener { ripple.setProgress(it.animatedValue as Float) }
             start()
+        }
+        if (breathing) {
+            val icon = appIcon ?: return
+            breatheAnimator = ValueAnimator.ofFloat(0.94f, 1.06f).apply {
+                duration = BREATHE_DURATION_MS
+                repeatCount = ValueAnimator.INFINITE
+                repeatMode = ValueAnimator.REVERSE
+                addUpdateListener {
+                    icon.scaleX = it.animatedValue as Float
+                    icon.scaleY = it.animatedValue as Float
+                }
+                start()
+            }
         }
     }
 
-    private fun stopSpin() {
-        spinAnimator?.cancel()
-        spinAnimator = null
-        musicNoteIconView?.rotation = 0f
+    private fun stopListeningFx() {
+        rippleAnimator?.cancel()
+        rippleAnimator = null
+        breatheAnimator?.cancel()
+        breatheAnimator = null
+        appIcon?.scaleX = 1f
+        appIcon?.scaleY = 1f
+        rippleView?.setProgress(0f)
+        rippleView?.visibility = View.GONE
     }
 
     // ===================== 通知 =====================
@@ -936,7 +1182,8 @@ class FloatingRecognitionService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // 停止采集线程并回收资源
+        // 停止动效与采集线程并回收资源
+        stopListeningFx()
         synchronized(captureLock) {
             stopRequested = true
             captureLock.notifyAll()
@@ -958,49 +1205,49 @@ class FloatingRecognitionService : Service() {
     }
 }
 
-/// Canvas 绘制的音符图标（八分音符：符头椭圆 + 符杆 + 符尾旗）。
-/// 颜色可配置，随悬浮窗状态切换；识别中由外部 ObjectAnimator 旋转。
-class MusicNoteIconView(context: android.content.Context) : View(context) {
-    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
-    private val stemPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+/// 波纹扩散层（玻璃钮外圈）：3 圈主题主色圆环，α 随扩散渐隐，由外部
+/// ValueAnimator 驱动 progress 循环；仅在 LISTENING / RECOGNIZING 状态显示。
+class RippleRingView(context: android.content.Context) : View(context) {
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
     }
-    private val path = Path()
-    private var iconColor = Color.WHITE
+    private var progress = 0f
+    private var ringColor = Color.WHITE
 
-    fun setIconColor(color: Int) {
-        if (iconColor != color) {
-            iconColor = color
+    fun setRingColor(color: Int) {
+        if (ringColor != color) {
+            ringColor = color
             invalidate()
         }
+    }
+
+    fun setProgress(p: Float) {
+        progress = p
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val w = width.toFloat()
         val h = height.toFloat()
-        if (w <= 0 || h <= 0) return
-        fillPaint.color = iconColor
-        stemPaint.color = iconColor
-        stemPaint.strokeWidth = w * 0.08f
-        path.reset()
+        if (w <= 0 || h <= 0 || visibility != VISIBLE) return
+        val cx = w / 2f
+        val cy = h / 2f
+        // 96dp 容器：内半径贴 64dp 玻璃钮边缘（32dp），扩散到容器边缘（48dp）
+        val rMin = w * 0.34f
+        val rMax = w * 0.5f
+        ringPaint.strokeWidth = resources.displayMetrics.density * 2f
+        for (i in 0 until RING_COUNT) {
+            val t = (progress + i.toFloat() / RING_COUNT) % 1f
+            val r = rMin + (rMax - rMin) * t
+            ringPaint.color = ringColor
+            ringPaint.alpha = ((1f - t) * 140).toInt()
+            canvas.drawCircle(cx, cy, r, ringPaint)
+        }
+    }
 
-        // 符头：略微倾斜的椭圆（左上方向）
-        canvas.save()
-        canvas.rotate(-15f, w * 0.30f, h * 0.74f)
-        canvas.drawOval(w * 0.19f, h * 0.62f, w * 0.41f, h * 0.86f, fillPaint)
-        canvas.restore()
-
-        // 符杆：从符头右上竖直向上
-        canvas.drawLine(w * 0.41f, h * 0.72f, w * 0.41f, h * 0.16f, stemPaint)
-
-        // 符尾旗：从符杆顶端向下弯曲（两次贝塞尔）
-        path.moveTo(w * 0.41f, h * 0.16f)
-        path.quadTo(w * 0.63f, h * 0.26f, w * 0.50f, h * 0.44f)
-        path.quadTo(w * 0.44f, h * 0.54f, w * 0.53f, h * 0.62f)
-        canvas.drawPath(path, stemPaint)
+    companion object {
+        private const val RING_COUNT = 3
     }
 }
