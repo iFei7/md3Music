@@ -159,6 +159,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
   @override
   void initState() {
     super.initState();
+    // 专辑语境（isAlbum / 默认收藏歌单）下 time 维度是服务端曲序，默认升序；
+    // 普通歌单保持字段初值的降序（最新在前）。
+    _sortAscending = widget.isAlbum || widget.isDefaultFavorite;
     _multiSelect.addListener(_onMultiSelectChanged);
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -820,10 +823,13 @@ class _PlaylistPageState extends State<PlaylistPage> {
     try {
       // 复用歌单详情页 / 收藏页共用的加载器（listid / global_collection_id
       // 接口 + 本地缓存，见 PlaylistSongsLoader），避免两套歌单解析逻辑。
+      // 专辑语境下 listid 是 album id，必须传给 loader 走专辑接口。
       final result = await PlaylistSongsLoader.fetch(
         context,
         widget.playlist,
         isInMyFavorites: widget.isInMyFavorites,
+        isAlbum: widget.isAlbum,
+        albumId: widget.albumGlobalCollectionId,
       );
       if (!mounted) return;
       final all = result.songs;
@@ -1331,8 +1337,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
           M3ESortButton<_SortBy>(
             tooltip: '排序',
             current: _sortBy,
-            options: const [
-              (value: _SortBy.time, label: '添加时间'),
+            options: [
+              (value: _SortBy.time,
+                  label: widget.isAlbum ? '专辑顺序' : '添加时间'),
               (value: _SortBy.title, label: '歌曲名称'),
               (value: _SortBy.duration, label: '时长'),
             ],
@@ -1343,7 +1350,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
                   _sortAscending = !_sortAscending;
                 } else {
                   _sortBy = value;
-                  _sortAscending = value == _SortBy.time ? false : true;
+                  // 选 time 时恒升序（专辑/歌单曲序与「最新在前」语义
+                  // 均以升序为自然默认），消除手动翻正后被重置回降序的缺陷。
+                  _sortAscending = true;
                 }
                 _invalidateDisplaySongs();
               });

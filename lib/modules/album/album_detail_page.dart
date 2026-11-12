@@ -41,7 +41,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
 
   // 排序
   _SortBy _sortBy = _SortBy.time;
-  bool _sortAscending = false;
+  bool _sortAscending = true;
 
   // 专辑内搜索
   bool _isSearching = false;
@@ -227,7 +227,8 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     try {
       final api = KugouApiClient();
       final detailFuture = api.getAlbumDetail(widget.album.id);
-      final songsFuture = api.getAlbumSongs(widget.album.id);
+      // 全量分页拉取（专辑歌曲接口单页只有 30 首）
+      final songsFuture = api.getAlbumSongsAll(widget.album.id);
 
       final results = await Future.wait([detailFuture, songsFuture]);
 
@@ -533,7 +534,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                                 tooltip: '排序',
                                 current: _sortBy,
                                 options: const [
-                                  (value: _SortBy.time, label: '添加时间'),
+                                  (value: _SortBy.time, label: '专辑顺序'),
                                   (value: _SortBy.title, label: '歌曲名称'),
                                   (value: _SortBy.duration, label: '时长'),
                                 ],
@@ -544,7 +545,7 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                                       _sortAscending = !_sortAscending;
                                     } else {
                                       _sortBy = value;
-                                      _sortAscending = value == _SortBy.time ? false : true;
+                                      _sortAscending = true;
                                     }
                                     _invalidateDisplaySongs();
                                   });

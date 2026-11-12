@@ -714,10 +714,10 @@ class KugouSongDetail {
   }
 
   Song toSong() {
-    // 清理 title：API 的 filename/songname 常返回 "歌手 - 歌曲名" 格式，
-    // 去掉前缀，只保留纯歌曲名（subtitle 已单独显示歌手和专辑）。
-    // 只用 " - "（空格-破折号-空格）作为分隔符，避免误剥含有连字符的歌名
-    // （如 "白菊 -shiragiku-"）。与 EchoMusic processSongTitle 实现一致。
+    // 清理 title：API 的 filename/songname 常返回 "歌手 - 歌曲名" 格式。
+    // 仅当歌名以「接口歌手字段（含兜底推断出的歌手） - 」开头时才剥掉这
+    // 一个前缀，保留歌名内部的 " - "（版本后缀，如
+    // "飞鸟和鱼 - 电视剧《东宫》片尾曲"、"白菊 -shiragiku-"），避免误剥。
     var cleanTitle = songName;
     // 歌手名兜底：当 API 未返回歌手字段时，从 "歌手 - 歌曲名" 格式的
     // 文件名中提取歌手。与 EchoMusic song.ts 实现一致。
@@ -726,10 +726,11 @@ class KugouSongDetail {
         songName.contains(' - ')) {
       resolvedArtist = songName.split(' - ')[0];
     }
-    if (cleanTitle.contains(' - ')) {
-      final parts = cleanTitle.split(' - ');
-      if (parts.length > 1) {
-        final rest = parts.sublist(1).join(' - ');
+    final artist = resolvedArtist;
+    if (artist != null && artist.isNotEmpty) {
+      final prefix = '$artist - ';
+      if (cleanTitle.startsWith(prefix)) {
+        final rest = cleanTitle.substring(prefix.length);
         if (rest.trim().isNotEmpty) {
           cleanTitle = rest;
         }

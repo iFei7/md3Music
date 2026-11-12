@@ -232,6 +232,63 @@ void main() {
     });
   });
 
+  /// toSong() 标题清理：仅剥与接口歌手字段（含兜底推断）匹配的前缀，
+  /// 保留歌名内部的 " - "（版本后缀），避免歌名被截断。
+  group('KugouSongDetail.toSong 标题清理', () {
+    test('songname 带版本后缀且歌手字段存在时，整串保留不剥', () {
+      final d = KugouSongDetail.fromJson({
+        'FileHash': 'FF3BA0A7AD50D5BEBB2ED7907F15608C',
+        'songname': '飞鸟和鱼 - 电视剧《东宫》片尾曲',
+        'SingerName': '李琦',
+      });
+
+      expect(d.toSong().title, '飞鸟和鱼 - 电视剧《东宫》片尾曲');
+    });
+
+    test('songname 带 Remix 后缀时整串保留', () {
+      final d = KugouSongDetail.fromJson({
+        'FileHash': 'FF3BA0A7AD50D5BEBB2ED7907F15608C',
+        'songname': 'Lemon - Remix',
+        'SingerName': '米津玄師',
+      });
+
+      expect(d.toSong().title, 'Lemon - Remix');
+    });
+
+    test('歌手字段与 songname 前缀匹配时仍剥掉真前缀', () {
+      final d = KugouSongDetail.fromJson({
+        'FileHash': 'FF3BA0A7AD50D5BEBB2ED7907F15608C',
+        'songname': '周杰伦 - 晴天-remix版',
+        'SingerName': '周杰伦',
+      });
+
+      expect(d.toSong().title, '晴天-remix版');
+    });
+
+    test('无 songname 时从 FileName 剥歌手前缀', () {
+      final d = KugouSongDetail.fromJson({
+        'FileHash': 'FF3BA0A7AD50D5BEBB2ED7907F15608C',
+        'FileName': '张三 - 夜曲 (Live)',
+        'SingerName': '张三',
+      });
+
+      expect(d.toSong().title, '夜曲 (Live)');
+    });
+
+    test('无歌手字段时用兜底推断的歌手剥前缀，保留歌名内部 " - "', () {
+      final d = KugouSongDetail.fromJson({
+        'FileHash': 'FF3BA0A7AD50D5BEBB2ED7907F15608C',
+        'FileName': '李四 - 白菊 -shiragiku-',
+      });
+
+      // 无歌手字段，resolvedArtist 由 FileName 首段兜底推断
+      expect(d.artistName, isNull);
+      final song = d.toSong();
+      expect(song.artist, '李四');
+      expect(song.title, '白菊 -shiragiku-');
+    });
+  });
+
   group('KugouComment.fromJson userId 字段名降级', () {
     test('user_id / userid / kugouid 三种字段名都能解析', () {
       expect(KugouComment.fromJson({'id': 'c', 'user_id': '1'}).userId, '1');

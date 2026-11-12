@@ -11,7 +11,7 @@ use crate::cache::{CacheEntry, CACHE};
 use crate::device::DeviceConfig;
 use crate::modules::{Ctx, ModuleFn};
 use crate::request::{BodyValue, ModuleResponse};
-use crate::util::{json_stringify, percent_decode_preserve_plus};
+use crate::util::{json_stringify, percent_decode, percent_decode_preserve_plus};
 use serde_json::{json, Map, Value};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -809,7 +809,8 @@ fn parse_query(s: &str) -> Value {
             Some((k, v)) => (k, v),
             None => (pair, ""),
         };
-        let val = percent_decode_preserve_plus(raw_val);
+        // 查询参数中的 + 表示空格；真实加号由 %2B 编码，解码后仍保留。
+        let val = percent_decode(raw_val);
         if raw_key.ends_with(']') {
             // cookie[token] / cookie[] / cookie[token][x]
             let open = raw_key.find('[');
@@ -1105,5 +1106,17 @@ mod request_capacity_tests {
         assert!(peak_media.load(Ordering::Acquire) <= MEDIA_LIMIT);
         assert_eq!(requests.load(Ordering::Acquire), 0);
         assert_eq!(media.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn parse_query_decodes_plus_as_space() {
+        let q = parse_query("name=A+B");
+        assert_eq!(q.get("name").and_then(|v| v.as_str()), Some("A B"));
+    }
+
+    #[test]
+    fn parse_query_keeps_encoded_plus_literal() {
+        let q = parse_query("name=A%2BB");
+        assert_eq!(q.get("name").and_then(|v| v.as_str()), Some("A+B"));
     }
 }
