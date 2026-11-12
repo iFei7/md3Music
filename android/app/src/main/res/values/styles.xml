@@ -33,4 +33,13 @@
              systemNavigationBarIconBrightness 覆写。 -->
         <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
     </style>
+    <!-- 悬浮识曲投射授权 trampoline（RecognitionConsentActivity）：全透明、
+         无标题、无转场动画——仅承接系统 MediaProjection 授权弹窗，
+         弹窗关闭即 finish，用户感知上停留在外部页面/桌面。 -->
+    <style name="RecognitionConsentTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

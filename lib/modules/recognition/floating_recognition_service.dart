@@ -55,6 +55,10 @@ class FloatingRecognitionService {
   bool _isActive = false;
   bool get isActive => _isActive;
 
+  /// 用户在悬浮窗点击停止后本轮识别作废标记：
+  /// 在途的 _handleSegment 完成后不再继续采集/报错，授权结果回来也不再开始。
+  bool _recognitionCancelled = false;
+
   int _attemptCount = 0;
   Map<String, dynamic>? _lastResult;
 
@@ -164,6 +168,8 @@ class FloatingRecognitionService {
   // ===================== 原生回调处理 =====================
 
   Future<void> _handleSegment(Uint8List pcm) async {
+    // 用户已在悬浮窗点击停止：本轮作废，在途段不再处理（不继续、不报错）
+    if (_recognitionCancelled) return;
     _attemptCount++;
     if (pcm.isEmpty) {
       _continueOrFail();
@@ -221,10 +227,16 @@ class FloatingRecognitionService {
   void _handleFloatingAction(String action) {
     switch (action) {
       case 'start':
-        // 悬浮窗按钮点击「识别」：重置本轮计数并发起 MediaProjection 授权
+        // 悬浮窗按钮点击「识别」：仅重置本轮计数与状态；
+        // MediaProjection 授权已改由原生侧直接拉起 trampoline activity，
+        // 不再经 Dart → MethodChannel → MainActivity 旧链路。
+        _recognitionCancelled = false;
         _attemptCount = 0;
         _lastResult = null;
-        _requestProjection();
+        break;
+      case 'stop':
+        // 悬浮窗按钮聆听/识别中再次点击：终止本轮识别（不关服务，悬浮窗保留）
+        _stopRecognitionRound();
         break;
       case 'play':
         _playLastResult();
@@ -232,13 +244,18 @@ class FloatingRecognitionService {
     }
   }
 
-  Future<void> _requestProjection() async {
-    try {
-      await _channel.invokeMethod('requestProjection');
-    } catch (_) {}
+  /// 终止当前识别轮次：重置计数/结果，通知原生停止采集。
+  /// 不调 stop()——悬浮窗服务保留，可再次点击开始。
+  Future<void> _stopRecognitionRound() async {
+    _recognitionCancelled = true;
+    _attemptCount = 0;
+    _lastResult = null;
+    await _stopCapture();
   }
 
   Future<void> _continueOrFail() async {
+    // 用户已停止本轮：不再继续采集（原生侧 captureThread 已空，也会兜底忽略）
+    if (_recognitionCancelled) return;
     if (_attemptCount >= _maxTotalDuration ~/ _segmentDuration) {
       _setStatus('未识别到歌曲');
       await _stopCapture();

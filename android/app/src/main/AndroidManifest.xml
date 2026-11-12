@@ -72,6 +72,16 @@
                 <data android:mimeType="application/opus" />
             </intent-filter>
         </activity>
+        <!-- 悬浮识曲投射授权 trampoline：透明、不落 recents、立即 finish；
+             taskAffinity="" 不并入主 task，finish 后系统自动回用户原 task。 -->
+        <activity
+            android:name=".RecognitionConsentActivity"
+            android:theme="@style/RecognitionConsentTheme"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false"
+            android:taskAffinity=""
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode" />
         <!-- 桌面入口 launcher alias：与 MainActivity 共用组件，始终启用这一个。 -->
         <activity-alias
             android:name=".LauncherModernIcon"

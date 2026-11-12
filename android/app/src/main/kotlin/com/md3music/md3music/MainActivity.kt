@@ -51,7 +51,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val FOLDER_PICKER_REQUEST_CODE = 9999
         private const val FONT_PICKER_REQUEST_CODE = 10000
-        private const val RECOGNITION_PROJECTION_REQUEST = 10001
         private const val BACKGROUND_PICKER_REQUEST_CODE = 10002
 
         // 静态引用：让 Service 也能调用 MethodChannel（无 FlutterEngine 缓存时走这里）
@@ -511,11 +510,6 @@ class MainActivity : FlutterActivity() {
                             }
                         )
                     }
-                    result.success(true)
-                }
-                "requestProjection" -> {
-                    val pm = getSystemService(android.media.projection.MediaProjectionManager::class.java)
-                    startActivityForResult(pm.createScreenCaptureIntent(), RECOGNITION_PROJECTION_REQUEST)
                     result.success(true)
                 }
                 "continueCapture" -> {
@@ -1051,11 +1045,6 @@ class MainActivity : FlutterActivity() {
                 backgroundPickerResult?.success(null)
                 backgroundPickerResult = null
             }
-        } else if (requestCode == RECOGNITION_PROJECTION_REQUEST) {
-            // 悬浮窗识曲：MediaProjection 授权结果 → 注入服务 + 通知 Dart
-            val granted = resultCode == RESULT_OK && data != null
-            recognitionChannel?.invokeMethod("onProjectionResult", granted)
-            FloatingRecognitionService.onProjectionResult(resultCode, data)
         }
     }
 
