@@ -56,5 +56,21 @@ class IdleStopPolicy {
 
         /** 上限 60 分钟，超出按 60 处理。 */
         const val MAX_MINUTES = 60
+
+        /**
+         * 归一化 SharedPreferences 原始值为分钟数（纯函数，便于 JVM 单测）。
+         *
+         * 背景：Flutter 侧 shared_preferences_android 对 setInt 实际写的是
+         * putLong（Long 类型），原生 prefs.getInt 读 Long 会抛 ClassCastException。
+         * 因此改读 prefs.all 后按实际类型归一化：
+         * - null（从未写入）→ [DEFAULT_MINUTES]
+         * - Number（Int / Long / Double）→ toInt()（交给 [IdleStopPolicy.normalizeMinutes] clamp）
+         * - 其他非法类型 → [DEFAULT_MINUTES]
+         */
+        fun resolveMinutes(raw: Any?): Int = when (raw) {
+            null -> DEFAULT_MINUTES
+            is Number -> raw.toInt()
+            else -> DEFAULT_MINUTES
+        }
     }
 }

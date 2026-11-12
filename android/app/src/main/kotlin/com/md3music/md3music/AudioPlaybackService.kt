@@ -624,16 +624,21 @@ class AudioPlaybackService : Service() {
     /// 原生侧每次排期都重新读 SharedPreferences，所以 Flutter 设置页改完即生效，
     /// 不需要任何 native 通道方法。注意 key 前缀必须是 `flutter.`
     /// （Flutter 的 shared_preferences 插件写入时统一加前缀）。
+    ///
+    /// 缺陷修复：Flutter 侧 prefs.setInt 经 shared_preferences_android 实际写为
+    /// putLong（Long），原 prefs.getInt 读 Long 抛 ClassCastException 被吞掉，
+    /// 导致用户关闭开关（写 0）后原生仍按默认 10 分钟排期。改用 prefs.all
+    /// 按实际类型归一化（见 [IdleStopPolicy.resolveMinutes]）。
     private fun idleStopMinutes(): Int {
         return try {
             val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-            idleStopPolicy.normalizeMinutes(
-                prefs.getInt(
-                    "flutter.settings_keepalive_idle_stop_minutes",
-                    IdleStopPolicy.DEFAULT_MINUTES
-                )
-            )
-        } catch (_: Exception) {
+            val raw = prefs.all["flutter.settings_keepalive_idle_stop_minutes"]
+            if (raw != null && raw !is Number) {
+                Log.w(TAG, "idleStopMinutes: 非法类型 ${raw.javaClass.simpleName}，回落默认")
+            }
+            idleStopPolicy.normalizeMinutes(IdleStopPolicy.resolveMinutes(raw))
+        } catch (e: Exception) {
+            Log.w(TAG, "idleStopMinutes: 读取失败，回落默认", e)
             IdleStopPolicy.DEFAULT_MINUTES
         }
     }

@@ -67,4 +67,43 @@ class IdleStopPolicyTest {
     fun shouldStop_pausedAndEnabledStops() {
         assertTrue(policy.shouldStop(playing = false, minutes = 10))
     }
+
+    // ===== resolveMinutes（SharedPreferences 值类型归一化）=====
+
+    @Test
+    fun resolveMinutes_longZeroResolvesDisabled() {
+        // 用户关闭开关：Flutter setInt(0) 实际写 Long 0，原生必须读到 0
+        assertEquals(0, IdleStopPolicy.resolveMinutes(0L))
+        assertFalse(policy.shouldStop(playing = false, minutes = policy.normalizeMinutes(0)))
+    }
+
+    @Test
+    fun resolveMinutes_longTenResolvesTen() {
+        // 默认开启 10 分钟：Flutter setInt(10) 实际写 Long 10
+        assertEquals(10, IdleStopPolicy.resolveMinutes(10L))
+        assertTrue(policy.shouldStop(playing = false, minutes = policy.normalizeMinutes(10)))
+    }
+
+    @Test
+    fun resolveMinutes_intPassesThrough() {
+        assertEquals(5, IdleStopPolicy.resolveMinutes(5))
+    }
+
+    @Test
+    fun resolveMinutes_doublePassesThrough() {
+        // 防 Double 类型的脏值也能归一化
+        assertEquals(10, IdleStopPolicy.resolveMinutes(10.0))
+    }
+
+    @Test
+    fun resolveMinutes_invalidTypeFallsBackToDefault() {
+        assertEquals(IdleStopPolicy.DEFAULT_MINUTES, IdleStopPolicy.resolveMinutes("abc"))
+        assertEquals(IdleStopPolicy.DEFAULT_MINUTES, IdleStopPolicy.resolveMinutes(true))
+    }
+
+    @Test
+    fun resolveMinutes_nullFallsBackToDefault() {
+        // 从未写入过该 key：prefs.all 取不到 → null → 默认 10
+        assertEquals(IdleStopPolicy.DEFAULT_MINUTES, IdleStopPolicy.resolveMinutes(null))
+    }
 }
