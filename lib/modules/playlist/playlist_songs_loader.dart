@@ -42,6 +42,7 @@ class PlaylistSongsLoader {
   }
 
   /// 拉取歌单完整歌曲。与歌单详情页 `_fetchSongs` 同一优先级与接口：
+  /// 专辑（[isAlbum] + [albumId]）→ `/album/songs` 全量分页；
   /// 已登录 + listid → `/playlist/track/all/new` 分页；否则走
   /// `global_collection_id`（KugouProvider.getPlaylistTrackAll）。
   /// 成功且 [isInMyFavorites] 时同步写入与详情页同 key 的本地缓存。
@@ -49,6 +50,8 @@ class PlaylistSongsLoader {
     BuildContext context,
     Playlist playlist, {
     bool isInMyFavorites = true,
+    bool isAlbum = false,
+    String? albumId,
   }) async {
     final api = KugouApiClient();
     final isLoggedIn = api.isLoggedIn;
@@ -57,7 +60,17 @@ class PlaylistSongsLoader {
     List<Song> all = [];
     bool apiSucceeded = false;
 
-    if (isLoggedIn && fetchListid != null && fetchListid.isNotEmpty) {
+    if (isAlbum) {
+      // 收藏专辑的 listid 就是 album id，歌单接口（/playlist/track/all/new）
+      // 对 album id 返回空，必须走专辑接口全量分页。
+      if (albumId != null && albumId.isNotEmpty) {
+        final result = await api.getAlbumSongsAll(albumId);
+        if (result != null) {
+          all = result.songs.map((s) => s.toSong()).toList();
+          apiSucceeded = true;
+        }
+      }
+    } else if (isLoggedIn && fetchListid != null && fetchListid.isNotEmpty) {
       const int pageSize = 200;
       const int maxSongs = 9999;
       const int maxPages = (maxSongs + pageSize - 1) ~/ pageSize;

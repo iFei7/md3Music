@@ -480,10 +480,14 @@ class KugouApiClient {
 
   /// 发送二进制 POST 请求（用于听歌识曲等接口）
   /// 使用 http 包直接发送，避免 Dio 把 Uint8List JSON 序列化成数组
+  ///
+  /// [timeout]：本次请求的独立超时时长；缺省保持原 5 分钟兜底
+  /// （云盘上传等大文件场景）。听歌识曲等低延迟接口应显式传短超时。
   Future<Map<String, dynamic>?> _postBinary(
     String path, {
     required Uint8List body,
     Map<String, dynamic>? queryParameters,
+    Duration? timeout,
   }) async {
     try {
       // 构建 URL
@@ -511,7 +515,8 @@ class KugouApiClient {
           .post(Uri.parse(url), headers: headers, body: body)
           // 上传大文件（云盘上传）耗时可长达数分钟，加超时兜底，
           // 避免服务器异常时前端永久挂起（批量上传卡在某一首）。
-          .timeout(const Duration(minutes: 5));
+          // 低延迟接口（听歌识曲）经 [timeout] 传独立短超时。
+          .timeout(timeout ?? const Duration(minutes: 5));
       // 酷狗指纹接口在"未匹配"时返回 502 + JSON body（含 error_code），
       // 需要解析 body 以区分"未识别"和"真正的服务错误"
       // （云盘上传等响应体可能很大，解码放后台 isolate，避免阻塞 UI）
@@ -4151,6 +4156,30 @@ class KugouApiClient {
     }
   }
 
+  /// 分页读取专辑完整歌曲列表。专辑歌曲接口默认只返回 30 首；收藏专辑也必须
+  /// 使用 album_id 分页，不能用歌单接口的返回条数推断专辑是否完整。
+  Future<KugouAlbumSongs?> getAlbumSongsAll(String albumId) async {
+    const pageSize = 30;
+    const maxPages = 1000;
+    final songs = <KugouSongDetail>[];
+    var total = 0;
+    for (var page = 1; page <= maxPages; page++) {
+      final result = await getAlbumSongs(
+        albumId,
+        page: page,
+        pagesize: pageSize,
+      );
+      if (result == null) return null;
+      if (page == 1) total = result.total;
+      songs.addAll(result.songs);
+      if ((total > 0 && songs.length >= total) ||
+          result.songs.length < pageSize) {
+        break;
+      }
+    }
+    return KugouAlbumSongs(songs: songs, total: total);
+  }
+
   Future<List<KugouSongDetail>?> getPlaylistTrackAll({
     required String id,
     int page = 1,
@@ -4395,11 +4424,19 @@ class KugouApiClient {
   }
 
   /// 听歌识曲：发送 PCM 音频数据识别歌曲
-  Future<Map<String, dynamic>?> audioMatch(Uint8List pcmData) async {
+  ///
+  /// [timeout]：独立超时（默认 12s）。识别循环按段推进，单段超时后
+  /// 返回 null，调用方把 null 当「本轮未命中」继续下一段重试，
+  /// 不会被误判为整轮「未识别到歌曲」终止。
+  Future<Map<String, dynamic>?> audioMatch(
+    Uint8List pcmData, {
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
     return await _postBinary(
       KugouEndpoints.audioMatch,
       body: pcmData,
       queryParameters: {'timestamp': DateTime.now().millisecondsSinceEpoch},
+      timeout: timeout,
     );
   }
 
