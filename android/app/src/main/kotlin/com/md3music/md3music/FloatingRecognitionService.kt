@@ -106,9 +106,9 @@ class FloatingRecognitionService : Service() {
         private const val GLASS_ALPHA_SOLID_DARK = 0xB3
         private const val GLASS_ALPHA_SOLID_LIGHT = 0x99
 
-        // 面板歌名/歌手最大宽度：18sp 标题约 7~8 个汉字，130dp 会截得过碎；
-        // 150dp 下面板总宽 ≈ 304dp（360dp 窄屏可完整显示）。
-        private const val TEXT_MAX_WIDTH_DP = 150
+        // 面板歌名/歌手最大宽度：130dp（批次 57 口径；18sp 实验档的 150dp 随
+        // 字号回退一并撤销，恢复紧凑面板宽度）。
+        private const val TEXT_MAX_WIDTH_DP = 130
 
         // 状态
         const val STATE_IDLE = 0
@@ -474,15 +474,14 @@ class FloatingRecognitionService : Service() {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { setMargins(dp(8), 0, dp(4), 0) }
         }
-        // 歌名/歌手字号对齐播放页（full_player.dart _buildTitleBlock / _titleTextStyle）：
-        // 标题 18sp / w700 / letterSpacing 1.5 / lineHeight 1.2，
-        // 歌手 13sp / w400（M3 bodyMedium 的 14sp 在播放页被显式压到 13sp）。
-        // 行高与播放页一致后，文字块高度 ≈ 封面 40dp，面板纵向比例保持平衡。
+        // 歌名/歌手字号（批次58 修正）：播放页 18sp 标题是全屏大封面排版口径，
+        // 搬进悬浮胶囊会因 maxWidth 截断到 7~8 字而不可读（真机反馈）。
+        // 回退到批次 57 口径：歌名 sp11 粗体 / 歌手 sp9.5，宽 130dp——
+        // 该档用户未提出过可读性问题；磨砂模糊与玻璃配色改动全部保留。
         songNameText = TextView(this).apply {
             setTextColor(cOnSurface)
-            textSize = sp(18f)
+            textSize = sp(11f)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
-            letterSpacing = 0.08f   // 0.08em ≈ 播放页 letterSpacing 1.5 / fontSize 18
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
             maxWidth = dp(TEXT_MAX_WIDTH_DP)
@@ -491,7 +490,7 @@ class FloatingRecognitionService : Service() {
         }
         artistText = TextView(this).apply {
             setTextColor(cOnSurfaceVariant)
-            textSize = sp(13f)
+            textSize = sp(9.5f)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
             maxWidth = dp(TEXT_MAX_WIDTH_DP)
