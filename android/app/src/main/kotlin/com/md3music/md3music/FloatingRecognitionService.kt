@@ -57,9 +57,11 @@ import java.net.URL
  * 采集循环由 Dart 侧控制：每段完成后本服务阻塞等待 `continueCapture` /
  * `stopCapture`，避免原生侧自行决定重试次数。
  *
- * 视觉：透明玻璃材质（半透明莫奈取色底 + 描边 + elevation 投影，
- * 不启用跨窗口模糊），折叠态为应用图标玻璃圆钮，聆听/识别中带波纹扩散，
- * 结果态为胶囊玻璃面板。
+ * 视觉：透明玻璃材质 —— 磨砂模糊由独立的 [RecognitionGlassBackdrop] 窗口提供
+ * （`Window#setBackgroundBlurRadius` 的窗口内局部模糊，σ 对齐 dock 栏
+ * `LiquidGlassSurface` 的 18），内容窗口只叠加低 α 莫奈 token 叠色 + 描边 +
+ * elevation 投影；模糊不可用的机型自动回退到实心档叠色。
+ * 折叠态为应用图标玻璃圆钮，聆听/识别中带波纹扩散，结果态为胶囊玻璃面板。
  */
 class FloatingRecognitionService : Service() {
 
@@ -95,6 +97,19 @@ class FloatingRecognitionService : Service() {
         // 识别中图标呼吸缩放：0.94 ↔ 1.06，单程 700ms（全程 1400ms）
         private const val BREATHE_DURATION_MS = 700L
 
+        // 玻璃叠色 α（模糊可用时）：对齐 dock 玻璃 LiquidGlassSurface 的
+        // fillAlpha 0.12——模糊负责消解背景细节，叠色只做主题着色。
+        // 圆钮 0x1F（12%）、结果面板 0x2E（18%，承载文字读性略高）。
+        private const val GLASS_ALPHA_BLUR = 0x1F
+        private const val GLASS_ALPHA_PANEL_BLUR = 0x2E
+        // 模糊不可用时的实心档 α（原视觉，保证无模糊机型可读）
+        private const val GLASS_ALPHA_SOLID_DARK = 0xB3
+        private const val GLASS_ALPHA_SOLID_LIGHT = 0x99
+
+        // 面板歌名/歌手最大宽度：18sp 标题约 7~8 个汉字，130dp 会截得过碎；
+        // 150dp 下面板总宽 ≈ 304dp（360dp 窄屏可完整显示）。
+        private const val TEXT_MAX_WIDTH_DP = 150
+
         // 状态
         const val STATE_IDLE = 0
         const val STATE_LISTENING = 1
@@ -128,6 +143,21 @@ class FloatingRecognitionService : Service() {
     private var songNameText: TextView? = null
     private var artistText: TextView? = null
     private var params: WindowManager.LayoutParams? = null
+
+    // 玻璃背板（窗口内局部模糊）：圆钮一块、结果面板一块，各自形状固定，
+    // 均在内容窗口之前加入（同 type 下先加入者在下层）。
+    private var micPlate: RecognitionGlassBackdrop? = null
+    private var panelPlate: RecognitionGlassBackdrop? = null
+    /** 跨窗口模糊当前是否可用（API 31+ 且系统未因省电/GPU 限制关闭）。 */
+    private var blurActive = false
+    private var blurListener: java.util.function.Consumer<Boolean>? = null
+    // 目标视图相对窗口原点的偏移（px）：由布局回调测量，拖动时用 params + 偏移
+    // 直接摆位，避免 getLocationOnScreen 在窗口移动后滞后一帧导致背板抖动。
+    private var micPlateDx = 0
+    private var micPlateDy = 0
+    private var panelPlateDx = 0
+    private var panelPlateDy = 0
+    private var lastLoggedPlateOffsets = ""
 
     // 底部"拖到这里关闭"区域（独立 overlay，不可触摸）
     private var closeZoneView: View? = null
@@ -194,8 +224,113 @@ class FloatingRecognitionService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, createNotification())
         }
+        // 背板必须先于内容窗口建立：同 type 下先加入的窗口在下层，
+        // 否则模糊背板会压在内容（文字/图标）之上。
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        setupGlassBackdrop()
         createFloatingView()
         createCloseZone()
+    }
+
+    // ===================== 玻璃背板（窗口内局部模糊） =====================
+
+    /// 建立磨砂玻璃背板窗口 + 订阅系统跨窗口模糊开关。
+    ///
+    /// 只在 API 31+ 且系统当前允许跨窗口模糊时建立；建立失败或模糊被
+    /// 系统关闭（省电模式/GPU 限制/开发者选项）时不建窗口，玻璃自动
+    /// 回退到实心档叠色（见 [defaultGlassAlpha]），不会出现「透明但没模糊」。
+    private fun setupGlassBackdrop() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val wm = windowManager ?: return
+        blurActive = wm.isCrossWindowBlurEnabled
+        if (!blurActive) return
+        val mic = RecognitionGlassBackdrop(this)
+        if (!mic.ensure()) return
+        val panel = RecognitionGlassBackdrop(this)
+        if (!panel.ensure()) {
+            mic.release()
+            return
+        }
+        micPlate = mic
+        panelPlate = panel
+        // 系统可在运行时开关模糊（省电模式等）：跟随切换叠色档位与背板显隐
+        try {
+            val listener = java.util.function.Consumer<Boolean> { enabled ->
+                onCrossWindowBlurChanged(enabled)
+            }
+            blurListener = listener
+            wm.addCrossWindowBlurEnabledListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "addCrossWindowBlurEnabledListener failed", e)
+        }
+    }
+
+    private fun onCrossWindowBlurChanged(enabled: Boolean) {
+        if (blurActive == enabled) return
+        blurActive = enabled
+        Log.i(TAG, "cross-window blur enabled=$enabled")
+        updateUi()
+        syncBackdrop()
+    }
+
+    /// 背板跟随内容窗口：位置 = 内容窗口 params + 视图在窗口内的偏移，
+    /// 形状/叠色按当前状态刷新。模糊不可用或目标视图未测量时收敛隐藏。
+    private fun syncBackdrop() {
+        val p = params
+        val btn = micButton
+        val panel = resultPanel
+        val mic = micPlate
+        val pan = panelPlate
+        if (p == null || !blurActive) {
+            mic?.collapse()
+            pan?.collapse()
+            return
+        }
+        if (mic != null && btn != null && btn.width > 0 && btn.height > 0) {
+            mic.setPlate(RecognitionGlassBackdrop.plateTint(stateGlassBase()), oval = true, cornerPx = 0)
+            mic.place(p.x + micPlateDx, p.y + micPlateDy, btn.width, btn.height)
+        } else {
+            mic?.collapse()
+        }
+        if (pan != null && panel != null && state == STATE_RESULT &&
+            panel.visibility == View.VISIBLE && panel.width > 0 && panel.height > 0
+        ) {
+            pan.setPlate(
+                RecognitionGlassBackdrop.plateTint(cPanelBg),
+                oval = false,
+                cornerPx = dp(24)
+            )
+            pan.place(p.x + panelPlateDx, p.y + panelPlateDy, panel.width, panel.height)
+        } else {
+            pan?.collapse()
+        }
+    }
+
+    /// 测量目标视图相对窗口原点的偏移（布局完成后调用）。
+    private fun captureBackdropOffsets() {
+        val p = params ?: return
+        val loc = IntArray(2)
+        micButton?.let {
+            if (it.width > 0) {
+                it.getLocationOnScreen(loc)
+                micPlateDx = loc[0] - p.x
+                micPlateDy = loc[1] - p.y
+            }
+        }
+        resultPanel?.let {
+            if (it.width > 0) {
+                it.getLocationOnScreen(loc)
+                panelPlateDx = loc[0] - p.x
+                panelPlateDy = loc[1] - p.y
+            }
+        }
+        // 诊断：偏移 = 视图在窗口内的位置（内容窗口与背板同基准时为正的小值）。
+        // 若某 ROM 对 overlay 施加额外内缩，这里的值会明显异常，可据此判断背板错位原因。
+        val sig = "$micPlateDx,$micPlateDy/$panelPlateDx,$panelPlateDy"
+        if (sig != lastLoggedPlateOffsets) {
+            lastLoggedPlateOffsets = sig
+            Log.i(TAG, "backdrop offsets (mic/panel) = $sig")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -216,9 +351,12 @@ class FloatingRecognitionService : Service() {
 
     // ===================== 悬浮窗 UI（MD3E 玻璃设计语言） =====================
     //
-    // 玻璃材质：半透明莫奈取色底（不启用 FLAG_BLUR_BEHIND 跨窗口模糊）+ 1dp
-    // 主题主色 α60% 细描边 + 7dp elevation 投影。玻璃底色全部从 Dart 推送的 11 色
-    // token（setThemeColors）派生 α 变体，按亮度自适应深/浅玻璃，不写死与主题无关的固定色。
+    // 玻璃材质：磨砂模糊来自独立的 [RecognitionGlassBackdrop] 窗口（窗口内局部
+    // 背景模糊，σ=18dp 对齐 dock 玻璃），本窗口只叠加低 α 莫奈取色底（模糊可用
+    // 12%~18%，不可用回实心 60%~70%）+ 1dp 主题主色 α60% 细描边 + 7dp elevation
+    // 投影；**不使用 FLAG_BLUR_BEHIND**（该标志会模糊整块屏幕）。
+    // 玻璃底色全部从 Dart 推送的 11 色 token（setThemeColors）派生 α 变体，
+    // 按亮度自适应深/浅玻璃，不写死与主题无关的固定色。
     // 折叠态：52dp 圆形玻璃钮，内部为应用 launcher 图标（monochrome 资源 + tint）。
     // 聆听/识别中：外圈波纹扩散（主题主色 α 渐隐），识别中加图标呼吸缩放。
     // 结果态：24dp 圆角胶囊玻璃面板（封面 + 歌名/歌手 + 播放/关闭）。
@@ -303,7 +441,7 @@ class FloatingRecognitionService : Service() {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dp(24).toFloat()
-                setColor(glassColor(cPanelBg))
+                setColor(glassColor(cPanelBg, panelGlassAlpha()))
                 setStroke(dp(1), primaryStroke())
             }.also { panelGd = it }
             setPadding(dp(10), dp(8), dp(8), dp(8))
@@ -336,22 +474,27 @@ class FloatingRecognitionService : Service() {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { setMargins(dp(8), 0, dp(4), 0) }
         }
+        // 歌名/歌手字号对齐播放页（full_player.dart _buildTitleBlock / _titleTextStyle）：
+        // 标题 18sp / w700 / letterSpacing 1.5 / lineHeight 1.2，
+        // 歌手 13sp / w400（M3 bodyMedium 的 14sp 在播放页被显式压到 13sp）。
+        // 行高与播放页一致后，文字块高度 ≈ 封面 40dp，面板纵向比例保持平衡。
         songNameText = TextView(this).apply {
             setTextColor(cOnSurface)
-            textSize = sp(11f)
+            textSize = sp(18f)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
+            letterSpacing = 0.08f   // 0.08em ≈ 播放页 letterSpacing 1.5 / fontSize 18
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
-            maxWidth = dp(130)
+            maxWidth = dp(TEXT_MAX_WIDTH_DP)
             gravity = Gravity.CENTER_VERTICAL
             setOnClickListener { sendToDart("onFloatingAction", "play") }
         }
         artistText = TextView(this).apply {
             setTextColor(cOnSurfaceVariant)
-            textSize = sp(9.5f)
+            textSize = sp(13f)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
-            maxWidth = dp(130)
+            maxWidth = dp(TEXT_MAX_WIDTH_DP)
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(2), 0, 0)
             setOnClickListener { sendToDart("onFloatingAction", "play") }
@@ -401,13 +544,22 @@ class FloatingRecognitionService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             layoutType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    // 与玻璃背板窗口同基准（整屏原点）：背板位置 = params + 视图偏移，
+                    // 两者都按 FLAG_LAYOUT_IN_SCREEN 定位，避免状态栏内缩造成错位。
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = dp(120)
             applyGlassBlur(this)
+        }
+
+        // 布局完成后测量背板偏移并摆位：面板显示/隐藏、内容变化都会触发重排。
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            captureBackdropOffsets()
+            syncBackdrop()
         }
 
         windowManager?.addView(rootView, params)
@@ -434,10 +586,27 @@ class FloatingRecognitionService : Service() {
 
     // ===================== 玻璃材质 helper =====================
 
-    /// 玻璃底色：保留 token RGB，α 按亮度自适应——深色玻璃 70%（0xB3）/ 浅色玻璃 60%（0x99）。
+    /// 玻璃底色：保留 token RGB，α 分两档——
+    /// - 模糊可用（[blurActive]，背板窗口提供 dock 同档磨砂）：低 α（圆钮 12%），
+    ///   细节由模糊消解，叠色只做主题着色；
+    /// - 模糊不可用：回实心档，深色玻璃 70%（0xB3）/ 浅色玻璃 60%（0x99），
+    ///   保证透明底上的文字/图标可读（AOSP 对「模糊被关闭时提高底色 α」的建议）。
     /// 必须由 Dart 推送的主题 token 派生，不写死与主题无关的固定色。
-    private fun glassColor(base: Int, alpha: Int = if (isDarkColor(base)) 0xB3 else 0x99): Int =
+    private fun glassColor(base: Int, alpha: Int = defaultGlassAlpha(base)): Int =
         (alpha shl 24) or (base and 0x00FFFFFF)
+
+    private fun defaultGlassAlpha(base: Int): Int = when {
+        blurActive -> GLASS_ALPHA_BLUR
+        isDarkColor(base) -> GLASS_ALPHA_SOLID_DARK
+        else -> GLASS_ALPHA_SOLID_LIGHT
+    }
+
+    /// 结果面板叠色 α：承载文字，模糊档比圆钮上浮到 18%（0x2E）保证读性。
+    private fun panelGlassAlpha(): Int = when {
+        blurActive -> GLASS_ALPHA_PANEL_BLUR
+        isDarkColor(cPanelBg) -> GLASS_ALPHA_SOLID_DARK
+        else -> GLASS_ALPHA_SOLID_LIGHT
+    }
 
     /// 主题主色（token: primary → cListeningBg）α60% 细描边
     private fun primaryStroke(): Int = (0x99 shl 24) or (cListeningBg and 0x00FFFFFF)
@@ -454,9 +623,10 @@ class FloatingRecognitionService : Service() {
     private fun idleIconTint(): Int =
         if (isDarkColor(glassColor(cBtnIdleBg))) Color.WHITE else Color.BLACK
 
-    /// 玻璃材质：不启用跨窗口模糊（用户要求显示悬浮窗时不需要全屏模糊），
-    /// 恒走降级路径——清除 FLAG_BLUR_BEHIND，玻璃观感由半透明莫奈 token 底
-    /// + 描边 + elevation 投影呈现。
+    /// 显式清除 FLAG_BLUR_BEHIND：该标志等价于「模糊版 FLAG_DIM_BEHIND」，
+    /// 无论窗口多小都会模糊**整块屏幕**（批次 55 用它 → 用户反馈「全屏模糊」）。
+    /// 磨砂效果改由 [RecognitionGlassBackdrop] 提供（窗口内局部背景模糊，
+    /// 按玻璃轮廓裁剪），因此所有 addView 窗口一律不带该标志。
     private fun applyGlassBlur(lp: WindowManager.LayoutParams) {
         lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_BLUR_BEHIND.inv()
     }
@@ -611,6 +781,8 @@ class FloatingRecognitionService : Service() {
                         params?.x = initialX + dx.toInt()
                         params?.y = initialY + dy.toInt()
                         windowManager?.updateViewLayout(rootView, params)
+                        // 背板跟手（用缓存偏移 + params 直接摆位，不依赖布局回调节奏）
+                        syncBackdrop()
                         updateCloseZoneHighlight()
                     }
                     true
@@ -1004,7 +1176,7 @@ class FloatingRecognitionService : Service() {
             // 刷新玻璃底/描边/文本静态配色（按钮动态配色由 updateUi 按状态刷新）
             micBtnGd?.setColor(glassColor(stateGlassBase()))
             micBtnGd?.setStroke(dp(1), primaryStroke())
-            panelGd?.setColor(glassColor(cPanelBg))
+            panelGd?.setColor(glassColor(cPanelBg, panelGlassAlpha()))
             panelGd?.setStroke(dp(1), primaryStroke())
             coverBgGd?.setColor(glassColor(cBtnIdleBg))
             playBtnBgGd?.setColor(glassColor(cResultBg))
@@ -1016,6 +1188,8 @@ class FloatingRecognitionService : Service() {
             appIcon?.setColorFilter(stateIconTint())
             // 刷新按钮/图标动态配色
             updateUi()
+            // 背板叠色随主题 token 刷新
+            syncBackdrop()
         }
     }
 
@@ -1081,11 +1255,15 @@ class FloatingRecognitionService : Service() {
                 stopListeningFx()
             }
         }
+        // 状态切换后同步背板形状/位置（面板显隐本身还会触发一次布局回调兜底）
+        syncBackdrop()
     }
 
     /// 结果面板玻璃淡入上滑动效（MD3E expressive，260ms 保留）
     private fun showResultPanel() {
         val panel = resultPanel ?: return
+        // 已在位（模糊开关/主题切换仅重绘配色时会再进本函数）不再重播入场动画
+        if (panel.visibility == View.VISIBLE && panel.alpha == 1f && panel.translationY == 0f) return
         panel.visibility = View.VISIBLE
         panel.alpha = 0f
         panel.translationY = dp(10).toFloat()
@@ -1223,6 +1401,16 @@ class FloatingRecognitionService : Service() {
                 windowManager?.removeView(it)
             } catch (_: Exception) {}
         }
+        // 玻璃背板窗口与系统模糊开关监听一并回收（避免窗口泄漏 / 回调泄漏）
+        try {
+            blurListener?.let { l -> windowManager?.removeCrossWindowBlurEnabledListener(l) }
+        } catch (_: Exception) {}
+        blurListener = null
+        micPlate?.release()
+        panelPlate?.release()
+        micPlate = null
+        panelPlate = null
+        blurActive = false
         // 通知 Dart 服务已停止，同步悬浮窗开关状态（避免 Dart 误以为仍在运行）
         sendToDart("onServiceStopped", null)
         instance = null

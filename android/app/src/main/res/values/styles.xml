@@ -36,6 +36,21 @@
     <!-- 悬浮识曲投射授权 trampoline（RecognitionConsentActivity）：全透明、
          无标题、无转场动画——仅承接系统 MediaProjection 授权弹窗，
          弹窗关闭即 finish，用户感知上停留在外部页面/桌面。 -->
+    <!-- 悬浮识曲「玻璃背板」窗口主题（RecognitionGlassBackdrop）：仅借一个
+         Window 承载 Window#setBackgroundBlurRadius 的窗口内局部背景模糊。
+         - windowIsTranslucent：背景模糊绘制在窗口 Surface 之下，窗口必须透明才可见；
+         - windowIsFloating=false：与内容 overlay 窗口同基准（Gravity.TOP|START +
+           FLAG_LAYOUT_IN_SCREEN 定位），避免浮动窗口的额外内缩导致背板与玻璃错位；
+         - 无 dim、无转场，避免任何可见的窗口痕迹。 -->
+    <style name="RecognitionBackdropTheme" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+
     <style name="RecognitionConsentTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
