@@ -9,6 +9,9 @@
 /// **均不显示悬浮 Dock**（transitive 排除）；pop 回一级页后再
 /// push 普通二级页必须恢复正常显示（排除链不污染无关路由）。
 ///
+/// `/user_agreement`（用户协议页）归设置类：首启作为栈底路由天然
+/// 不显示 Dock；从非排除入口 push 为二级路由时也按名排除。
+///
 /// 本测试复刻 app.dart `MaterialApp.builder` 的装配（控制器 +
 /// RouteObserver + 仅播放器 Dock），验证控制器的路由栈深度/排除项
 /// 语义。主布局内的一级 tab 页 Dock（导航 + 播放器）不受影响，由
@@ -125,6 +128,10 @@ Future<void> _pumpHarness(WidgetTester tester) async {
               ),
             ),
           ),
+          // 与 app.dart onGenerateRoute 同名命名路由：用户协议页归
+          // 设置类，作为二级路由打开时同样按名排除悬浮栏
+          '/user_agreement': (context) =>
+              const Scaffold(body: Center(child: Text('用户协议页'))),
         },
         home: Builder(
           builder: (context) => Scaffold(
@@ -155,6 +162,12 @@ Future<void> _pumpHarness(WidgetTester tester) async {
                     ),
                     child: const Text('push 播放页'),
                   ),
+                  TextButton(
+                    key: const ValueKey('push-user-agreement'),
+                    onPressed: () =>
+                        Navigator.of(context).pushNamed('/user_agreement'),
+                    child: const Text('push 用户协议页'),
+                  ),
                 ],
               ),
             ),
@@ -168,7 +181,7 @@ Future<void> _pumpHarness(WidgetTester tester) async {
             builder: (context, _) {
               return Stack(
                 children: [
-                  if (child != null) child,
+                  ?child,
                   if (controller.visible)
                     // 与 app.dart 同款：全屏 Overlay 承载 Tooltip（有界），
                     // Dock 自身 Align(bottomCenter) 钉在屏底
@@ -260,6 +273,19 @@ void main() {
       findsNothing,
       reason: '完整播放页本身就是播放器，排除悬浮栏',
     );
+  });
+
+  testWidgets('push /user_agreement（命名路由）：不挂悬浮播放器', (tester) async {
+    await _pumpHarness(tester);
+    await tester.tap(find.byKey(const ValueKey('push-user-agreement')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+      find.byType(GlassDockPlayer),
+      findsNothing,
+      reason: '用户协议页归设置类，作为二级路由打开时不显示悬浮 Dock',
+    );
+    expect(find.text('用户协议页'), findsOneWidget);
   });
 
   testWidgets('二级页持续存在时 Dock 持续可见', (tester) async {

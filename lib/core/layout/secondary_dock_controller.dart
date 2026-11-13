@@ -22,8 +22,9 @@ import '../../modules/player/full_player_route.dart';
 ///   在每次回调里把 `previousRoute` 一并补录进栈（补齐栈底），保证
 ///   「一级 → push 二级」必然得到栈深 2；
 /// - 排除项按路由身份判定：完整播放页是私有路由类
-///   [DraggablePlayerRoute]（按类型排除）；`/settings` 与
-///   `/dlna_remote` 是按名字排除的命名路由。
+///   [DraggablePlayerRoute]（按类型排除）；`/settings`、
+///   `/dlna_remote` 与 `/user_agreement`（归设置类）是按名字
+///   排除的命名路由。
 ///
 /// 批次 36（transitive 排除）：设置页内 push 出来的子页（均衡器 /
 /// 声音 / 关于 / 登录 / 签到 / 用户协议等，均为匿名
@@ -55,8 +56,15 @@ class SecondaryDockController extends ChangeNotifier {
   /// 二级态悬浮播放器是否可见（true = 当前应渲染仅播放器 Dock）。
   bool get visible => _visible;
 
-  /// 应排除悬浮栏的路由名（设置页 / DLNA 遥控页）。
-  static const Set<String> _excludedRouteNames = {'/settings', '/dlna_remote'};
+  /// 应排除悬浮栏的路由名（设置页 / DLNA 遥控页 / 用户协议页）。
+  /// `/user_agreement` 归设置类：从非排除入口作为二级路由打开时
+  /// 同样不显示悬浮 Dock（首启栈底路由天然不显示；从设置页进入
+  /// 则由批次 36 传递排除自动覆盖）。
+  static const Set<String> _excludedRouteNames = {
+    '/settings',
+    '/dlna_remote',
+    '/user_agreement',
+  };
 
   /// 把 [route] 补录进栈（已存在则忽略）。
   void _record(Route<dynamic>? route) {

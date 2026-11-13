@@ -150,7 +150,7 @@ void main() {
             ..httpClientAdapter = adapter,
         );
 
-    test('accelerated=true 时请求走 ghclone.com 镜像前缀', () async {
+    test('accelerated=true 时请求走 gh-proxy.com 镜像前缀', () async {
       final payload = Uint8List.fromList(List.filled(8, 0x4d));
       final adapter = _RecordingAdapter(payload);
       final updater = _updater(adapter);
@@ -159,10 +159,10 @@ void main() {
 
       await updater.startDownload(manifest, accelerated: true);
 
-      expect(adapter.uris.single.toString(), startsWith('https://ghclone.com/'));
+      expect(adapter.uris.single.toString(), startsWith('https://gh-proxy.com/'));
       expect(
         adapter.uris.single.toString(),
-        'https://ghclone.com/$_apkUrl',
+        'https://gh-proxy.com/$_apkUrl',
       );
       expect(updater.phase, InAppUpdaterPhase.readyToInstall);
     });
@@ -203,7 +203,7 @@ void main() {
 
       await updater.startDownload(manifest, accelerated: true);
 
-      expect(adapter.uris.single.toString(), startsWith('https://ghclone.com/'));
+      expect(adapter.uris.single.toString(), startsWith('https://gh-proxy.com/'));
       expect(updater.phase, InAppUpdaterPhase.error);
       expect(updater.apkFile, isNull);
     });

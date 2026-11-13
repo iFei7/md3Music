@@ -43,6 +43,11 @@ class SettingsRepository {
   static const String _keyUpdateLastNotifiedVersion =
       'update_last_notified_version';
 
+  /// 批次58d：待处理的新版本红点身份（正式通道存 versionName，Beta 存 tag，
+  /// 记法同 _keyUpdateLastNotifiedVersion）。与「只提醒一次」键分离：
+  /// 红点在用户进入检查更新流程后单独清除，不影响同版本不重复提醒语义。
+  static const String _keyUpdateBadgeVersion = 'update_badge_version';
+
   /// 批次34：Beta 通道更新开关：开启后更新检查改查 GitHub Pre-release
   /// （开发快照），版本更频繁但可能不稳定。默认关闭。
   static const String _keyBetaChannelEnabled = 'settings_beta_channel_enabled';
@@ -162,6 +167,17 @@ class SettingsRepository {
   Future<void> setUpdateLastNotifiedVersion(String version) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyUpdateLastNotifiedVersion, version);
+  }
+
+  /// 批次58d：待处理的新版本红点身份；无待处理更新返回空串。
+  Future<String> getUpdateBadgeVersion() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyUpdateBadgeVersion) ?? '';
+  }
+
+  Future<void> setUpdateBadgeVersion(String version) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyUpdateBadgeVersion, version);
   }
 
   /// 批次34：Beta 通道更新开关（默认关闭）。

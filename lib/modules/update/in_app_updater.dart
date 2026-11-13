@@ -352,7 +352,7 @@ class InAppUpdater extends ChangeNotifier {
   ///
   /// [target] 为下载目标清单：null 时用 [_manifest]（默认推荐项）；
   /// UI 允许用户在 [candidates] 中切换 ABI 后传入对应清单。
-  /// [accelerated] 为 true 时（批次34）下载 URL 走 ghclone.com 镜像前缀
+  /// [accelerated] 为 true 时（批次34）下载 URL 走 gh-proxy.com 镜像前缀
   /// （与发布页加速链一致，302 转发 GitHub CDN）；字节数 + SHA-256 校验
   /// 逻辑不变（校验数据均来自清单），文件名仍取自原始 apkUrl。
   /// 流程：downloading(进度) → verifying → readyToInstall，任一步失败
@@ -391,7 +391,7 @@ class InAppUpdater extends ChangeNotifier {
 
       // 加速镜像只是 302 转发 GitHub CDN，清单校验（字节/SHA-256）兜底真实性
       final downloadUrl = accelerated
-          ? 'https://ghclone.com/${manifest.apkUrl}'
+          ? 'https://gh-proxy.com/${manifest.apkUrl}'
           : manifest.apkUrl;
       await _dio.download(
         downloadUrl,

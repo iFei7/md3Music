@@ -43,6 +43,7 @@ import '../onboarding/user_agreement_page.dart';
 import '../update/in_app_updater.dart';
 import '../update/update_check_service.dart';
 import '../update/update_manifest.dart';
+import '../update/update_prompt.dart' show updateBadgeVisible;
 import '../user/account_manager_sheet.dart';
 import '../user/grade_display.dart';
 import '../user/sign_in_mini_card.dart';
@@ -115,6 +116,9 @@ class _SettingsPageState extends State<SettingsPage>
   bool _betaChannelEnabled = false;
   // 上次已提醒的新版本号（形如 5.6.5，空串=无）。用于「更新最新版本」副标题提示。
   String _pendingUpdateVersion = '';
+  // 批次58d：待处理的新版本红点身份（正式通道存 versionName，Beta 存 tag，
+  // 空串=无）。用户进入检查更新流程后清除，仅控制入口红点显示。
+  String _updateBadgeVersion = '';
   // 应用内更新器：检查→下载→校验→安装的状态机，供更新对话框订阅
   final InAppUpdater _updater = InAppUpdater();
   // 手动检查更新进行中（入口显示加载态，防重复点击）
@@ -424,6 +428,8 @@ class _SettingsPageState extends State<SettingsPage>
         .getBetaChannelEnabled();
     final pendingUpdateVersion = await _settingsRepository
         .getUpdateLastNotifiedVersion();
+    final updateBadgeVersion = await _settingsRepository
+        .getUpdateBadgeVersion();
     final viperMasterEnabled = await _settingsRepository
         .getViperMasterEnabled();
     final viperTapeQualityEnabled = await _settingsRepository
@@ -439,6 +445,7 @@ class _SettingsPageState extends State<SettingsPage>
       _updateReminderEnabled = updateReminderEnabled;
       _betaChannelEnabled = betaChannelEnabled;
       _pendingUpdateVersion = pendingUpdateVersion;
+      _updateBadgeVersion = updateBadgeVersion;
       _useDynamicColor = useDynamicColor;
       _useCoverSeedColor = useCoverSeedColor;
       _useBackgroundImage = useBackgroundImage;
@@ -3049,7 +3056,7 @@ class _SettingsPageState extends State<SettingsPage>
                   height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Icon(Icons.cloud_download_outlined, size: 20),
+              : _buildUpdateEntryTrailing(),
           onTap: _isCheckingUpdate ? null : _checkForInAppUpdate,
         ),
         // 渲染引擎与版本号同属"当前构建的事实"，故并入版本组：
@@ -3173,6 +3180,44 @@ class _SettingsPageState extends State<SettingsPage>
     );
   }
 
+  /// 批次58d：「检查更新」入口是否显示红点。
+  ///
+  /// 确定性判定：待处理身份（update_badge_version）非空且与当前本地
+  /// versionName 不匹配。Beta 快照 tag 含 versionName，由
+  /// updateBadgeVisible 的包含关系判断兼容；当前版本未知时宁可提示。
+  bool get _showUpdateBadge {
+    final currentVersion = _appVersion.isEmpty ? kBuildAppVersion : _appVersion;
+    return updateBadgeVisible(
+      pendingIdentity: _updateBadgeVersion,
+      currentVersion: currentVersion,
+    );
+  }
+
+  /// 批次58d：「检查更新」入口 trailing 图标——存在待处理更新（已知有
+  /// 新版本但尚未进入检查流程）时在图标右上角叠加红点提示。
+  Widget _buildUpdateEntryTrailing() {
+    const icon = Icon(Icons.cloud_download_outlined, size: 20);
+    if (!_showUpdateBadge) return icon;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        icon,
+        Positioned(
+          top: -3,
+          right: -3,
+          child: Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.error,
+              shape: BoxShape.circle,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   /// 手动检查更新入口：优先走应用内更新（清单 → 下载 → 校验 → 安装）。
   ///
   /// 检查过程弹出「正在检查更新…」加载对话框（sonify 式弹窗检索体验）；
@@ -3181,6 +3226,13 @@ class _SettingsPageState extends State<SettingsPage>
   Future<void> _checkForInAppUpdate() async {
     if (_isCheckingUpdate) return;
     HapticFeedback.lightImpact();
+    // 批次58d：进入检查更新流程即视为已处理待处理更新，清除入口红点
+    // （只清红点键，不动「只提醒一次」的 update_last_notified_version）。
+    if (_updateBadgeVersion.isNotEmpty) {
+      setState(() => _updateBadgeVersion = '');
+      // ignore: discarded_futures
+      _settingsRepository.setUpdateBadgeVersion('');
+    }
     setState(() => _isCheckingUpdate = true);
     // 检查对话框与结果弹窗都走 root navigator，避免结果弹窗被关闭逻辑误伤
     final loading = showDialog<void>(
@@ -3355,7 +3407,7 @@ class _SettingsPageState extends State<SettingsPage>
             onPressed: () => Navigator.pop(dialogCtx),
             child: const Text('取消'),
           ),
-          // 批次34：加速下载——ghclone.com 镜像转发 GitHub CDN，
+          // 批次34：加速下载——gh-proxy.com 镜像转发 GitHub CDN，
           // 与发布页加速链一致；校验逻辑（字节/SHA-256）不变
           FilledButton.tonal(
             onPressed: () {

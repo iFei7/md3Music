@@ -9,6 +9,7 @@ import '../../data/repositories/settings_repository.dart';
 import 'github_release_client.dart';
 import 'release_info.dart';
 import 'release_version.dart';
+import 'update_prompt.dart';
 
 /// 一次检查的结果。
 enum UpdateCheckOutcome {
@@ -25,6 +26,13 @@ enum UpdateCheckOutcome {
 /// 提醒方式注入点：默认走全局原生 toast，测试中替换为收集器。
 typedef UpdateNotifier = void Function(String message);
 
+/// 批次58d：发现新版本时的弹窗回调注入点（仅 interactive 路径触发）。
+/// 默认经 appNavigatorKey 弹 AlertDialog；测试中替换为收集器。
+typedef UpdatePrompter = Future<void> Function(
+  ReleaseInfo release,
+  String currentVersion,
+);
+
 /// 版本更新检测与提醒。
 ///
 /// 职责边界：只负责「查最新版本 → 比本地版本 → 提醒一次」，
@@ -34,12 +42,14 @@ class UpdateCheckService {
     ReleaseSource? source,
     SettingsRepository? settings,
     UpdateNotifier? notifier,
+    UpdatePrompter? prompter,
     Future<String> Function()? readCurrentVersion,
     Future<int> Function()? readCurrentBuildNumber,
     Future<bool> Function()? readBetaChannel,
   }) : _source = source ?? GithubReleaseClient(),
        _settings = settings ?? SettingsRepository(),
        _notifier = notifier ?? _defaultNotifier,
+       _prompter = prompter ?? _defaultPrompter,
        _readCurrentVersion = readCurrentVersion ?? _defaultCurrentVersion,
        _readCurrentBuildNumber =
            readCurrentBuildNumber ?? _defaultCurrentBuildNumber,
@@ -57,6 +67,9 @@ class UpdateCheckService {
   final ReleaseSource _source;
   final SettingsRepository _settings;
   final UpdateNotifier _notifier;
+
+  /// 批次58d：interactive 弹窗回调（默认经 appNavigatorKey 弹 AlertDialog）。
+  final UpdatePrompter _prompter;
   final Future<String> Function() _readCurrentVersion;
 
   /// 本地构建号（CI --build-number=run_number 写入 PackageInfo.buildNumber）。
@@ -70,6 +83,15 @@ class UpdateCheckService {
   bool _running = false;
 
   static void _defaultNotifier(String message) => showToast(message, long: true);
+
+  static Future<void> _defaultPrompter(
+    ReleaseInfo release,
+    String currentVersion,
+  ) =>
+      showUpdateAvailablePrompt(
+        remoteVersion: release.tagName,
+        currentVersion: currentVersion,
+      );
 
   static Future<int> _defaultCurrentBuildNumber() async {
     try {
@@ -97,22 +119,28 @@ class UpdateCheckService {
   /// 启动挂载点：延迟 [startupDelay] 后自动检查一次。
   ///
   /// [suppress] 为 true 时直接跳过（首次启动引导 / 用户协议未确认时不应打扰）。
+  /// 批次58d：启动路径为 interactive——发现新版本时除 toast 外额外弹
+  /// 确认弹窗（设置页手动检查有自己的流程弹窗，不经此路径）。
   void scheduleStartupCheck({bool suppress = false}) {
     if (suppress) return;
     // Release 资产只有 Android APK，其它平台检查无意义
     if (kIsWeb || !Platform.isAndroid) return;
     Timer(startupDelay, () {
       // ignore: discarded_futures
-      checkAndNotify();
+      checkAndNotify(interactive: true);
     });
   }
 
   /// 检查并在发现新版本时提醒。返回值便于日志与测试断言。
-  Future<UpdateCheckOutcome> checkAndNotify() async {
+  ///
+  /// [interactive] 为 true（启动自动检查）时，发现新版本除 notifier
+  /// toast 外额外触发弹窗回调；navigator 不可用时弹窗组件静默跳过，
+  /// 行为退回纯 toast。设置页手动检查保持默认 false，不重复弹窗。
+  Future<UpdateCheckOutcome> checkAndNotify({bool interactive = false}) async {
     if (_running) return UpdateCheckOutcome.skipped;
     _running = true;
     try {
-      return await _run();
+      return await _run(interactive: interactive);
     } finally {
       _running = false;
     }
@@ -133,7 +161,10 @@ class UpdateCheckService {
     }
   }
 
-  Future<UpdateCheckOutcome> _run({bool force = false}) async {
+  Future<UpdateCheckOutcome> _run({
+    bool force = false,
+    bool interactive = false,
+  }) async {
     if (!await _settings.getUpdateReminderEnabled()) {
       debugPrint('[UpdateCheck] 用户已关闭新版本提醒，跳过');
       return UpdateCheckOutcome.skipped;
@@ -187,6 +218,18 @@ class UpdateCheckService {
 
     await _settings.setUpdateLastNotifiedVersion(notifiedIdentity);
     _notify(release, current);
+    // 批次58d：记录待处理红点身份，供设置页「检查更新」入口显示红点；
+    // 与「只提醒一次」键分离，用户进入检查更新流程后单独清除。
+    await _settings.setUpdateBadgeVersion(notifiedIdentity);
+    // interactive（启动自动检查）路径额外弹确认弹窗；弹窗组件在
+    // navigator 不可用时静默跳过，行为退回上面的纯 toast。
+    if (interactive) {
+      try {
+        await _prompter(release, current);
+      } catch (error) {
+        debugPrint('[UpdateCheck] 更新弹窗展示失败：$error');
+      }
+    }
     debugPrint('[UpdateCheck] 已提醒新版本 ${release.version}（本地 $current）');
     return UpdateCheckOutcome.notified;
   }

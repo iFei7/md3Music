@@ -64,9 +64,13 @@ ReleaseInfo _release(String tag) => ReleaseInfo.fromTag(
 );
 
 /// 构造被测服务：注入假数据源、假当前版本、捕获提醒文案。
-({UpdateCheckService service, _FakeSource source, List<String> messages}) _build({
+/// [prompts] 非空时注入弹窗回调收集器（批次58d：interactive 路径断言用）。
+({UpdateCheckService service, _FakeSource source, List<String> messages})
+    _build({
   required ReleaseInfo? remote,
   required String currentVersion,
+  List<String>? prompts,
+  List<String>? promptCurrents,
 }) {
   final source = _FakeSource(remote);
   final messages = <String>[];
@@ -74,6 +78,12 @@ ReleaseInfo _release(String tag) => ReleaseInfo.fromTag(
     source: source,
     readCurrentVersion: () async => currentVersion,
     notifier: messages.add,
+    prompter: prompts == null
+        ? null
+        : (release, current) async {
+            prompts.add(release.tagName);
+            promptCurrents?.add(current);
+          },
   );
   return (service: service, source: source, messages: messages);
 }
@@ -389,6 +399,78 @@ void main() {
         await SettingsRepository().getUpdateLastNotifiedVersion(),
         'v5.9.27-lite-abc1234',
       );
+    });
+  });
+
+  // 批次58d：启动自动检查（interactive）发现新版本时额外弹窗；
+  // 设置页手动路径与非 interactive 路径保持只有 toast。
+  group('批次58d：interactive 弹窗与待处理红点', () {
+    test('interactive=true 且发现新版本时触发弹窗回调（带远端 tag 与当前版本）',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      final prompts = <String>[];
+      final promptCurrents = <String>[];
+      final ctx = _build(
+        remote: _release('v5.6.5'),
+        currentVersion: '5.6.0',
+        prompts: prompts,
+        promptCurrents: promptCurrents,
+      );
+
+      expect(
+        await ctx.service.checkAndNotify(interactive: true),
+        UpdateCheckOutcome.notified,
+      );
+      // notifier（toast）与弹窗回调都会触发
+      expect(ctx.messages, isNotEmpty);
+      expect(prompts, ['v5.6.5']);
+      expect(promptCurrents, ['5.6.0']);
+    });
+
+    test('默认（interactive=false）不触发弹窗回调，仅 toast', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prompts = <String>[];
+      final ctx = _build(
+        remote: _release('v5.6.5'),
+        currentVersion: '5.6.0',
+        prompts: prompts,
+      );
+
+      expect(await ctx.service.checkAndNotify(), UpdateCheckOutcome.notified);
+      expect(ctx.messages, isNotEmpty);
+      expect(prompts, isEmpty);
+    });
+
+    test('interactive=true 但已是最新时不弹窗', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prompts = <String>[];
+      final ctx = _build(
+        remote: _release('v5.6.0'),
+        currentVersion: '5.6.0',
+        prompts: prompts,
+      );
+
+      expect(
+        await ctx.service.checkAndNotify(interactive: true),
+        UpdateCheckOutcome.upToDate,
+      );
+      expect(prompts, isEmpty);
+    });
+
+    test('发现新版本时写入待处理红点身份（同提醒身份记法）', () async {
+      SharedPreferences.setMockInitialValues({});
+      final ctx = _build(remote: _release('v5.6.5'), currentVersion: '5.6.0');
+
+      expect(await ctx.service.checkAndNotify(), UpdateCheckOutcome.notified);
+      expect(await SettingsRepository().getUpdateBadgeVersion(), '5.6.5');
+    });
+
+    test('未发现新版本或检查失败时不写红点身份', () async {
+      SharedPreferences.setMockInitialValues({});
+      final ctx = _build(remote: null, currentVersion: '5.6.0');
+
+      expect(await ctx.service.checkAndNotify(), UpdateCheckOutcome.failed);
+      expect(await SettingsRepository().getUpdateBadgeVersion(), '');
     });
   });
 }
