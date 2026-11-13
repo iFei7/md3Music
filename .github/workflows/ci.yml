@@ -584,6 +584,11 @@ jobs:
     name: Build Android TV APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # 6.0 正式发布口径：无连字符的正式 tag（如 v6.0.0）不构建、不发布 TV 包，
+    # 正式 Release 仅含手机端 APK（标准版 64/32 位 + 随身听兼容版）。
+    # lite 分支日常构建与带连字符的 beta tag（vX.Y.Z-xxx）仍照常构建 TV。
+    # 恢复 TV 正式发布：删除下方 if 行即可。
+    if: github.event_name != 'push' || github.ref_type != 'tag' || contains(github.ref_name, '-')
 
     steps:
       - name: Checkout repository
