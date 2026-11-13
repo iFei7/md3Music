@@ -59,8 +59,10 @@ import java.net.URL
  *
  * 视觉：透明玻璃材质 —— 磨砂模糊由独立的 [RecognitionGlassBackdrop] 窗口提供
  * （`Window#setBackgroundBlurRadius` 的窗口内局部模糊，σ 对齐 dock 栏
- * `LiquidGlassSurface` 的 18），内容窗口只叠加低 α 莫奈 token 叠色 + 描边 +
- * elevation 投影；模糊不可用的机型自动回退到实心档叠色。
+ * `LiquidGlassSurface` 的 18），内容窗口叠加恒实心档莫奈 token 叠色（深 0xB3/
+ * 浅 0x99）+ 描边 + elevation 投影。低 α 实验档（模糊可用 12%~18%）因真机上
+ * 未渲染背板模糊的 ROM 呈全透明不可读已回退；背板仅作为支持模糊机型上的
+ * 磨砂增强，玻璃 α 不再依赖模糊可用性。
  * 折叠态为应用图标玻璃圆钮，聆听/识别中带波纹扩散，结果态为胶囊玻璃面板。
  */
 class FloatingRecognitionService : Service() {
@@ -97,18 +99,15 @@ class FloatingRecognitionService : Service() {
         // 识别中图标呼吸缩放：0.94 ↔ 1.06，单程 700ms（全程 1400ms）
         private const val BREATHE_DURATION_MS = 700L
 
-        // 玻璃叠色 α（模糊可用时）：对齐 dock 玻璃 LiquidGlassSurface 的
-        // fillAlpha 0.12——模糊负责消解背景细节，叠色只做主题着色。
-        // 圆钮 0x1F（12%）、结果面板 0x2E（18%，承载文字读性略高）。
-        private const val GLASS_ALPHA_BLUR = 0x1F
-        private const val GLASS_ALPHA_PANEL_BLUR = 0x2E
-        // 模糊不可用时的实心档 α（原视觉，保证无模糊机型可读）
+        // 玻璃叠色 α 恒走实心档（不随「模糊是否可用」变化）：真机反馈低 α 档
+        // 在未渲染背板模糊的 ROM 上全透明不可读。深色玻璃 70%（0xB3）/
+        // 浅色玻璃 60%（0x99），保证透明底上的文字/图标可读。
         private const val GLASS_ALPHA_SOLID_DARK = 0xB3
         private const val GLASS_ALPHA_SOLID_LIGHT = 0x99
 
-        // 面板歌名/歌手最大宽度：130dp（批次 57 口径；18sp 实验档的 150dp 随
-        // 字号回退一并撤销，恢复紧凑面板宽度）。
-        private const val TEXT_MAX_WIDTH_DP = 130
+        // 面板歌名/歌手最大宽度：150dp（18sp 口径下 130dp 只能显示约 7 字，
+        // 150dp 约可容纳 8 字，对齐播放页标题/歌手字号的可读性）。
+        private const val TEXT_MAX_WIDTH_DP = 150
 
         // 状态
         const val STATE_IDLE = 0
@@ -148,9 +147,6 @@ class FloatingRecognitionService : Service() {
     // 均在内容窗口之前加入（同 type 下先加入者在下层）。
     private var micPlate: RecognitionGlassBackdrop? = null
     private var panelPlate: RecognitionGlassBackdrop? = null
-    /** 跨窗口模糊当前是否可用（API 31+ 且系统未因省电/GPU 限制关闭）。 */
-    private var blurActive = false
-    private var blurListener: java.util.function.Consumer<Boolean>? = null
     // 目标视图相对窗口原点的偏移（px）：由布局回调测量，拖动时用 params + 偏移
     // 直接摆位，避免 getLocationOnScreen 在窗口移动后滞后一帧导致背板抖动。
     private var micPlateDx = 0
@@ -234,16 +230,16 @@ class FloatingRecognitionService : Service() {
 
     // ===================== 玻璃背板（窗口内局部模糊） =====================
 
-    /// 建立磨砂玻璃背板窗口 + 订阅系统跨窗口模糊开关。
+    /// 建立磨砂玻璃背板窗口。
     ///
-    /// 只在 API 31+ 且系统当前允许跨窗口模糊时建立；建立失败或模糊被
-    /// 系统关闭（省电模式/GPU 限制/开发者选项）时不建窗口，玻璃自动
-    /// 回退到实心档叠色（见 [defaultGlassAlpha]），不会出现「透明但没模糊」。
+    /// 玻璃 α 已不依赖模糊可用性（真机反馈低 α 档在未渲染背板模糊的 ROM 上
+    /// 呈全透明不可读，已回退恒实心档，见 [defaultGlassAlpha]）；背板仅作为
+    /// 「能渲染窗口内局部模糊机型上的磨砂增强」——不支持时 α≈3% 的背板无可见
+    /// 副作用。只在 API 31+ 建立；mic/panel 两个背板都 ensure 成功才赋值字段，
+    /// panel 失败则 release mic 并整体放弃（保持无背板的纯实心玻璃）。
     private fun setupGlassBackdrop() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         val wm = windowManager ?: return
-        blurActive = wm.isCrossWindowBlurEnabled
-        if (!blurActive) return
         val mic = RecognitionGlassBackdrop(this)
         if (!mic.ensure()) return
         val panel = RecognitionGlassBackdrop(this)
@@ -253,35 +249,17 @@ class FloatingRecognitionService : Service() {
         }
         micPlate = mic
         panelPlate = panel
-        // 系统可在运行时开关模糊（省电模式等）：跟随切换叠色档位与背板显隐
-        try {
-            val listener = java.util.function.Consumer<Boolean> { enabled ->
-                onCrossWindowBlurChanged(enabled)
-            }
-            blurListener = listener
-            wm.addCrossWindowBlurEnabledListener(listener)
-        } catch (e: Exception) {
-            Log.w(TAG, "addCrossWindowBlurEnabledListener failed", e)
-        }
-    }
-
-    private fun onCrossWindowBlurChanged(enabled: Boolean) {
-        if (blurActive == enabled) return
-        blurActive = enabled
-        Log.i(TAG, "cross-window blur enabled=$enabled")
-        updateUi()
-        syncBackdrop()
     }
 
     /// 背板跟随内容窗口：位置 = 内容窗口 params + 视图在窗口内的偏移，
-    /// 形状/叠色按当前状态刷新。模糊不可用或目标视图未测量时收敛隐藏。
+    /// 形状/叠色按当前状态刷新。目标视图未测量时收敛隐藏。
     private fun syncBackdrop() {
         val p = params
         val btn = micButton
         val panel = resultPanel
         val mic = micPlate
         val pan = panelPlate
-        if (p == null || !blurActive) {
+        if (p == null) {
             mic?.collapse()
             pan?.collapse()
             return
@@ -352,9 +330,11 @@ class FloatingRecognitionService : Service() {
     // ===================== 悬浮窗 UI（MD3E 玻璃设计语言） =====================
     //
     // 玻璃材质：磨砂模糊来自独立的 [RecognitionGlassBackdrop] 窗口（窗口内局部
-    // 背景模糊，σ=18dp 对齐 dock 玻璃），本窗口只叠加低 α 莫奈取色底（模糊可用
-    // 12%~18%，不可用回实心 60%~70%）+ 1dp 主题主色 α60% 细描边 + 7dp elevation
-    // 投影；**不使用 FLAG_BLUR_BEHIND**（该标志会模糊整块屏幕）。
+    // 背景模糊，σ=18dp 对齐 dock 玻璃），本窗口叠加恒实心档莫奈取色底（深 0xB3/
+    // 浅 0x99，不随「模糊是否可用」变化）+ 1dp 主题主色 α60% 细描边 + 7dp
+    // elevation 投影；**不使用 FLAG_BLUR_BEHIND**（该标志会模糊整块屏幕）。
+    // 低 α 实验档（模糊可用 12%~18%）因真机在未渲染背板模糊的 ROM 上全透明
+    // 不可读已回退；磨砂由背板窗口在支持的机型上增强。
     // 玻璃底色全部从 Dart 推送的 11 色 token（setThemeColors）派生 α 变体，
     // 按亮度自适应深/浅玻璃，不写死与主题无关的固定色。
     // 折叠态：52dp 圆形玻璃钮，内部为应用 launcher 图标（monochrome 资源 + tint）。
@@ -441,7 +421,7 @@ class FloatingRecognitionService : Service() {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dp(24).toFloat()
-                setColor(glassColor(cPanelBg, panelGlassAlpha()))
+                setColor(glassColor(cPanelBg))
                 setStroke(dp(1), primaryStroke())
             }.also { panelGd = it }
             setPadding(dp(10), dp(8), dp(8), dp(8))
@@ -474,13 +454,15 @@ class FloatingRecognitionService : Service() {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { setMargins(dp(8), 0, dp(4), 0) }
         }
-        // 歌名/歌手字号（批次58 修正）：播放页 18sp 标题是全屏大封面排版口径，
-        // 搬进悬浮胶囊会因 maxWidth 截断到 7~8 字而不可读（真机反馈）。
-        // 回退到批次 57 口径：歌名 sp11 粗体 / 歌手 sp9.5，宽 130dp——
-        // 该档用户未提出过可读性问题；磨砂模糊与玻璃配色改动全部保留。
+        // 歌名/歌手字号（对齐播放页口径 18sp/13sp）：Kotlin 的 `textSize = x`
+        // 映射到 TextView.setTextSize(float)，本身已以 sp 为单位；此前经 sp()
+        // 助手再乘 scaledDensity 造成双重缩放（实际渲染 ≈30sp，远大于目标）。
+        // 修复：直接写 sp 字面值，勿再乘 scaledDensity。为容纳 18sp 歌名
+        // （130dp 只能显示约 7 字），maxWidth 放宽到 150dp（TEXT_MAX_WIDTH_DP）。
         songNameText = TextView(this).apply {
             setTextColor(cOnSurface)
-            textSize = sp(11f)
+            // sp 单位字面值，与播放页标题 18sp 一致（勿乘 scaledDensity）
+            textSize = 18f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
@@ -490,7 +472,8 @@ class FloatingRecognitionService : Service() {
         }
         artistText = TextView(this).apply {
             setTextColor(cOnSurfaceVariant)
-            textSize = sp(9.5f)
+            // sp 单位字面值，对齐播放页歌手 13sp（勿乘 scaledDensity）
+            textSize = 13f
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
             maxWidth = dp(TEXT_MAX_WIDTH_DP)
@@ -585,27 +568,17 @@ class FloatingRecognitionService : Service() {
 
     // ===================== 玻璃材质 helper =====================
 
-    /// 玻璃底色：保留 token RGB，α 分两档——
-    /// - 模糊可用（[blurActive]，背板窗口提供 dock 同档磨砂）：低 α（圆钮 12%），
-    ///   细节由模糊消解，叠色只做主题着色；
-    /// - 模糊不可用：回实心档，深色玻璃 70%（0xB3）/ 浅色玻璃 60%（0x99），
-    ///   保证透明底上的文字/图标可读（AOSP 对「模糊被关闭时提高底色 α」的建议）。
+    /// 玻璃底色：保留 token RGB，α 恒实心档——深色玻璃 70%（0xB3）/
+    /// 浅色玻璃 60%（0x99），保证透明底上的文字/图标可读（AOSP 对
+    /// 「模糊被关闭时提高底色 α」的建议）。磨砂感由背板窗口在支持的
+    /// 机型上透过叠色增强，不依赖「模糊是否可用」探测（无公开 API 可
+    /// 探测模糊是否真的渲染，低 α 实验档已在真机全透明翻车后回退）。
     /// 必须由 Dart 推送的主题 token 派生，不写死与主题无关的固定色。
     private fun glassColor(base: Int, alpha: Int = defaultGlassAlpha(base)): Int =
         (alpha shl 24) or (base and 0x00FFFFFF)
 
-    private fun defaultGlassAlpha(base: Int): Int = when {
-        blurActive -> GLASS_ALPHA_BLUR
-        isDarkColor(base) -> GLASS_ALPHA_SOLID_DARK
-        else -> GLASS_ALPHA_SOLID_LIGHT
-    }
-
-    /// 结果面板叠色 α：承载文字，模糊档比圆钮上浮到 18%（0x2E）保证读性。
-    private fun panelGlassAlpha(): Int = when {
-        blurActive -> GLASS_ALPHA_PANEL_BLUR
-        isDarkColor(cPanelBg) -> GLASS_ALPHA_SOLID_DARK
-        else -> GLASS_ALPHA_SOLID_LIGHT
-    }
+    private fun defaultGlassAlpha(base: Int): Int =
+        if (isDarkColor(base)) GLASS_ALPHA_SOLID_DARK else GLASS_ALPHA_SOLID_LIGHT
 
     /// 主题主色（token: primary → cListeningBg）α60% 细描边
     private fun primaryStroke(): Int = (0x99 shl 24) or (cListeningBg and 0x00FFFFFF)
@@ -1175,7 +1148,7 @@ class FloatingRecognitionService : Service() {
             // 刷新玻璃底/描边/文本静态配色（按钮动态配色由 updateUi 按状态刷新）
             micBtnGd?.setColor(glassColor(stateGlassBase()))
             micBtnGd?.setStroke(dp(1), primaryStroke())
-            panelGd?.setColor(glassColor(cPanelBg, panelGlassAlpha()))
+            panelGd?.setColor(glassColor(cPanelBg))
             panelGd?.setStroke(dp(1), primaryStroke())
             coverBgGd?.setColor(glassColor(cBtnIdleBg))
             playBtnBgGd?.setColor(glassColor(cResultBg))
@@ -1379,8 +1352,6 @@ class FloatingRecognitionService : Service() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
-    private fun sp(v: Float): Float = v * resources.displayMetrics.scaledDensity
-
     override fun onDestroy() {
         super.onDestroy()
         // 停止动效与采集线程并回收资源
@@ -1400,16 +1371,11 @@ class FloatingRecognitionService : Service() {
                 windowManager?.removeView(it)
             } catch (_: Exception) {}
         }
-        // 玻璃背板窗口与系统模糊开关监听一并回收（避免窗口泄漏 / 回调泄漏）
-        try {
-            blurListener?.let { l -> windowManager?.removeCrossWindowBlurEnabledListener(l) }
-        } catch (_: Exception) {}
-        blurListener = null
+        // 玻璃背板窗口回收（避免窗口泄漏）
         micPlate?.release()
         panelPlate?.release()
         micPlate = null
         panelPlate = null
-        blurActive = false
         // 通知 Dart 服务已停止，同步悬浮窗开关状态（避免 Dart 误以为仍在运行）
         sendToDart("onServiceStopped", null)
         instance = null
