@@ -176,12 +176,6 @@ class SecondaryDockController extends ChangeNotifier {
 ///
 /// 只观察 [PageRoute]：主布局 / 完整播放页 / 命名路由都是 PageRoute
 /// 子类；匿名 `MaterialPageRoute`（详情页等绝大多数二级页）同样是。
-///
-/// 批次 58e：每个路由事件后附带一次拖拽展开状态兜底收口
-/// （[resetStalePlayerDragState]）——若完整播放页已不在栈中活跃而
-/// [playerExpansion] / [playerDragActive] 仍有残留（pop 过渡中断 /
-/// Dock 重挂载打断收敛动画），任何后续导航行为都会把全局量复位，
-/// 杜绝 Dock 永久半透明且不可点击（冷重启才恢复）的严重 bug。
 class SecondaryDockRouteObserver extends RouteObserver<PageRoute<dynamic>> {
   SecondaryDockRouteObserver(this.controller);
 
@@ -190,24 +184,20 @@ class SecondaryDockRouteObserver extends RouteObserver<PageRoute<dynamic>> {
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     controller.didPush(route, previousRoute);
-    resetStalePlayerDragState();
   }
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
     controller.didPop(route, previousRoute);
-    resetStalePlayerDragState();
   }
 
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
     controller.didRemove(route, previousRoute);
-    resetStalePlayerDragState();
   }
 
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
     controller.didReplace(newRoute: newRoute, oldRoute: oldRoute);
-    resetStalePlayerDragState();
   }
 }

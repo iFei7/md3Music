@@ -1,4 +1,3 @@
-import 'dart:async' show scheduleMicrotask;
 import 'dart:math' show max;
 
 import 'package:flutter/foundation.dart';
@@ -577,15 +576,6 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
     _switchSettle.dispose();
     _switchDx.dispose();
     _dragReturnSettle.dispose();
-    // 批次 58e 收口（严重 bug 修复）：本 Dock 实例销毁若发生在上滑拖拽
-    // 或回归收敛动画（200ms 窗口）中——横竖屏切换（横/竖屏两个 Dock
-    // 实例切换）、一级页 ↔ 二级页 Dock 切换、切 tab 重建——此前只清
-    // listener 与局部动画，全局量 [playerDragActive] / [playerExpansion]
-    // 永卡中间值，Dock 整体 `Opacity(1-exp)` + `IgnorePointer`（半透明
-    // 且不可点击），冷重启才恢复。微任务兜底复位（延迟到 build 帧外写
-    // 全局量防 setState during build 断言；完整播放页仍活跃时不动——
-    // 展开进度由路由接管，见 resetStalePlayerDragState 文档）。
-    scheduleMicrotask(resetStalePlayerDragState);
     super.dispose();
   }
 

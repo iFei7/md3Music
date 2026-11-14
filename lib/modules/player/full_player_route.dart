@@ -89,33 +89,6 @@ final ValueNotifier<bool> playerDragActive = ValueNotifier<bool>(false);
 /// 拖拽起点：MiniPlayer 顶端全局 Y 坐标（= FullPlayer 展开起点）。
 double playerDragOriginTop = 0.0;
 
-/// 拖拽展开全局状态收口（批次 58e 严重 bug 修复）。
-///
-/// 背景（真机实测）：悬浮 Dock 与悬浮播放器**高概率整体半透明且不可
-/// 点击，冷重启才恢复**。根因是全局拖拽状态机（[playerExpansion] /
-/// [playerDragActive]）存在多条「失去收口者」路径——没有任何存活对象
-/// 再负责把它们归零：
-/// 1. Dock State 重挂载（横竖屏切换 / 一级页 ↔ 二级页两个 Dock 实例
-///    切换 / 切 tab 重建）发生在上滑拖拽或回归收敛动画（200ms 窗口）中
-///    ——Dock `dispose` 此前只清 listener 与局部动画，全局量永卡中间值；
-/// 2. FullPlayer pop/dismiss 过渡（300ms reverse）被打断（popUntil 回根、
-///    过渡中 finalize）——`didPop` 入口的归零被过渡期逐帧写回覆盖，
-///    动画中断后 [playerExpansion] 停在中间值。
-/// 状态机表现（glass_dock_player build）：exp ∈ (0.2, 0.5] 且
-/// dragActive = false 时 Dock 渲染为 `Opacity(1-exp)` + `IgnorePointer`
-/// ——正是「半透明且不可点击」；exp > 0.5 则 Dock 整体移除。
-///
-/// 本函数是**三层防御的公共收口**：[DraggablePlayerRoute.dispose] 与
-/// Dock State `dispose` 在「完整播放页不在栈中活跃」的前提下调用它复位；
-/// [activePlayerRoute] 仍活跃（路由动画驱动中）时不动状态，返回 false。
-bool resetStalePlayerDragState() {
-  final route = activePlayerRoute;
-  if (route != null && route.isActive) return false;
-  if (playerDragActive.value) playerDragActive.value = false;
-  if (playerExpansion.value != 0.0) playerExpansion.value = 0.0;
-  return true;
-}
-
 /// 兼容旧引用：返回 true 表示当前 FullPlayer 在栈顶。
 /// 新代码应直接监听 [playerExpansion]。
 bool get isFullPlayerOnTop => playerExpansion.value > 0.5;
@@ -362,13 +335,6 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
     if (identical(activePlayerRoute, this)) {
       activePlayerRoute = null;
     }
-    // 批次 58e 收口：pop 过渡（reverse 300ms）被中断（popUntil 回根 /
-    // 过渡中 finalize / 二次移除）时，动画停在中途——didPop 入口的归零
-    // 已被过渡期逐帧写回覆盖，route 移除后无人再驱动 [playerExpansion]
-    // 归零，Dock 从此永久半透明且不可点击。微任务兜底复位（延迟到
-    // build 帧外写全局量，避免 dispose 期触发监听者 setState during
-    // build 断言；复位前再查活跃路由，防误清新 push 路由的动画进度）。
-    scheduleMicrotask(resetStalePlayerDragState);
     super.dispose();
   }
 
@@ -449,10 +415,6 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
           if (pos >= 1.0) {
             if (playerExpansion.value != 1.0) {
               scheduleMicrotask(() {
-                // 批次 58e 守卫（对齐 tv_ui 同款）：本路由已不活跃
-                // （pop 过渡被中断 / 已 finalize）时不再写全局量，防
-                // 把中断时的中间进度残留进 playerExpansion。
-                if (!identical(activePlayerRoute, this)) return;
                 playerExpansion.value = 1.0;
               });
             }
@@ -466,10 +428,6 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
             // 让出当前 build 帧：build 阶段直接改 ValueNotifier 会触发
             // 监听者 setState() during build（_dependents/descendant 断言）。
             scheduleMicrotask(() {
-              // 批次 58e 守卫（对齐 tv_ui 同款）：路由不再活跃（pop 过渡
-              // 被中断后最后一帧的排队写入）时不写回中间值——否则覆盖
-              // didPop 的归零，Dock 永久半透明不可点击。
-              if (!identical(activePlayerRoute, this)) return;
               playerExpansion.value = pos;
             });
           }
@@ -499,8 +457,6 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
         if (progress >= 1.0) {
           if (playerExpansion.value != 1.0) {
             scheduleMicrotask(() {
-              // 批次 58e 守卫（对齐 tv_ui 同款）：路由不活跃不写。
-              if (!identical(activePlayerRoute, this)) return;
               playerExpansion.value = 1.0;
             });
           }
@@ -511,8 +467,6 @@ class DraggablePlayerRoute<T> extends PageRoute<T> {
         // setState() during build 断言。
         if (progress != playerExpansion.value) {
           scheduleMicrotask(() {
-            // 批次 58e 守卫（对齐 tv_ui 同款）：路由不活跃不写。
-            if (!identical(activePlayerRoute, this)) return;
             playerExpansion.value = progress;
           });
         }
