@@ -1472,6 +1472,13 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
       velocity: velocity,
       acceleration: _dragAcceleration,
     )) {
+      // 批次 58e-r3：Navigator 解析前置——二级页 Dock 挂在 builder Stack
+      // （Navigator 之外），原 `Navigator.of` 在此处抛「context does not
+      // include a Navigator」，而下方 `playerDragActive.value = false` 已
+      // 先执行 → 拖拽状态机残留（exp 卡中间值，Dock 永久半透明/消失且
+      // 不可点击，冷重启才恢复）。先解析（经 resolveRootNavigator 回退
+      // 全局 appNavigatorKey，正常不抛）再改状态，保证失败不污染状态机。
+      final NavigatorState navigator = resolveRootNavigator(context);
       // 路由接管显示权，拖拽激活即刻释放（覆盖层交棒）。
       playerDragActive.value = false;
       final route = fullPlayerRoute(
@@ -1479,7 +1486,7 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
         dragOriginTop: playerDragOriginTop,
         screenHeight: screenHeight,
       );
-      Navigator.of(context, rootNavigator: true).push(route);
+      navigator.push(route);
       // 拖拽模式 didPush 将 controller 归零等待手势接管；此处无后续手势，
       // 从覆盖层最后进度收敛到全屏（300ms easeOutCubic，起点连续不跳变）。
       route.controller.value = progress.clamp(0.0, 1.0);

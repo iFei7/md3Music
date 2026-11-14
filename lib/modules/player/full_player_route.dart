@@ -4,6 +4,7 @@ import 'dart:math' show max;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
+import '../../bootstrap_common.dart' show appNavigatorKey;
 import '../../utils/landscape_immersive.dart';
 import 'full_player.dart';
 
@@ -123,6 +124,33 @@ bool resetStalePlayerDragState() {
 /// 新代码应直接监听 [playerExpansion]。
 bool get isFullPlayerOnTop => playerExpansion.value > 0.5;
 
+/// 解析根 Navigator（批次 58e-r3 严重 bug 修复）。
+///
+/// **背景（真机实测，v6.0.1-lite-563dadb）**：二级页（仅播放器形态）上滑
+/// 或点击悬浮播放器**必现打不开播放页**，且上滑后悬浮播放器必现透明或
+/// 消失，退出二级页后一级页 Dock 同样受影响。根因：二级页 Dock 挂在
+/// `MaterialApp.builder` 的 Stack（**Navigator 之外**），其 context 父链
+/// 不含 Navigator——`Navigator.of(context, rootNavigator: true)` 抛
+/// 「context does not include a Navigator」：
+/// - 点击路径：[openFullPlayer] 在 push 前抛，点击无任何反应；
+/// - 上滑达标路径：[_onPlayerDragEnd]（GlassDockPlayer）**先置
+///   `playerDragActive=false` 再 push**，push 处抛异常后拖拽状态机
+///   残留——exp 卡在 (0.2, 0.5]（Dock 渲染 `Opacity(1-exp)` +
+///   `IgnorePointer` = 半透明不可点击）或 > 0.5（Dock 整体移除 = 消失），
+///   退出二级页后残留全局态继续影响一级页 Dock；
+/// - release 模式手势回调异常被框架静默捕获，无崩溃只有症状。
+/// 一级页 Dock 在 Navigator 内不受影响——该缺陷自 builder-Stack 二级页
+/// Dock 引入起即存在，真机在本轮系统测试二级页场景时暴露。
+///
+/// 修复：`Navigator.maybeOf` 优先（context 在 Navigator 内时命中，行为
+/// 与原 `Navigator.of` 一致），builder-Stack Dock 场景回退全局
+/// [appNavigatorKey]（MaterialApp.navigatorKey，与二级页 Dock 的
+/// `popUntil` 回根同款通道）。
+NavigatorState resolveRootNavigator(BuildContext context) {
+  return Navigator.maybeOf(context, rootNavigator: true) ??
+      appNavigatorKey.currentState!;
+}
+
 /// 打开 FullPlayer（**统一防重复入栈**，新代码一律走这里）。
 ///
 /// 此前各调用点各自判重且口径不一：多数用 `activePlayerRoute?.isCurrent == true`
@@ -146,7 +174,10 @@ void openFullPlayer(BuildContext context) {
   // Navigator 会把完整播放页 push 进中央内容区（只盖住内容区、盖不住侧栏与
   // 底部播放栏）。改用根 Navigator 让播放页覆盖整个 shell。手机布局下根
   // Navigator 即唯一 Navigator，行为不变。
-  final NavigatorState navigator = Navigator.of(context, rootNavigator: true);
+  // 批次 58e-r3：经 [resolveRootNavigator] 解析——builder-Stack 二级页
+  // Dock 的 context 不含 Navigator，原 `Navigator.of` 在此处抛异常导致
+  // 点击无法打开播放页（见该函数文档）。
+  final NavigatorState navigator = resolveRootNavigator(context);
   final DraggablePlayerRoute? existing = activePlayerRoute;
   if (existing != null) {
     if (existing.isActive && !existing.isCurrent) {
