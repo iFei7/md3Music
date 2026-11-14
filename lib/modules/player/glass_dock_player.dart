@@ -1394,6 +1394,13 @@ class _GlassDockPlayerState extends State<GlassDockPlayer>
   /// 拖拽开始：记录播放器按钮顶端全局 Y（= FullPlayer 展开起点），
   /// 激活跟手覆盖层（真实 FullPlayer，随 playerExpansion 位移/淡入）。
   void _onPlayerDragStart(BuildContext boxContext, DragStartDetails details) {
+    // 批次 58e-r2 交互点自愈：用户主动发起新拖拽前清理拖拽状态机脏残留
+    // （上次回归收敛动画被 Dock 重挂载打断时，dragActive 卡 true + exp 卡
+    // 中间值——不复位则本拖拽被脏态污染：跟手覆盖层异常、松手判定错乱）。
+    // 完整播放页仍活跃时内部跳过（见 resetStalePlayerDragState 文档）。
+    // 必须在 `_dragDistance = playerExpansion.value * ...` 续接之前执行，
+    // 保证脏残留不参与距离续接。
+    resetStalePlayerDragState();
     // 运行时守卫（含「播放页已在栈中」检查——不放在 build 期注册判定，
     // 否则 Dock 子树重挂载后会拿到过期快照，见 _buildPlayerButton 注释）：
     // 无歌 / 播放页已在栈中时不启动拖拽。
